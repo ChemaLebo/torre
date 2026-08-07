@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Pedidos · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Pedidos · todos los clientes</h1>
+  </div>
+  <div class="quien"><b>{{ total }}</b> pedido(s) con estos filtros{% if total > 200 %} · mostrando 200{% endif %}</div>
+</div>
+
+<div class="card mb">
+  <div class="titulo">
+    <h2>Filtros</h2>
+    <a class="btn primario" href="{% url 'mesa:pedido_nuevo' %}">Pedido manual</a>
+  </div>
+  <form method="get" class="fila">
+    <div style="flex:1;min-width:160px">
+      <label for="f-cliente">Cliente</label>
+      <select id="f-cliente" name="cliente">
+        <option value="">Todos</option>
+        {% for c in clientes_filtro %}
+        <option value="{{ c.pk }}" {% if filtro.cliente == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:160px">
+      <label for="f-estado">Estado</label>
+      <select id="f-estado" name="estado">
+        <option value="">Todos</option>
+        {% for clave, nombre in estados %}
+        <option value="{{ clave }}" {% if filtro.estado == clave %}selected{% endif %}>{{ nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:2;min-width:200px">
+      <label for="f-q">Buscar</label>
+      <input id="f-q" type="text" name="q" value="{{ filtro.q }}" placeholder="Folio, comprador u orden de Shopify">
+    </div>
+    <div style="align-self:flex-end"><button class="btn" type="submit">Filtrar</button></div>
+  </form>
+</div>
+
+<div class="tabla-wrap">
+  <table>
+    <thead>
+      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Incidencia</th><th>Ingresó</th><th>Cancelar</th></tr>
+    </thead>
+    <tbody>
+      {% for pedido in pedidos %}
+      <tr>
+        <td class="mono">{{ pedido.folio }}</td>
+        <td>{{ pedido.cliente.nombre }}</td>
+        <td class="small">{% if pedido.tienda %}{{ pedido.tienda.dominio }}{% else %}manual{% endif %}</td>
+        <td>{{ pedido.comprador_nombre|default:"—" }}</td>
+        <td>{% if pedido.es_local %}<span class="pill accent">local</span>{% else %}<span class="small">CP {{ pedido.cp|default:"—" }}</span>{% endif %}</td>
+        <td><span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span></td>
+        <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% else %}<span class="small">—</span>{% endif %}</td>
+        <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
+        <td>
+          {% if pedido.cancelable %}
+          <form method="post" class="fila">
+            {% csrf_token %}
+            <input type="hidden" name="accion" value="cancelar">
+            <input type="hidden" name="folio" value="{{ pedido.folio }}">
+            <input type="text" name="motivo" placeholder="Motivo" required>
+            <button class="btn chico peligro" type="submit">Cancelar</button>
+          </form>
+          {% else %}<span class="small">—</span>{% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9" class="muted centro">Sin pedidos con esos filtros.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

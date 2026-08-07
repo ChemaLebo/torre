@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Catálogo de {{ cliente.nombre }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">
+      <a href="{% url 'mesa:clientes' %}">Clientes</a> /
+      <a href="{% url 'mesa:cliente_detalle' cliente.pk %}">{{ cliente.slug }}</a> / catálogo
+    </div>
+    <h1>Catálogo de {{ cliente.nombre }}</h1>
+  </div>
+  <div class="fila">
+    <span class="pill accent">{{ skus|length }} SKU(s)</span>
+  </div>
+</div>
+
+<div class="card mb">
+  <div class="titulo"><h3>SKUs del cliente</h3></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Código</th>
+          <th>Descripción</th>
+          <th>Barras</th>
+          <th class="derecha">Peso (gr)</th>
+          <th>Lote</th>
+          <th class="derecha">Divisible en</th>
+          <th class="derecha">Reorden</th>
+          <th class="derecha">Disponible</th>
+          <th>Estado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sku in skus %}
+        <tr>
+          <td class="mono"><b>{{ sku.codigo }}</b></td>
+          <td>{{ sku.descripcion }}</td>
+          <td class="mono">{{ sku.codigo_barras|default:"—" }}</td>
+          <td class="derecha mono">{{ sku.peso_gr }}</td>
+          <td>{% if sku.requiere_lote %}<span class="pill">sí</span>{% else %}<span class="small muted">no</span>{% endif %}</td>
+          <td class="derecha mono">{{ sku.empaques_divisibles }}</td>
+          <td class="derecha mono">{{ sku.punto_reorden }}</td>
+          <td class="derecha mono">{{ sku.disponible }}</td>
+          <td>{% if sku.activo %}<span class="pill ok">activo</span>{% else %}<span class="pill crit">inactivo</span>{% endif %}</td>
+          <td class="derecha"><a class="btn chico" href="?editar={{ sku.pk }}#form-sku">editar</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" class="muted centro">Sin SKUs todavía. Da de alta el primero abajo o importa el catálogo por CSV.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card" id="form-sku">
+    <div class="titulo">
+      <h3>{% if sku_editar %}Editar {{ sku_editar.codigo }}{% else %}Nuevo SKU{% endif %}</h3>
+      {% if sku_editar %}<a class="small" href="{% url 'mesa:cliente_skus' cliente.pk %}">cancelar edición →</a>{% endif %}
+    </div>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="sku_guardar">
+      {{ form.sku_id }}
+      {{ form.non_field_errors }}
+      <div class="grid g2">
+        <div>
+          <label for="{{ form.codigo.id_for_label }}">{{ form.codigo.label }}</label>
+          {{ form.codigo }}{{ form.codigo.errors }}
+        </div>
+        <div>
+          <label for="{{ form.codigo_barras.id_for_label }}">{{ form.codigo_barras.label }}</label>
+          {{ form.codigo_barras }}{{ form.codigo_barras.errors }}
+        </div>
+      </div>
+      <div class="mt">
+        <label for="{{ form.descripcion.id_for_label }}">{{ form.descripcion.label }}</label>
+        {{ form.descripcion }}{{ form.descripcion.errors }}
+      </div>
+      <div class="grid g2 mt">
+        <div>
+          <label for="{{ form.peso_gr.id_for_label }}">{{ form.peso_gr.label }}</label>
+          {{ form.peso_gr }}
+          <div class="small muted">{{ form.peso_gr.help_text }}</div>
+          {{ form.peso_gr.errors }}
+        </div>
+        <div>
+          <label for="{{ form.unidad.id_for_label }}">{{ form.unidad.label }}</label>
+          {{ form.unidad }}{{ form.unidad.errors }}
+        </div>
+        <div>
+          <label for="{{ form.largo_cm.id_for_label }}">{{ form.largo_cm.label }}</label>
+          {{ form.largo_cm }}{{ form.largo_cm.errors }}
+        </div>
+        <div>
+          <label for="{{ form.ancho_cm.id_for_label }}">{{ form.ancho_cm.label }}</label>
+          {{ form.ancho_cm }}{{ form.ancho_cm.errors }}
+        </div>
+        <div>
+          <label for="{{ form.alto_cm.id_for_label }}">{{ form.alto_cm.label }}</label>
+          {{ form.alto_cm }}{{ form.alto_cm.errors }}
+        </div>
+        <div>
+          <label for="{{ form.precio_declarado.id_for_label }}">{{ form.precio_declarado.label }}</label>
+          {{ form.precio_declarado }}{{ form.precio_declarado.errors }}
+        </div>
+        <div>
+          <label for="{{ form.punto_reorden.id_for_label }}">{{ form.punto_reorden.label }}</label>
+          {{ form.punto_reorden }}{{ form.punto_reorden.errors }}
+        </div>
+        <div>
+          <label for="{{ form.empaques_divisibles.id_for_label }}">{{ form.empaques_divisibles.label }}</label>
+          {{ form.empaques_divisibles }}
+          <div class="small muted">{{ form.empaques_divisibles.help_text }}</div>
+          {{ form.empaques_divisibles.errors }}
+        </div>
+        <div>
+          <label for="{{ form.requiere_lote.id_for_label }}">{{ form.requiere_lote.label }}</label>
+          {{ form.requiere_lote }}{{ form.requiere_lote.errors }}
+        </div>
+        <div>
+          <label for="{{ form.backorder_habilitado.id_for_label }}">{{ form.backorder_habilitado.label }}</label>
+          {{ form.backorder_habilitado }}{{ form.backorder_habilitado.errors }}
+        </div>
+        <div>
+          <label for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>
+          {{ form.activo }}{{ form.activo.errors }}
+        </div>
+      </div>
+      <div class="fila mt">
+        <button class="btn primario" type="submit">{% if sku_editar %}Guardar cambios{% else %}Dar de alta el SKU{% endif %}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Importar catálogo por CSV</h3></div>
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="importar_csv">
+      <label for="id_archivo">Archivo CSV (UTF-8, con encabezados)</label>
+      <input type="file" name="archivo" id="id_archivo" accept=".csv" required>
+      <p class="small muted mt">
+        Encabezados: <span class="mono">codigo,descripcion,codigo_barras,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles</span>.
+        Solo codigo y descripcion son obligatorios por fila; requiere_lote acepta si/no/1/0.
+        Un código que ya existe se actualiza; las filas con error no detienen a las demás.
+      </p>
+      <button class="btn primario mt" type="submit">Importar CSV</button>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Hoy{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">{{ hoy|date:"l j \d\e F" }}</div>
+    <h1>Hoy</h1>
+  </div>
+  <div class="quien">{{ cliente_actual.nombre }} · corte de hoy <b>{{ corte }}</b></div>
+</div>
+
+<div class="banner {{ semaforo }}"><span class="foco"></span><span>{{ mensaje_dia }}</span></div>
+
+<div class="grid g4 mb">
+  <div class="card stat"><b>{{ en_proceso }}</b><span>Pedidos en proceso</span></div>
+  <div class="card stat"><b>{{ salieron_hoy }}</b><span>Salieron hoy de bodega</span></div>
+  <div class="card stat {% if total_abiertas %}warn{% else %}ok{% endif %}">
+    <b>{{ total_abiertas }}</b><span>Incidencias en atención</span>
+  </div>
+  <div class="card stat {% if criticos %}crit{% else %}ok{% endif %}">
+    <b>{{ criticos|length }}</b><span>Productos por resurtir</span>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo">
+      <h3>Tus pedidos, paso a paso</h3>
+      <a class="small" href="{% url 'portal:pedidos' %}">Ver todos</a>
+    </div>
+    {% for fila in embudo %}
+      <div class="fila entre">
+        <span class="small">{{ fila.etiqueta }}</span>
+        <span class="mono">{{ fila.n }}</span>
+      </div>
+      <div class="medidor mb"><span style="width: {{ fila.pct }}%"></span></div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <div class="titulo">
+      <h3>Corte del día</h3>
+      <span class="pill {% if antes_corte %}ok{% else %}warn{% endif %}">
+        {% if antes_corte %}Abierto hasta las {{ corte }}{% else %}Cerró a las {{ corte }}{% endif %}
+      </span>
+    </div>
+    <p>{{ mensaje_corte }}</p>
+    <hr class="sep">
+    <div class="titulo"><h3>Conexión con tu tienda</h3></div>
+    {% for fila in salud_sync %}
+      <div class="fila entre mb">
+        <div>
+          <div>{{ fila.etiqueta }}</div>
+          <div class="small mono">{{ fila.tienda }}</div>
+        </div>
+        <span class="pill {{ fila.clase }}">{{ fila.frescura }}</span>
+      </div>
+    {% empty %}
+      <p class="muted">Aún no hay tiendas conectadas. Nosotros nos encargamos del alta contigo.</p>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo">
+      <h3>Incidencias en atención</h3>
+      <a class="small" href="{% url 'portal:incidencias' %}">Ver todas</a>
+    </div>
+    {% for inc in incidencias_abiertas %}
+      <div class="fila entre mb">
+        <div>
+          <a class="mono" href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>
+          <span class="small">· {{ inc.get_tipo_display }}{% if inc.pedido %} · {{ inc.pedido.folio }}{% endif %}</span>
+          <div class="small">La pelota la tiene: {{ inc.pelota }}</div>
+        </div>
+        <span class="pill {{ inc.reloj_clase }}">{{ inc.reloj_texto }}</span>
+      </div>
+    {% empty %}
+      <p class="muted">Sin incidencias abiertas. Así nos gusta.</p>
+    {% endfor %}
+    {% if total_abiertas > incidencias_abiertas|length %}
+      <p class="small"><a href="{% url 'portal:incidencias' %}">Hay {{ total_abiertas }} en total; aquí ves las más urgentes.</a></p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo">
+      <h3>Inventario por resurtir</h3>
+      <a class="small" href="{% url 'portal:inventario' %}">Ver inventario</a>
+    </div>
+    {% for fila in criticos %}
+      <div class="fila entre mb">
+        <div>
+          <span class="mono">{{ fila.sku.codigo }}</span>
+          <div class="small">{{ fila.sku.descripcion }}</div>
+        </div>
+        <span class="pill crit">{{ fila.disponible }} disponibles</span>
+      </div>
+    {% empty %}
+      <p class="muted">Ningún producto está por debajo de su punto de resurtido.</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

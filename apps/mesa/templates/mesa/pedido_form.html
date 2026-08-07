@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Pedido manual · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Pedido manual</h1>
+  </div>
+  <div class="quien">Para clientes sin tienda conectada: mayoreo, B2B o venta directa.</div>
+</div>
+
+<div class="card">
+  {% if cliente_sel %}
+    <div class="titulo"><h2>Pedido de {{ cliente_sel.nombre }}</h2><a class="btn chico" href="{% url 'mesa:pedido_nuevo' %}">Cambiar de cliente</a></div>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="cliente" value="{{ cliente_sel.slug }}">
+      {{ form.non_field_errors }}
+
+      <div class="grid g3">
+        <div>
+          <label for="{{ form.comprador_nombre.id_for_label }}">{{ form.comprador_nombre.label }}</label>
+          {{ form.comprador_nombre }}
+          {{ form.comprador_nombre.errors }}
+        </div>
+        <div>
+          <label for="{{ form.comprador_tel.id_for_label }}">{{ form.comprador_tel.label }}</label>
+          {{ form.comprador_tel }}
+          <div class="small muted">{{ form.comprador_tel.help_text }}</div>
+          {{ form.comprador_tel.errors }}
+        </div>
+        <div>
+          <label for="{{ form.comprador_email.id_for_label }}">{{ form.comprador_email.label }}</label>
+          {{ form.comprador_email }}
+          {{ form.comprador_email.errors }}
+        </div>
+      </div>
+
+      <div class="grid g2 mt">
+        <div>
+          <label for="{{ form.calle.id_for_label }}">{{ form.calle.label }}</label>
+          {{ form.calle }}
+          {{ form.calle.errors }}
+        </div>
+        <div>
+          <label for="{{ form.colonia.id_for_label }}">{{ form.colonia.label }}</label>
+          {{ form.colonia }}
+          {{ form.colonia.errors }}
+        </div>
+      </div>
+
+      <div class="grid g3 mt">
+        <div>
+          <label for="{{ form.ciudad.id_for_label }}">{{ form.ciudad.label }}</label>
+          {{ form.ciudad }}
+          {{ form.ciudad.errors }}
+        </div>
+        <div>
+          <label for="{{ form.estado.id_for_label }}">{{ form.estado.label }}</label>
+          {{ form.estado }}
+          {{ form.estado.errors }}
+        </div>
+        <div>
+          <label for="{{ form.cp.id_for_label }}">{{ form.cp.label }}</label>
+          {{ form.cp }}
+          {{ form.cp.errors }}
+        </div>
+      </div>
+
+      <div class="grid g2 mt">
+        <div>
+          <label for="{{ form.valor_declarado.id_for_label }}">{{ form.valor_declarado.label }}</label>
+          {{ form.valor_declarado }}
+          <div class="small muted">{{ form.valor_declarado.help_text }}</div>
+          {{ form.valor_declarado.errors }}
+        </div>
+        <div>
+          <label for="{{ form.nota_regalo.id_for_label }}">{{ form.nota_regalo.label }}</label>
+          {{ form.nota_regalo }}
+          {{ form.nota_regalo.errors }}
+        </div>
+      </div>
+
+      <div class="mt">
+        <div class="eyebrow">Renglones del pedido</div>
+        {% for sku_campo, cantidad_campo in form.renglones %}
+          <div class="grid g2">
+            <div>
+              <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }} {{ forloop.counter }}</label>
+              {{ sku_campo }}
+              {{ sku_campo.errors }}
+            </div>
+            <div>
+              <label for="{{ cantidad_campo.id_for_label }}">{{ cantidad_campo.label }}</label>
+              {{ cantidad_campo }}
+              {{ cantidad_campo.errors }}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="mt"><button class="btn primario" type="submit">Crear pedido</button></div>
+    </form>
+  {% else %}
+    <div class="titulo"><h2>¿De qué cliente es el pedido?</h2></div>
+    <p class="small">Primero elige el cliente: sus productos dependen de él.</p>
+    <form method="get" class="fila">
+      <div style="flex:1;min-width:200px">
+        <label for="f-cliente">Cliente</label>
+        <select id="f-cliente" name="cliente">
+          {% for c in clientes_activos %}
+          <option value="{{ c.slug }}">{{ c.nombre }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="align-self:flex-end"><button class="btn primario" type="submit">Capturar pedido</button></div>
+    </form>
+  {% endif %}
+</div>
+
+{% endblock %}

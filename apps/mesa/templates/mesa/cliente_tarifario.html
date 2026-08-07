@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Tarifario de {{ cliente.nombre }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">
+      <a href="{% url 'mesa:clientes' %}">Clientes</a> /
+      <a href="{% url 'mesa:cliente_detalle' cliente.pk %}">{{ cliente.slug }}</a> / tarifario
+    </div>
+    <h1>Tarifario de {{ cliente.nombre }}</h1>
+  </div>
+  <div class="fila">
+    {% if tiene_overrides %}<span class="pill accent">tarifario propio</span>
+    {% else %}<span class="pill ok">usa el default</span>{% endif %}
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <div class="grid g2">
+        {% for f in filas %}
+        <div>
+          <label for="{{ f.campo.id_for_label }}">{{ f.campo.label }}</label>
+          {{ f.campo }}
+          <div class="small muted">
+            {{ f.campo.help_text }}
+            {% if f.propio %}<span class="pill accent">propio</span>{% else %}<span class="pill">default</span>{% endif %}
+          </div>
+          {{ f.campo.errors }}
+        </div>
+        {% endfor %}
+      </div>
+      <div class="fila mt">
+        <button class="btn primario" type="submit">Guardar tarifario</button>
+        <a class="btn" href="{% url 'mesa:cliente_detalle' cliente.pk %}">Cancelar</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Cómo funciona</h3></div>
+    <ul class="timeline">
+      <li class="hito"><span class="cuando">Overrides</span>Solo se guardan las tarifas que difieren del default general; el resto sigue el tarifario de la casa.</li>
+      <li><span class="cuando">Volver al default</span>Deja un campo vacío (o pon el mismo valor del default) y esa tarifa regresa al general.</li>
+      <li><span class="cuando">Dónde pega</span>La factura simulada de <a href="{% url 'mesa:finanzas' %}">Finanzas</a> usa este tarifario desde el siguiente cálculo.</li>
+    </ul>
+  </div>
+</div>
+
+{% endblock %}

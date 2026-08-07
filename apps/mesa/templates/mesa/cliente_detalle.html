@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}{{ cliente.nombre }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{% url 'mesa:clientes' %}">Clientes</a> / {{ cliente.slug }}</div>
+    <h1>{{ cliente.nombre }}</h1>
+  </div>
+  <div class="fila">
+    {% if cliente.activo %}<span class="pill ok">activo</span>{% else %}<span class="pill crit">inactivo</span>{% endif %}
+    <a class="btn chico" href="{% url 'mesa:cliente_editar' cliente.pk %}">Editar</a>
+    <a class="btn chico" href="{% url 'mesa:cliente_tarifario' cliente.pk %}">Editar tarifario</a>
+    <a class="btn chico" href="{% url 'mesa:cliente_skus' cliente.pk %}">Catálogo ({{ n_skus }} SKUs)</a>
+  </div>
+</div>
+
+<div class="grid g3 mb">
+  <div class="card">
+    <div class="eyebrow">Contacto</div>
+    <p class="mono" style="margin:8px 0 0">
+      {{ cliente.contacto_nombre|default:"sin contacto" }}<br>
+      WhatsApp: {{ cliente.contacto_whatsapp|default:"—" }}<br>
+      {% if cliente.razon_social %}{{ cliente.razon_social }}<br>{% endif %}
+      {% if cliente.rfc %}RFC {{ cliente.rfc }}{% endif %}
+    </p>
+  </div>
+  <div class="card">
+    <div class="eyebrow">Configuración operativa</div>
+    <p class="mono" style="margin:8px 0 0">
+      Buffer de stock: {{ cliente.buffer_stock }} unidad(es)<br>
+      Carrier preferente: {{ cliente.carrier_preferente }}<br>
+      Naked packing local: {% if cliente.naked_packing_local %}sí{% else %}no{% endif %}<br>
+      Visto bueno desde: ${{ cliente.umbral_visto_bueno_mxn }} MXN
+    </p>
+  </div>
+  <div class="card">
+    <div class="eyebrow">Guía de voz</div>
+    <p class="small" style="margin:8px 0 0">{{ cliente.guia_de_voz|default:"Sin guía de voz registrada."|linebreaksbr }}</p>
+  </div>
+</div>
+
+<div class="card mb">
+  <div class="titulo"><h3>Tiendas conectadas</h3><a class="small" href="{% url 'mesa:sync' %}">salud de sync →</a></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Dominio</th><th>Plataforma</th><th>Location</th><th>Ingesta</th><th>Push</th><th>Estado</th><th></th></tr></thead>
+      <tbody>
+        {% for tienda in tiendas %}
+        <tr>
+          <td class="mono">{{ tienda.dominio }}{% if not tienda.token %} <span class="small">(mock)</span>{% endif %}
+            <div class="small muted">webhook: {% url 'integraciones:webhook_shopify' tienda.pk %}</div>
+          </td>
+          <td>{{ tienda.get_plataforma_display }}</td>
+          <td class="mono">{{ tienda.location_id|default:"—" }}</td>
+          <td><span class="small">{{ tienda.frescura_ingesta }}</span></td>
+          <td><span class="small">{{ tienda.frescura_push }}</span></td>
+          <td>{% if tienda.activo %}<span class="pill ok">activa</span>{% else %}<span class="pill crit">inactiva</span>{% endif %}</td>
+          <td class="derecha"><a class="btn chico" href="?tienda={{ tienda.pk }}#form-tienda">editar</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="muted centro">Sin tiendas conectadas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="post" class="mt" id="form-tienda">
+    {% csrf_token %}
+    <input type="hidden" name="accion" value="tienda_guardar">
+    {% if tienda_editar %}<input type="hidden" name="tienda_id" value="{{ tienda_editar.pk }}">{% endif %}
+    <div class="eyebrow">{% if tienda_editar %}Editar {{ tienda_editar.dominio }}{% else %}Conectar tienda Shopify{% endif %}</div>
+    <div class="grid g2 mt">
+      <div>
+        <label for="id_tienda_dominio">Dominio</label>
+        <input type="text" name="dominio" id="id_tienda_dominio" placeholder="marca.myshopify.com"
+               value="{{ tienda_editar.dominio|default:'' }}" required>
+      </div>
+      <div>
+        <label for="id_tienda_location">Location ID</label>
+        <input type="text" name="location_id" id="id_tienda_location" placeholder="id numérico o GID"
+               value="{{ tienda_editar.location_id|default:'' }}">
+      </div>
+      <div>
+        <label for="id_tienda_token">Token (también firma los webhooks)</label>
+        <input type="password" name="token" id="id_tienda_token" autocomplete="new-password"
+               placeholder="{% if tienda_editar %}vacío = conservar el actual{% else %}vacío = modo mock (dev){% endif %}">
+        {% if tienda_editar.token %}<div class="small muted">Token actual: <span class="mono">…{{ tienda_editar.token|slice:"-4:" }}</span></div>{% endif %}
+      </div>
+      <div>
+        <label for="id_tienda_activo">Activa</label>
+        <input type="checkbox" name="activo" id="id_tienda_activo"
+               {% if not tienda_editar or tienda_editar.activo %}checked{% endif %}>
+      </div>
+    </div>
+    <p class="small muted mt">Al guardar, pega la URL del webhook en Shopify (aparece bajo el dominio en la tabla).</p>
+    <div class="fila">
+      <button class="btn primario" type="submit">{% if tienda_editar %}Guardar tienda{% else %}Conectar tienda{% endif %}</button>
+      {% if tienda_editar %}<a class="btn" href="{% url 'mesa:cliente_detalle' cliente.pk %}">Cancelar</a>{% endif %}
+    </div>
+  </form>
+</div>
+
+<div class="grid g2 mb">
+  <div class="card">
+    <div class="titulo"><h3>Pedidos recientes</h3><a class="small" href="{% url 'mesa:pedidos' %}?cliente={{ cliente.pk }}">todos →</a></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Folio</th><th>Comprador</th><th>Estado</th><th>Ingresó</th></tr></thead>
+        <tbody>
+          {% for pedido in pedidos_recientes %}
+          <tr>
+            <td class="mono">{{ pedido.folio }}</td>
+            <td>{{ pedido.comprador_nombre|default:"—" }}</td>
+            <td><span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span></td>
+            <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="4" class="muted centro">Sin pedidos todavía.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Incidencias abiertas</h3><a class="small" href="{% url 'mesa:incidencias' %}?cliente={{ cliente.pk }}">todas →</a></div>
+    {% if incidencias_abiertas %}
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Folio</th><th>Tipo</th><th>Reloj SLA</th></tr></thead>
+        <tbody>
+          {% for inc in incidencias_abiertas %}
+          <tr>
+            <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+            <td>{{ inc.get_tipo_display }} · {{ inc.prioridad }}</td>
+            <td><span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">Sin incidencias abiertas para esta marca.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid g3">
+  <div class="card">
+    <div class="titulo"><h3>Usuarios del portal</h3></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Usuario</th><th>Estado</th><th></th></tr></thead>
+        <tbody>
+          {% for perfil in usuarios %}
+          <tr>
+            <td>
+              <span class="mono">{{ perfil.usuario.username }}</span>
+              <div class="small muted">{{ perfil.usuario.get_full_name|default:perfil.get_rol_display }}</div>
+            </td>
+            <td>
+              {% if perfil.usuario.is_active %}<span class="pill ok">activo</span>
+              {% else %}<span class="pill crit">inactivo</span>{% endif %}
+            </td>
+            <td class="derecha">
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="accion" value="usuario_reset">
+                <input type="hidden" name="usuario_id" value="{{ perfil.usuario.pk }}">
+                <button class="btn chico" type="submit">Nueva contraseña</button>
+              </form>
+              <form method="post" style="display:inline">
+                {% csrf_token %}
+                <input type="hidden" name="accion" value="usuario_toggle">
+                <input type="hidden" name="usuario_id" value="{{ perfil.usuario.pk }}">
+                <button class="btn chico {% if perfil.usuario.is_active %}peligro{% endif %}" type="submit">
+                  {% if perfil.usuario.is_active %}Desactivar{% else %}Activar{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="3" class="muted centro">Sin usuarios ligados. Crea el primero aquí abajo.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <form method="post" class="mt">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="usuario_nuevo">
+      <div class="eyebrow">Nuevo usuario del portal</div>
+      <label class="mt" for="id_usuario_username">Usuario</label>
+      <input type="text" name="username" id="id_usuario_username" placeholder="ej. karina2" required>
+      <label for="id_usuario_nombre">Nombre completo</label>
+      <input type="text" name="nombre" id="id_usuario_nombre" placeholder="Nombre y apellido">
+      <label for="id_usuario_email">Email</label>
+      <input type="email" name="email" id="id_usuario_email" placeholder="vacío = usuario@torre380e.mx">
+      <label for="id_usuario_password">Contraseña</label>
+      <input type="text" name="password" id="id_usuario_password" placeholder="vacío = se genera sola">
+      <button class="btn primario mt" type="submit">Crear usuario</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Reglas de envío</h3><span class="small">menor prioridad gana</span></div>
+    {% for regla in reglas_envio %}
+    <div style="padding:6px 0;border-bottom:1px solid var(--hair)">
+      <span class="pill {% if regla.cliente_id %}accent{% endif %}">[{{ regla.prioridad }}] {% if regla.cliente_id %}{{ regla.cliente.nombre }}{% else %}global{% endif %}</span>
+      <div class="small mono" style="margin-top:4px">{{ regla.condicion|default:"{}" }} → {{ regla.carrier }}/{{ regla.servicio }}</div>
+    </div>
+    {% empty %}
+    <p class="muted">Sin reglas: aplica el carrier preferente.</p>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Plantillas de mensaje</h3></div>
+    {% for plantilla in plantillas %}
+    <div class="fila entre" style="padding:6px 0;border-bottom:1px solid var(--hair)">
+      <span><b class="mono">{{ plantilla.clave }}</b> · {{ plantilla.nombre }}{% if not plantilla.cliente_id %} <span class="small">(default)</span>{% endif %}</span>
+      {% if plantilla.aprobada_por_cliente %}<span class="pill ok">aprobada</span>{% else %}<span class="pill warn">sin aprobar</span>{% endif %}
+    </div>
+    {% empty %}
+    <p class="muted">Sin plantillas: se usan los cuerpos default.</p>
+    {% endfor %}
+  </div>
+</div>
+
+{% endblock %}

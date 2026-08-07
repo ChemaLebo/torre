@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Conteos del día{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Conteo cíclico</div>
+    <h1>Conteos de hoy · {{ hoy|date:"D d/M" }}</h1>
+  </div>
+  <div class="quien">Conteo CIEGO: cuenta lo que hay en el anaquel, sin ver el sistema.</div>
+</div>
+
+{% if pendientes %}
+<div class="lista-cards">
+  {% for tarea in pendientes %}
+  <div class="card">
+    <div class="titulo">
+      <h2 class="mono">{{ tarea.sku.codigo }}</h2>
+      <span class="pill accent">pendiente</span>
+    </div>
+    <p>{{ tarea.sku.descripcion }} <span class="small">({{ tarea.sku.cliente.nombre }})</span></p>
+    <p class="small mono">Código de barras: {{ tarea.sku.codigo_barras|default:"sin barras" }}</p>
+    {% if tarea.ubicaciones %}
+    <div class="small">Dónde contar:</div>
+    <div class="chips lectura">
+      {% for codigo in tarea.ubicaciones %}<span class="chip lectura">{{ codigo }}</span>{% endfor %}
+    </div>
+    {% else %}
+    <p class="small muted">Sin saldo en anaquel a la vista — cuenta donde esté físicamente y registra lo que veas.</p>
+    {% endif %}
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="tarea_id" value="{{ tarea.pk }}">
+      <label for="contado-{{ tarea.pk }}">¿Cuántas piezas contaste? (0 también cuenta)</label>
+      <input type="number" name="contado" id="contado-{{ tarea.pk }}" min="0" inputmode="numeric" autocomplete="off" required>
+      <div class="mt"><button class="btn primario bloque" type="submit">Registrar conteo</button></div>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="banner ok"><span class="foco"></span>Sin conteos pendientes hoy. Inventario bajo control.</div>
+{% endif %}
+
+{% if completadas %}
+<div class="card mt">
+  <div class="titulo"><h2>Contados hoy</h2></div>
+  {% for tarea in completadas %}
+  <div class="corral-fila">
+    <div class="crece">
+      <span class="mono">{{ tarea.conteo.folio }}</span> · <span class="mono">{{ tarea.sku.codigo }}</span>
+      <div class="small">Esperado <span class="num">{{ tarea.conteo.esperado }}</span> · contado <span class="num">{{ tarea.conteo.contado }}</span></div>
+      {% if tarea.incidencia %}
+      <div class="small"><span class="mono">{{ tarea.incidencia.folio }}</span> — no ajustes nada sin doble firma</div>
+      {% endif %}
+    </div>
+    {% if tarea.conteo.diferencia == 0 %}
+      <span class="pill ok">cuadra</span>
+    {% else %}
+      <span class="pill {% if tarea.incidencia %}crit{% else %}warn{% endif %}">{{ tarea.conteo.diferencia }} piezas</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

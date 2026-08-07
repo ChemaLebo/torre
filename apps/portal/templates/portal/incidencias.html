@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Incidencias{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Tu operación</div>
+    <h1>Incidencias</h1>
+  </div>
+  <a class="btn primario" href="{% url 'portal:incidencia_nueva' %}">Levantar incidencia</a>
+</div>
+
+<div class="card mb">
+  <div class="titulo"><h3>En atención</h3></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Folio</th>
+          <th>Qué pasó</th>
+          <th>Pedido</th>
+          <th>Abierta</th>
+          <th>Quién tiene la pelota</th>
+          <th>Reloj</th>
+          <th>Prioridad</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inc in abiertas %}
+          <tr class="fila-link">
+            <td class="mono"><a href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+            <td>{{ inc.get_tipo_display }}</td>
+            <td class="mono">{% if inc.pedido %}{{ inc.pedido.folio }}{% else %}—{% endif %}</td>
+            <td class="small">{{ inc.abierta_hace }}</td>
+            <td class="small">{{ inc.pelota }}</td>
+            <td><span class="pill {{ inc.reloj_clase }}">{{ inc.reloj_texto }}</span></td>
+            <td>{% if inc.prioridad == 'P1' %}<span class="pill accent">Urgente</span>{% else %}<span class="pill">{{ inc.get_prioridad_display }}</span>{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7" class="muted">No hay incidencias abiertas. Cuando algo falle, aquí lo verás con folio, reloj y responsable.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="titulo"><h3>Historial</h3></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Folio</th>
+          <th>Qué pasó</th>
+          <th>Pedido</th>
+          <th>Abierta el</th>
+          <th>Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inc in historial %}
+          <tr class="fila-link">
+            <td class="mono"><a href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+            <td>{{ inc.get_tipo_display }}</td>
+            <td class="mono">{% if inc.pedido %}{{ inc.pedido.folio }}{% else %}—{% endif %}</td>
+            <td class="small">{{ inc.ts_apertura|date:"d/M/Y H:i" }}</td>
+            <td><span class="pill ok">{{ inc.get_estado_display }}</span></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5" class="muted">Todavía no hay incidencias resueltas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

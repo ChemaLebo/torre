@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Recepciones{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción</div>
+    <h1>Recepciones</h1>
+  </div>
+  <div class="quien">El pallet se desarma el mismo día, siempre.</div>
+</div>
+
+{% if abiertas %}
+<div class="lista-cards">
+  {% for orden in abiertas %}
+  <div class="card">
+    <div class="titulo">
+      <h2 class="mono">{{ orden.folio }}</h2>
+      <span class="pill {% if orden.estado == 'RECIBIDA' %}warn{% elif orden.estado == 'EN_RECEPCION' %}accent{% endif %}">{{ orden.get_estado_display }}</span>
+    </div>
+    <p>{{ orden.cliente.nombre }}
+      <span class="small">· cita <span class="mono">{{ orden.fecha_compromiso|date:"D d/M"|default:"—" }}</span>
+      · avance <span class="num">{{ orden.total_recibido }} / {{ orden.total_anunciado }}</span></span>
+    </p>
+    {% if orden.sla_texto %}<p><span class="pill {{ orden.sla_tono }}">{{ orden.sla_texto }}</span></p>
+    {% else %}<p class="small muted">Reloj SLA: aún no inicia</p>{% endif %}
+    <a class="btn primario bloque" href="{% url 'piso:recepcion_detalle' orden.pk %}">Trabajar</a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="banner ok"><span class="foco"></span>Sin recepciones pendientes. Nada anunciado por trabajar.</div>
+{% endif %}
+
+{% if cerradas %}
+<div class="card mt">
+  <div class="titulo"><h2>Últimas cerradas</h2></div>
+  {% for orden in cerradas %}
+  <div class="corral-fila">
+    <div class="crece"><span class="mono">{{ orden.folio }}</span> · {{ orden.cliente.nombre }}</div>
+    <span class="mono small">{{ orden.ts_vendible|date:"d/M H:i"|default:"—" }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

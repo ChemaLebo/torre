@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Mi turno{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Local 380 E</div>
+    <h1>Mi turno</h1>
+  </div>
+</div>
+
+{# Contadores vivos en una línea + reloj del corte. #}
+<div class="banner {{ corte_tono }}">
+  <span class="foco"></span>
+  <div>
+    <b>{{ num_por_pickear }} por pickear · {{ por_empacar|length }} por empacar · {{ staging|length }} en salida</b>
+    <div class="small">Corte {{ corte_hora }} · {{ corte_texto }}</div>
+  </div>
+</div>
+
+{% if siguiente %}
+<div class="card">
+  <div class="titulo">
+    <div class="eyebrow">Siguiente</div>
+    {% if siguiente.ya_empezado %}<span class="pill accent">ya empezado — termínalo</span>{% else %}<span class="pill">en cola</span>{% endif %}
+  </div>
+  <h1 class="mono">{{ siguiente.folio }}</h1>
+  <p>{{ siguiente.cliente.nombre }} · {{ siguiente.comprador_nombre|default:"sin nombre" }}</p>
+  <div class="fila">
+    <span class="pill">{{ siguiente.num_lineas }} línea{{ siguiente.num_lineas|pluralize }}</span>
+    <span class="pill">{{ siguiente.total_piezas }} piezas</span>
+    {% if siguiente.es_local %}<span class="pill warn">local</span>{% else %}<span class="pill">foráneo</span>{% endif %}
+    {% if siguiente.incidencia_activa %}<span class="pill crit">faltante</span>{% endif %}
+  </div>
+</div>
+<form method="post" class="accion-fija mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="siguiente">
+  <input type="hidden" name="pedido_id" value="{{ siguiente.pk }}">
+  {% if siguiente.ya_empezado %}<input type="hidden" name="empezado" value="1">{% endif %}
+  <button class="btn primario gigante" type="submit">EMPEZAR ▶</button>
+</form>
+{% else %}
+<div class="card centro">
+  <h1>Todo al día 🍺</h1>
+  <p class="muted">Sin pedidos en la cola. Lo que sigue en la agenda está aquí abajo.</p>
+</div>
+{% endif %}
+
+{# Agenda del día: cards compactas apiladas (no tablas). #}
+<div class="lista-cards mt">
+  {% if restocks %}
+  <div class="card">
+    <div class="titulo"><h2>Cancelaciones: regresar mercancía</h2><span class="pill warn">restock pendiente</span></div>
+    <p class="small">El pedido se canceló con mercancía en proceso. Regresa las piezas a su ubicación y confirma aquí.</p>
+    {% for p in restocks %}
+    <div class="corral-fila">
+      <div class="crece"><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }} <span class="small">({{ p.total_piezas }} piezas)</span></div>
+      <form method="post">{% csrf_token %}
+        <input type="hidden" name="accion" value="confirmar_restock">
+        <input type="hidden" name="pedido_id" value="{{ p.pk }}">
+        <button class="btn" type="submit">Mercancía regresada</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if recepciones_abiertas %}
+  <div class="card">
+    <div class="titulo"><h2>Recepciones abiertas</h2><a class="btn chico" href="{% url 'piso:recepciones' %}">Ver todo</a></div>
+    {% for orden in recepciones_abiertas %}
+    <div class="corral-fila">
+      <div class="crece"><span class="mono">{{ orden.folio }}</span> · {{ orden.cliente.nombre }}</div>
+      <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Trabajar</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if conteos_pendientes %}
+  <div class="card">
+    <div class="titulo"><h2>Conteos de hoy</h2><a class="btn chico" href="{% url 'piso:conteos' %}">Ir a conteos</a></div>
+    <ul class="timeline">
+      {% for t in conteos_pendientes %}
+      <li><span class="mono">{{ t.sku.codigo }}</span> · {{ t.sku.descripcion }} <span class="small">({{ t.sku.cliente.nombre }})</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if staging %}
+  <div class="card">
+    <div class="titulo"><h2>En salida</h2><a class="btn chico" href="{% url 'piso:salida' %}">Ir a salida</a></div>
+    <p class="small">{{ staging|length }} pedido{{ staging|length|pluralize }} esperando al chofer en su corral.</p>
+  </div>
+  {% endif %}
+
+  {% if flota_propia and entregas_locales %}
+  <div class="card">
+    <div class="titulo"><h2>Entregas locales en reparto</h2><a class="btn chico" href="{% url 'piso:entrega_local' %}">Ver POD</a></div>
+    <p class="small">{{ entregas_locales|length }} pedido{{ entregas_locales|length|pluralize }} por cerrar con POD.</p>
+  </div>
+  {% endif %}
+</div>
+
+{# Opt-in de push: push.js muestra la zona solo con soporte Web Push y sin suscripción previa. #}
+<div class="mt centro" id="zona-push" hidden>
+  <button class="btn chico btn-push" id="btn-push" type="button" data-vapid="{{ vapid_public_key }}" data-zona="zona-push">🔔 Activar notificaciones</button>
+  <div class="small muted">Te avisamos aunque traigas la app cerrada: pedido nuevo o camión anunciado.</div>
+</div>
+{% endblock %}

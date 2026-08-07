@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Bodega{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="90">{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Bodega</h1>
+  </div>
+  <div class="quien">Actualizado a las <b class="mono">{{ actualizado|time:"H:i" }}</b> · se refresca solo cada 90 s</div>
+</div>
+
+<div class="grid bodega-grid">
+  <div class="card">
+    <div class="titulo">
+      <h3>Local 380 E · plano en vivo</h3>
+      <span class="small">toca una zona para ver su detalle</span>
+    </div>
+    {% include "includes/plano_bodega.html" %}
+  </div>
+
+  <div class="card">
+
+    <div class="panel-zona" data-panel="descarga">
+      <div class="titulo">
+        <h3>Descarga y desarmado</h3>
+        <span class="pill {% if ordenes %}accent{% endif %}">{{ ordenes|length }} entrada(s)</span>
+      </div>
+      {% if ordenes %}
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr><th>Folio</th><th>Cliente</th><th>Cita</th><th>Tarimas</th><th>Avance</th><th>Reloj</th></tr></thead>
+            <tbody>
+              {% for orden in ordenes %}
+              <tr>
+                <td class="mono">{{ orden.folio }}</td>
+                <td>{{ orden.cliente.nombre }}</td>
+                <td class="mono">{{ orden.fecha_compromiso|date:"d/m"|default:"—" }}</td>
+                <td class="mono">{{ orden.tarimas }}</td>
+                <td><span class="pill {{ orden.pill }}">{{ orden.total_recibido }}/{{ orden.total_anunciado }} pzas</span></td>
+                <td>{% if orden.sla_texto %}<span class="pill {{ orden.sla_tono }}">{{ orden.sla_texto }}</span>{% else %}<span class="small">sin descargar</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">Sin camiones en el andén ni citas para hoy o mañana.</p>
+      {% endif %}
+      <h3 class="mt">En desarmado / put-away</h3>
+      {% if putaway %}
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr><th>Cliente</th><th>SKU</th><th class="derecha">Piezas</th></tr></thead>
+            <tbody>
+              {% for fila in putaway %}
+              <tr>
+                <td>{{ fila.sku__cliente__nombre }}</td>
+                <td class="mono">{{ fila.sku__codigo }}</td>
+                <td class="derecha mono">{{ fila.piezas }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">Nada pendiente de acomodar: zona amarilla despejada.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="almacen">
+      <div class="titulo">
+        <h3>Almacén</h3>
+        <span class="pill ok">{{ almacen.n_skus }} SKU(s) con stock</span>
+      </div>
+      <div class="grid g2 mb">
+        <div class="stat"><b>{{ almacen.total_vendible }}</b><span>piezas vendibles</span></div>
+        <div class="stat"><b>{{ almacen.total_apartado }}</b><span>piezas apartadas</span></div>
+      </div>
+      {% if almacen.por_cliente %}
+        <h3>Por cliente</h3>
+        {% for fila in almacen.por_cliente %}
+          <div class="fila entre">
+            <span class="small">{{ fila.sku__cliente__nombre }}</span>
+            <span class="mono">{{ fila.piezas }} pzas</span>
+          </div>
+        {% endfor %}
+        <h3 class="mt">Por ubicación</h3>
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr><th>Ubicación</th><th class="derecha">Vendibles</th><th class="derecha">Apartadas</th></tr></thead>
+            <tbody>
+              {% for ubic in almacen.ubicaciones %}
+              <tr>
+                <td class="mono">{{ ubic.codigo }}</td>
+                <td class="derecha mono">{{ ubic.vendible }}</td>
+                <td class="derecha mono">{{ ubic.apartado }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">Racks vacíos: sin stock ubicado todavía.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="packing">
+      <div class="titulo">
+        <h3>Packing · Empaque</h3>
+        <span class="pill {% if en_picking_n %}accent{% endif %}">{{ en_picking_n }} en picking</span>
+      </div>
+      <h3>Surtiéndose en pasillo</h3>
+      {% for pedido in surtiendo %}
+        <div class="fila entre mb">
+          <div>
+            <span class="mono">{{ pedido.folio }}</span>
+            <span class="small">· {{ pedido.cliente.nombre }} · {{ pedido.piezas }} pzas</span>
+          </div>
+          <span class="pill accent">{{ pedido.piezas_pickeadas }}/{{ pedido.piezas }}</span>
+        </div>
+      {% empty %}
+        <p class="muted">Nadie surtiendo ahorita.</p>
+      {% endfor %}
+      <h3 class="mt">Listos para empacar</h3>
+      {% for pedido in listos_empaque %}
+        <div class="fila entre mb">
+          <div>
+            <span class="mono">{{ pedido.folio }}</span>
+            <span class="small">· {{ pedido.cliente.nombre }} · {{ pedido.piezas }} pzas</span>
+          </div>
+          <span class="pill ok">completo</span>
+        </div>
+      {% empty %}
+        <p class="muted">Mesas de empaque libres.</p>
+      {% endfor %}
+    </div>
+
+    <div class="panel-zona" data-panel="paquetes_listos">
+      <div class="titulo">
+        <h3>Paquetes listos · corrales</h3>
+        <span class="pill {% if en_corral_n %}accent{% endif %}">{{ paquetes_n }} paquete(s)</span>
+      </div>
+      {% for grupo in corrales %}
+        <h3 {% if not forloop.first %}class="mt"{% endif %}>{{ grupo.nombre }} <span class="small mono">{{ grupo.codigo }}</span></h3>
+        {% for pedido in grupo.pedidos %}
+          <div class="fila entre mb">
+            <div>
+              <span class="mono">{{ pedido.folio }}</span>
+              <span class="small">· {{ pedido.cliente.nombre }} · {{ pedido.n_paquetes }} paquete(s)</span>
+            </div>
+            <span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span>
+          </div>
+        {% empty %}
+          <p class="muted">Corral vacío.</p>
+        {% endfor %}
+      {% endfor %}
+    </div>
+
+    <div class="panel-zona" data-panel="cuarentena">
+      <div class="titulo">
+        <h3>Cuarentena</h3>
+        <span class="pill {% if cuarentena_piezas %}crit{% else %}ok{% endif %}">{{ cuarentena_piezas }} pieza(s)</span>
+      </div>
+      {% if cuarentena %}
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr><th>Cliente</th><th>SKU</th><th class="derecha">Piezas</th></tr></thead>
+            <tbody>
+              {% for fila in cuarentena %}
+              <tr>
+                <td>{{ fila.sku__cliente__nombre }}</td>
+                <td class="mono">{{ fila.sku__codigo }}</td>
+                <td class="derecha mono">{{ fila.piezas }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="small mt">Nada sale de aquí sin dictamen con doble firma (MER-01 / RET-01).</p>
+      {% else %}
+        <p class="muted">Cuarentena vacía. Así nos gusta.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="oficina">
+      <div class="titulo"><h3>Oficina · Mesa de Control</h3></div>
+      <div class="stat {% if badges.oficina %}warn{% else %}ok{% endif %} mb">
+        <b>{{ badges.oficina }}</b>
+        <span>incidencia(s) abiertas en gestión</span>
+      </div>
+      <a class="btn chico" href="{% url 'mesa:incidencias' %}?estado=abiertas">Gestionar incidencias</a>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}POD {{ pedido.folio }}{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Entrega local · POD</div>
+    <h1>{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · {{ pedido.comprador_nombre|default:"sin nombre" }}
+      {% if pedido.comprador_tel %}· <span class="mono">{{ pedido.comprador_tel }}</span>{% endif %}
+    </div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:entrega_local' %}">Volver</a>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Dirección de entrega</h2></div>
+  <p>
+    {{ pedido.direccion.address1|default:"Sin calle registrada" }}
+    {% if pedido.direccion.address2 %}, {{ pedido.direccion.address2 }}{% endif %}
+    {% if pedido.direccion.city %}· {{ pedido.direccion.city }}{% endif %}
+    · CP <span class="mono">{{ pedido.cp|default:"—" }}</span>
+  </p>
+  {% if pedido.nota_regalo %}<p class="small">Nota de regalo incluida: no menciones el precio al entregar.</p>{% endif %}
+</div>
+
+<div class="banner crit mt"><span class="foco"></span>
+  Este paquete lleva alcohol. Verifica la identificación de quien recibe: si no es mayor de edad, NO entregues y llama a Mesa de Control.
+</div>
+
+<div class="card mt">
+  <div class="titulo"><h2>Cerrar entrega (POD)</h2></div>
+  <form method="post" enctype="multipart/form-data">{% csrf_token %}
+    <label for="foto_pod">Foto de entrega (paquete en manos del receptor o en la puerta)</label>
+    <input type="file" name="foto_pod" id="foto_pod" accept="image/*" capture="environment" required>
+
+    <label for="receptor">Nombre de quien recibe</label>
+    <input type="text" name="receptor" id="receptor" placeholder="Nombre y apellido" autocomplete="off" required>
+
+    <label class="fila mt" for="mayoria_edad">
+      <input type="checkbox" name="mayoria_edad" id="mayoria_edad" value="si" required>
+      <b>Verifiqué en persona que quien recibe es mayor de edad</b> — obligatorio: el producto es alcohol.
+    </label>
+
+    <div class="mt"><button class="btn primario" type="submit">Entregado — guardar POD</button></div>
+  </form>
+  <p class="small muted mt">Sin foto, sin nombre o sin verificación de edad, la entrega no se puede cerrar.</p>
+</div>
+{% endblock %}

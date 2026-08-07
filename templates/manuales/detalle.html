@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ manual.codigo }} · {{ manual.titulo }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/manuales.css' %}">{% endblock %}
+
+{% block content %}
+<div class="manual-migas"><a href="{% url url_lista %}">← Manuales</a></div>
+
+<div class="manual-layout">
+  <article class="manual-lectura">
+    <header class="manual-cabecera">
+      <div class="manual-emoji">{{ manual.emoji }}</div>
+      <div class="eyebrow">{{ manual.codigo }}{% if manual.version %} · {{ manual.version }}{% endif %}</div>
+      <h1 class="manual-titulo">{{ manual.titulo }}</h1>
+      {% if manual.propiedades %}
+        <dl class="manual-props">
+          {% for prop in manual.propiedades %}
+            <div class="prop"><dt>{{ prop.0 }}</dt><dd>{{ prop.1|safe }}</dd></div>
+          {% endfor %}
+        </dl>
+      {% endif %}
+    </header>
+
+    {% if manual.toc %}
+      <details class="manual-toc-movil">
+        <summary>En esta página</summary>
+        <nav>
+          {% for h in manual.toc %}<a href="#{{ h.id }}">{{ h.titulo }}</a>{% endfor %}
+        </nav>
+      </details>
+    {% endif %}
+
+    <div class="manual-cuerpo">{% include cuerpo_template %}</div>
+
+    {% if rol_actual == "portal" %}
+      <section class="card manual-sugerencia">
+        <div class="titulo"><h3>Sugerir una mejora</h3></div>
+        <p class="small">¿Ves algo mejorable en cómo operamos? Dínoslo aquí: tu sugerencia llega directo a la Mesa de Control, con tu nombre y este manual.</p>
+        <form method="post">
+          {% csrf_token %}
+          <label for="{{ form.texto.id_for_label }}">{{ form.texto.label }}</label>
+          {{ form.texto }}
+          {{ form.texto.errors }}
+          <div class="fila mt">
+            <button class="btn primario" type="submit">Enviar a la Mesa de Control</button>
+          </div>
+        </form>
+      </section>
+    {% endif %}
+  </article>
+
+  {% if manual.toc %}
+    <aside class="manual-toc">
+      <div class="eyebrow">En esta página</div>
+      <nav>
+        {% for h in manual.toc %}<a href="#{{ h.id }}">{{ h.titulo }}</a>{% endfor %}
+      </nav>
+    </aside>
+  {% endif %}
+</div>
+{% endblock %}

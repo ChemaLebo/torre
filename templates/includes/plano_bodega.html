@@ -1,0 +1,133 @@
+{% comment %}
+Plano interactivo del Local 380 E (arquitectónico 8A casa de diseño, 18/may/2026).
+Planta portrait ≈ 16.5 m de ancho × 21 m de fondo; viewBox en cm.
+
+Contexto requerido (lo arma la vista, nunca el template):
+- badges: dict zona → conteo vivo (None = sin badge, p. ej. oficina en portal)
+- racks: apps.mesa.plano.racks_bodega() — 14 racks con su ubicación real
+- zona_activa: clave de la zona abierta al cargar
+
+Los paneles de detalle viven en el template que incluye este partial, como
+divs `data-panel="<zona>"` server-rendered; el JS de abajo solo alterna
+visibilidad. Sin JS, todos los paneles quedan visibles apilados.
+{% endcomment %}
+<div class="plano-wrap" id="plano-bodega" data-zona-activa="{{ zona_activa }}">
+<svg class="plano-svg" viewBox="0 0 1660 2110" role="img"
+     aria-label="Plano de la bodega Local 380 E con datos vivos por zona">
+
+  <!-- Muros del local -->
+  <rect class="plano-piso" x="20" y="20" width="1620" height="2070" rx="8"/>
+
+  <!-- Acceso / andén: dos puertas al muro izquierdo + polipasto -->
+  <g class="plano-acceso">
+    <rect class="plano-puerta" x="12" y="640" width="16" height="140"/>
+    <rect class="plano-puerta" x="12" y="860" width="16" height="140"/>
+    <circle class="plano-polipasto" cx="160" cy="760" r="30"/>
+    <text class="plano-etiqueta chica" x="48" y="615">Acceso · Andén</text>
+    <text class="chica" x="106" y="835">Polipasto</text>
+  </g>
+
+  <!-- Baños + regadera: zona neutra, sin datos -->
+  <g class="plano-banos">
+    <rect class="plano-neutra" x="120" y="1150" width="440" height="410" rx="10"/>
+    <text class="plano-etiqueta chica" x="340" y="1365" text-anchor="middle">Baños · Regadera</text>
+  </g>
+
+  <!-- Oficina · Mesa de Control -->
+  <g class="plano-zona zona-oficina" data-zona="oficina" aria-label="Oficina, Mesa de Control">
+    <rect class="zona-fondo" x="700" y="40" width="460" height="280" rx="10"/>
+    <text class="plano-etiqueta" x="930" y="175" text-anchor="middle">Oficina</text>
+    <text class="chica" x="930" y="215" text-anchor="middle">Mesa de Control</text>
+    {% if badges.oficina != None %}
+    <g class="plano-badge"><circle cx="1112" cy="90" r="36"/><text x="1112" y="102" text-anchor="middle">{{ badges.oficina }}</text></g>
+    {% endif %}
+  </g>
+
+  <!-- Paquetes listos: corrales de salida -->
+  <g class="plano-zona zona-paquetes_listos" data-zona="paquetes_listos" aria-label="Paquetes listos, corrales de salida">
+    <rect class="zona-fondo" x="60" y="180" width="580" height="380" rx="10"/>
+    <text class="plano-etiqueta" x="85" y="240">Paquetes listos</text>
+    <rect class="plano-sub" x="85" y="290" width="165" height="235" rx="6"/>
+    <text class="chica" x="167" y="415" text-anchor="middle">SAL-PQX</text>
+    <rect class="plano-sub" x="268" y="290" width="165" height="235" rx="6"/>
+    <text class="chica" x="350" y="415" text-anchor="middle">SAL-LOCAL</text>
+    <rect class="plano-sub" x="451" y="290" width="165" height="235" rx="6"/>
+    <text class="chica" x="533" y="415" text-anchor="middle">SAL-OTRO</text>
+    <g class="plano-badge"><circle cx="592" cy="230" r="36"/><text x="592" y="242" text-anchor="middle">{{ badges.paquetes_listos }}</text></g>
+  </g>
+
+  <!-- Packing: mesas de empaque + báscula -->
+  <g class="plano-zona zona-packing" data-zona="packing" aria-label="Packing, mesas de empaque y báscula">
+    <rect class="zona-fondo" x="680" y="360" width="560" height="280" rx="10"/>
+    <text class="plano-etiqueta" x="705" y="415">Packing</text>
+    <rect class="plano-sub" x="705" y="445" width="210" height="110" rx="6"/>
+    <text class="chica" x="810" y="510" text-anchor="middle">Mesa 1</text>
+    <rect class="plano-sub" x="940" y="445" width="210" height="110" rx="6"/>
+    <text class="chica" x="1045" y="510" text-anchor="middle">Mesa 2</text>
+    <circle class="plano-sub" cx="1185" cy="590" r="28"/>
+    <text class="chica" x="1185" y="599" text-anchor="middle">kg</text>
+    <g class="plano-badge"><circle cx="1192" cy="410" r="36"/><text x="1192" y="422" text-anchor="middle">{{ badges.packing }}</text></g>
+  </g>
+
+  <!-- Descarga y desarmado de tarimas -->
+  <g class="plano-zona zona-descarga" data-zona="descarga" aria-label="Descarga y desarmado de tarimas">
+    <rect class="zona-fondo" x="300" y="600" width="340" height="480" rx="10"/>
+    <text class="plano-etiqueta" x="322" y="670">Descarga</text>
+    <text class="chica" x="322" y="710">y desarmado</text>
+    <text class="chica" x="322" y="746">de tarimas</text>
+    <g class="plano-badge"><circle cx="592" cy="650" r="36"/><text x="592" y="662" text-anchor="middle">{{ badges.descarga }}</text></g>
+  </g>
+
+  <!-- Almacén: 7 filas de racks dobles con las ubicaciones reales -->
+  <g class="plano-zona zona-almacen" data-zona="almacen" aria-label="Almacén, racks con ubicaciones">
+    <rect class="zona-fondo" x="660" y="680" width="640" height="1300" rx="10"/>
+    <text class="plano-etiqueta" x="690" y="735">Almacén</text>
+    {% for rack in racks %}
+    <rect class="plano-rack{% if not rack.codigo %} vacio{% endif %}" x="{{ rack.x }}" y="{{ rack.y }}" width="{{ rack.w }}" height="{{ rack.h }}"/>
+    {% if rack.codigo %}<text class="plano-rack-codigo" x="{{ rack.cx }}" y="{{ rack.cy }}" text-anchor="middle">{{ rack.codigo }}</text>{% endif %}
+    {% endfor %}
+    <g class="plano-badge"><circle cx="1252" cy="732" r="36"/><text x="1252" y="744" text-anchor="middle">{{ badges.almacen }}</text></g>
+  </g>
+
+  <!-- Cuarentena: MER-01 / RET-01 -->
+  <g class="plano-zona zona-cuarentena" data-zona="cuarentena" aria-label="Cuarentena, merma y retornos">
+    <rect class="zona-fondo" x="1330" y="1700" width="290" height="280" rx="10"/>
+    <text class="plano-etiqueta chica" x="1475" y="1760" text-anchor="middle">Cuarentena</text>
+    <text class="chica" x="1475" y="1850" text-anchor="middle">MER-01</text>
+    <text class="chica" x="1475" y="1895" text-anchor="middle">RET-01</text>
+    <g class="plano-badge"><circle cx="1394" cy="1754" r="36"/><text x="1394" y="1766" text-anchor="middle">{{ badges.cuarentena }}</text></g>
+  </g>
+</svg>
+</div>
+
+<script>
+(function () {
+  var raiz = document.getElementById("plano-bodega");
+  if (!raiz) { return; }
+  var zonas = raiz.querySelectorAll("[data-zona]");
+  var paneles = document.querySelectorAll("[data-panel]");
+
+  function activar(clave) {
+    zonas.forEach(function (zona) {
+      zona.classList.toggle("activa", zona.getAttribute("data-zona") === clave);
+    });
+    paneles.forEach(function (panel) {
+      panel.hidden = panel.getAttribute("data-panel") !== clave;
+    });
+  }
+
+  zonas.forEach(function (zona) {
+    zona.setAttribute("tabindex", "0");
+    zona.setAttribute("role", "button");
+    zona.addEventListener("click", function () { activar(zona.getAttribute("data-zona")); });
+    zona.addEventListener("keydown", function (evento) {
+      if (evento.key === "Enter" || evento.key === " ") {
+        evento.preventDefault();
+        activar(zona.getAttribute("data-zona"));
+      }
+    });
+  });
+
+  activar(raiz.getAttribute("data-zona-activa"));
+})();
+</script>

@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}Inventario · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Inventario</h1>
+  </div>
+  <div class="quien">Stock por cliente, ajustes con doble firma y ubicaciones del Local 380 E.</div>
+</div>
+
+<div class="card mb">
+  <div class="fila">
+    <span class="small muted">Cliente:</span>
+    {% for c in clientes_activos %}
+      <a class="pill {% if cliente_sel and cliente_sel.pk == c.pk %}accent{% endif %}" href="{% url 'mesa:inventario' %}?cliente={{ c.slug }}">{{ c.nombre }}</a>
+    {% empty %}
+      <span class="muted">No hay clientes activos.</span>
+    {% endfor %}
+    <a class="pill {% if ver_ubicaciones %}accent{% endif %}" href="{% url 'mesa:inventario' %}?ver=ubicaciones">Ubicaciones</a>
+  </div>
+</div>
+
+{% if ver_ubicaciones %}
+
+<div class="card mb">
+  <div class="titulo"><h2>Ubicaciones del Local 380 E</h2></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Código</th><th>Tipo</th><th>Estado</th><th>Saldos vivos</th><th class="derecha"></th></tr>
+      </thead>
+      <tbody>
+        {% for ubic in ubicaciones %}
+        <tr>
+          <td class="mono">{{ ubic.codigo }}</td>
+          <td>{{ ubic.get_tipo_display }}</td>
+          <td>{% if ubic.activo %}<span class="pill ok">activa</span>{% else %}<span class="pill warn">apagada</span>{% endif %}</td>
+          <td class="num">{{ ubic.saldos_vivos }}</td>
+          <td class="derecha">
+            <form method="post">{% csrf_token %}
+              <input type="hidden" name="accion" value="ubicacion_toggle">
+              <input type="hidden" name="ubicacion_id" value="{{ ubic.pk }}">
+              <button class="btn chico" type="submit">{% if ubic.activo %}Apagar{% else %}Prender{% endif %}</button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="muted centro">Sin ubicaciones dadas de alta.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small mt">Una ubicación con saldos vivos no se puede apagar: primero mueve sus piezas.</p>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Nueva ubicación</h2></div>
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="ubicacion_nueva">
+    <div class="grid g2">
+      <div>
+        <label for="ubic-codigo">Código</label>
+        <input type="text" name="codigo" id="ubic-codigo" class="mono" placeholder="A-02-1" autocomplete="off" required>
+      </div>
+      <div>
+        <label for="ubic-tipo">Tipo</label>
+        <select name="tipo" id="ubic-tipo" required>
+          {% for clave, nombre in tipos_ubicacion %}
+          <option value="{{ clave }}">{{ nombre }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="mt"><button class="btn primario" type="submit">Dar de alta</button></div>
+  </form>
+</div>
+
+{% elif sku_detalle %}
+
+<div class="card mb">
+  <div class="titulo">
+    <h2><span class="mono">{{ sku_detalle.codigo }}</span> · {{ sku_detalle.descripcion }}</h2>
+    <a class="btn chico" href="{% url 'mesa:inventario' %}?cliente={{ cliente_sel.slug }}">Volver al resumen</a>
+  </div>
+  <div class="grid g4">
+    <div class="card stat"><b>{{ resumen.fisico }}</b><span>físico</span></div>
+    <div class="card stat"><b>{{ resumen.vendible }}</b><span>vendible · {{ resumen.apartado }} apartado</span></div>
+    <div class="card stat {% if resumen.cuarentena %}warn{% endif %}"><b>{{ resumen.cuarentena }}</b><span>cuarentena · {{ resumen.en_recepcion }} en recepción</span></div>
+    <div class="card stat"><b>{{ resumen.disponible }}</b><span>disponible publicado</span></div>
+  </div>
+</div>
+
+<div class="card mb">
+  <div class="titulo"><h2>Saldos por ubicación</h2><span class="pill accent">solo lectura</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Ubicación</th><th>Estado</th><th>Lote</th><th>Caducidad</th><th class="derecha">Piezas</th></tr>
+      </thead>
+      <tbody>
+        {% for saldo in saldos %}
+        <tr>
+          <td class="mono">{{ saldo.ubicacion.codigo }}</td>
+          <td>{{ saldo.get_estado_display }}</td>
+          <td class="mono">{% if saldo.lote %}{{ saldo.lote.codigo }}{% else %}—{% endif %}</td>
+          <td class="mono">{% if saldo.lote.fecha_caducidad %}{{ saldo.lote.fecha_caducidad|date:"d/M/Y" }}{% else %}—{% endif %}</td>
+          <td class="num">{{ saldo.cantidad }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="muted centro">Este SKU no tiene saldos vivos.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small mt">El saldo no se toca a mano: todo movimiento pasa por los servicios de inventario y queda en el kardex.</p>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h2>Kardex · últimos {{ movimientos|length }} movimientos</h2></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead>
+          <tr><th>Cuándo</th><th>Tipo</th><th>Piezas</th><th>Referencia</th><th>Actor</th></tr>
+        </thead>
+        <tbody>
+          {% for mov in movimientos %}
+          <tr>
+            <td class="small">{{ mov.ts|date:"d/M/Y H:i" }}</td>
+            <td>{{ mov.get_tipo_display }}</td>
+            <td class="mono">{% if mov.delta > 0 %}+{% endif %}{{ mov.delta }}</td>
+            <td class="mono">{{ mov.referencia|default:"—" }}</td>
+            <td class="small">{{ mov.actor|default:"—" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="muted centro">Sin movimientos todavía.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h2>Ajuste con doble firma</h2><span class="pill crit">dos PINs</span></div>
+    <p class="small">El ajuste mueve el saldo vendible y queda en el kardex con folio AJU. Nada se ajusta sin dos personas.</p>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="ajustar">
+      <input type="hidden" name="cliente" value="{{ cliente_sel.slug }}">
+      <input type="hidden" name="sku" value="{{ sku_detalle.codigo }}">
+      <div class="grid g2">
+        <div>
+          <label for="aj-delta">Piezas (con signo)</label>
+          <input type="number" name="delta" id="aj-delta" class="mono" placeholder="-2" autocomplete="off" required>
+        </div>
+        <div>
+          <label for="aj-motivo">Motivo</label>
+          <select name="motivo" id="aj-motivo" required>
+            {% for clave, nombre in motivos_ajuste %}
+            <option value="{{ clave }}">{{ nombre }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <label for="aj-incidencia">Folio de incidencia (opcional)</label>
+      <input type="text" name="incidencia_ref" id="aj-incidencia" class="mono" placeholder="INC-2026-0001" autocomplete="off">
+      <div class="grid g2">
+        <div>
+          <label for="aj-a1">Firma 1 · usuario</label>
+          <input type="text" name="autorizo_1" id="aj-a1" autocomplete="off" required>
+          <label for="aj-p1">Firma 1 · PIN</label>
+          <input type="password" name="pin_1" id="aj-p1" inputmode="numeric" maxlength="6" autocomplete="off" required>
+        </div>
+        <div>
+          <label for="aj-a2">Firma 2 · usuario (distinto)</label>
+          <input type="text" name="autorizo_2" id="aj-a2" autocomplete="off" required>
+          <label for="aj-p2">Firma 2 · PIN</label>
+          <input type="password" name="pin_2" id="aj-p2" inputmode="numeric" maxlength="6" autocomplete="off" required>
+        </div>
+      </div>
+      <div class="mt"><button class="btn peligro" type="submit">Aplicar ajuste</button></div>
+    </form>
+  </div>
+</div>
+
+{% elif cliente_sel %}
+
+<div class="card">
+  <div class="titulo"><h2>Inventario de {{ cliente_sel.nombre }}</h2></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>SKU</th><th>Físico</th><th>En recepción</th><th>Vendible</th><th>Apartado</th>
+          <th>En empaque</th><th>Cuarentena</th><th>Disponible</th><th>Último conteo</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for fila in filas %}
+        <tr>
+          <td><span class="mono">{{ fila.sku.codigo }}</span><div class="small">{{ fila.sku.descripcion }}</div></td>
+          <td class="num">{{ fila.fisico }}</td>
+          <td class="num">{{ fila.en_recepcion }}</td>
+          <td class="num">{{ fila.vendible }}</td>
+          <td class="num">{{ fila.apartado }}</td>
+          <td class="num">{{ fila.en_empaque }}</td>
+          <td class="num">{{ fila.cuarentena }}</td>
+          <td class="num">
+            <span class="mono">{{ fila.disponible }}</span>
+            {% if fila.bajo_reorden %}<span class="pill crit">por resurtir</span>{% endif %}
+          </td>
+          <td class="small">{{ fila.ultimo_conteo_hace }}</td>
+          <td><a class="small" href="{% url 'mesa:inventario' %}?cliente={{ cliente_sel.slug }}&amp;sku={{ fila.sku.codigo|urlencode }}">Detalle</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="10" class="muted centro">Este cliente no tiene SKUs activos.</td></tr>
+        {% endfor %}
+        {% if filas %}
+        <tr>
+          <td><b>Total</b></td>
+          <td class="num"><b>{{ totales.fisico }}</b></td>
+          <td class="num"><b>{{ totales.en_recepcion }}</b></td>
+          <td class="num"><b>{{ totales.vendible }}</b></td>
+          <td class="num"><b>{{ totales.apartado }}</b></td>
+          <td class="num"><b>{{ totales.en_empaque }}</b></td>
+          <td class="num"><b>{{ totales.cuarentena }}</b></td>
+          <td class="num"><b>{{ totales.disponible }}</b></td>
+          <td></td>
+          <td></td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small mt">Toca "Detalle" para ver los saldos por ubicación, el kardex y aplicar un ajuste con doble firma.</p>
+</div>
+
+{% else %}
+
+<div class="card">
+  <p class="muted">Elige un cliente para ver su inventario, o entra a Ubicaciones para gestionar el Local 380 E.</p>
+</div>
+
+{% endif %}
+{% endblock %}

@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}Picking {{ pedido.folio }}{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Picking</div>
+    <h1 class="mono">{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }}
+      {% if pedido.es_local %}· <span class="pill warn">entrega local</span>{% endif %}
+      · avance <b class="mono" id="pick-avance-total">{{ pickeadas }} / {{ total_piezas }}</b>
+    </div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:home' %}">Pausar pedido</a>
+</div>
+
+{% if completo %}
+<div class="banner ok"><span class="foco"></span>Pedido completo: todas las piezas escaneadas.</div>
+<a class="btn primario gigante" href="{% url 'piso:empaque_pedido' pedido.pk %}">Ir a empaque ▶</a>
+{% else %}
+
+{% if paquetes|length > 1 %}
+{# Plan de división: banner colapsable de 1 renglón — el texto_para_piso no se pierde. #}
+<details class="colapsable mb">
+  <summary>
+    📦 Va DIVIDIDO en {{ paquetes|length }} cajas
+    {% if ahorro_division > 0 %}· ahorra ${{ ahorro_division|floatformat:0 }}{% endif %}
+    — ver plan
+  </summary>
+  <div class="colapsable-cuerpo">
+    <p class="small">Cada caja lleva su propia guía — no mezcles el contenido entre cajas.</p>
+    {% for paq in paquetes %}
+    <p class="small"><b>Caja {{ paq.numero }}</b> (<span class="mono">{{ paq.peso_kg }} kg</span> · {{ paq.carrier }}):
+      {% for pl in paq.lineas.all %}{{ pl.texto_para_piso }}{% if not forloop.last %} · {% endif %}{% endfor %}
+    </p>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{# Una línea por pantalla, en orden de ruta (primera ubicación FEFO). #}
+{% for linea in lineas %}
+<section class="pick-linea card" {% if linea.completa %}hidden{% endif %}
+         data-linea-id="{{ linea.pk }}" data-cantidad="{{ linea.cantidad }}"
+         data-pickeada="{{ linea.cantidad_pickeada }}"
+         data-barras="{{ linea.sku.codigo_barras|default:'' }}"
+         data-codigo="{{ linea.sku.codigo }}">
+  {% if linea.primera_ubicacion %}
+  <div class="eyebrow">Ve a</div>
+  <div class="pick-ubicacion">{{ linea.primera_ubicacion.ubicacion.codigo }}</div>
+  <div class="small mono">
+    {% if linea.primera_ubicacion.lote %}
+      Lote {{ linea.primera_ubicacion.lote.codigo }}{% if linea.primera_ubicacion.lote.fecha_caducidad %} · cad. {{ linea.primera_ubicacion.lote.fecha_caducidad|date:"d/M/Y" }}{% endif %} — FEFO: este primero
+    {% else %}sin lote{% endif %}
+    {% if linea.ubicaciones|length > 1 %}
+      · también en {% for saldo in linea.ubicaciones|slice:"1:" %}{{ saldo.ubicacion.codigo }}{% if not forloop.last %} · {% endif %}{% endfor %}
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="banner crit"><span class="foco"></span>Sin stock vendible a la vista para {{ linea.sku.codigo }} — avisa a Mesa.</div>
+  {% endif %}
+  <p class="pick-producto mt">{{ linea.sku.descripcion }}<br><span class="small mono">{{ linea.sku.codigo }} · {{ linea.sku.codigo_barras|default:"sin barras" }}</span></p>
+  <div class="pick-avance">{{ linea.cantidad_pickeada }} de {{ linea.cantidad }}</div>
+</section>
+{% endfor %}
+
+{# Abajo FIJO: visor del escáner + fallback manual SIEMPRE visible. #}
+<div class="accion-fija mt">
+  <div class="card">
+    <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
+    <button class="btn primario bloque mt" type="button" id="btn-todas" hidden></button>
+    <form method="post" id="form-pick">{% csrf_token %}
+      <label for="codigo">O teclea el código</label>
+      <div class="fila">
+        <input type="text" name="codigo" id="codigo" class="mono" inputmode="numeric"
+               autocomplete="off" placeholder="Código de barras" style="flex:1 1 auto">
+        <input type="hidden" name="cantidad" value="1">
+        <button class="btn" type="submit">Confirmar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+/* escaner.js carga con defer (corre justo antes de DOMContentLoaded): todo
+   inline que use Escaner/Feedback DEBE esperar DOMContentLoaded o muere en
+   ReferenceError y se lleva la página completa. */
+document.addEventListener("DOMContentLoaded", function () {
+  var csrf = document.querySelector("#form-pick [name=csrfmiddlewaretoken]").value;
+  var secciones = Array.prototype.slice.call(document.querySelectorAll(".pick-linea"));
+  var avanceEl = document.getElementById("pick-avance-total");
+  var btnTodas = document.getElementById("btn-todas");
+  var form = document.getElementById("form-pick");
+  var inputCodigo = document.getElementById("codigo");
+  var ocupado = false;
+
+  function actual() {
+    for (var i = 0; i < secciones.length; i++) {
+      var s = secciones[i];
+      if (Number(s.dataset.pickeada) < Number(s.dataset.cantidad)) return s;
+    }
+    return null;
+  }
+
+  function pinta() {
+    var act = actual();
+    secciones.forEach(function (s) {
+      s.hidden = s !== act;
+      var avance = s.querySelector(".pick-avance");
+      if (avance) avance.textContent = s.dataset.pickeada + " de " + s.dataset.cantidad;
+    });
+    var restante = act ? Number(act.dataset.cantidad) - Number(act.dataset.pickeada) : 0;
+    var muestra = !!act && Number(act.dataset.pickeada) > 0 && restante > 1;
+    btnTodas.hidden = !muestra;
+    if (muestra) {
+      btnTodas.textContent = "×" + restante + " · confirmar todas";
+      btnTodas.dataset.codigo = act.dataset.barras || act.dataset.codigo;
+      btnTodas.dataset.cantidad = restante;
+    }
+  }
+
+  function confirmar(codigo, cantidad) {
+    if (!codigo) return;
+    if (ocupado) {
+      // Jamás descartar una lectura en silencio: el operador debe saber
+      // que su escaneo NO se confirmó todavía.
+      Feedback.error("Espera — confirmando la anterior.");
+      return;
+    }
+    ocupado = true;
+    var datos = new FormData();
+    datos.append("codigo", codigo);
+    datos.append("cantidad", cantidad || "1");
+    fetch(window.location.pathname, {
+      method: "POST",
+      headers: { "Accept": "application/json", "X-CSRFToken": csrf },
+      body: datos,
+    }).then(function (resp) {
+      ocupado = false;
+      var tipo = resp.headers.get("Content-Type") || "";
+      if (resp.redirected || tipo.indexOf("application/json") === -1) {
+        // Sesión expirada (302 al login) o respuesta ajena al servicio:
+        // recargar rehace login/estado — NO es un problema de conexión.
+        window.location.reload();
+        return null;
+      }
+      return resp.json().then(function (r) {
+        if (!resp.ok || !r.ok) {
+          Feedback.error(r.error || ("Error del servidor (" + resp.status + "). Intenta de nuevo."));
+          return;
+        }
+        for (var i = 0; i < secciones.length; i++) {
+          if (Number(secciones[i].dataset.lineaId) === r.linea_id) {
+            secciones[i].dataset.pickeada = r.pickeada;
+          }
+        }
+        if (avanceEl) avanceEl.textContent = r.avance.pickeadas + " / " + r.avance.total;
+        Feedback.ok();
+        if (r.completo && r.siguiente) {
+          Escaner.detener();
+          setTimeout(function () { window.location = r.siguiente; }, 400);
+          return;
+        }
+        pinta();
+      });
+    }).catch(function (err) {
+      ocupado = false;
+      // "Sin conexión" SOLO cuando de verdad no hubo red (TypeError del fetch).
+      if (err instanceof TypeError) {
+        Feedback.error("Sin conexión. Intenta de nuevo.");
+      } else {
+        Feedback.error("Error inesperado. Intenta de nuevo.");
+      }
+    });
+  }
+
+  Escaner.montar(document.getElementById("visor-escaner"), function (valor) {
+    confirmar(valor, "1");
+  });
+
+  form.addEventListener("submit", function (ev) {
+    if (!window.fetch) return; // sin fetch: POST clásico
+    ev.preventDefault();
+    confirmar(inputCodigo.value.trim(), "1");
+    inputCodigo.value = "";
+    inputCodigo.focus();
+  });
+
+  btnTodas.addEventListener("click", function () {
+    confirmar(btnTodas.dataset.codigo, btnTodas.dataset.cantidad);
+  });
+
+  pinta();
+});
+</script>
+{% endif %}
+{% endblock %}

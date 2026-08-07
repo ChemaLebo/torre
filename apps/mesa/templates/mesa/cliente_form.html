@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}{% if cliente %}Editar {{ cliente.nombre }}{% else %}Nuevo cliente{% endif %} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">
+      <a href="{% url 'mesa:clientes' %}">Clientes</a> /
+      {% if cliente %}<a href="{% url 'mesa:cliente_detalle' cliente.pk %}">{{ cliente.slug }}</a> / editar{% else %}nuevo{% endif %}
+    </div>
+    <h1>{% if cliente %}Editar cliente{% else %}Nuevo cliente{% endif %}</h1>
+  </div>
+</div>
+
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+
+    <div class="eyebrow">Identidad y contacto</div>
+    <div class="grid g2 mt">
+      <div>
+        <label for="{{ form.nombre.id_for_label }}">{{ form.nombre.label }}</label>
+        {{ form.nombre }}{{ form.nombre.errors }}
+      </div>
+      <div>
+        <label for="{{ form.slug.id_for_label }}">{{ form.slug.label }}</label>
+        {{ form.slug }}
+        <div class="small muted">{{ form.slug.help_text }}</div>
+        {{ form.slug.errors }}
+      </div>
+      <div>
+        <label for="{{ form.razon_social.id_for_label }}">{{ form.razon_social.label }}</label>
+        {{ form.razon_social }}{{ form.razon_social.errors }}
+      </div>
+      <div>
+        <label for="{{ form.rfc.id_for_label }}">{{ form.rfc.label }}</label>
+        {{ form.rfc }}{{ form.rfc.errors }}
+      </div>
+      <div>
+        <label for="{{ form.contacto_nombre.id_for_label }}">{{ form.contacto_nombre.label }}</label>
+        {{ form.contacto_nombre }}{{ form.contacto_nombre.errors }}
+      </div>
+      <div>
+        <label for="{{ form.contacto_whatsapp.id_for_label }}">{{ form.contacto_whatsapp.label }}</label>
+        {{ form.contacto_whatsapp }}
+        <div class="small muted">{{ form.contacto_whatsapp.help_text }}</div>
+        {{ form.contacto_whatsapp.errors }}
+      </div>
+    </div>
+
+    <div class="eyebrow mt">Configuración operativa</div>
+    <div class="grid g2 mt">
+      <div>
+        <label for="{{ form.buffer_stock.id_for_label }}">{{ form.buffer_stock.label }}</label>
+        {{ form.buffer_stock }}{{ form.buffer_stock.errors }}
+      </div>
+      <div>
+        <label for="{{ form.carrier_preferente.id_for_label }}">{{ form.carrier_preferente.label }}</label>
+        {{ form.carrier_preferente }}{{ form.carrier_preferente.errors }}
+      </div>
+      <div>
+        <label for="{{ form.umbral_visto_bueno_mxn.id_for_label }}">{{ form.umbral_visto_bueno_mxn.label }}</label>
+        {{ form.umbral_visto_bueno_mxn }}{{ form.umbral_visto_bueno_mxn.errors }}
+      </div>
+      <div>
+        <label for="{{ form.naked_packing_local.id_for_label }}">{{ form.naked_packing_local.label }}</label>
+        {{ form.naked_packing_local }}{{ form.naked_packing_local.errors }}
+        <label class="mt" for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>
+        {{ form.activo }}{{ form.activo.errors }}
+      </div>
+    </div>
+    <div class="mt">
+      <label for="{{ form.guia_de_voz.id_for_label }}">{{ form.guia_de_voz.label }}</label>
+      {{ form.guia_de_voz }}{{ form.guia_de_voz.errors }}
+    </div>
+
+    <div class="eyebrow mt">Branding del rastreo (opcional)</div>
+    <div class="grid g2 mt">
+      <div>
+        <label for="{{ form.brand_nombre_publico.id_for_label }}">{{ form.brand_nombre_publico.label }}</label>
+        {{ form.brand_nombre_publico }}{{ form.brand_nombre_publico.errors }}
+      </div>
+      <div>
+        <label for="{{ form.brand_logo_url.id_for_label }}">{{ form.brand_logo_url.label }}</label>
+        {{ form.brand_logo_url }}{{ form.brand_logo_url.errors }}
+      </div>
+      <div>
+        <label for="{{ form.brand_color_primario.id_for_label }}">{{ form.brand_color_primario.label }}</label>
+        {{ form.brand_color_primario }}{{ form.brand_color_primario.errors }}
+      </div>
+      <div>
+        <label for="{{ form.brand_color_fondo.id_for_label }}">{{ form.brand_color_fondo.label }}</label>
+        {{ form.brand_color_fondo }}{{ form.brand_color_fondo.errors }}
+      </div>
+      <div>
+        <label for="{{ form.brand_whatsapp_soporte.id_for_label }}">{{ form.brand_whatsapp_soporte.label }}</label>
+        {{ form.brand_whatsapp_soporte }}{{ form.brand_whatsapp_soporte.errors }}
+      </div>
+      <div>
+        <label for="{{ form.brand_dominio_tienda.id_for_label }}">{{ form.brand_dominio_tienda.label }}</label>
+        {{ form.brand_dominio_tienda }}{{ form.brand_dominio_tienda.errors }}
+      </div>
+    </div>
+
+    <div class="fila mt">
+      <button class="btn primario" type="submit">{% if cliente %}Guardar cambios{% else %}Crear cliente{% endif %}</button>
+      {% if cliente %}
+      <a class="btn" href="{% url 'mesa:cliente_detalle' cliente.pk %}">Cancelar</a>
+      {% else %}
+      <a class="btn" href="{% url 'mesa:clientes' %}">Cancelar</a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% endblock %}

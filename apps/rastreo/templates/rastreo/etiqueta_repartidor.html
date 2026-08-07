@@ -1,0 +1,134 @@
+<!doctype html>
+{% comment %}
+Página pública del REPARTIDOR (QR de la etiqueta v2). Móvil-first, brandeada
+con la identidad del cliente — el 3PL es invisible. Regla dura: aquí JAMÁS se
+muestran teléfono, apellidos ni valor declarado; el contacto con el comprador
+es por los canales oficiales de la marca, ese es el punto del botón de auxilio.
+{% endcomment %}
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrega {{ pedido_folio }} · {{ b.nombre_publico }}</title>
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    --primario: {{ b.color_primario }};
+    --fondo: {{ b.color_fondo }};
+    --texto: {{ b.color_texto }};
+    --tarjeta: #FFFFFF;
+    --suave: rgba(0,0,0,.08);
+    --tenue: rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--fondo); color: var(--texto);
+    line-height: 1.5; font-size: 17px; padding: 0 0 48px;
+  }
+  .lienzo { max-width: 560px; margin: 0 auto; padding: 0 16px; }
+  header {
+    text-align: center; padding: 22px 16px 16px;
+    border-bottom: 3px solid var(--primario);
+    background: var(--tarjeta); margin-bottom: 18px;
+  }
+  .marca {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 26px; letter-spacing: .04em; color: var(--primario);
+  }
+  .marca img { max-height: 48px; }
+  .lema { font-size: 12px; color: var(--tenue); letter-spacing: .14em; text-transform: uppercase; margin-top: 3px; }
+
+  .entrega { text-align: center; padding: 2px 0 16px; }
+  .entrega h1 { font-size: 24px; line-height: 1.2; color: var(--primario); font-family: Georgia, serif; }
+  .entrega .paquete { font-size: 15px; color: var(--tenue); margin-top: 4px; font-weight: 700; }
+
+  .tarjeta {
+    background: var(--tarjeta); border-radius: 12px;
+    box-shadow: 0 1px 4px var(--suave);
+    padding: 18px 20px; margin-bottom: 14px;
+  }
+  .tarjeta h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--tenue); margin-bottom: 8px; }
+
+  .btn {
+    display: block; width: 100%; text-align: center; text-decoration: none;
+    padding: 18px 14px; border-radius: 999px; font-size: 18px; font-weight: 800;
+    border: none; cursor: pointer; margin-top: 6px;
+  }
+  .btn-primario { background: var(--primario); color: #fff; }
+  .btn-secundario { background: transparent; color: var(--primario); border: 2px solid var(--primario); font-size: 16px; }
+
+  .direccion { font-size: 19px; line-height: 1.45; font-weight: 600; }
+  .cp { font-size: 22px; font-weight: 900; letter-spacing: 1px; margin-top: 6px; }
+  .referencias { font-size: 20px; line-height: 1.45; font-weight: 800; }
+  .sin-referencias { font-size: 16px; color: var(--tenue); }
+  .guia-dato { font-size: 13px; color: var(--tenue); margin-top: 10px; }
+  .guia-dato code { font-family: ui-monospace, Menlo, monospace; background: var(--fondo); padding: 2px 7px; border-radius: 5px; }
+
+  .aviso-ok {
+    background: var(--primario); color: #fff; border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 16px; text-align: center; font-size: 16px;
+  }
+  .ayuda-texto { font-size: 14.5px; color: var(--tenue); margin-bottom: 4px; }
+  footer { text-align: center; margin-top: 24px; font-size: 12px; color: var(--tenue); }
+</style>
+</head>
+<body>
+<header>
+  <div class="marca">
+    {% if b.logo_url %}<img src="{{ b.logo_url }}" alt="{{ b.nombre_publico }}">{% else %}{{ b.nombre_publico }}{% endif %}
+  </div>
+  <div class="lema">Entrega en curso</div>
+</header>
+<div class="lienzo">
+
+  {% if avisado %}
+  <div class="aviso-ok">
+    <b>Listo. Servicio al cliente de {{ b.nombre_publico }} ya fue avisado</b><br>
+    y va a contactar al comprador. Espera unos minutos o continúa tu ruta según tu política.
+  </div>
+  {% endif %}
+
+  <div class="entrega">
+    <h1>Entrega {{ pedido_folio }}</h1>
+    <div class="paquete">Paquete {{ paquete_n }} de {{ paquete_m }}</div>
+  </div>
+
+  <a class="btn btn-primario" href="{{ maps_url }}">📍 Abrir ubicación exacta en Google Maps</a>
+
+  <div class="tarjeta" style="margin-top:14px">
+    <h2>Dirección de entrega</h2>
+    <div class="direccion">
+      {% for linea in lineas_direccion %}{{ linea }}<br>{% endfor %}
+    </div>
+    <div class="cp">CP {{ cp|default:"—" }}</div>
+    {% if nombre_pila %}<div class="guia-dato">Recibe: {{ nombre_pila }}</div>{% endif %}
+    <div class="guia-dato">Guía <code>{{ guia_numero|default:"—" }}</code></div>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Referencias del domicilio</h2>
+    {% if referencias %}
+      {% for ref in referencias %}<div class="referencias">{{ ref }}</div>{% endfor %}
+    {% else %}
+      <div class="sin-referencias">Sin referencias registradas — guíate por el mapa.</div>
+    {% endif %}
+  </div>
+
+  <div class="tarjeta">
+    <h2>¿No encuentras el domicilio?</h2>
+    <p class="ayuda-texto">
+      Avisa con un toque: servicio al cliente de {{ b.nombre_publico }} contacta
+      al comprador por sus canales oficiales y te confirma la dirección.
+    </p>
+    <form method="post" action="/r/e/{{ token }}/">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="no_encontrado">
+      <button class="btn btn-secundario" type="submit">🚫 No encuentro el domicilio — avisar a servicio al cliente</button>
+    </form>
+  </div>
+
+  <footer>{{ b.nombre_publico }} · Gracias por entregar con cuidado</footer>
+</div>
+</body>
+</html>

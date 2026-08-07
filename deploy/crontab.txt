@@ -1,0 +1,15 @@
+# Jobs de Torre (crontab del usuario torre en el VPS): crontab deploy/crontab.txt
+# Todos son management commands idempotentes — re-ejecutarlos no duplica nada.
+PY=/srv/torre/venv/bin/python
+DIR=/srv/torre/torre
+
+# Tracking de guías con el carrier (cada 30 min en horario amplio)
+*/30 6-22 * * *  cd $DIR && $PY manage.py poll_tracking >> /var/log/torre/poll_tracking.log 2>&1
+# Conteo cíclico: genera las 3 tareas del día (9:00 L-S)
+0 9 * * 1-6      cd $DIR && $PY manage.py conteo_ciclico >> /var/log/torre/conteo.log 2>&1
+# Digest diario a clientes (17:30 L-V)
+30 17 * * 1-5    cd $DIR && $PY manage.py digest_diario >> /var/log/torre/digest.log 2>&1
+# Entregas presuntas (madrugada)
+15 2 * * *       cd $DIR && $PY manage.py cerrar_entregas_presuntas >> /var/log/torre/presuntas.log 2>&1
+# Respaldo de la base (Postgres) — 3:00, retiene 14 días
+0 3 * * *        pg_dump torre | gzip > /srv/torre/backups/torre-$(date +\%F).sql.gz && find /srv/torre/backups -name "*.sql.gz" -mtime +14 -delete

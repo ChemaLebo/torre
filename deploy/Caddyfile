@@ -1,0 +1,15 @@
+# Caddy = HTTPS automático (Let's Encrypt) + reverse proxy a gunicorn.
+# Instalar: https://caddyserver.com/docs/install · correr: caddy run --config deploy/Caddyfile
+# Sustituir torre.TU-DOMINIO.mx por el dominio real (apuntado por DNS A al VPS).
+
+torre.TU-DOMINIO.mx {
+    encode gzip
+    reverse_proxy 127.0.0.1:8000
+
+    # Los estáticos los sirve whitenoise desde gunicorn — no hace falta root/file_server.
+    # MEDIA (evidencias) también pasa por Django en este setup (volumen bajo).
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+    }
+}

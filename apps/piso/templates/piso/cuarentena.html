@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Cuarentena{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Cuarentena</div>
+    <h1>Cuarentena</h1>
+  </div>
+  <div class="quien">Dañado y retornado en revisión. De aquí no se pickea nada.</div>
+</div>
+
+<div class="banner warn"><span class="foco"></span>Nada sale de cuarentena sin dictamen con dos firmas.</div>
+
+{% if saldos %}
+<div class="lista-cards mt">
+  {% for saldo in saldos %}
+  <div class="card">
+    <div class="titulo">
+      <h2 class="mono">{{ saldo.sku.codigo }}</h2>
+      <span class="pill warn">{{ saldo.cantidad }} en cuarentena</span>
+    </div>
+    <p class="small">
+      {{ saldo.sku.descripcion }} ({{ saldo.sku.cliente.nombre }}) ·
+      lote {% if saldo.lote %}<span class="mono">{{ saldo.lote.codigo }}</span>{% if saldo.lote.fecha_caducidad %} · cad. {{ saldo.lote.fecha_caducidad|date:"d/M/Y" }}{% endif %}{% else %}sin lote{% endif %} ·
+      en <span class="mono">{{ saldo.ubicacion.codigo }}</span>
+    </p>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="dictamen">
+      <input type="hidden" name="saldo_id" value="{{ saldo.pk }}">
+      <div class="grid g2">
+        <div>
+          <label for="cantidad-{{ saldo.pk }}">¿Cuántas piezas dictaminas?</label>
+          <input type="number" name="cantidad" id="cantidad-{{ saldo.pk }}" min="1" max="{{ saldo.cantidad }}" inputmode="numeric" autocomplete="off" required>
+        </div>
+        <div>
+          <label for="destino-{{ saldo.pk }}">Destino</label>
+          <select name="destino" id="destino-{{ saldo.pk }}" required>
+            <option value="revendible">Revendible — regresa a put-away</option>
+            <option value="merma">Merma — sale del inventario</option>
+          </select>
+        </div>
+      </div>
+      <label for="motivo-{{ saldo.pk }}">Motivo del dictamen</label>
+      <input type="text" name="motivo_texto" id="motivo-{{ saldo.pk }}" placeholder="Ej. caja mojada, producto intacto" autocomplete="off">
+      <div class="grid g2">
+        <div>
+          <label for="autorizo1-{{ saldo.pk }}">Firma 1 · usuario</label>
+          <select name="autorizo_1" id="autorizo1-{{ saldo.pk }}" required>
+            <option value="">— elige quién firma —</option>
+            {% for perfil in firmantes %}
+            <option value="{{ perfil.usuario.username }}">{{ perfil.usuario.get_full_name|default:perfil.usuario.username }} · {{ perfil.get_rol_display }}</option>
+            {% endfor %}
+          </select>
+          <label for="pin1-{{ saldo.pk }}">Firma 1 · PIN</label>
+          <input type="password" name="pin_1" id="pin1-{{ saldo.pk }}" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
+        </div>
+        <div>
+          <label for="autorizo2-{{ saldo.pk }}">Firma 2 · usuario (distinto)</label>
+          <select name="autorizo_2" id="autorizo2-{{ saldo.pk }}" required>
+            <option value="">— elige quién firma —</option>
+            {% for perfil in firmantes %}
+            <option value="{{ perfil.usuario.username }}">{{ perfil.usuario.get_full_name|default:perfil.usuario.username }} · {{ perfil.get_rol_display }}</option>
+            {% endfor %}
+          </select>
+          <label for="pin2-{{ saldo.pk }}">Firma 2 · PIN</label>
+          <input type="password" name="pin_2" id="pin2-{{ saldo.pk }}" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
+        </div>
+      </div>
+      <div class="mt"><button class="btn primario bloque" type="submit">Dictaminar</button></div>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="banner ok mt"><span class="foco"></span>Cuarentena vacía. Nada dañado ni retornado en revisión.</div>
+{% endif %}
+
+<div class="card mt">
+  <div class="titulo">
+    <h2>Put-away pendiente</h2>
+    <span class="pill {% if putaway %}warn{% else %}ok{% endif %}">{{ total_putaway }} piezas</span>
+  </div>
+  {% if putaway %}
+  <p class="small">Dictámenes revendibles y retornos esperando anaquel. Ubícalos para que vuelvan a estar vendibles.</p>
+  <div class="small mt">Anaqueles válidos:
+    {% for u in ubicaciones_destino %}<span class="mono">{{ u.codigo }}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">Nada pendiente de ubicar.</p>
+  {% endif %}
+</div>
+
+{% for saldo in putaway %}
+<div class="card mt">
+  <div class="titulo">
+    <h2 class="mono">{{ saldo.sku.codigo }}</h2>
+    <span class="pill accent">{{ saldo.cantidad }} por ubicar</span>
+  </div>
+  <p class="small">
+    {{ saldo.sku.descripcion }} ({{ saldo.sku.cliente.nombre }}) ·
+    lote {% if saldo.lote %}<span class="mono">{{ saldo.lote.codigo }}</span>{% else %}sin lote{% endif %} ·
+    está en <span class="mono">{{ saldo.ubicacion.codigo }}</span>
+  </p>
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="ubicar_putaway">
+    <input type="hidden" name="saldo_id" value="{{ saldo.pk }}">
+    <div class="grid g2">
+      <div>
+        <label for="pa-cantidad-{{ saldo.pk }}">Cantidad</label>
+        <input type="number" name="cantidad" id="pa-cantidad-{{ saldo.pk }}" min="1" max="{{ saldo.cantidad }}" inputmode="numeric" autocomplete="off" required>
+      </div>
+      <div>
+        <label for="pa-ubicacion-{{ saldo.pk }}">Ubicación escaneada</label>
+        <input type="text" name="ubicacion" id="pa-ubicacion-{{ saldo.pk }}" class="mono" placeholder="A-01-2" autocomplete="off" required>
+      </div>
+    </div>
+    {% if saldo.sku.requiere_lote and not saldo.lote %}
+    <div class="grid g2">
+      <div>
+        <label for="pa-lote-{{ saldo.pk }}">Lote (el producto lo pide)</label>
+        <input type="text" name="lote" id="pa-lote-{{ saldo.pk }}" class="mono" placeholder="L-2026-07" autocomplete="off" required>
+      </div>
+      <div>
+        <label for="pa-caducidad-{{ saldo.pk }}">Caducidad del lote</label>
+        <input type="date" name="fecha_caducidad" id="pa-caducidad-{{ saldo.pk }}">
+      </div>
+    </div>
+    {% endif %}
+    <div class="mt"><button class="btn primario bloque" type="submit">Ubicar</button></div>
+  </form>
+</div>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Entrar{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span>Torre</div>
+    <div class="brand-sub">Local 380 E · Fulfillment con garantía</div>
+    {% if form.errors %}<div class="flash error">Usuario o contraseña incorrectos.</div>{% endif %}
+    <form method="post">{% csrf_token %}
+      <label for="id_username">Usuario</label>
+      <input type="text" name="username" id="id_username" autofocus autocomplete="username">
+      <label for="id_password">Contraseña</label>
+      <input type="password" name="password" id="id_password" autocomplete="current-password">
+      <input type="hidden" name="next" value="{{ next }}">
+      <button class="btn primario mt" style="width:100%" type="submit">Entrar</button>
+    </form>
+    <p class="small centro mt">Mismos datos que ves nosotros. Nada se esconde.</p>
+  </div>
+</div>
+{% endblock %}

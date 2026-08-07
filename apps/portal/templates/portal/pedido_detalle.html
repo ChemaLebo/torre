@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}{{ pedido.folio }}{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{% url 'portal:pedidos' %}">Pedidos</a> / {{ pedido.folio }}</div>
+    <h1>{{ pedido.folio }}</h1>
+  </div>
+  <div class="fila">
+    <span class="pill {{ pill }}">{{ pedido.get_estado_display }}</span>
+    {% if pedido.incidencia_activa %}<span class="pill accent">Con incidencia</span>{% endif %}
+    {% if pedido.es_local %}<span class="pill">Entrega local</span>{% endif %}
+  </div>
+</div>
+
+{% if especial %}
+  <div class="banner {{ especial.0 }}"><span class="foco"></span><span>{{ especial.1 }}</span></div>
+{% endif %}
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h3>El camino de este pedido</h3></div>
+    <ul class="timeline">
+      {% for paso in pasos %}
+        <li {% if paso.actual %}class="hito"{% endif %}>
+          <span class="cuando">
+            {% if paso.ts %}{{ paso.ts|date:"d/M/Y H:i" }}{% else %}Pendiente{% endif %}
+          </span>
+          {% if paso.hecho %}{{ paso.etiqueta }}{% else %}<span class="muted">{{ paso.etiqueta }}</span>{% endif %}
+          <div class="small">{{ paso.nota }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div>
+    <div class="card mb">
+      <div class="titulo"><h3>Comprador y destino</h3></div>
+      <p>
+        {{ pedido.comprador_nombre|default:"Sin nombre" }}
+        {% if pedido.comprador_tel %} · <span class="mono">{{ pedido.comprador_tel }}</span>{% endif %}
+      </p>
+      <p class="small">
+        {% if direccion.address1 %}{{ direccion.address1 }}{% if direccion.address2 %}, {{ direccion.address2 }}{% endif %}<br>{% endif %}
+        {% if direccion.city %}{{ direccion.city }}{% if direccion.province %}, {{ direccion.province }}{% endif %} · {% endif %}CP {{ pedido.cp|default:"—" }}
+      </p>
+      {% if pedido.nota_regalo %}
+        <p class="small">Nota de regalo: “{{ pedido.nota_regalo }}”</p>
+      {% endif %}
+    </div>
+
+    <div class="card mb">
+      <div class="titulo"><h3>Envío y rastreo</h3></div>
+      {% if guia %}
+        <p>
+          {{ guia.carrier|title }}{% if guia.servicio %} · {{ guia.servicio }}{% endif %}<br>
+          <span class="mono">{{ guia.numero|default:"guía en generación" }}</span>
+        </p>
+        <div class="fila entre">
+          <span class="pill {% if guia.estado == 'ENTREGADO' %}ok{% elif guia.estado == 'RETORNO' or guia.estado == 'INTENTO_FALLIDO' %}crit{% else %}accent{% endif %}">{{ guia.get_estado_display }}</span>
+          <span class="small">Último movimiento {{ guia.movio_hace }}</span>
+        </div>
+        {% if guia.ultimo_evento %}<p class="small mt">“{{ guia.ultimo_evento }}”</p>{% endif %}
+      {% else %}
+        <p class="muted">Todavía no hay guía: se genera en cuanto el pedido queda empacado y verificado.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="titulo"><h3>Incidencias de este pedido</h3></div>
+      {% for inc in incidencias_pedido %}
+        <div class="fila entre mb">
+          <div>
+            <a class="mono" href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>
+            <span class="small">· {{ inc.get_tipo_display }}</span>
+            <div class="small">La pelota la tiene: {{ inc.pelota }}</div>
+          </div>
+          <span class="pill {{ inc.reloj_clase }}">{{ inc.reloj_texto }}</span>
+        </div>
+      {% empty %}
+        <p class="muted">Este pedido no tiene incidencias. Todo va limpio.</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h3>Qué lleva la caja</h3></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Producto</th><th>Pedidas</th><th>Preparadas</th></tr></thead>
+        <tbody>
+          {% for linea in pedido.lineas.all %}
+            <tr>
+              <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div></td>
+              <td class="mono">{{ linea.cantidad }}</td>
+              <td class="mono">{{ linea.cantidad_pickeada }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3" class="muted">Sin renglones registrados.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if pedido.peso_real_gr %}
+      <p class="small mt">Verificado en báscula: <span class="mono">{{ pedido.peso_real_gr }} g</span> (esperábamos {{ pedido.peso_esperado_gr }} g).</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Fotos de evidencia</h3></div>
+    <div class="fotos">
+      {% for foto in fotos %}
+        <img src="{{ foto.archivo.url }}" alt="Evidencia {{ foto.tipo|default:'del pedido' }}">
+      {% empty %}
+        <div class="foto-ph">Las fotos aparecen aquí al empacar</div>
+      {% endfor %}
+    </div>
+    <p class="small mt">Cada pedido se cierra con foto del contenido y de la caja cerrada con su guía. Las guardamos 12 meses.</p>
+  </div>
+</div>
+
+{% if paquetes|length > 1 %}
+<div class="card mt">
+  <div class="titulo">
+    <h3>Paquetes de tu pedido</h3>
+    {% if ahorro_division > 0 %}<span class="pill ok">División inteligente: ahorraste ${{ ahorro_division|floatformat:0 }}</span>{% endif %}
+  </div>
+  <p class="small muted">Tu pedido viaja en {{ paquetes|length }} paquetes porque así el envío cuesta menos y cada botella viaja mejor protegida.</p>
+  <div class="grid g2 mt">
+    {% for paq in paquetes %}
+    <div class="card" style="background:var(--panel-2)">
+      <div class="titulo"><b>Paquete {{ paq.numero }}</b>
+        <span class="pill {% if paq.estado == 'DESPACHADO' %}accent{% elif paq.estado == 'EMPACADO' %}ok{% else %}warn{% endif %}">{{ paq.get_estado_display }}</span>
+      </div>
+      <div class="small">
+        <span class="mono">{{ paq.peso_kg }} kg</span> · {{ paq.carrier }} · <span class="mono">${{ paq.precio_cotizado|floatformat:2 }}</span>
+        {% if paq.fuera_de_meta %}<span class="pill warn">arriba de la meta de $115</span>{% endif %}
+      </div>
+      <ul class="small" style="margin:8px 0 0 18px;padding:0">
+        {% for pl in paq.lineas.all %}<li>{{ pl.texto_para_piso }}</li>{% endfor %}
+      </ul>
+      {% for g in paq.guias.all %}{% if g.es_activa %}
+      <div class="small mono mt">Guía {{ g.numero }}</div>
+      {% endif %}{% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Manuales{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/manuales.css' %}">{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">{% if rol_actual == "portal" %}Tu operación{% else %}La casa{% endif %}</div>
+    <h1>Manuales</h1>
+  </div>
+</div>
+
+{% if rol_actual == "portal" %}
+  <p class="manual-copy">Así operamos tu producto, paso a paso. Léelos cuando quieras — y si ves algo mejorable, dínoslo.</p>
+{% else %}
+  <p class="manual-copy">La operación real de la casa, paso a paso. Si un manual dice una cosa y la costumbre dice otra, manda el manual.</p>
+{% endif %}
+
+{% for grupo in grupos %}
+  <div class="eyebrow manual-grupo">{{ grupo.nombre }}</div>
+  <div class="grid g3">
+    {% for m in grupo.manuales %}
+      <a class="card manual-card" href="{% url url_detalle m.slug %}">
+        <span class="manual-card-emoji">{{ m.emoji }}</span>
+        <span class="eyebrow">{{ m.codigo }}</span>
+        <h3>{{ m.titulo }}</h3>
+        <p class="manual-card-resumen">{{ m.resumen }}</p>
+        <span class="lectura">{{ m.palabras }} palabras · {{ m.minutos }} min de lectura</span>
+      </a>
+    {% endfor %}
+  </div>
+{% empty %}
+  <div class="card"><p class="muted">Todavía no hay manuales renderizados. Corre <span class="mono">manage.py render_manuales</span>.</p></div>
+{% endfor %}
+
+{% if sugerencias %}
+  <div class="card mt">
+    <div class="titulo"><h3>Sugerencias de clientes</h3><span class="small">las últimas 10 · llegan desde el portal</span></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead>
+          <tr><th>Cuándo</th><th>Cliente</th><th>Manual</th><th>Sugerencia</th></tr>
+        </thead>
+        <tbody>
+          {% for e in sugerencias %}
+            <tr>
+              <td class="small">{{ e.ts|date:"d M H:i" }}</td>
+              <td>{{ e.cliente.nombre|default:"—" }}<div class="small">{{ e.actor_id }}</div></td>
+              <td class="mono">{% if e.manual_slug %}<a href="{% url url_detalle e.manual_slug %}">{{ e.entidad_id }}</a>{% else %}{{ e.entidad_id }}{% endif %}</td>
+              <td class="small">{{ e.delta.texto }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+{% if portada %}
+  <details class="card manual-portada mt">
+    <summary><span class="manual-card-emoji">{{ portada.emoji }}</span> {{ portada.titulo }} — reglas de la casa, roles y EPP</summary>
+    <div class="manual-lectura"><div class="manual-cuerpo">{% include "manuales/readme.html" %}</div></div>
+  </details>
+{% endif %}
+{% endblock %}

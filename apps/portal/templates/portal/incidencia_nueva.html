@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Levantar incidencia{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{% url 'portal:incidencias' %}">Incidencias</a> / Nueva</div>
+    <h1>Levantar incidencia</h1>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+
+      <label for="{{ form.pedido.id_for_label }}">{{ form.pedido.label }}</label>
+      {{ form.pedido }}
+      {{ form.pedido.errors }}
+
+      <label for="{{ form.tipo.id_for_label }}">{{ form.tipo.label }}</label>
+      {{ form.tipo }}
+      {{ form.tipo.errors }}
+
+      <label for="{{ form.descripcion.id_for_label }}">{{ form.descripcion.label }}</label>
+      {{ form.descripcion }}
+      {{ form.descripcion.errors }}
+
+      <div class="fila mt">
+        <button class="btn primario" type="submit">Enviar a la Mesa de Control</button>
+        <a class="btn" href="{% url 'portal:incidencias' %}">Cancelar</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Qué pasa después</h3></div>
+    <ul class="timeline">
+      <li class="hito"><span class="cuando">Al enviar</span>Tu caso recibe un folio y un reloj que puedes ver correr.</li>
+      <li><span class="cuando">En un máximo de {{ TORRE.SLA_PRIMERA_RESPUESTA_CLIENTE_HORAS }} horas hábiles</span>Una persona con nombre — no un bot — te responde aquí mismo.</li>
+      <li><span class="cuando">En un máximo de {{ TORRE.SLA_RESOLUCION_HORAS }} horas</span>Te proponemos una resolución y tú das el visto bueno.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Empacar {{ pedido.folio }}{% endblock %}
+{% block content %}
+
+{% if paso == "exito" %}
+{# ── Paso 5: éxito — al corral y al siguiente ── #}
+<div class="exito-pantalla">
+  <span class="palomita">✅</span>
+  <h1 class="mono">{{ pedido.folio }} listo</h1>
+  <p>Déjalo en el corral <b class="mono">{{ corral }}</b>. Cajas cerradas con evidencia completa.</p>
+</div>
+<form method="post" action="{% url 'piso:home' %}" class="accion-fija">{% csrf_token %}
+  <input type="hidden" name="accion" value="siguiente">
+  <button class="btn primario gigante" type="submit">SIGUIENTE PEDIDO ▶</button>
+</form>
+<p class="centro mt"><a class="small" href="{% url 'piso:home' %}">ir a Mi turno</a></p>
+<script>document.addEventListener("DOMContentLoaded", function () { Feedback.ok(); });</script>
+
+{% elif paso == "cierre" %}
+{# ── Paso 3-4: etiquetas impresas → foto de CAJA CERRADA por caja ── #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Empaque · Cierre</div>
+    <h1 class="mono">{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · cierre {{ cierres_hechos|add:1 }} de {{ total_cierres }}</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:salida' %}">Ir a salida</a>
+</div>
+
+{% if tiene_guia %}
+<div class="banner ok"><span class="foco"></span>
+  <div>
+    <b>🖨 Etiquetas imprimiéndose — pégalas.</b>
+    Guía{{ guias|length|pluralize }}:
+    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="banner warn"><span class="foco"></span>
+  Este pedido aún no tiene guía (excepción). Génerala en
+  <a href="{% url 'piso:salida' %}"><b>Salida</b></a>, pega la etiqueta y regresa por la foto de cierre.
+</div>
+{% endif %}
+
+{% if cierre_legacy %}
+<div class="card mt">
+  <div class="titulo"><h2>Foto de la caja cerrada</h2><span class="pill accent">con la etiqueta pegada</span></div>
+  <p class="small">Cierra la caja, pega la etiqueta y tómale foto: es la evidencia que sube al manifiesto.</p>
+  <form method="post" enctype="multipart/form-data">{% csrf_token %}
+    <input type="hidden" name="accion" value="cerrar_legacy">
+    <label for="foto_cierre">Foto · caja cerrada con etiqueta</label>
+    <input type="file" name="foto_cierre" id="foto_cierre" accept="image/*" capture="environment" required>
+    <div class="accion-fija mt">
+      <button class="btn primario gigante" type="submit" {% if not tiene_guia %}disabled{% endif %}>Caja cerrada ✓</button>
+    </div>
+  </form>
+</div>
+{% elif caja_cierre %}
+<div class="card mt">
+  <div class="titulo"><h2>Caja {{ caja_cierre.numero }} de {{ total_cierres }}</h2><span class="pill accent">foto de cierre</span></div>
+  <p class="small">
+    Cierra la caja {{ caja_cierre.numero }}, pega SU etiqueta
+    {% if caja_cierre.guia_activa %}(<span class="mono">{{ caja_cierre.guia_activa.numero }}</span>){% endif %}
+    y tómale foto con la etiqueta visible.
+  </p>
+  <form method="post" enctype="multipart/form-data">{% csrf_token %}
+    <input type="hidden" name="accion" value="cerrar_caja">
+    <input type="hidden" name="paquete_id" value="{{ caja_cierre.pk }}">
+    <label for="foto_cierre">Foto · caja {{ caja_cierre.numero }} cerrada con etiqueta</label>
+    <input type="file" name="foto_cierre" id="foto_cierre" accept="image/*" capture="environment" required>
+    <div class="accion-fija mt">
+      <button class="btn primario gigante" type="submit">Caja {{ caja_cierre.numero }} cerrada ✓</button>
+    </div>
+  </form>
+  {% if por_cerrar|length > 1 %}
+  <p class="small muted mt">Faltan después:
+    {% for c in por_cerrar|slice:"1:" %}caja {{ c.numero }}{% if not forloop.last %} · {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+{# ── Paso 1-2: CAJA i de N (o caja única legacy) — foto CONTENIDO + peso ── #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Empaque</div>
+    {% if paso == "caja" %}
+    <h1>Caja {{ caja.numero }} de {{ total_cajas }}</h1>
+    <div class="small mono">{{ pedido.folio }} · {{ pedido.cliente.nombre }}</div>
+    {% else %}
+    <h1 class="mono">{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · {{ pedido.comprador_nombre|default:"sin nombre" }}</div>
+    {% endif %}
+  </div>
+  <a class="btn chico" href="{% url 'piso:empaque' %}">Volver</a>
+</div>
+
+{% if naked %}
+<div class="banner crit"><span class="foco"></span>
+  NAKED PACKING: este pedido sale en la caja limpia de {{ pedido.cliente.nombre }}.
+  JAMÁS cinta del 3PL, jamás relleno de terceros. La marca es de ellos, no nuestra.
+</div>
+{% else %}
+<div class="banner warn"><span class="foco"></span>
+  Usa SOLO insumos oficiales de {{ pedido.cliente.nombre }} (muro de insumos del cliente). Cinta genérica del 3PL = pedido mal empacado.
+</div>
+{% endif %}
+
+{% if paso == "caja" %}
+<div class="card">
+  <div class="titulo"><h2>Qué va en ESTA caja</h2>
+    <span class="pill accent">caja {{ caja.numero }}/{{ total_cajas }}</span>
+  </div>
+  <ul class="timeline">
+    {% for pl in caja.lineas.all %}
+    <li>{{ pl.texto_para_piso }}</li>
+    {% empty %}
+    <li class="muted">Caja sin desglose — empaca según el plan.</li>
+    {% endfor %}
+  </ul>
+  {% if total_cajas > 1 %}
+  <p class="small muted">No mezcles contenido de otras cajas: cada una viaja con su propia guía.</p>
+  {% endif %}
+</div>
+{% else %}
+<div class="card">
+  <div class="titulo"><h2>Contenido</h2></div>
+  {% for linea in lineas %}
+  <div class="corral-fila">
+    <div class="crece"><span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}</div>
+    <span class="num">{{ linea.cantidad_pickeada }} / {{ linea.cantidad }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<details class="colapsable mt">
+  <summary>Checklist de empaque de {{ pedido.cliente.nombre }}</summary>
+  <div class="colapsable-cuerpo">
+    <ul class="timeline">
+      {% for punto in checklist %}
+      <li>{{ punto }}</li>
+      {% endfor %}
+    </ul>
+    {% if pedido.nota_regalo %}
+    <div class="banner accent"><span class="foco"></span>Nota de regalo — métela en la caja: “{{ pedido.nota_regalo }}”</div>
+    {% endif %}
+  </div>
+</details>
+
+<div class="card mt">
+  <div class="titulo"><h2>Foto y báscula</h2><span class="pill accent">±{{ tolerancia }}%</span></div>
+  {% if hubo_error_post %}
+  <div class="banner warn"><span class="foco"></span>
+    El intento anterior no pasó: el navegador no conserva la foto —
+    <b>vuelve a tomarla</b>. {% if peso_previo %}El peso que capturaste sigue abajo.{% endif %}
+  </div>
+  {% endif %}
+  <p class="small">
+    {% if paso == "caja" %}El plan de esta caja marca <b class="mono">{{ peso_esperado }} g</b>.{% else %}Peso esperado: <b class="mono">{{ peso_esperado }} g</b>.{% endif %}
+    La báscula debe marcar entre <b class="mono">{{ peso_min }} g</b> y <b class="mono">{{ peso_max }} g</b>.
+    Si no cuadra, abre la caja y revisa el contenido: NO fuerces el número.
+  </p>
+  <form method="post" enctype="multipart/form-data" id="form-empaque">{% csrf_token %}
+    {% if paso == "caja" %}
+    <input type="hidden" name="accion" value="empacar_caja">
+    <input type="hidden" name="paquete_id" value="{{ caja.pk }}">
+    {% endif %}
+    <label for="foto_contenido">1 · Foto del CONTENIDO {% if paso == "caja" %}de la caja {{ caja.numero }}{% endif %} (obligatoria)</label>
+    <input type="file" name="foto_contenido" id="foto_contenido" accept="image/*" capture="environment"
+           {% if paso == "caja" %}required{% elif fotos_existentes < 1 %}required{% endif %}>
+    {% if paso == "legacy" and fotos_existentes %}
+    <p class="small muted">Este pedido ya tiene {{ fotos_existentes }} foto(s) de contenido guardadas.</p>
+    {% endif %}
+
+    <label for="peso_real_gr">2 · Peso de la báscula (gramos)</label>
+    <input type="number" name="peso_real_gr" id="peso_real_gr" min="1" inputmode="numeric"
+           placeholder="{{ peso_esperado }}" autocomplete="off" required
+           {% if peso_previo %}value="{{ peso_previo }}"{% endif %}
+           data-min="{{ peso_min }}" data-max="{{ peso_max }}" data-esperado="{{ peso_esperado }}">
+    <div class="banner crit mt" id="peso-fuera" hidden><span class="foco"></span>
+      <span id="peso-fuera-texto"></span>
+    </div>
+
+    <p class="small muted mt">
+      La foto de la caja cerrada se toma AL FINAL, con la etiqueta ya pegada:
+      al confirmar, Torre genera la guía e imprime las etiquetas solas.
+    </p>
+    {# Botón HABILITADO de nacimiento (sin JS mandan los required); el JS lo apaga para la UX de encendido. #}
+    <div class="accion-fija mt">
+      <button class="btn primario gigante" type="submit" id="btn-empacado">
+        {% if paso == "caja" %}Caja {{ caja.numero }} lista ✓{% else %}Empacado ✓{% endif %}
+      </button>
+    </div>
+    <p class="small muted" id="ayuda-empacado">Sin la foto del contenido y el peso, el botón no se enciende.</p>
+  </form>
+</div>
+
+<script>
+(function () {
+  var boton = document.getElementById("btn-empacado");
+  var peso = document.getElementById("peso_real_gr");
+  var foto = document.getElementById("foto_contenido");
+  var form = document.getElementById("form-empaque");
+  var fuera = document.getElementById("peso-fuera");
+  var fueraTexto = document.getElementById("peso-fuera-texto");
+  var existentes = {% if paso == "legacy" %}{{ fotos_existentes }}{% else %}0{% endif %};
+  var minimo = Number(peso.dataset.min), maximo = Number(peso.dataset.max);
+  var esperado = Number(peso.dataset.esperado);
+
+  function pesoFuera(valor) {
+    return esperado > 0 && (valor < minimo || valor > maximo);
+  }
+  function revisar() {
+    var fotos = existentes + (foto.files.length ? 1 : 0);
+    var valor = Number(peso.value);
+    var listo = fotos >= 1 && peso.value && valor > 0;
+    boton.disabled = !listo;
+    document.getElementById("ayuda-empacado").style.display = listo ? "none" : "";
+    if (peso.value && pesoFuera(valor)) {
+      fuera.hidden = false;
+      fueraTexto.textContent = "El peso no cuadra: la báscula marca " + valor +
+        " g y el rango es " + minimo + "–" + maximo + " g. Revisa el contenido antes de cerrar la caja.";
+    } else {
+      fuera.hidden = true;
+    }
+  }
+  [peso, foto].forEach(function (campo) {
+    campo.addEventListener("change", revisar);
+    campo.addEventListener("input", revisar);
+  });
+  // Validación client-side ANTES de subir: peso fuera de rango → banda roja,
+  // NO se sube nada y el input de foto conserva su archivo.
+  form.addEventListener("submit", function (ev) {
+    var valor = Number(peso.value);
+    if (peso.value && pesoFuera(valor)) {
+      ev.preventDefault();
+      revisar();
+      if (window.Feedback) Feedback.error("Peso fuera de rango: revisa el contenido.");
+      peso.focus();
+    }
+  });
+  revisar();
+})();
+</script>
+{% endif %}
+{% endblock %}

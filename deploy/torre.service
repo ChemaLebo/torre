@@ -1,0 +1,21 @@
+# systemd unit del servidor Torre (VPS Ubuntu/Debian).
+# Instalar: sudo cp deploy/torre.service /etc/systemd/system/ && sudo systemctl enable --now torre
+[Unit]
+Description=Torre 3PL (gunicorn)
+After=network.target postgresql.service
+
+[Service]
+User=torre
+Group=torre
+WorkingDirectory=/srv/torre/torre
+Environment=TORRE_DEBUG=0
+# El resto de variables viven en /srv/torre/torre/.env (el settings.py lo carga solo)
+ExecStartPre=/srv/torre/venv/bin/python manage.py migrate --noinput
+ExecStartPre=/srv/torre/venv/bin/python manage.py collectstatic --noinput
+ExecStart=/srv/torre/venv/bin/gunicorn torre_project.wsgi:application \
+    --bind 127.0.0.1:8000 --workers 3 --timeout 60 --access-logfile -
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

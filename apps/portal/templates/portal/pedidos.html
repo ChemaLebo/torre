@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Pedidos{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Tu operación</div>
+    <h1>Pedidos</h1>
+  </div>
+  <div class="fila">
+    <a class="btn chico {% if ver == 'proceso' %}primario{% endif %}" href="?ver=proceso">En proceso</a>
+    <a class="btn chico {% if ver == 'entregados' %}primario{% endif %}" href="?ver=entregados">Entregados</a>
+    <a class="btn chico {% if ver == 'incidencias' %}primario{% endif %}" href="?ver=incidencias">Con incidencia</a>
+    <a class="btn chico {% if ver == 'todos' %}primario{% endif %}" href="?ver=todos">Todos</a>
+  </div>
+</div>
+
+<div class="tabla-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Folio</th>
+        <th>Ingresó</th>
+        <th>Comprador</th>
+        <th>Destino</th>
+        <th>Piezas</th>
+        <th>Estado</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in pedidos_lista %}
+        <tr class="fila-link">
+          <td class="mono"><a href="{% url 'portal:pedido_detalle' p.pk %}">{{ p.folio }}</a></td>
+          <td class="small">{{ p.creado|date:"d/M H:i" }}</td>
+          <td>{{ p.comprador_nombre|default:"—" }}</td>
+          <td class="small">{% if p.es_local %}Colima · entrega local{% else %}CP {{ p.cp|default:"—" }}{% endif %}</td>
+          <td class="mono">{{ p.piezas|default:"0" }}</td>
+          <td><span class="pill {{ p.pill }}">{{ p.get_estado_display }}</span></td>
+          <td>{% if p.incidencia_activa %}<span class="pill accent">Incidencia</span>{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="7" class="muted">No hay pedidos en esta vista.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="small mt">¿Necesitas esta lista completa? <a href="{% url 'portal:exportar' %}">Descárgala en un clic desde Exportar</a>.</p>
+{% endblock %}

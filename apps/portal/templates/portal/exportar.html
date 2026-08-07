@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Exportar{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Tus datos son tuyos</div>
+    <h1>Exportar</h1>
+  </div>
+  <div class="quien">Descarga todo en un clic, sin pedir permiso</div>
+</div>
+
+<div class="grid g3">
+  <div class="card">
+    <div class="titulo"><h3>Pedidos</h3></div>
+    <p class="small">Todos tus pedidos con fecha de ingreso, estado, piezas, guía y hora de salida y de entrega. Abre directo en Excel.</p>
+    <a class="btn primario" href="?csv=pedidos">Descargar pedidos</a>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Inventario</h3></div>
+    <p class="small">Tu inventario completo: físico, en recepción, apartado, cuarentena y disponible por producto, con la fecha del último conteo. La historia de cada producto se descarga desde <a href="{% url 'portal:inventario' %}">Inventario</a>.</p>
+    <a class="btn primario" href="?csv=inventario">Descargar inventario</a>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Incidencias</h3></div>
+    <p class="small">Todas tus incidencias con folio, tipo, prioridad y las fechas de apertura, respuesta, resolución y cierre.</p>
+    <a class="btn primario" href="?csv=incidencias">Descargar incidencias</a>
+  </div>
+</div>
+
+<p class="small mt">Cada descarga sale con los datos al momento del clic. Si necesitas un corte especial, escríbenos por una incidencia o directo a la Mesa de Control.</p>
+{% endblock %}

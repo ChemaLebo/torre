@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Picking{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Picking</div>
+    <h1>Picking</h1>
+  </div>
+  <div class="quien">La cola manda: en <a href="{% url 'piso:home' %}"><b>Mi turno</b></a> el botón EMPEZAR elige por ti.</div>
+</div>
+
+{% if pendientes %}
+<div class="card">
+  <div class="titulo"><h2>Por iniciar</h2><span class="pill">{{ pendientes|length }} pendientes</span></div>
+  <div class="lista-cards">
+    {% for p in pendientes %}
+    <div class="card">
+      <div class="fila entre">
+        <div>
+          <span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}
+          <div class="small">{{ p.total_piezas }} piezas
+            {% if p.es_local %}· <span class="pill warn">local</span>{% else %}· <span class="pill">foráneo</span>{% endif %}
+            {% if p.incidencia_activa %}<span class="pill crit">faltante</span>{% endif %}
+          </div>
+        </div>
+      </div>
+      <form method="post" class="mt">{% csrf_token %}
+        <input type="hidden" name="accion" value="iniciar">
+        <input type="hidden" name="pedido_id" value="{{ p.pk }}">
+        <button class="btn primario bloque" type="submit">Iniciar picking</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card mt">
+  <div class="titulo"><h2>En picking</h2><span class="pill accent">{{ en_picking|length }} activos</span></div>
+  {% if en_picking %}
+  <div class="lista-cards">
+    {% for p in en_picking %}
+    <div class="card">
+      <div class="fila entre">
+        <div><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}</div>
+        <span class="num">{{ p.pickeadas }} / {{ p.total_piezas }}</span>
+      </div>
+      <div class="medidor mt {% if p.avance_pct == 100 %}ok{% endif %}"><span style="width:{{ p.avance_pct }}%"></span></div>
+      <a class="btn primario bloque mt" href="{% url 'piso:picking_pedido' p.pk %}">Escanear</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">Nadie en picking ahorita.</p>
+  {% endif %}
+</div>
+{% endblock %}

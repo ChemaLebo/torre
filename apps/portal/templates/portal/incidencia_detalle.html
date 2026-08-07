@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}{{ incidencia.folio }}{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{% url 'portal:incidencias' %}">Incidencias</a> / {{ incidencia.folio }}</div>
+    <h1>{{ incidencia.folio }}</h1>
+  </div>
+  <div class="fila">
+    <span class="pill">{{ incidencia.get_tipo_display }}</span>
+    {% if incidencia.prioridad == 'P1' %}<span class="pill accent">Urgente</span>{% endif %}
+    <span class="pill {% if incidencia.abierta %}warn{% else %}ok{% endif %}">{{ incidencia.get_estado_display }}</span>
+    <span class="pill {{ incidencia.reloj_clase }}">{{ incidencia.reloj_texto }}</span>
+  </div>
+</div>
+
+{% if incidencia.estado == 'RESOLUCION_PROPUESTA' %}
+  <div class="banner warn"><span class="foco"></span><span>Hay una propuesta de resolución esperando tu visto bueno. Revisa el último mensaje y respóndenos aquí mismo.</span></div>
+{% endif %}
+
+<div class="grid g2">
+  <div>
+    <div class="card mb">
+      <div class="titulo"><h3>Conversación</h3></div>
+      <ul class="timeline">
+        {% for mensaje in timeline %}
+          <li {% if mensaje.rol_autor == 'mesa' %}class="hito"{% endif %}>
+            <span class="cuando">{{ mensaje.ts|date:"d/M/Y H:i" }} · {{ mensaje.autor }} ({{ mensaje.get_rol_autor_display }})</span>
+            {{ mensaje.texto|linebreaksbr }}
+          </li>
+        {% empty %}
+          <li><span class="cuando">Sin mensajes todavía</span>La Mesa de Control escribirá aquí en cuanto tome el caso.</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="titulo"><h3>Escríbenos</h3></div>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="accion" value="responder">
+        {{ form.non_field_errors }}
+        <label for="{{ form.texto.id_for_label }}">{{ form.texto.label }}</label>
+        {{ form.texto }}
+        {{ form.texto.errors }}
+        <div class="fila mt">
+          <button class="btn primario" type="submit">Enviar mensaje</button>
+        </div>
+      </form>
+      {% if puede_urgente %}
+        <hr class="sep">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="accion" value="urgente">
+          <div class="fila entre">
+            <span class="small">¿Esto no puede esperar? Súbela al frente de la fila.</span>
+            <button class="btn peligro chico" type="submit">Marcar urgente</button>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <div class="card mb">
+      <div class="titulo"><h3>Datos del caso</h3></div>
+      <p class="small">Abierta {{ incidencia.abierta_hace }} · {{ incidencia.ts_apertura|date:"d/M/Y H:i" }}</p>
+      <p class="small">La pelota la tiene: <b>{{ incidencia.pelota }}</b></p>
+      {% if incidencia.pedido %}
+        <p class="small">Pedido: <a class="mono" href="{% url 'portal:pedido_detalle' incidencia.pedido.pk %}">{{ incidencia.pedido.folio }}</a></p>
+      {% endif %}
+      {% if incidencia.sku %}
+        <p class="small">Producto: <span class="mono">{{ incidencia.sku.codigo }}</span> · {{ incidencia.sku.descripcion }}</p>
+      {% endif %}
+      {% if incidencia.ts_primera_respuesta %}
+        <p class="small">Primera respuesta humana: {{ incidencia.ts_primera_respuesta|date:"d/M/Y H:i" }}</p>
+      {% endif %}
+      {% if incidencia.ts_resolucion %}
+        <p class="small">Resuelta: {{ incidencia.ts_resolucion|date:"d/M/Y H:i" }}</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="titulo"><h3>Compensaciones</h3></div>
+      {% for comp in compensaciones %}
+        <div class="fila entre mb">
+          <div>
+            {{ comp.get_tipo_display }} · <span class="mono">${{ comp.monto }}</span>
+            {% if comp.referencia_pago %}<div class="small">Referencia de pago: <span class="mono">{{ comp.referencia_pago }}</span></div>{% endif %}
+            {% if comp.fecha_pago %}<div class="small">Pagada el {{ comp.fecha_pago|date:"d/M/Y" }}</div>{% endif %}
+          </div>
+          <span class="pill {% if comp.estado == 'PAGADA' %}ok{% elif comp.estado == 'APROBADA' %}accent{% else %}warn{% endif %}">{{ comp.get_estado_display }}</span>
+        </div>
+      {% empty %}
+        <p class="muted">Sin compensaciones en este caso. Si aplica una, aquí verás su estatus y su referencia de pago.</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

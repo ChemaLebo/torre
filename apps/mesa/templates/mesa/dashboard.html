@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Torre de control{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Torre de control</h1>
+  </div>
+  <div class="quien">Corte del día: <b class="mono">{{ TORRE.CORTE_CONTRACTUAL }}</b></div>
+</div>
+
+<div class="banner {{ banner.nivel }}"><span class="foco"></span>{{ banner.texto }}</div>
+
+<div class="grid g4 mb">
+  <div class="card stat">
+    <b>{{ total_hoy }}</b>
+    <span>pedidos ingresados hoy</span>
+  </div>
+  <div class="card stat {% if salida_pct is None %}{% elif salida_pct >= 95 %}ok{% elif salida_pct >= 90 %}warn{% else %}crit{% endif %}">
+    <b>{% if salida_pct is None %}—{% else %}{{ salida_pct }}%{% endif %}</b>
+    <span>salida mismo día (7 días · {{ salida_a_tiempo }}/{{ salida_medibles }} pre-corte)</span>
+  </div>
+  <div class="card stat {% if fuera_de_sla %}crit{% elif incidencias_abiertas %}warn{% else %}ok{% endif %}">
+    <b>{{ incidencias_abiertas|length }}</b>
+    <span>incidencias abiertas · {{ fuera_de_sla }} fuera de SLA</span>
+  </div>
+  <div class="card stat {% if exactitud_pct is None %}{% elif exactitud_pct >= 99.5 %}ok{% elif exactitud_pct >= 99.3 %}warn{% else %}crit{% endif %}">
+    <b>{% if exactitud_pct is None %}—{% else %}{{ exactitud_pct }}%{% endif %}</b>
+    <span>conteos exactos (30 días · {{ conteos_30d }} conteos)</span>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo">
+      <h3>Pedidos de hoy por estado</h3>
+      <a class="small" href="{% url 'mesa:pedidos' %}">ver todos →</a>
+    </div>
+    {% if pedidos_hoy %}
+      <div class="tabla-wrap">
+        <table>
+          <thead><tr><th>Estado</th><th class="derecha">Pedidos</th><th style="width:40%">Del día</th></tr></thead>
+          <tbody>
+            {% for fila in pedidos_hoy %}
+            <tr>
+              <td><span class="pill {{ fila.pill }}">{{ fila.nombre }}</span></td>
+              <td class="derecha mono">{{ fila.n }}</td>
+              <td><div class="medidor"><span style="width:{{ fila.pct }}%"></span></div></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Todavía no entran pedidos hoy. El corte es a las {{ TORRE.CORTE_CONTRACTUAL }}.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo">
+      <h3>Incidencias abiertas · por reloj SLA</h3>
+      <a class="small" href="{% url 'mesa:incidencias' %}">gestionar →</a>
+    </div>
+    {% if incidencias_abiertas %}
+      <div class="tabla-wrap">
+        <table>
+          <thead><tr><th>Folio</th><th>Tipo</th><th>Cliente</th><th>Reloj</th></tr></thead>
+          <tbody>
+            {% for inc in incidencias_abiertas %}
+            <tr class="fila-link">
+              <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+              <td>{{ inc.get_tipo_display }} · {{ inc.prioridad }}</td>
+              <td>{{ inc.cliente.nombre }}</td>
+              <td><span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Cero incidencias abiertas. Así se ve un buen día.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h3>Guías sin movimiento</h3><span class="small">umbral: {{ TORRE.SIN_MOVIMIENTO_LOCAL_HORAS }} h local · {{ TORRE.SIN_MOVIMIENTO_FORANEO_HORAS }} h foráneo</span></div>
+    {% if guias_atoradas %}
+      <div class="tabla-wrap">
+        <table>
+          <thead><tr><th>Guía</th><th>Pedido</th><th>Ruta</th><th>Quieta</th></tr></thead>
+          <tbody>
+            {% for guia in guias_atoradas %}
+            <tr>
+              <td class="mono">{{ guia.carrier }} {{ guia.numero }}</td>
+              <td class="mono">{{ guia.pedido.folio }} · {{ guia.pedido.cliente.nombre }}</td>
+              <td>{% if guia.pedido.es_local %}local{% else %}foránea{% endif %}</td>
+              <td><span class="pill crit">{{ guia.horas_quietas }} h (umbral {{ guia.horas_umbral }} h)</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">Ninguna guía dormida más allá de su umbral de ruta.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Últimos eventos de auditoría</h3></div>
+    <ul class="timeline">
+      {% for evento in eventos %}
+      <li>
+        <span class="cuando">{{ evento.ts|date:"d/M H:i" }} · {{ evento.actor_id|default:"sistema" }}{% if evento.cliente %} · {{ evento.cliente.nombre }}{% endif %}</span>
+        <span class="mono">{{ evento.entidad }}#{{ evento.entidad_id }}</span> — {{ evento.accion }}
+        {% if evento.motivo %}<div class="small">{{ evento.motivo }}</div>{% endif %}
+      </li>
+      {% empty %}
+      <li><span class="muted">Sin eventos todavía.</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+{% endblock %}

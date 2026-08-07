@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}{{ orden.folio }}{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción</div>
+    <h1>{{ orden.folio }}</h1>
+    <div class="small">{{ orden.cliente.nombre }} · cita {{ orden.fecha_compromiso|date:"D d/M"|default:"sin cita" }}</div>
+  </div>
+  <div class="fila">
+    <span class="pill {% if orden.estado == 'CERRADA' %}ok{% elif orden.estado == 'RECIBIDA' %}warn{% else %}accent{% endif %}">{{ orden.get_estado_display }}</span>
+    <a class="btn chico" href="{% url 'piso:recepciones' %}">Volver</a>
+  </div>
+</div>
+
+{% if sla_texto %}
+<div class="banner {{ sla_tono }}"><span class="foco"></span>{{ sla_texto }}. La orden se cierra cuando TODO quedó ubicado y vendible.</div>
+{% endif %}
+
+<div class="card">
+  <div class="titulo"><h2>Líneas de la orden</h2><span class="pill accent">conteo ciego</span></div>
+  <p class="small">Cuenta lo que llegó sin ver lo anunciado: aquí solo aparece lo que TÚ has capturado.</p>
+  {% for linea in lineas %}
+  <div class="corral-fila">
+    <div class="crece">
+      <span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}
+      <div class="small">Recibido <span class="num">{{ linea.cantidad_recibida }}</span>
+        · Dañado <span class="num">{{ linea.cantidad_danada }}</span>
+        · Por ubicar <span class="num">{{ linea.por_ubicar }}</span></div>
+    </div>
+    {% if linea.completa %}<span class="pill ok">Completa</span>{% else %}<span class="pill warn">En conteo</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% if orden.estado != 'CERRADA' %}
+<div class="card mt">
+  <div class="titulo"><h2>Escáner</h2><span class="pill">anaquel o producto</span></div>
+  <p class="small">Apunta al código del ANAQUEL destino o al código de barras del PRODUCTO: Torre llena los campos solo.</p>
+  <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h2>1 · Recibir</h2><span class="pill accent">conteo ciego</span></div>
+    <p class="small">Cuenta lo que llegó ANTES de ver lo anunciado. Lo dañado se va a cuarentena con foto.</p>
+    <form method="post" enctype="multipart/form-data">{% csrf_token %}
+      <input type="hidden" name="accion" value="recibir">
+      <label for="linea_id">Producto (o escanéalo)</label>
+      <select name="linea_id" id="linea_id" required>
+        {% for linea in lineas %}
+        <option value="{{ linea.pk }}" data-barras="{{ linea.sku.codigo_barras|default:'' }}" data-codigo="{{ linea.sku.codigo }}">{{ linea.sku.codigo }} — {{ linea.sku.descripcion }}</option>
+        {% endfor %}
+      </select>
+      <div class="grid g2">
+        <div>
+          <label for="cantidad_ok">En buen estado</label>
+          <input type="number" name="cantidad_ok" id="cantidad_ok" min="0" inputmode="numeric" value="0">
+        </div>
+        <div>
+          <label for="cantidad_danada">Dañadas</label>
+          <input type="number" name="cantidad_danada" id="cantidad_danada" min="0" inputmode="numeric" value="0">
+        </div>
+      </div>
+      <label for="foto_llegada">Foto de llegada (tarima / caja como llegó) — obligatoria en la primera línea</label>
+      <input type="file" name="foto_llegada" id="foto_llegada" accept="image/*" capture="environment">
+      <div class="mt"><button class="btn primario bloque" type="submit">Registrar recepción</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h2>2 · Ubicar (put-away)</h2></div>
+    <p class="small">Nada es vendible hasta estar en su anaquel. Escanea la etiqueta del anaquel o tócalo aquí:</p>
+    <div class="chips" id="chips-ubicacion">
+      {% for u in ubicaciones_destino %}
+      <button class="chip" type="button" data-ubicacion="{{ u.codigo }}">{{ u.codigo }}</button>
+      {% endfor %}
+    </div>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="ubicar">
+      <label for="sku_id">Producto (o escanéalo)</label>
+      <select name="sku_id" id="sku_id" required>
+        {% for linea in lineas %}
+        <option value="{{ linea.sku_id }}" data-barras="{{ linea.sku.codigo_barras|default:'' }}" data-codigo="{{ linea.sku.codigo }}">{{ linea.sku.codigo }} — {{ linea.por_ubicar }} por ubicar</option>
+        {% endfor %}
+      </select>
+      <div class="grid g2">
+        <div>
+          <label for="cantidad">Cantidad</label>
+          <input type="number" name="cantidad" id="cantidad" min="1" inputmode="numeric" required>
+        </div>
+        <div>
+          <label for="ubicacion">Ubicación (escaneada o tap)</label>
+          <input type="text" name="ubicacion" id="ubicacion" class="mono" placeholder="A-01-2" autocomplete="off" required>
+        </div>
+      </div>
+      <div class="grid g2">
+        <div>
+          <label for="lote">Lote (si el producto lo pide)</label>
+          <input type="text" name="lote" id="lote" class="mono" placeholder="L-2026-07" autocomplete="off">
+        </div>
+        <div>
+          <label for="fecha_caducidad">Caducidad del lote</label>
+          <input type="date" name="fecha_caducidad" id="fecha_caducidad">
+        </div>
+      </div>
+      <div class="mt"><button class="btn primario bloque" type="submit">Ubicar</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card mt">
+  <div class="titulo"><h2>3 · Cerrar orden</h2></div>
+  {% if pendiente_putaway > 0 %}
+    <div class="banner warn"><span class="foco"></span>Faltan {{ pendiente_putaway }} piezas por ubicar. La orden se cierra hasta que todo sea vendible.</div>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="cerrar">
+      <button class="btn bloque" type="submit" disabled>Todo ubicado — cerrar orden</button>
+    </form>
+  {% elif orden.estado == 'RECIBIDA' or orden.estado == 'EN_RECEPCION' %}
+    <p class="small">Todo lo recibido ya está en anaquel.{% if orden.estado == 'EN_RECEPCION' %} Si ya no va a llegar más mercancía, cierra la orden: las diferencias se reportan al cliente.{% endif %} Captura cuántas tarimas llegaron y cierra la orden para parar el reloj SLA.</p>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="cerrar">
+      <label for="tarimas_recibidas">Tarimas recibidas</label>
+      <input type="number" name="tarimas_recibidas" id="tarimas_recibidas" min="0" inputmode="numeric" value="{{ orden.tarimas }}">
+      <div class="mt"><button class="btn primario bloque" type="submit">Todo ubicado — cerrar orden</button></div>
+    </form>
+  {% else %}
+    <p class="muted">La orden se puede cerrar cuando algo se haya recibido y todo esté ubicado.</p>
+  {% endif %}
+</div>
+
+<script>
+/* escaner.js carga con defer (corre justo antes de DOMContentLoaded): todo
+   inline que use Escaner/Feedback DEBE esperar DOMContentLoaded o muere en
+   ReferenceError y se lleva la página completa. */
+document.addEventListener("DOMContentLoaded", function () {
+  var inputUbicacion = document.getElementById("ubicacion");
+  var chips = Array.prototype.slice.call(document.querySelectorAll("#chips-ubicacion .chip"));
+  var selects = [document.getElementById("linea_id"), document.getElementById("sku_id")];
+
+  function marcaChip(codigo) {
+    chips.forEach(function (chip) {
+      chip.classList.toggle("activo", chip.dataset.ubicacion.toUpperCase() === codigo.toUpperCase());
+    });
+  }
+  function ponUbicacion(codigo) {
+    inputUbicacion.value = codigo;
+    marcaChip(codigo);
+  }
+  chips.forEach(function (chip) {
+    chip.addEventListener("click", function () { ponUbicacion(chip.dataset.ubicacion); });
+  });
+
+  function eligeSku(valor) {
+    var pego = false;
+    selects.forEach(function (select) {
+      if (!select) return;
+      var opciones = Array.prototype.slice.call(select.options);
+      for (var i = 0; i < opciones.length; i++) {
+        var o = opciones[i];
+        if (valor && (o.dataset.barras === valor || o.dataset.codigo === valor)) {
+          select.value = o.value;
+          pego = true;
+          break;
+        }
+      }
+    });
+    return pego;
+  }
+
+  Escaner.montar(document.getElementById("visor-escaner"), function (valor) {
+    valor = valor.trim();
+    // ¿Anaquel destino?
+    for (var i = 0; i < chips.length; i++) {
+      if (chips[i].dataset.ubicacion.toUpperCase() === valor.toUpperCase()) {
+        ponUbicacion(chips[i].dataset.ubicacion);
+        Feedback.ok();
+        return;
+      }
+    }
+    // ¿Producto de la orden?
+    if (eligeSku(valor)) { Feedback.ok(); return; }
+    Feedback.error("Ese código no es ni anaquel ni producto de esta orden.");
+  });
+});
+</script>
+{% else %}
+<div class="banner ok mt"><span class="foco"></span>Orden cerrada: todo quedó vendible el {{ orden.ts_vendible|date:"d/M H:i" }}.</div>
+{% endif %}
+
+{% if fotos_llegada %}
+<div class="card mt">
+  <div class="titulo"><h2>Fotos de llegada</h2></div>
+  <div class="fotos">
+    {% for foto in fotos_llegada %}
+    <img src="{{ foto.archivo.url }}" alt="Foto de llegada {{ orden.folio }}">
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

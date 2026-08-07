@@ -1,0 +1,9 @@
+.env
+torre.sqlite3
+media/
+staticfiles/
+__pycache__/
+*.pem
+.DS_Store
+*.pyc
+torre.sqlite3-journal

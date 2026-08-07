@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Recepciones · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Recepciones · todos los clientes</h1>
+  </div>
+  <div class="quien">El aviso que llega por WhatsApp se captura aquí, en menos de 15 minutos.</div>
+</div>
+
+<div class="card mb">
+  {% if cliente_captura %}
+    <div class="titulo"><h2>Capturar ASN de {{ cliente_captura.nombre }}</h2><a class="btn chico" href="{% url 'mesa:recepciones' %}">Cambiar de cliente</a></div>
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="cliente" value="{{ cliente_captura.slug }}">
+      {{ form.non_field_errors }}
+
+      <div class="grid g2">
+        <div>
+          <label for="{{ form.fecha_compromiso.id_for_label }}">{{ form.fecha_compromiso.label }}</label>
+          {{ form.fecha_compromiso }}
+          {{ form.fecha_compromiso.errors }}
+        </div>
+        <div>
+          <label for="{{ form.tarimas.id_for_label }}">{{ form.tarimas.label }}</label>
+          {{ form.tarimas }}
+          <div class="small muted">{{ form.tarimas.help_text }}</div>
+          {{ form.tarimas.errors }}
+        </div>
+      </div>
+
+      {% for sku_campo, cantidad_campo in form.renglones %}
+        <div class="grid g2">
+          <div>
+            <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }} {{ forloop.counter }}</label>
+            {{ sku_campo }}
+            {{ sku_campo.errors }}
+          </div>
+          <div>
+            <label for="{{ cantidad_campo.id_for_label }}">{{ cantidad_campo.label }}</label>
+            {{ cantidad_campo }}
+            {{ cantidad_campo.errors }}
+          </div>
+        </div>
+      {% endfor %}
+
+      <div class="mt"><button class="btn primario" type="submit">Registrar ASN</button></div>
+    </form>
+  {% else %}
+    <div class="titulo"><h2>Capturar una ASN (aviso por WhatsApp)</h2></div>
+    <p class="small">Primero elige el cliente: sus productos dependen de él.</p>
+    <form method="get" class="fila">
+      <div style="flex:1;min-width:200px">
+        <label for="f-cliente">Cliente</label>
+        <select id="f-cliente" name="cliente">
+          {% for c in clientes_activos %}
+          <option value="{{ c.slug }}">{{ c.nombre }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="align-self:flex-end"><button class="btn primario" type="submit">Capturar para este cliente</button></div>
+    </form>
+  {% endif %}
+</div>
+
+<div class="card mb">
+  <div class="titulo"><h2>ASNs abiertas</h2></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Folio</th><th>Cliente</th><th>Estado</th><th>Cita</th><th>Tarimas</th><th>Anunciado / recibido</th><th>Reloj SLA</th></tr>
+      </thead>
+      <tbody>
+        {% for orden in abiertas %}
+        <tr>
+          <td class="mono">{{ orden.folio }}</td>
+          <td>{{ orden.cliente.nombre }}</td>
+          <td><span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span></td>
+          <td class="mono">{{ orden.fecha_compromiso|date:"D d/M"|default:"—" }}</td>
+          <td class="mono">{% if orden.tarimas %}{{ orden.tarimas }}{% else %}—{% endif %}</td>
+          <td class="num">{{ orden.total_anunciado }} / {{ orden.total_recibido }}</td>
+          <td>{% if orden.sla_texto %}<span class="pill {{ orden.sla_tono }}">{{ orden.sla_texto }}</span>{% else %}<span class="muted">Aún no inicia</span>{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="muted centro">Sin ASNs abiertas. Nada anunciado por recibir.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Últimas 10 cerradas</h2></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Folio</th><th>Cliente</th><th>Tarimas recibidas</th><th>Anunciado / recibido</th><th>Vendible desde</th></tr>
+      </thead>
+      <tbody>
+        {% for orden in cerradas %}
+        <tr>
+          <td class="mono">{{ orden.folio }}</td>
+          <td>{{ orden.cliente.nombre }}</td>
+          <td class="mono">{% if orden.tarimas_recibidas %}{{ orden.tarimas_recibidas }}{% else %}—{% endif %}</td>
+          <td class="num">{{ orden.total_anunciado }} / {{ orden.total_recibido }}</td>
+          <td class="mono">{{ orden.ts_vendible|date:"d/M H:i"|default:"—" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="muted centro">Todavía no hay recepciones cerradas.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

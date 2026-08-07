@@ -1,0 +1,190 @@
+{% load humanize %}<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tu pedido · {{ b.nombre_publico }}</title>
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    --primario: {{ b.color_primario }};
+    --fondo: {{ b.color_fondo }};
+    --texto: {{ b.color_texto }};
+    --tarjeta: #FFFFFF;
+    --suave: rgba(0,0,0,.08);
+    --tenue: rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--fondo); color: var(--texto);
+    line-height: 1.55; font-size: 16px;
+    {% if embed %}padding: 8px;{% else %}padding: 0 0 60px;{% endif %}
+  }
+  .lienzo { max-width: 560px; margin: 0 auto; padding: 0 18px; }
+  {% if not embed %}
+  header {
+    text-align: center; padding: 34px 16px 26px;
+    border-bottom: 3px solid var(--primario);
+    background: var(--tarjeta); margin-bottom: 24px;
+  }
+  .marca {
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 30px; letter-spacing: .04em; color: var(--primario);
+  }
+  .marca img { max-height: 56px; }
+  .lema { font-size: 12.5px; color: var(--tenue); letter-spacing: .14em; text-transform: uppercase; margin-top: 4px; }
+  {% endif %}
+  .estado-hero { text-align: center; padding: 8px 0 22px; }
+  .estado-hero h1 { font-size: 30px; line-height: 1.15; color: var(--primario); font-family: Georgia, serif; }
+  .estado-hero p { color: var(--tenue); margin-top: 6px; }
+  .folio { font-size: 13px; color: var(--tenue); margin-top: 10px; letter-spacing: .06em; }
+
+  .linea-tiempo { display: flex; margin: 10px 0 28px; }
+  .lt-paso { flex: 1; text-align: center; position: relative; }
+  .lt-paso::before {
+    content: ""; position: absolute; top: 10px; left: -50%; width: 100%;
+    height: 3px; background: var(--suave);
+  }
+  .lt-paso:first-child::before { display: none; }
+  .lt-paso.hecho::before { background: var(--primario); }
+  .lt-punto {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--tarjeta); border: 3px solid var(--suave);
+    margin: 0 auto 8px; position: relative; z-index: 1;
+  }
+  .lt-paso.hecho .lt-punto { background: var(--primario); border-color: var(--primario); }
+  .lt-nombre { font-size: 12px; }
+  .lt-paso.hecho .lt-nombre { font-weight: 700; }
+  .lt-fecha { font-size: 10.5px; color: var(--tenue); }
+
+  .tarjeta {
+    background: var(--tarjeta); border-radius: 12px;
+    box-shadow: 0 1px 4px var(--suave);
+    padding: 18px 20px; margin-bottom: 14px;
+  }
+  .tarjeta h2 { font-size: 14px; letter-spacing: .1em; text-transform: uppercase; color: var(--tenue); margin-bottom: 10px; }
+  .paquete-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .paquete-cab b { font-size: 17px; }
+  .chip {
+    display: inline-block; font-size: 12px; font-weight: 700;
+    color: var(--primario); border: 1.5px solid var(--primario);
+    padding: 3px 12px; border-radius: 999px;
+  }
+  .chip.entregado { background: var(--primario); color: #fff; }
+  .contenido { margin: 10px 0 4px; padding-left: 18px; color: var(--texto); font-size: 14.5px; }
+  .guia { font-size: 13px; color: var(--tenue); margin-top: 8px; }
+  .guia code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--fondo); padding: 2px 7px; border-radius: 5px; }
+
+  .pod img { width: 100%; border-radius: 10px; margin-top: 8px; }
+
+  .btn {
+    display: block; width: 100%; text-align: center; text-decoration: none;
+    padding: 14px; border-radius: 999px; font-size: 16px; font-weight: 700;
+    border: none; cursor: pointer; margin-top: 10px;
+  }
+  .btn-primario { background: var(--primario); color: #fff; }
+  .btn-secundario { background: transparent; color: var(--primario); border: 2px solid var(--primario); }
+
+  details { margin-top: 6px; }
+  summary { cursor: pointer; font-weight: 700; color: var(--primario); padding: 8px 0; }
+  label { display: block; font-size: 13px; font-weight: 700; margin: 12px 0 4px; }
+  select, textarea, input[type="file"] {
+    width: 100%; padding: 11px; border: 1.5px solid var(--suave);
+    border-radius: 9px; font-size: 15px; background: #fff; color: var(--texto);
+  }
+  .aviso-ok {
+    background: var(--primario); color: #fff; border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 16px; text-align: center;
+  }
+  footer { text-align: center; margin-top: 28px; font-size: 12px; color: var(--tenue); }
+</style>
+</head>
+<body>
+{% if not embed %}
+<header>
+  <div class="marca">
+    {% if b.logo_url %}<img src="{{ b.logo_url }}" alt="{{ b.nombre_publico }}">{% else %}{{ b.nombre_publico }}{% endif %}
+  </div>
+  <div class="lema">Seguimiento de tu pedido</div>
+</header>
+{% endif %}
+<div class="lienzo">
+
+  {% if reportado %}
+  <div class="aviso-ok">
+    <b>Ya recibimos tu reporte.</b><br>
+    Una persona de {{ b.nombre_publico }} te contacta en menos de {{ sla_min }} minutos en horario de atención.
+  </div>
+  {% endif %}
+
+  <div class="estado-hero">
+    <h1>{{ estado_titulo }}</h1>
+    <p>{% if nombre_pila %}{{ nombre_pila }}, {% endif %}{{ estado_descripcion }}</p>
+    <div class="folio">PEDIDO {{ pedido.folio }}</div>
+  </div>
+
+  <div class="linea-tiempo">
+    {% for paso in timeline %}
+    <div class="lt-paso {% if paso.hecho %}hecho{% endif %}">
+      <div class="lt-punto"></div>
+      <div class="lt-nombre">{{ paso.paso }}</div>
+      {% if paso.ts %}<div class="lt-fecha">{{ paso.ts|date:"j M, G:i" }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% for p in paquetes %}
+  <div class="tarjeta">
+    <div class="paquete-cab">
+      <b>{% if p.total > 1 %}Paquete {{ p.numero }} de {{ p.total }}{% else %}Tu envío{% endif %}</b>
+      <span class="chip {% if p.entregado %}entregado{% endif %}">{{ p.estado }}</span>
+    </div>
+    {% if p.total > 1 and forloop.first %}
+    <p style="font-size:13px;color:var(--tenue);margin-top:6px">
+      Tu pedido viaja en {{ p.total }} paquetes para que cada botella llegue perfecta. Pueden llegar en momentos distintos del día.
+    </p>
+    {% endif %}
+    <ul class="contenido">
+      {% for item in p.contenido %}<li>{{ item }}</li>{% endfor %}
+    </ul>
+    {% if p.guia %}
+    <div class="guia">{{ p.carrier }} · Guía <code>{{ p.guia }}</code></div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if pod %}
+  <div class="tarjeta pod">
+    <h2>Confirmación de entrega</h2>
+    <img src="{{ pod.archivo.url }}" alt="Foto de entrega">
+  </div>
+  {% endif %}
+
+  <div class="tarjeta">
+    <h2>¿Algo no salió bien?</h2>
+    <p style="font-size:14.5px">Cuéntanos y lo resolvemos. Nada de bots: te responde una persona en menos de {{ sla_min }} minutos en horario de atención.</p>
+    <details>
+      <summary>Reportar un problema</summary>
+      <form method="post" action="/r/{{ token }}/reporte/" enctype="multipart/form-data">
+        {% csrf_token %}
+        <label for="tipo">¿Qué pasó?</label>
+        <select name="tipo" id="tipo">
+          {% for valor, etiqueta in tipos_reporte %}<option value="{{ valor }}">{{ etiqueta }}</option>{% endfor %}
+        </select>
+        <label for="texto">Cuéntanos más (opcional)</label>
+        <textarea name="texto" id="texto" rows="3" maxlength="1000" placeholder="Ej. la caja llegó golpeada de una esquina…"></textarea>
+        <label for="foto">Foto (opcional, nos ayuda muchísimo)</label>
+        <input type="file" name="foto" id="foto" accept="image/*">
+        <button class="btn btn-primario" type="submit">Enviar reporte</button>
+      </form>
+    </details>
+    {% if b.whatsapp_soporte %}
+    <a class="btn btn-secundario" href="https://wa.me/{{ b.whatsapp_soporte }}">Escríbenos por WhatsApp</a>
+    {% endif %}
+  </div>
+
+  <footer>{{ b.nombre_publico }} · Hecho con cariño en Colima</footer>
+</div>
+</body>
+</html>

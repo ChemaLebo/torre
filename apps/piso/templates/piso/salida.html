@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Salida{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Salida</div>
+    <h1>Staging por corral</h1>
+  </div>
+  {% if flota_propia %}
+  <div class="fila">
+    <a class="btn chico" href="{% url 'piso:entrega_local' %}">Entregas locales (POD)</a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="banner warn"><span class="foco"></span>
+  El “va en camino” al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino.
+</div>
+
+<div class="grid g3">
+  {% for corral in corrales %}
+  {% if corral.codigo != corral_local or flota_propia or corral.listos or corral.sin_guia %}
+  <div class="card">
+    <div class="titulo">
+      <h2 class="mono">{{ corral.codigo }}</h2>
+      <span class="pill {% if corral.listos %}accent{% endif %}">{{ corral.nombre }}</span>
+    </div>
+    <div class="numero-corral">{{ corral.listos|length }}</div>
+    <div class="small muted">listos para el chofer</div>
+
+    {% if corral.sin_guia %}
+    <hr class="sep">
+    <div class="small muted">Sin guía todavía (excepción — el carril nuevo ya no los produce):</div>
+    {% for p in corral.sin_guia %}
+    <div class="corral-fila">
+      <div class="crece"><span class="mono">{{ p.folio }}</span> <span class="small">· {{ p.cliente.nombre }}</span></div>
+      <form method="post">{% csrf_token %}
+        <input type="hidden" name="accion" value="generar_guia">
+        <input type="hidden" name="pedido_id" value="{{ p.pk }}">
+        <button class="btn" type="submit">Generar guía</button>
+      </form>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if corral.listos %}
+    <hr class="sep">
+    {% for p in corral.listos %}
+    <div class="corral-fila">
+      <div class="crece">
+        <span class="mono">{{ p.folio }}</span>
+        · <span class="mono small">{{ p.guia.numero|default:"—" }}</span>
+        <div class="small">{{ p.cliente.nombre }}
+          {% if not p.cierre_ok %}<span class="pill crit">falta foto de cierre</span>{% endif %}
+        </div>
+      </div>
+      <div class="fila">
+        {% for g in p.guias_activas %}
+        <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
+        <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
+          <input type="hidden" name="accion" value="imprimir">
+          <input type="hidden" name="volver" value="salida">
+          <button class="btn chico" type="submit" title="Imprimir en bodega" aria-label="Imprimir etiqueta en la impresora de bodega">🖨</button>
+        </form>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+
+    {% for p in corral.sin_cierre %}
+    <p class="small"><span class="pill crit">se queda</span> {{ p.folio }} se queda: falta foto de caja cerrada con la etiqueta pegada —
+      <a href="{% url 'piso:empaque_pedido' p.pk %}">tomar foto de cierre</a></p>
+    {% endfor %}
+
+    <form method="post" class="mt">{% csrf_token %}
+      <input type="hidden" name="accion" value="manifiesto">
+      <input type="hidden" name="corral" value="{{ corral.codigo }}">
+      <button class="btn primario gigante" type="submit" {% if corral.firman == 0 %}disabled{% endif %}>
+        FIRMÓ EL CHOFER · SALEN {{ corral.firman }}
+      </button>
+    </form>
+    <p class="small muted">Firma del chofer en mano ANTES de tocar este botón. Marca RECOLECTADO en lote y avisa al comprador.</p>
+    {% elif not corral.sin_guia %}
+    <p class="muted mt">Corral vacío.</p>
+    {% else %}
+    <p class="small muted mt">Genera las guías para poder firmar el manifiesto.</p>
+    {% endif %}
+
+    {% if corral.codigo == corral_local and flota_propia %}
+    <hr class="sep">
+    <p class="small">Ruta local: al firmar salen a reparto. Cierra cada entrega con su POD en
+      <a href="{% url 'piso:entrega_local' %}">Entregas locales</a>.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

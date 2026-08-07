@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Inventario{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Tu operación</div>
+    <h1>Inventario</h1>
+  </div>
+  <div class="quien">Cifras al momento de cargar esta página · conteos diarios publicados con fecha</div>
+</div>
+
+<div class="tabla-wrap mb">
+  <table>
+    <thead>
+      <tr>
+        <th>Producto</th>
+        <th>Físico</th>
+        <th>En recepción</th>
+        <th>Apartado</th>
+        <th>Cuarentena</th>
+        <th>Disponible</th>
+        <th>Último conteo</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for fila in filas %}
+        <tr {% if kardex and kardex.sku.pk == fila.sku.pk %}class="fila-link"{% endif %}>
+          <td>
+            <span class="mono">{{ fila.sku.codigo }}</span>
+            <div class="small">{{ fila.sku.descripcion }}</div>
+          </td>
+          <td class="mono">{{ fila.fisico }}</td>
+          <td class="mono">{{ fila.en_recepcion }}</td>
+          <td class="mono">{{ fila.apartado }}</td>
+          <td class="mono">{{ fila.cuarentena }}</td>
+          <td>
+            <span class="mono">{{ fila.disponible }}</span>
+            {% if fila.bajo_reorden %}<span class="pill crit">Por resurtir</span>{% endif %}
+          </td>
+          <td class="small">{{ fila.ultimo_conteo_hace }}</td>
+          <td><a class="small" href="?sku={{ fila.sku.codigo|urlencode }}">Ver historia</a></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="8" class="muted">Todavía no hay productos dados de alta. Nosotros los cargamos contigo en el arranque.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if kardex %}
+  <div class="card">
+    <div class="titulo">
+      <h3>Historia de {{ kardex.sku.codigo }} · {{ kardex.sku.descripcion }}</h3>
+      <a class="btn chico" href="{% url 'portal:exportar' %}?csv=kardex&amp;sku={{ kardex.sku.codigo|urlencode }}">Descargar CSV</a>
+    </div>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Cuándo</th><th>Qué pasó</th><th>Piezas</th><th>Referencia</th></tr></thead>
+        <tbody>
+          {% for mov in kardex.movimientos %}
+            <tr>
+              <td class="small">{{ mov.ts|date:"d/M/Y H:i" }}</td>
+              <td>{{ mov.que_paso }}</td>
+              <td class="mono">{% if mov.delta > 0 %}+{% endif %}{{ mov.delta }}</td>
+              <td class="mono">{{ mov.referencia|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4" class="muted">Este producto todavía no tiene movimientos.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="small mt">Cada entrada, salida, apartado o ajuste queda aquí con fecha y referencia. Nada se mueve en silencio.</p>
+  </div>
+{% else %}
+  <p class="small">Toca “Ver historia” en cualquier producto para ver todos sus movimientos, o <a href="{% url 'portal:exportar' %}">descarga el inventario completo desde Exportar</a>.</p>
+{% endif %}
+{% endblock %}

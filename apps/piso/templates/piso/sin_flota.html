@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Sin flota propia{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Entrega local</div>
+    <h1>Aquí no hay nada que hacer</h1>
+  </div>
+</div>
+<div class="card centro">
+  <p>Hoy no tenemos flota propia: <b>todos</b> los pedidos —locales incluidos— salen con paquetería
+    y viven en <a href="{% url 'piso:salida' %}"><b>Salida</b></a>, en el corral de su carrier.</p>
+  <p class="small muted">Si algún día se prende la flota (Mesa lo configura), esta pantalla vuelve sola.</p>
+  <a class="btn primario mt" href="{% url 'piso:salida' %}">Ir a salida</a>
+</div>
+{% endblock %}

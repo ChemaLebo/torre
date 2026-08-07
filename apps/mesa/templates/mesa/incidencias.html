@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Incidencias · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Incidencias</h1>
+  </div>
+  <div class="quien"><b>{{ abiertas_n }}</b> abiertas de {{ incidencias|length }} en la vista</div>
+</div>
+
+<div class="card mb">
+  <form method="get" class="fila">
+    <div style="flex:1;min-width:160px">
+      <label for="f-estado">Estado</label>
+      <select id="f-estado" name="estado">
+        <option value="">Todas</option>
+        <option value="abiertas" {% if filtro.estado == "abiertas" %}selected{% endif %}>Solo abiertas</option>
+        {% for clave, nombre in estados %}
+        <option value="{{ clave }}" {% if filtro.estado == clave %}selected{% endif %}>{{ nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:160px">
+      <label for="f-tipo">Tipo</label>
+      <select id="f-tipo" name="tipo">
+        <option value="">Todos</option>
+        {% for clave, nombre in tipos %}
+        <option value="{{ clave }}" {% if filtro.tipo == clave %}selected{% endif %}>{{ clave }} · {{ nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:160px">
+      <label for="f-cliente">Cliente</label>
+      <select id="f-cliente" name="cliente">
+        <option value="">Todos</option>
+        {% for c in clientes_filtro %}
+        <option value="{{ c.pk }}" {% if filtro.cliente == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="align-self:flex-end"><button class="btn" type="submit">Filtrar</button></div>
+  </form>
+</div>
+
+<div class="tabla-wrap">
+  <table>
+    <thead>
+      <tr><th>Folio</th><th>Tipo</th><th>Prioridad</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Dueño</th><th>Reloj SLA</th></tr>
+    </thead>
+    <tbody>
+      {% for inc in incidencias %}
+      <tr class="fila-link">
+        <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+        <td>{{ inc.get_tipo_display }}</td>
+        <td><span class="pill {% if inc.prioridad == 'P1' %}crit{% elif inc.prioridad == 'P2' %}warn{% endif %}">{{ inc.prioridad }}</span></td>
+        <td>{{ inc.cliente.nombre }}</td>
+        <td class="mono">{% if inc.pedido %}{{ inc.pedido.folio }}{% else %}—{% endif %}</td>
+        <td><span class="pill {% if inc.abierta %}accent{% else %}ok{% endif %}">{{ inc.get_estado_display }}</span></td>
+        <td>{{ inc.dueno|default:"sin dueño" }}</td>
+        <td>{% if inc.abierta %}<span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span>{% else %}<span class="small">cerró su reloj</span>{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" class="muted centro">Nada con esos filtros. Ajusta la búsqueda.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

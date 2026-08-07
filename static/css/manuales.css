@@ -1,0 +1,137 @@
+/* ══════════════════════════════════════════════════════════════════
+   TORRE · Manuales (SOPs) — diseño de lectura estilo Notion
+   sobre el tema oscuro WOP. Encabezados: Questrial.
+   Este archivo lo incluyen solo templates/manuales/*.html.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* El @font-face de Questrial vive en wop.css (display global de la app);
+   este archivo siempre carga después de wop.css vía base.html. */
+:root {
+  --manual-display: "Questrial", "Century Gothic", "Futura", "Avenir Next", sans-serif;
+}
+
+/* ── Índice: cards por manual ── */
+.manual-copy { max-width: 720px; font-size: 1.05rem; line-height: 1.7; color: var(--ink-70); margin: 0 0 26px; }
+.manual-grupo { margin: 26px 8px 10px; }
+.manual-card { display: flex; flex-direction: column; gap: 6px; transition: border-color .15s, background .15s; }
+.manual-card:hover { border-color: var(--hair-2); background: var(--panel-2); color: inherit; }
+.manual-card h3 { font-family: var(--manual-display); font-weight: 400; font-size: 17px; letter-spacing: .01em; }
+.manual-card-emoji { font-size: 26px; line-height: 1; }
+.manual-card-resumen {
+  margin: 0; font-size: 13px; color: var(--ink-50); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.manual-card .lectura { margin-top: auto; padding-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--ink-30); }
+
+/* Portada (README) plegada al pie del índice */
+.manual-portada summary {
+  cursor: pointer; font-family: var(--manual-display); font-size: 17px;
+  display: flex; align-items: center; gap: 10px; list-style: none;
+}
+.manual-portada summary::-webkit-details-marker { display: none; }
+.manual-portada summary::after { content: "abrir"; margin-left: auto; font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-30); }
+.manual-portada[open] summary::after { content: "cerrar"; }
+.manual-portada[open] summary { margin-bottom: 14px; }
+
+/* ── Detalle: layout lectura + TOC lateral ── */
+.manual-migas { margin-bottom: 18px; }
+.manual-migas a { font-family: var(--mono); font-size: 12px; color: var(--ink-50); }
+.manual-migas a:hover { color: var(--ink); }
+.manual-layout {
+  display: grid; grid-template-columns: minmax(0, 760px) 220px;
+  gap: 56px; justify-content: center; align-items: start;
+}
+.manual-toc { position: sticky; top: 28px; }
+.manual-toc nav { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; border-left: 1px solid var(--hair); }
+.manual-toc nav a { display: block; padding: 5px 0 5px 14px; font-size: 13px; color: var(--ink-50); line-height: 1.4; margin-left: -1px; border-left: 1px solid transparent; }
+.manual-toc nav a:hover { color: var(--ink); border-left-color: var(--accent); }
+.manual-toc-movil { display: none; }
+
+@media (max-width: 1100px) {
+  .manual-layout { grid-template-columns: minmax(0, 760px); }
+  .manual-toc { display: none; }
+  .manual-toc-movil {
+    display: block; margin: 0 0 22px; border: 1px solid var(--hair);
+    border-radius: var(--r); background: var(--panel); padding: 12px 16px;
+  }
+  .manual-toc-movil summary { cursor: pointer; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-50); }
+  .manual-toc-movil nav { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+  .manual-toc-movil nav a { padding: 6px 0; font-size: 14px; color: var(--ink-70); }
+}
+
+/* ── Cabecera del documento: emoji, título, propiedades estilo Notion ── */
+.manual-cabecera { margin-bottom: 10px; }
+.manual-emoji { font-size: 54px; line-height: 1; margin-bottom: 14px; }
+.manual-titulo {
+  font-family: var(--manual-display); font-weight: 400; text-transform: none;
+  font-size: clamp(30px, 4vw, 42px); letter-spacing: .005em; line-height: 1.12;
+  margin: 6px 0 18px;
+}
+.manual-props { margin: 0 0 6px; padding: 14px 0 4px; border-top: 1px solid var(--hair); display: grid; gap: 9px; }
+.manual-props .prop { display: grid; grid-template-columns: 150px 1fr; gap: 14px; align-items: baseline; margin: 0; }
+.manual-props dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-30); }
+.manual-props dd { margin: 0; font-size: 13.5px; color: var(--ink-70); line-height: 1.55; }
+@media (max-width: 640px) { .manual-props .prop { grid-template-columns: 1fr; gap: 2px; } }
+
+/* ── Cuerpo de lectura ── */
+.manual-lectura { min-width: 0; }
+.manual-cuerpo { font-size: 1.05rem; line-height: 1.7; color: var(--ink-70); }
+.manual-cuerpo p { margin: 0 0 1.05em; }
+.manual-cuerpo strong { color: var(--ink); font-weight: 600; }
+.manual-cuerpo em { color: var(--ink); }
+.manual-cuerpo a { color: var(--accent-hot); }
+.manual-cuerpo h2 {
+  font-family: var(--manual-display); font-weight: 400; text-transform: none;
+  font-size: 25px; letter-spacing: .01em; line-height: 1.25; color: var(--ink);
+  margin: 2.1em 0 .75em; padding-bottom: .35em; border-bottom: 1px solid var(--hair);
+  scroll-margin-top: 24px;
+}
+.manual-cuerpo h3 {
+  font-family: var(--manual-display); font-weight: 400;
+  font-size: 18px; color: var(--ink); margin: 1.6em 0 .6em;
+}
+.manual-cuerpo hr { border: none; border-top: 1px solid var(--hair); margin: 2.2em 0; }
+.manual-cuerpo ul, .manual-cuerpo ol { margin: 0 0 1.05em; padding-left: 1.5em; }
+.manual-cuerpo li { margin: 0 0 .45em; }
+.manual-cuerpo li > ul, .manual-cuerpo li > ol { margin: .45em 0 .2em; }
+
+/* `code` como kbd-pill: los botones y rutas de Torre */
+.manual-cuerpo code {
+  font-family: var(--mono); font-size: .82em;
+  background: var(--panel-2); border: 1px solid var(--hair-2); border-radius: 6px;
+  padding: .12em .5em; white-space: nowrap; color: var(--ink);
+}
+
+/* Callouts ⚠️: párrafo completo o item de lista */
+.manual-cuerpo .callout {
+  border-radius: var(--r); padding: 14px 18px; margin: 0 0 1.05em;
+  border-left: 3px solid var(--crit);
+}
+.manual-cuerpo .callout.warn { background: var(--crit-soft); }
+.manual-cuerpo li.warn {
+  list-style: none; margin-left: -1.5em; padding: 10px 14px;
+  border-left: 3px solid var(--crit); background: var(--crit-soft);
+  border-radius: var(--r); margin-bottom: .55em;
+}
+
+/* Checklists reales (- [ ]) */
+.manual-cuerpo li.check { list-style: none; margin-left: -1.5em; }
+.manual-cuerpo li.check label { all: unset; display: flex; gap: 10px; align-items: baseline; font: inherit; color: inherit; }
+.manual-cuerpo li.check input { accent-color: var(--accent); flex: none; transform: translateY(1px); }
+
+/* Tablas dentro del manual: limpias, con overflow propio */
+.manual-cuerpo .tabla-wrap { margin: 0 0 1.2em; }
+.manual-cuerpo table { font-size: .92rem; }
+.manual-cuerpo td { color: var(--ink-70); }
+
+/* Bloques preformateados (checklists imprimibles de los SOPs) */
+.manual-cuerpo .pre-manual {
+  background: var(--panel); border: 1px dashed var(--hair-2); border-radius: var(--r);
+  padding: 18px 20px; margin: 0 0 1.2em; overflow-x: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.75; color: var(--ink-70);
+}
+
+/* ── Sugerencias (portal) ── */
+.manual-sugerencia { margin-top: 40px; }
+.manual-sugerencia .error-campo { margin-top: 8px; color: var(--crit); font-size: 13px; }
+.manual-sugerencia ul.errorlist { margin: 8px 0 0; padding: 0; list-style: none; color: var(--crit); font-size: 13px; }

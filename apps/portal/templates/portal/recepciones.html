@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Recepciones{% endblock %}
+
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Tu operación</div>
+    <h1>Recepciones</h1>
+  </div>
+  <div class="quien">Anuncia tu mercancía y síguela hasta que quede a la venta</div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h3>Anunciar una entrega</h3></div>
+    <p class="small">Dinos qué llega y cuándo. Con el anuncio agendamos la descarga y tu producto queda listo para vender en un máximo de {{ TORRE.SLA_RECEPCION_HORAS_CONTRACTUAL }} horas desde que termina la descarga.</p>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+
+      <label for="{{ form.fecha_compromiso.id_for_label }}">{{ form.fecha_compromiso.label }}</label>
+      {{ form.fecha_compromiso }}
+      {{ form.fecha_compromiso.errors }}
+
+      <label for="{{ form.tarimas.id_for_label }}">{{ form.tarimas.label }}</label>
+      {{ form.tarimas }}
+      <div class="small muted">{{ form.tarimas.help_text }}</div>
+      {{ form.tarimas.errors }}
+
+      {% for sku_campo, cantidad_campo in form.renglones %}
+        <div class="grid g2">
+          <div>
+            <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }} {{ forloop.counter }}</label>
+            {{ sku_campo }}
+            {{ sku_campo.errors }}
+          </div>
+          <div>
+            <label for="{{ cantidad_campo.id_for_label }}">{{ cantidad_campo.label }}</label>
+            {{ cantidad_campo }}
+            {{ cantidad_campo.errors }}
+          </div>
+        </div>
+      {% endfor %}
+
+      <div class="fila mt">
+        <button class="btn primario" type="submit">Anunciar entrega</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Tus entregas</h3></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Folio</th>
+            <th>Cita</th>
+            <th>Tarimas</th>
+            <th>Piezas</th>
+            <th>Estado</th>
+            <th>Avance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for orden in ordenes %}
+            <tr>
+              <td class="mono">{{ orden.folio }}</td>
+              <td class="small">{% if orden.fecha_compromiso %}{{ orden.fecha_compromiso|date:"d/M/Y" }}{% else %}—{% endif %}</td>
+              <td class="mono">{% if orden.tarimas %}{{ orden.tarimas }}{% else %}—{% endif %}</td>
+              <td class="mono">{{ orden.total_recibido }}/{{ orden.total_anunciado }}{% if orden.total_danado %} <span class="pill crit">{{ orden.total_danado }} dañadas</span>{% endif %}</td>
+              <td><span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span></td>
+              <td><span class="pill {{ orden.reloj_clase }}">{{ orden.reloj_texto }}</span></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="muted">Todavía no anuncias entregas. Usa el formulario de al lado para la primera.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="small mt">Si llega algo dañado o distinto a lo anunciado, lo documentamos con foto el mismo día y te avisamos con las diferencias.</p>
+  </div>
+</div>
+{% endblock %}

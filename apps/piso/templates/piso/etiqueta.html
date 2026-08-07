@@ -1,0 +1,161 @@
+{% load static %}<!doctype html>
+{% comment %}
+Etiqueta de envío 10×15 cm (4×6") — página standalone a propósito: NO extiende
+base.html porque el chrome (sidebar/nav) se imprimiría sobre la etiqueta.
+Blanco y negro de alto contraste para impresoras térmicas. El QR se genera en
+el navegador con static/js/qrcode.min.js (vendoreado, MIT); la URL destino vive
+en data-qr para poder verificarla server-side sin ejecutar JS.
+{% endcomment %}
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Etiqueta {{ guia.numero|default:pedido.folio }} · Torre</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #d9d9d9; color: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+
+  @media screen {
+    body { min-height: 100vh; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .etiqueta { box-shadow: 0 3px 16px rgba(0,0,0,.3); }
+    .pantalla { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    .pantalla .acciones { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .pantalla button {
+      font: inherit; font-size: 17px; font-weight: 700; cursor: pointer;
+      padding: 12px 26px; border: 2px solid #000; border-radius: 8px; background: #fff;
+    }
+    .pantalla .aviso {
+      max-width: 10cm; font-size: 14px; font-weight: 700;
+      padding: 10px 14px; border: 2px solid #000; border-radius: 8px; background: #fff;
+    }
+    .pantalla .aviso.error { background: #000; color: #fff; }
+  }
+  @page { size: 10cm 15cm; margin: 0; }
+  @media print {
+    html, body { background: #fff; padding: 0; }
+    .pantalla { display: none; }
+    .etiqueta { box-shadow: none; page-break-inside: avoid; }
+  }
+
+  .etiqueta {
+    width: 10cm; height: 15cm; background: #fff; color: #000;
+    padding: 3.5mm; overflow: hidden; display: flex; flex-direction: column;
+  }
+  .bloque { border-bottom: 2px solid #000; padding: 1.5mm 0; }
+
+  .cabecera { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; }
+  .marca { font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
+  .paquete-de { font-size: 13px; font-weight: 800; white-space: nowrap; }
+
+  .carrier { font-size: 13px; font-weight: 800; text-transform: uppercase; }
+  .numero-guia { font-size: 24px; font-weight: 800; line-height: 1.05; word-break: break-all; }
+
+  .label { font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+  .destinatario .nombre { font-size: 15px; font-weight: 800; }
+  .destinatario .dato { font-size: 12px; line-height: 1.25; }
+  .cp-grande { font-size: 30px; font-weight: 900; line-height: 1; letter-spacing: 1px; }
+
+  .referencias { background: #000; color: #fff; padding: 1.5mm 2mm; }
+  .referencias .label { color: #fff; }
+  .referencias .texto { font-size: 12px; font-weight: 700; line-height: 1.25; }
+
+  .qr-zona { display: flex; gap: 3mm; align-items: center; padding: 2mm 0; flex: 1; min-height: 0; }
+  .qr-caja { width: 4cm; height: 4cm; flex: none; border: 1px solid #000; padding: 1mm; display: flex; align-items: center; justify-content: center; }
+  .qr-caja svg { width: 100%; height: 100%; display: block; }
+  .qr-caja .qr-texto { font-size: 8px; word-break: break-all; }
+  .qr-lado { min-width: 0; }
+  .qr-lado .titulo-qr { font-size: 13px; font-weight: 800; line-height: 1.2; }
+  .qr-lado .url { font-size: 8px; word-break: break-all; margin-top: 1.5mm; }
+
+  .pie { border-top: 2px solid #000; padding-top: 1.5mm; display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-size: 11px; font-weight: 700; }
+  .pie .folio-chico { font-size: 10px; }
+</style>
+</head>
+<body>
+
+<div class="pantalla">
+  {% for mensaje in messages %}
+  <div class="aviso {{ mensaje.tags }}">{{ mensaje }}</div>
+  {% endfor %}
+  <div class="acciones">
+    <button type="button" onclick="window.print()">Imprimir etiqueta</button>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="imprimir">
+      <button type="submit">🖨 Imprimir en bodega</button>
+    </form>
+  </div>
+</div>
+
+<div class="etiqueta">
+  <div class="bloque cabecera">
+    <div>
+      <div class="marca">{{ marca }}</div>
+      <div class="mono" style="font-size:12px">{{ pedido.folio }}</div>
+    </div>
+    <div class="paquete-de">Paquete {{ paquete_n }} de {{ paquete_m }}</div>
+  </div>
+
+  <div class="bloque">
+    <div class="carrier">{{ guia.carrier }}{% if guia.servicio %} · {{ guia.servicio }}{% endif %}</div>
+    <div class="numero-guia mono">{{ guia.numero|default:"SIN NÚMERO" }}</div>
+  </div>
+
+  <div class="bloque destinatario">
+    <div class="label">Destinatario</div>
+    <div class="nombre">{{ pedido.comprador_nombre|default:"—" }}</div>
+    {% if pedido.comprador_tel %}<div class="dato mono">Tel: {{ pedido.comprador_tel }}</div>{% endif %}
+    {% if direccion.address1 %}<div class="dato">{{ direccion.address1 }}</div>{% endif %}
+    {% if direccion.address2 %}<div class="dato">{{ direccion.address2 }}</div>{% endif %}
+    <div class="dato">
+      {% if direccion.city %}{{ direccion.city }}{% endif %}{% if direccion.province %}, {{ direccion.province }}{% endif %}{% if direccion.zip %}, {{ direccion.zip }}{% endif %}
+    </div>
+    <div class="cp-grande mono">CP {{ cp|default:"—" }}</div>
+  </div>
+
+  <div class="referencias">
+    <div class="label">Referencias</div>
+    {% if referencias %}
+      {% for ref in referencias %}<div class="texto">{{ ref }}</div>{% endfor %}
+    {% else %}
+      <div class="texto">Sin referencias — usa el QR</div>
+    {% endif %}
+  </div>
+
+  <div class="qr-zona">
+    <div id="qr" class="qr-caja" data-qr="{{ qr_url }}">
+      <span class="qr-texto mono">{{ qr_url }}</span>
+    </div>
+    <div class="qr-lado">
+      <div class="titulo-qr">📍 REPARTIDOR: escanea — ubicación exacta + botón de ayuda si no encuentras</div>
+      <div class="url mono">{{ qr_url }}</div>
+    </div>
+  </div>
+
+  <div class="pie">
+    <span>{% if peso_kg %}{{ peso_kg }} kg{% endif %}</span>
+    <span>Frágil · Este lado arriba</span>
+    <span class="mono folio-chico">{{ pedido.folio }}</span>
+  </div>
+</div>
+
+<script src="{% static 'js/qrcode.min.js' %}"></script>
+<script>
+  (function () {
+    var caja = document.getElementById("qr");
+    if (!caja || typeof qrcode !== "function") return;
+    try {
+      var qr = qrcode(0, "M");  // 0 = versión automática según el largo de la URL
+      qr.addData(caja.getAttribute("data-qr"));
+      qr.make();
+      caja.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    } catch (err) {
+      // Sin QR la URL impresa en texto sigue sirviendo de respaldo.
+    }
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Salud de sync · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Salud de sync</h1>
+  </div>
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="correr_push">
+    <button class="btn primario" type="submit">Correr push ahora</button>
+  </form>
+</div>
+
+<div class="card mb">
+  <div class="titulo"><h3>Tiendas conectadas</h3><span class="small">frescura por dirección · nada de "tiempo real"</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Tienda</th><th>Cliente</th><th>Ingesta</th><th>Push</th><th>Detalle último push</th></tr>
+      </thead>
+      <tbody>
+        {% for tienda in tiendas %}
+        <tr>
+          <td class="mono">{{ tienda.dominio }}{% if not tienda.activo %} <span class="pill crit">inactiva</span>{% endif %}{% if not tienda.token %} <span class="small">(mock)</span>{% endif %}</td>
+          <td>{{ tienda.cliente.nombre }}</td>
+          <td><span class="pill {{ tienda.pill_ingesta }}">{{ tienda.frescura_ingesta }}{% if tienda.log_ingesta %} · {{ tienda.log_ingesta.resultado }}{% endif %}</span></td>
+          <td><span class="pill {{ tienda.pill_push }}">{{ tienda.frescura_push }}{% if tienda.log_push %} · {{ tienda.log_push.resultado }}{% endif %}</span></td>
+          <td class="small">{% if tienda.log_push %}{{ tienda.log_push.detalle|truncatechars:70 }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="muted centro">No hay tiendas conectadas todavía.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h3>Cola de push de inventario</h3><span class="small">{{ cola|length }} SKU(s) pendientes</span></div>
+    {% if cola %}
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>SKU</th><th>Cliente</th><th>Encolado</th></tr></thead>
+        <tbody>
+          {% for pendiente in cola %}
+          <tr>
+            <td class="mono">{{ pendiente.sku.codigo }}</td>
+            <td>{{ pendiente.sku.cliente.nombre }}</td>
+            <td><span class="pill warn">{{ pendiente.frescura }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">Cola vacía: todo el inventario está empujado.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Webhooks recientes</h3></div>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Cuándo</th><th>Tienda</th><th>Topic</th><th>Origen</th><th>Estado</th></tr></thead>
+        <tbody>
+          {% for wh in webhooks %}
+          <tr>
+            <td class="mono">{{ wh.ts|date:"d/M H:i" }}</td>
+            <td class="small">{{ wh.tienda.dominio }}</td>
+            <td class="mono">{{ wh.topic }}</td>
+            <td>{{ wh.get_origen_display }}</td>
+            <td>{% if wh.procesado %}<span class="pill ok">procesado</span>{% else %}<span class="pill warn">pendiente</span>{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="muted centro">Sin webhooks registrados.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

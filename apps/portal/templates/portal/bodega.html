@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Bodega en vivo{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="90">{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">{{ cliente_actual.nombre }}</div>
+    <h1>Bodega en vivo</h1>
+  </div>
+  <div class="quien">Actualizado a las <b class="mono">{{ actualizado|time:"H:i" }}</b> · esta vista se refresca sola cada 90 s</div>
+</div>
+
+<div class="banner ok"><span class="foco"></span><span>{{ frase_bodega }}</span></div>
+
+<div class="grid bodega-grid">
+  <div class="card">
+    <div class="titulo">
+      <h3>Así se ve tu operación en el Local 380 E</h3>
+      <span class="small">toca una zona del plano</span>
+    </div>
+    {% include "includes/plano_bodega.html" %}
+  </div>
+
+  <div class="card">
+
+    <div class="panel-zona" data-panel="descarga">
+      <div class="titulo">
+        <h3>Descarga · tus entregas</h3>
+        <span class="pill {% if ordenes %}accent{% endif %}">{{ ordenes|length }} entrega(s)</span>
+      </div>
+      {% for orden in ordenes %}
+        <p>{{ orden.copy_bodega }}</p>
+        <div class="fila entre mb">
+          <span class="small mono">{{ orden.folio }}</span>
+          <span class="pill {{ orden.reloj_clase }}">{{ orden.reloj_texto }}</span>
+        </div>
+        {% if not forloop.last %}<hr class="sep">{% endif %}
+      {% empty %}
+        <p class="muted">
+          No esperamos entregas tuyas hoy ni mañana.
+          <a href="{% url 'portal:recepciones' %}">Anuncia una entrega</a> cuando quieras mandarnos producto.
+        </p>
+      {% endfor %}
+      {% if putaway %}
+        <h3 class="mt">Acomodándose en anaqueles</h3>
+        {% for fila in putaway %}
+          <div class="fila entre">
+            <span class="small mono">{{ fila.sku__codigo }}</span>
+            <span class="mono">{{ fila.piezas }} pzas</span>
+          </div>
+        {% endfor %}
+        <p class="small mt">Estas piezas ya llegaron y quedan a la venta en cuanto suban a su anaquel.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="almacen">
+      <div class="titulo">
+        <h3>Tu producto en anaqueles</h3>
+        <span class="pill ok">{{ almacen.n_skus }} producto(s)</span>
+      </div>
+      <div class="grid g2 mb">
+        <div class="stat"><b>{{ almacen.total_vendible }}</b><span>piezas listas para venderse</span></div>
+        <div class="stat"><b>{{ almacen.total_apartado }}</b><span>piezas apartadas para pedidos</span></div>
+      </div>
+      {% if almacen.ubicaciones %}
+        <div class="tabla-wrap">
+          <table>
+            <thead><tr><th>Anaquel</th><th class="derecha">Piezas</th><th class="derecha">Apartadas</th></tr></thead>
+            <tbody>
+              {% for ubic in almacen.ubicaciones %}
+              <tr>
+                <td class="mono">{{ ubic.codigo }}</td>
+                <td class="derecha mono">{{ ubic.vendible }}</td>
+                <td class="derecha mono">{{ ubic.apartado }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">Todavía no tienes producto en anaqueles. En cuanto llegue tu primera entrega lo verás aquí.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="packing">
+      <div class="titulo">
+        <h3>Pedidos preparándose</h3>
+        <span class="pill {% if en_picking_n %}accent{% endif %}">{{ en_picking_n }} pedido(s)</span>
+      </div>
+      <h3>Juntándose pieza por pieza</h3>
+      {% for pedido in surtiendo %}
+        <div class="fila entre mb">
+          <a class="mono" href="{% url 'portal:pedido_detalle' pedido.pk %}">{{ pedido.folio }}</a>
+          <span class="pill accent">{{ pedido.piezas_pickeadas }} de {{ pedido.piezas }} piezas</span>
+        </div>
+      {% empty %}
+        <p class="muted">Ninguno en pasillo ahorita.</p>
+      {% endfor %}
+      <h3 class="mt">Listos para empacarse</h3>
+      {% for pedido in listos_empaque %}
+        <div class="fila entre mb">
+          <a class="mono" href="{% url 'portal:pedido_detalle' pedido.pk %}">{{ pedido.folio }}</a>
+          <span class="pill ok">{{ pedido.piezas }} piezas · completo</span>
+        </div>
+      {% empty %}
+        <p class="muted">Ninguno esperando mesa de empaque.</p>
+      {% endfor %}
+      <p class="small mt">Cada pedido se pesa en báscula y se fotografía dos veces antes de cerrar la caja.</p>
+    </div>
+
+    <div class="panel-zona" data-panel="paquetes_listos">
+      <div class="titulo">
+        <h3>Por salir de bodega</h3>
+        <span class="pill {% if en_corral_n %}accent{% endif %}">{{ paquetes_n }} caja(s)</span>
+      </div>
+      {% for grupo in corrales %}
+        {% if grupo.pedidos %}
+          <h3 {% if not forloop.first %}class="mt"{% endif %}>{{ grupo.nombre }}</h3>
+          {% for pedido in grupo.pedidos %}
+            <div class="fila entre mb">
+              <a class="mono" href="{% url 'portal:pedido_detalle' pedido.pk %}">{{ pedido.folio }}</a>
+              <span class="pill {{ pedido.pill }}">{{ pedido.n_paquetes }} caja(s)</span>
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endfor %}
+      {% if not en_corral_n %}
+        <p class="muted">Nada esperando recolección en este momento.</p>
+      {% else %}
+        <p class="small mt">Tu comprador recibe su "va en camino" en cuanto la paquetería firma el manifiesto — nunca antes.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="cuarentena">
+      <div class="titulo">
+        <h3>En revisión</h3>
+        <span class="pill {% if cuarentena_piezas %}warn{% else %}ok{% endif %}">{{ cuarentena_piezas }} pieza(s)</span>
+      </div>
+      {% for fila in cuarentena %}
+        <div class="fila entre mb">
+          <div>
+            <span class="mono">{{ fila.sku__codigo }}</span>
+            <div class="small">{{ fila.sku__descripcion }}</div>
+          </div>
+          <span class="mono">{{ fila.piezas }} pzas</span>
+        </div>
+      {% empty %}
+        <p class="muted">Nada de tu producto está en revisión. Todo en orden.</p>
+      {% endfor %}
+      {% if cuarentena %}
+        <p class="small mt">Estas piezas no se venden mientras las revisamos; nada regresa a anaquel sin doble firma.</p>
+      {% endif %}
+    </div>
+
+    <div class="panel-zona" data-panel="oficina">
+      <div class="titulo"><h3>Oficina · Mesa de Control</h3></div>
+      <p class="muted">
+        Aquí trabaja el equipo que cuida tu operación todos los días. Si algo se
+        sale de lo normal, lo ves primero en
+        <a href="{% url 'portal:incidencias' %}">Incidencias</a>.
+      </p>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

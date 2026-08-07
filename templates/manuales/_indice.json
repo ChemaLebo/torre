@@ -1,0 +1,895 @@
+[
+ {
+  "slug": "sop-01-apertura-y-cierre",
+  "codigo": "SOP-01",
+  "titulo": "Apertura y cierre del local",
+  "emoji": "🌅",
+  "resumen": "La apertura no es \"prender la luz\": es la inspección diaria que evita que un cable de polipasto podrido o una báscula descalibrada te arruinen el día (o algo peor). El cierre es lo que garantiza que mañana el local amanezca operable y que nada de valor quede expuesto.",
+  "palabras": 1318,
+  "minutos": 7,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (si él no está, quien abra/cierre asume el rol y firma)"
+   ],
+   [
+    "Frecuencia",
+    "Diario. Apertura 8:30 · Cierre 17:45 (sábado: 9:00 y 13:00)"
+   ],
+   [
+    "Tiempo estándar",
+    "Apertura: 15 min · Cierre: 15 min"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo desde que cruzas la puerta"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Tareas</strong> (<code>/piso/</code>)"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-apertura-8-30",
+    "titulo": "A. Apertura (8:30)"
+   },
+   {
+    "id": "b-cierre-17-45",
+    "titulo": "B. Cierre (17:45)"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-apertura",
+    "titulo": "✂️ Checklist imprimible — APERTURA"
+   },
+   {
+    "id": "checklist-imprimible-cierre",
+    "titulo": "✂️ Checklist imprimible — CIERRE"
+   }
+  ]
+ },
+ {
+  "slug": "sop-02-recepcion-descarga",
+  "codigo": "SOP-02",
+  "titulo": "Recepción y descarga (polipasto)",
+  "emoji": "🚚",
+  "resumen": "El Local 380 E recibe la mercancía desde la calle: el camión se queda arriba y todo baja al nivel de piso por el polipasto, a baja velocidad. Esto convierte cada recepción en la maniobra de mayor riesgo de la semana: vidrio pesado, suspendido, con gente y vía pública alrededor. Este SOP existe para que sea aburrida y sin sustos, siempre igual.",
+  "palabras": 1677,
+  "minutos": 8,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (dirige; es el único que opera el polipasto salvo certificados)"
+   ],
+   [
+    "Frecuencia",
+    "Martes y jueves 9:00–13:00, <strong>con cita (ASN)</strong>. Llegada de camión = disparador"
+   ],
+   [
+    "Tiempo estándar",
+    "Inicio de descarga ≤ 30 min desde la llegada · ~20–30 min por tarima calle→piso"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo + guantes anticorte. <strong>Chaleco alta visibilidad para todo el que pise banqueta/calle</strong>"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Recepción</strong> (<code>/piso/recepciones/</code>) → botón <strong>&quot;Trabajar&quot;</strong> → detalle de la orden (tarjeta <strong>&quot;1 · Recibir&quot;</strong>)"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-antes-de-que-llegue-el-camion",
+    "titulo": "A. Antes de que llegue el camión"
+   },
+   {
+    "id": "b-llegada-del-camion",
+    "titulo": "B. Llegada del camión"
+   },
+   {
+    "id": "c-descarga-camion-polipasto-piso",
+    "titulo": "C. Descarga: camión → polipasto → piso"
+   },
+   {
+    "id": "d-cierre-de-la-maniobra",
+    "titulo": "D. Cierre de la maniobra"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-recepcion-y-descarga",
+    "titulo": "✂️ Checklist imprimible — RECEPCIÓN Y DESCARGA"
+   }
+  ]
+ },
+ {
+  "slug": "sop-03-desarmado-y-conteo-ciego",
+  "codigo": "SOP-03",
+  "titulo": "Desarmado de tarimas y conteo ciego",
+  "emoji": "📦",
+  "resumen": "Una tarima sin desarmar es inventario fantasma: producto que existe pero no se puede vender, no se puede pickear y nadie sabe si llegó completo. Por eso la regla es brutal y simple: lo que se descargó hoy, se cuenta hoy. Y se cuenta a ciegas: tú no sabes cuánto anunció el cliente, así que tu número es un dato real, no una confirmación de dedo.",
+  "palabras": 1336,
+  "minutos": 7,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (captura). FLEX/OP-2 desestiban"
+   ],
+   [
+    "Frecuencia",
+    "Cada recepción. <strong>El pallet se desarma el MISMO día, siempre</strong> (cláusula de contrato)"
+   ],
+   [
+    "Tiempo estándar",
+    "30–45 min por tarima (desestiba + conteo + captura)"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo + guantes anticorte. Faja recomendada. Lentes si aparece vidrio roto"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Recepción</strong> → <strong>&quot;Trabajar&quot;</strong> en la orden → tarjeta <strong>&quot;1 · Recibir&quot;</strong> → botón <strong>&quot;Registrar recepción&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-desestiba-segura-la-parte-fisica",
+    "titulo": "A. Desestiba segura (la parte física)"
+   },
+   {
+    "id": "b-conteo-ciego-la-parte-de-captura",
+    "titulo": "B. Conteo ciego (la parte de captura)"
+   },
+   {
+    "id": "c-cierre-de-la-orden",
+    "titulo": "C. Cierre de la orden"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-desarmado-y-conteo-ciego",
+    "titulo": "✂️ Checklist imprimible — DESARMADO Y CONTEO CIEGO"
+   }
+  ]
+ },
+ {
+  "slug": "sop-04-acomodo-putaway",
+  "codigo": "SOP-04",
+  "titulo": "Acomodo (put-away) y FEFO",
+  "emoji": "🗄️",
+  "resumen": "Lo contado todavía no se vende. En Torre, el producto recibido queda \"en put-away\": existe, pero no es vendible ni aparece disponible en la tienda del cliente. Solo cuando lo escaneas a su anaquel se vuelve vendible. Por eso el put-away no es \"acomodar cajas\": es el paso que enciende las ventas del cliente, con reloj contractual encima.",
+  "palabras": 1252,
+  "minutos": 6,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (responsable del SLA); OP-2 ejecuta"
+   ],
+   [
+    "Frecuencia",
+    "Después de cada conteo de recepción (SOP-03) y de cada dictamen &quot;revendible&quot; o retorno (SOP-10)"
+   ],
+   [
+    "Tiempo estándar",
+    "≤ 4 h internas desde fin de descarga (contractual: <strong>≤ 8 h hábiles</strong> hasta &quot;vendible&quot;)"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo + guantes anticorte. Faja recomendada"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Recepción</strong> → detalle de orden → tarjeta <strong>&quot;2 · Ubicar (put-away)&quot;</strong> → botón <strong>&quot;Ubicar&quot;</strong> · Piso → <strong>Cuarentena</strong> → sección <strong>&quot;Put-away pendiente&quot;</strong> → botón <strong>&quot;Ubicar&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-entiende-el-mapa-de-ubicaciones",
+    "titulo": "A. Entiende el mapa de ubicaciones"
+   },
+   {
+    "id": "b-fefo-primero-caduca-primero-sale",
+    "titulo": "B. FEFO: primero caduca, primero sale"
+   },
+   {
+    "id": "c-ejecutar-el-put-away-recepcion",
+    "titulo": "C. Ejecutar el put-away (recepción)"
+   },
+   {
+    "id": "d-put-away-pendiente-desde-cuarentena",
+    "titulo": "D. Put-away pendiente desde Cuarentena"
+   },
+   {
+    "id": "e-el-reloj-sla-y-que-pasa-si-no-llegas",
+    "titulo": "E. El reloj SLA y qué pasa si no llegas"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-put-away",
+    "titulo": "✂️ Checklist imprimible — PUT-AWAY"
+   }
+  ]
+ },
+ {
+  "slug": "sop-05-picking",
+  "codigo": "SOP-05",
+  "titulo": "Picking",
+  "emoji": "🛒",
+  "resumen": "El picking es donde nace (o muere) el \"pedido perfecto\". La regla de la casa: nada se cierra sin verificar — cada pieza se escanea, y Torre no acepta piezas que no son del pedido. Tu escáner es el que evita mandarle al comprador la cerveza equivocada.",
+  "palabras": 1123,
+  "minutos": 6,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-2 Operador de piso (OP-1 apoya en pico)"
+   ],
+   [
+    "Frecuencia",
+    "Olas durante el día; todo pedido que entró antes del corte (14:00) se pickea HOY"
+   ],
+   [
+    "Tiempo estándar",
+    "5–10 min por pedido típico"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo; guantes anticorte al manejar cajas"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Picking</strong> (<code>/piso/picking/</code>) → <strong>&quot;Iniciar picking&quot;</strong> / <strong>&quot;Escanear&quot;</strong> → detalle del pedido → <strong>&quot;Confirmar pieza&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "pasos",
+    "titulo": "Pasos"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-picking",
+    "titulo": "✂️ Checklist imprimible — PICKING"
+   }
+  ]
+ },
+ {
+  "slug": "sop-06-empaque",
+  "codigo": "SOP-06",
+  "titulo": "Empaque",
+  "emoji": "📸",
+  "resumen": "Aquí es donde la rotura se gana o se pierde: el 59.8% de las incidencias del proveedor anterior fueron roturas. Nuestra apuesta es que la prevención es el seguro: divisores, prueba de agitado, báscula ±3% y dos fotos. La pantalla no te deja marcar \"Empacado\" sin peso y sin las 2 fotos — y eso es a propósito: *\"Sin las 2 fotos y el peso, el botón no se enciende.\"",
+  "palabras": 1388,
+  "minutos": 7,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-2 Operador de piso (FLEX puede empacar ASISTIDO solo con certificación de empaque)"
+   ],
+   [
+    "Frecuencia",
+    "Cada pedido con picking completo. Todo lo de antes del corte se empaca HOY"
+   ],
+   [
+    "Tiempo estándar",
+    "6–12 min por caja de vidrio bien protegida"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo; cutter con guarda; guantes anticorte al abrir/ajustar divisores"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Empaque</strong> (<code>/piso/empaque/</code>) → <strong>&quot;Empacar&quot;</strong> → detalle → botón <strong>&quot;Empacado&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "pasos",
+    "titulo": "Pasos"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-empaque",
+    "titulo": "✂️ Checklist imprimible — EMPAQUE"
+   }
+  ]
+ },
+ {
+  "slug": "sop-07-salida-y-manifiesto",
+  "codigo": "SOP-07",
+  "titulo": "Salida y manifiesto",
+  "emoji": "🚀",
+  "resumen": "La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de la casa: *\"El 'va en camino' al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino.\"* El proveedor anterior marcaba \"enviado\" paquetes que dormían en su bodega; nosotros jamás. El botón del manifiesto se toca con la firma del chofer ya en la mano. Nunca antes.",
+  "palabras": 1266,
+  "minutos": 6,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-2 Operador de piso (OP-1 responde por el escalamiento si el carrier falla)"
+   ],
+   [
+    "Frecuencia",
+    "2 recolecciones diarias de paquetería ([COMPLETAR: horas pactadas]) + salida de ruta local"
+   ],
+   [
+    "Tiempo estándar",
+    "10–20 min por recolección"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo; chaleco si la carga al camión se hace en banqueta"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Salida</strong> (<code>/piso/salida/</code>): botones <strong>&quot;Generar guía&quot;</strong> y <strong>&quot;Manifiesto firmado · salen N&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-staging-por-corral",
+    "titulo": "A. Staging por corral"
+   },
+   {
+    "id": "b-llegada-del-repartidor-por-cada-recoleccion",
+    "titulo": "B. Llegada del repartidor (por cada recolección)"
+   },
+   {
+    "id": "c-ruta-local",
+    "titulo": "C. Ruta local"
+   },
+   {
+    "id": "d-si-la-paqueteria-no-llega",
+    "titulo": "D. Si la paquetería no llega"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-salida-recoleccion",
+    "titulo": "✂️ Checklist imprimible — SALIDA / RECOLECCIÓN"
+   }
+  ]
+ },
+ {
+  "slug": "sop-08-entrega-local",
+  "codigo": "SOP-08",
+  "titulo": "Entrega local (alcohol / POD)",
+  "emoji": "🏠",
+  "resumen": "La pantalla de entregas locales abre con un banner rojo que es la ley completa de este SOP: *\"El producto es alcohol. Sin verificar mayoría de edad en persona, NO se entrega. Sin excepciones.\"* Vender/entregar alcohol a un menor es un delito y un riesgo directo para la licencia del cliente y para esta casa. Ninguna entrega vale eso.",
+  "palabras": 1314,
+  "minutos": 7,
+  "grupo": "Operación diaria",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-2 Operador de piso (conduce y entrega)"
+   ],
+   [
+    "Frecuencia",
+    "Ruta diaria al firmar el manifiesto de <code>SAL-LOCAL</code> (~15:30)"
+   ],
+   [
+    "Tiempo estándar",
+    "Según ruta; cada entrega en puerta: 3–5 min"
+   ],
+   [
+    "EPP",
+    "Calzado cerrado; chaleco al cargar/descargar en vía pública"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → Salida → <strong>&quot;Entregas locales (POD)&quot;</strong> (<code>/piso/entrega-local/</code>) → <strong>&quot;Registrar entrega&quot;</strong> → <strong>&quot;Entregado — guardar POD&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-carga-del-vehiculo",
+    "titulo": "A. Carga del vehículo"
+   },
+   {
+    "id": "b-en-la-puerta-del-comprador",
+    "titulo": "B. En la puerta del comprador"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-entrega-local",
+    "titulo": "✂️ Checklist imprimible — ENTREGA LOCAL"
+   }
+  ]
+ },
+ {
+  "slug": "sop-09-conteos-y-ajustes",
+  "codigo": "SOP-09",
+  "titulo": "Conteos cíclicos y ajustes de inventario",
+  "emoji": "🔢",
+  "resumen": "El conteo cíclico diario es la fuente del SLA de exactitud de inventario (≥ 99.5%) que le prometimos al cliente por contrato — con crédito si fallamos. Tres SKUs cada mañana, contados a ciegas, mantienen el inventario honesto sin cerrar la bodega a inventariar. La regla de acero: contar es diario y normal; ajustar es excepcional y con dos firmas.",
+  "palabras": 1320,
+  "minutos": 7,
+  "grupo": "Control",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega"
+   ],
+   [
+    "Frecuencia",
+    "Conteo cíclico: <strong>diario a las 9:00, 3 SKUs</strong> que Torre asigna (A semanal, B quincenal, C mensual + total trimestral). Ajustes: solo cuando un descuadre confirmado lo exige"
+   ],
+   [
+    "Tiempo estándar",
+    "Conteo: 20–30 min los 3 SKUs · Ajuste: 10 min"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Conteos</strong> (<code>/piso/conteos/</code>) → <strong>&quot;Registrar conteo&quot;</strong> · Mesa de Control → Inventario → tarjeta <strong>&quot;Ajuste con doble firma&quot;</strong> → <strong>&quot;Aplicar ajuste&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-conteo-ciclico-diario-9-00",
+    "titulo": "A. Conteo cíclico diario (9:00)"
+   },
+   {
+    "id": "b-ajustes-de-inventario-doble-firma-siempre",
+    "titulo": "B. Ajustes de inventario (doble firma, siempre)"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-conteo-ciclico-y-ajuste",
+    "titulo": "✂️ Checklist imprimible — CONTEO CÍCLICO Y AJUSTE"
+   }
+  ]
+ },
+ {
+  "slug": "sop-10-cuarentena-retornos-merma",
+  "codigo": "SOP-10",
+  "titulo": "Cuarentena, retornos y merma",
+  "emoji": "🚧",
+  "resumen": "La cuarentena es la sala de espera del producto dudoso. La pantalla lo dice en dos frases que son todo el SOP: *\"Dañado y retornado en revisión. De aquí no se pickea nada.\"* y *\"Nada sale de cuarentena sin dictamen con dos firmas.\"* Mientras algo está en cuarentena, NO es vendible, NO se pickea, NO se presta \"porque se ve bien\".",
+  "palabras": 1438,
+  "minutos": 7,
+  "grupo": "Control",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (firma 1 de todo dictamen)"
+   ],
+   [
+    "Frecuencia",
+    "Al detectar daño (recepción, bodega, empaque) · al llegar un retorno · dictámenes: diario en la tarde"
+   ],
+   [
+    "Tiempo estándar",
+    "Ingreso a cuarentena: 5 min · Dictamen: 5–10 min por fila"
+   ],
+   [
+    "EPP",
+    "<strong>Guantes anticorte + lentes de seguridad SIEMPRE que haya o pueda haber vidrio roto</strong>; botas con casquillo"
+   ],
+   [
+    "Pantallas de Torre",
+    "Piso → <strong>Cuarentena</strong> (<code>/piso/cuarentena/</code>): botón <strong>&quot;Dictaminar&quot;</strong> y sección <strong>&quot;Put-away pendiente&quot;</strong> → <strong>&quot;Ubicar&quot;</strong>"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-que-entra-a-cuarentena-y-como",
+    "titulo": "A. Qué entra a cuarentena y cómo"
+   },
+   {
+    "id": "b-retornos-incidencia-p1",
+    "titulo": "B. Retornos = incidencia P1"
+   },
+   {
+    "id": "c-dictamen-con-dos-firmas",
+    "titulo": "C. Dictamen con dos firmas"
+   },
+   {
+    "id": "d-manejo-de-vidrio-roto-y-derrames",
+    "titulo": "D. Manejo de vidrio roto y derrames"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-cuarentena-y-dictamen",
+    "titulo": "✂️ Checklist imprimible — CUARENTENA Y DICTAMEN"
+   }
+  ]
+ },
+ {
+  "slug": "sop-11-seguridad-cargas-y-equipo",
+  "codigo": "SOP-11",
+  "titulo": "Seguridad: cargas, patín y polipasto",
+  "emoji": "🦺",
+  "resumen": "Aquí no hay \"productividad\" que discutir: una caja de cerveza pesa 13–16 kg, una tarima cientos, y el polipasto los sube y baja sobre una banqueta pública. Este SOP manda sobre todos los demás. Cualquiera —incluido FLEX— tiene autoridad para gritar \"¡ALTO!\" y detener una maniobra insegura. Nadie se regaña por detener una maniobra; se regaña por no detenerla.",
+  "palabras": 1589,
+  "minutos": 8,
+  "grupo": "Seguridad",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (autoridad de seguridad del local; puede detener cualquier maniobra)"
+   ],
+   [
+    "Frecuencia",
+    "Permanente. Inspección de polipasto: diaria antes del primer uso. Repaso del SOP: mensual y con cada ingreso de personal"
+   ],
+   [
+    "Tiempo estándar",
+    "Inspección diaria de polipasto: 5 min"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo (siempre) · guantes anticorte (cargas y vidrio) · lentes (vidrio roto) · chaleco (vía pública) · faja (opcional)"
+   ],
+   [
+    "Pantallas de Torre",
+    "Ninguna — este SOP es 100% físico. La bitácora de inspecciones vive en papel"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-tecnica-de-levantamiento-manual",
+    "titulo": "A. Técnica de levantamiento manual"
+   },
+   {
+    "id": "b-patin-estibador-hidraulico",
+    "titulo": "B. Patín / estibador hidráulico"
+   },
+   {
+    "id": "c-polipasto-el-equipo-mas-serio-del-local",
+    "titulo": "C. Polipasto — el equipo más serio del local"
+   },
+   {
+    "id": "d-via-publica-banqueta-y-calle",
+    "titulo": "D. Vía pública (banqueta y calle)"
+   },
+   {
+    "id": "e-reglas-generales-y-prohibiciones-del-local",
+    "titulo": "E. Reglas generales y prohibiciones del local"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-inspeccion-diaria-del-polipasto",
+    "titulo": "✂️ Checklist imprimible — INSPECCIÓN DIARIA DEL POLIPASTO"
+   },
+   {
+    "id": "recordatorio-de-bolsillo-cargas",
+    "titulo": "✂️ Recordatorio de bolsillo — CARGAS"
+   }
+  ]
+ },
+ {
+  "slug": "sop-12-emergencias",
+  "codigo": "SOP-12",
+  "titulo": "Emergencias",
+  "emoji": "🚨",
+  "resumen": "El orden de prioridades es fijo: 1) las personas, 2) el edificio, 3) la mercancía. Ninguna caja de cerveza vale un dedo. Este SOP se pega en la oficina Y en el punto de reunión, y los teléfonos de la sección G se llenan ANTES del primer día de operación.",
+  "palabras": 2359,
+  "minutos": 12,
+  "grupo": "Seguridad",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (o la persona de mayor rango presente). TODOS deben conocer este SOP de memoria"
+   ],
+   [
+    "Frecuencia",
+    "Al ocurrir la emergencia. Simulacro de sismo: participar en los nacionales + 1 interno semestral. Repaso: mensual en 10 min"
+   ],
+   [
+    "Tiempo estándar",
+    "No aplica: en emergencia, la prioridad es la gente, luego el edificio, al final la mercancía"
+   ],
+   [
+    "EPP",
+    "El de la zona; en limpieza post-emergencia con vidrio: guantes anticorte + lentes"
+   ],
+   [
+    "Pantallas de Torre",
+    "Ninguna durante la emergencia. Sección F (modo degradado) define qué se captura después"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-sismo-esto-es-cdmx-va-a-pasar",
+    "titulo": "A. SISMO (esto es CDMX: va a pasar)"
+   },
+   {
+    "id": "b-incendio",
+    "titulo": "B. INCENDIO"
+   },
+   {
+    "id": "c-lesion-corte-con-vidrio",
+    "titulo": "C. LESIÓN / CORTE CON VIDRIO"
+   },
+   {
+    "id": "d-derrame-de-producto",
+    "titulo": "D. DERRAME DE PRODUCTO"
+   },
+   {
+    "id": "e-robo-intrusion",
+    "titulo": "E. ROBO / INTRUSIÓN"
+   },
+   {
+    "id": "f-falla-de-luz-red-o-software-modo-degradado",
+    "titulo": "F. FALLA DE LUZ, RED O SOFTWARE (modo degradado)"
+   },
+   {
+    "id": "g-directorio-de-emergencia-llenar-antes-del-dia-1-pegar-junto-a-este-sop-y-en-la-oficina",
+    "titulo": "G. Directorio de emergencia (llenar ANTES del día 1; pegar junto a este SOP y en la oficina)"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-tarjeta-de-emergencia-pegar-en-oficina-y-punto-de-reunion",
+    "titulo": "✂️ Checklist imprimible — TARJETA DE EMERGENCIA (pegar en oficina y punto de reunión)"
+   }
+  ]
+ },
+ {
+  "slug": "sop-13-limpieza-y-5s",
+  "codigo": "SOP-13",
+  "titulo": "Limpieza y 5S",
+  "emoji": "🧹",
+  "resumen": "En una bodega de vidrio y líquido, la limpieza no es estética: es seguridad e inventario. Un piso pegajoso es un resbalón; una esquina con \"tiliches\" es donde se pierden las piezas que luego descuadran conteos; una tarima en el pasillo es el tropiezo de alguien que carga 15 kg de vidrio. La regla 5S de la casa: un lugar para cada cosa, cada cosa en su lugar, y nada \"por mientras\".",
+  "palabras": 1377,
+  "minutos": 7,
+  "grupo": "Seguridad",
+  "version": "v1.0 · Agosto 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "OP-1 Jefe de bodega (responsable); ejecutan todos, FLEX incluido"
+   ],
+   [
+    "Frecuencia",
+    "Diario (durante el día + 5S de cierre 16:30–17:30) · Semanal (viernes tarde) · Mensual (primer sábado)"
+   ],
+   [
+    "Tiempo estándar",
+    "Diario: 30–40 min repartidos · Semanal: +45 min · Mensual: +2 h"
+   ],
+   [
+    "EPP",
+    "Botas con casquillo; guantes anticorte y lentes si aparece vidrio; guantes de hule para baños"
+   ],
+   [
+    "Pantallas de Torre",
+    "Ninguna. Checklists en papel, en la carpeta de bitácora"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "a-las-reglas-permanentes-a-toda-hora",
+    "titulo": "A. Las reglas permanentes (a toda hora)"
+   },
+   {
+    "id": "b-rutina-diaria",
+    "titulo": "B. Rutina DIARIA"
+   },
+   {
+    "id": "c-rutina-semanal-viernes-por-la-tarde",
+    "titulo": "C. Rutina SEMANAL (viernes por la tarde)"
+   },
+   {
+    "id": "d-rutina-mensual-primer-sabado-despues-del-corte-de-13-00",
+    "titulo": "D. Rutina MENSUAL (primer sábado, después del corte de 13:00)"
+   },
+   {
+    "id": "errores-comunes-y-como-se-ven",
+    "titulo": "Errores comunes y cómo se ven"
+   },
+   {
+    "id": "nunca-hagas-esto",
+    "titulo": "NUNCA hagas esto"
+   },
+   {
+    "id": "que-queda-registrado",
+    "titulo": "Qué queda registrado"
+   },
+   {
+    "id": "checklist-imprimible-5s-de-cierre-diario",
+    "titulo": "✂️ Checklist imprimible — 5S DE CIERRE (diario)"
+   }
+  ]
+ },
+ {
+  "slug": "readme",
+  "codigo": "README",
+  "titulo": "Manuales de operación — Centro de fulfillment Local 380 E",
+  "emoji": "📖",
+  "resumen": "Av. Torres de Ixtapantongo 380E, Olivar de los Padres, CDMX 01780 Versión 1.0 · Agosto 2026 · Producto principal: cerveza en vidrio (cajas de 13–16 kg, frágil, alcohol)",
+  "palabras": 1515,
+  "minutos": 8,
+  "grupo": "",
+  "version": "",
+  "propiedades": [],
+  "toc": [
+   {
+    "id": "indice-de-manuales",
+    "titulo": "Índice de manuales"
+   },
+   {
+    "id": "las-10-reglas-de-oro-de-la-casa",
+    "titulo": "Las 10 reglas de oro de la casa"
+   },
+   {
+    "id": "los-tres-roles-y-sus-usuarios-de-torre",
+    "titulo": "Los tres roles y sus usuarios de Torre"
+   },
+   {
+    "id": "matriz-de-responsabilidades-raci-simple",
+    "titulo": "Matriz de responsabilidades (RACI simple)"
+   },
+   {
+    "id": "epp-minimo-por-zona",
+    "titulo": "EPP mínimo por zona"
+   },
+   {
+    "id": "horario-tipo-dia-normal-lunes-miercoles-viernes",
+    "titulo": "Horario tipo — día normal (lunes, miércoles, viernes)"
+   },
+   {
+    "id": "horario-tipo-martes-y-jueves-dia-de-recepcion",
+    "titulo": "Horario tipo — martes y jueves (día de recepción)"
+   },
+   {
+    "id": "donde-vive-cada-cosa-en-torre-menu-lateral-seccion-piso",
+    "titulo": "Dónde vive cada cosa en Torre (menú lateral, sección \"Piso\")"
+   }
+  ]
+ }
+]

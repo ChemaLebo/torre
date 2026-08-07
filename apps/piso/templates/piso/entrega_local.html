@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Entregas locales{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Entrega local</div>
+    <h1>Entregas locales</h1>
+  </div>
+  <a class="btn chico" href="{% url 'piso:salida' %}">Volver a salida</a>
+</div>
+
+<div class="banner crit"><span class="foco"></span>
+  El producto es alcohol. Sin verificar mayoría de edad en persona, NO se entrega. Sin excepciones.
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>En reparto — cerrar con POD</h2><span class="pill accent">{{ en_reparto|length }}</span></div>
+  {% if en_reparto %}
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Pedido</th><th>Comprador</th><th>Dirección</th><th></th></tr></thead>
+      <tbody>
+        {% for p in en_reparto %}
+        <tr>
+          <td class="mono">{{ p.folio }}<div class="small">{{ p.cliente.nombre }}</div></td>
+          <td>{{ p.comprador_nombre|default:"sin nombre" }}<div class="small mono">{{ p.comprador_tel|default:"" }}</div></td>
+          <td class="small">{{ p.direccion.address1|default:"—" }}{% if p.direccion.city %}, {{ p.direccion.city }}{% endif %} <span class="mono">{{ p.cp }}</span></td>
+          <td class="derecha"><a class="btn primario" href="{% url 'piso:entrega_local_pedido' p.pk %}">Registrar entrega</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Nada en reparto ahorita.</p>
+  {% endif %}
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h2>Por salir a reparto</h2></div>
+    {% if por_salir %}
+    <div class="tabla-wrap">
+      <table>
+        <tbody>
+          {% for p in por_salir %}
+          <tr>
+            <td class="mono">{{ p.folio }}</td>
+            <td class="small">{{ p.comprador_nombre|default:"sin nombre" }}</td>
+            <td><span class="pill">{{ p.get_estado_display }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="small mt">Salen a reparto al firmar el manifiesto del corral <span class="mono">SAL-LOCAL</span> en <a href="{% url 'piso:salida' %}">Salida</a>.</p>
+    {% else %}
+    <p class="muted">Sin pedidos locales en staging.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h2>Entregados hoy</h2><span class="pill ok">{{ entregados_hoy|length }}</span></div>
+    {% if entregados_hoy %}
+    <ul class="timeline">
+      {% for p in entregados_hoy %}
+      <li><span class="mono">{{ p.folio }}</span> · {{ p.comprador_nombre|default:"sin nombre" }} · {{ p.ts_entregado|date:"H:i" }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">Todavía nada entregado hoy.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
