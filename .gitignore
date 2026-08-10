@@ -1,9 +1,41 @@
+# --- Secrets / config local ---
 .env
+.env.*
+!.env.example
+*.pem
+
+# --- Entornos virtuales (dentro del repo) ---
+venv/
+.venv/
+env/
+torre-env/
+
+# --- Base de datos local ---
 torre.sqlite3
+torre.sqlite3-journal
+torre.sqlite3-wal
+torre.sqlite3-shm
+
+# --- Generados por Django ---
 media/
 staticfiles/
+
+# --- Python ---
 __pycache__/
-*.pem
-.DS_Store
 *.pyc
-torre.sqlite3-journal
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Editor ---
+.vscode/
+.idea/
+
+# --- Documentos locales (no viajan en el repo) ---
+RUNDOWN.md
