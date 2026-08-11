@@ -1012,21 +1012,10 @@ def sync(request):
         PushInventarioPendiente, SyncLog, Tienda, WebhookEvento,
     )
 
-    if request.method == "POST" and request.POST.get("accion") == "correr_push":
-        from apps.integraciones.services import push_inventario
-
-        resumen = push_inventario()
-        registrar_evento(
-            "sync", "push_manual", "push_ejecutado", actor=request.user, delta=resumen,
-            motivo="Push de inventario disparado a mano desde Mesa de Control",
-        )
-        messages.success(
-            request,
-            f"Push ejecutado: {resumen['skus']} SKU(s) en cola, "
-            f"{resumen['pushes_ok']} push(es) ok, {resumen['pushes_error']} con error.",
-        )
-        return redirect("mesa:sync")
-
+    # El botón "correr push" se quitó (2026-08-11): la cola la drena el cron
+    # cada 5 min y el drenado corre síncrono en el request — un click ansioso
+    # amarraba un worker contra la API de Shopify. Manual: ssh + manage.py
+    # push_inventario.
     ahora = timezone.now()
     tiendas = list(Tienda.objects.select_related("cliente").order_by("cliente__nombre", "dominio"))
     for tienda in tiendas:

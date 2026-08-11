@@ -208,22 +208,21 @@ class PedidosGlobalesTests(BaseMesaTest):
         self.assertNotContains(buscado, p2.folio)
 
 
-@override_settings(DEBUG=True)  # tienda sin token = modo mock, solo dev
 class SyncTests(BaseMesaTest):
-    def test_correr_push_drena_la_cola(self):
+    def test_el_boton_de_push_manual_ya_no_existe(self):
+        """La cola la drena el cron (push_inventario cada 5 min): el botón
+        corría el drenado síncrono en el request y amarraba un worker."""
         from apps.catalogo.models import SKU
-        from apps.integraciones.models import PushInventarioPendiente, SyncLog, Tienda
+        from apps.integraciones.models import PushInventarioPendiente, Tienda
         from apps.integraciones.services import encolar_push_inventario
 
         Tienda.objects.create(cliente=self.colima, dominio="colima-mx.myshopify.com", token="")
         sku = SKU.objects.create(cliente=self.colima, codigo="COLIMITA-SIX", descripcion="Colimita six")
         encolar_push_inventario(sku)
-        self.assertEqual(PushInventarioPendiente.objects.count(), 1)
 
         self.client.force_login(self.usuario_mesa)
-        respuesta = self.client.post(reverse("mesa:sync"), {"accion": "correr_push"})
-        self.assertRedirects(respuesta, reverse("mesa:sync"))
-        self.assertEqual(PushInventarioPendiente.objects.count(), 0)
-        self.assertTrue(
-            SyncLog.objects.filter(direccion="push", resultado="ok", detalle__contains="COLIMITA-SIX").exists()
-        )
+        pantalla = self.client.get(reverse("mesa:sync"))
+        self.assertNotContains(pantalla, "correr_push")
+        # El POST viejo ya no drena nada.
+        self.client.post(reverse("mesa:sync"), {"accion": "correr_push"})
+        self.assertEqual(PushInventarioPendiente.objects.count(), 1)

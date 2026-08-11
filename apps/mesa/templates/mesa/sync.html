@@ -7,10 +7,7 @@
     <div class="eyebrow">Mesa de Control</div>
     <h1>Salud de sync</h1>
   </div>
-  <form method="post">{% csrf_token %}
-    <input type="hidden" name="accion" value="correr_push">
-    <button class="btn primario" type="submit">Correr push ahora</button>
-  </form>
+  <span class="small muted">La cola se drena sola cada 5 min (cron)</span>
 </div>
 
 <div class="card mb">

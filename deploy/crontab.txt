@@ -5,6 +5,10 @@ DIR=/srv/torre/torre
 
 # Tracking de guías con el carrier (cada 30 min en horario amplio)
 */30 6-22 * * *  cd $DIR && $PY manage.py poll_tracking >> /var/log/torre/poll_tracking.log 2>&1
+# Push de inventario a Shopify: drena la cola (cada 5 min — la ventana de sobreventa ES esta cadencia)
+*/5 6-22 * * *   cd $DIR && $PY manage.py push_inventario >> /var/log/torre/push_inventario.log 2>&1
+# Reconciliación Shopify: red de seguridad de webhooks perdidos + replay (cada 15 min)
+*/15 6-22 * * *  cd $DIR && $PY manage.py sync_shopify >> /var/log/torre/sync_shopify.log 2>&1
 # Conteo cíclico: genera las 3 tareas del día (9:00 L-S)
 0 9 * * 1-6      cd $DIR && $PY manage.py conteo_ciclico >> /var/log/torre/conteo.log 2>&1
 # Digest diario a clientes (17:30 L-V)
