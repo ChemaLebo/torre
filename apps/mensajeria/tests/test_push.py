@@ -5,6 +5,8 @@ piezas de la PWA (sw.js, manifest, botón de opt-in).
 webpush SIEMPRE va mockeado: los tests jamás tocan un push service real.
 """
 import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -263,6 +265,25 @@ class BajaPushTests(TestCase):
 
 class EnviarPushTests(TestCase):
     """enviar_push_a_rol con webpush mockeado: envío, poda y best-effort."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Hermético: vapid_configurado() exige las 3 variables Y que el .pem
+        # exista en disco. Sin este override la clase solo pasaba en máquinas
+        # con secretos VAPID reales (webpush va mockeado: el contenido del
+        # .pem jamás se lee, solo su existencia).
+        super().setUpClass()
+        tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp.cleanup)
+        pem = Path(tmp.name) / "vapid_prueba.pem"
+        pem.write_text("-----BEGIN EC PRIVATE KEY-----\nprueba\n-----END EC PRIVATE KEY-----\n")
+        override = override_settings(
+            VAPID_PUBLIC_KEY="BClaveDePruebaNoEsReal",
+            VAPID_PRIVATE_PEM=str(pem),
+            VAPID_CLAIM_EMAIL="piso@torre380e.mx",
+        )
+        override.enable()
+        cls.addClassCleanup(override.disable)
 
     def setUp(self):
         self.piso1 = crear_usuario("piso1", "piso")
