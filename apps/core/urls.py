@@ -10,4 +10,5 @@ urlpatterns = [
     path("entrar/", views.LoginView.as_view(), name="login"),
     path("salir/", views.LogoutView.as_view(), name="logout"),
     path("despues-de-entrar/", views.post_login, name="post_login"),
+    path("evidencia/<int:pk>/", views.evidencia, name="evidencia"),
 ]

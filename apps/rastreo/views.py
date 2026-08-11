@@ -6,7 +6,7 @@ El 3PL es invisible: la página es 100% de la marca (branding del Cliente).
 """
 from django.conf import settings
 from django.core.cache import cache
-from django.http import Http404
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
@@ -177,6 +177,28 @@ def pagina(request, token):
     contexto["embed"] = request.GET.get("embed") == "1"
     contexto["reportado"] = request.GET.get("reportado") == "1"
     return render(request, "rastreo/pagina.html", contexto)
+
+
+def pod(request, token):
+    """Foto de entrega (POD) del pedido del token — el token ES la credencial.
+
+    MEDIA no se sirve público: la foto sale por aquí y solo cuando el pedido
+    ya está entregado (mismo criterio que _contexto para mostrarla).
+    """
+    _throttle(request)
+    acceso = get_object_or_404(AccesoRastreo.objects.select_related("pedido"), token=token)
+    pedido = acceso.pedido
+    if pedido.estado not in ("ENTREGADO", "ENTREGA_PRESUNTA"):
+        raise Http404
+    foto = (EvidenciaFoto.objects
+            .filter(entidad="entrega_local", entidad_id=str(pedido.pk), tipo="pod")
+            .first())
+    if foto is None:
+        raise Http404
+    try:
+        return FileResponse(foto.archivo.open("rb"))
+    except (FileNotFoundError, ValueError):
+        raise Http404
 
 
 @require_POST

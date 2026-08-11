@@ -82,3 +82,38 @@ class TestReporte(BaseRastreo):
         self.assertEqual(
             Incidencia.objects.filter(pedido=self.pedido, origen="comprador").count(), 3
         )
+
+
+class TestPodPublico(BaseRastreo):
+    """El POD sale por /r/<token>/pod/ (el token es la credencial): MEDIA ya
+    no se sirve directo ni en dev."""
+
+    def _crear_pod(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.core.models import EvidenciaFoto
+
+        return EvidenciaFoto.objects.create(
+            entidad="entrega_local", entidad_id=str(self.pedido.pk), tipo="pod",
+            archivo=SimpleUploadedFile("pod.jpg", b"poddemo"),
+        )
+
+    def test_pod_publico_solo_con_pedido_entregado(self):
+        self._crear_pod()
+        # Antes de entregar: 404 aunque la foto exista.
+        self.assertEqual(self.client.get(f"/r/{self.token}/pod/").status_code, 404)
+        cache.clear()
+        self.pedido.estado = "ENTREGADO"
+        self.pedido.save(update_fields=["estado"])
+        respuesta = self.client.get(f"/r/{self.token}/pod/")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(b"".join(respuesta.streaming_content), b"poddemo")
+
+    def test_pagina_entregada_apunta_al_pod_autorizado(self):
+        self._crear_pod()
+        self.pedido.estado = "ENTREGADO"
+        self.pedido.save(update_fields=["estado"])
+        r = self.client.get(f"/r/{self.token}/")
+        cuerpo = r.content.decode()
+        self.assertIn(f"/r/{self.token}/pod/", cuerpo)
+        self.assertNotIn("/media/", cuerpo)

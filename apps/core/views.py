@@ -1,8 +1,10 @@
 from django.conf import settings
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpResponse
-from django.shortcuts import redirect
+from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import get_object_or_404, redirect
+
+from .models import EvidenciaFoto
 
 
 class LoginView(auth_views.LoginView):
@@ -87,3 +89,64 @@ def service_worker(request):
     )
     respuesta["Cache-Control"] = "no-cache"
     return respuesta
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Evidencia con autorización. MEDIA no tiene auth (y en producción ni ruta):
+# las fotos llevan datos de clientes y compradores, así que salen SOLO por
+# aquí — mismo criterio que las etiquetas PDF en envios.api_impresion.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resolver_referencia(modelo, eid, relacion):
+    """Primer objeto cuyo pk (si eid es numérico) o folio coincide con eid."""
+    filtro = {"pk": int(eid)} if eid.isdigit() else {"folio": eid}
+    return modelo.objects.filter(**filtro).select_related(relacion).first()
+
+
+def _cliente_de_evidencia(foto):
+    """Cliente dueño de la foto, resolviendo la referencia (entidad, entidad_id).
+
+    entidad_id mezcla pk y folio según el punto de captura (deuda conocida —
+    ver incidencias._congelar_evidencia_pedido): se aceptan ambas formas.
+    Referencia irresoluble → None (el portal la trata como ajena).
+    """
+    # Lazy por contrato: core es la hoja del grafo, importa dentro de la función.
+    from apps.incidencias.models import Incidencia
+    from apps.inventario.models import Conteo, OrdenEntrada
+    from apps.pedidos.models import Pedido
+
+    rutas = {
+        "pedido": (Pedido, "cliente"),
+        "entrega_local": (Pedido, "cliente"),
+        "asn": (OrdenEntrada, "cliente"),
+        "incidencia": (Incidencia, "cliente"),
+        "conteo": (Conteo, "sku__cliente"),
+    }
+    if foto.entidad not in rutas:
+        return None
+    modelo, relacion = rutas[foto.entidad]
+    objeto = _resolver_referencia(modelo, str(foto.entidad_id), relacion)
+    if objeto is None:
+        return None
+    return objeto.sku.cliente if foto.entidad == "conteo" else objeto.cliente
+
+
+@login_required
+def evidencia(request, pk):
+    """Sirve una EvidenciaFoto con autorización por rol y tenant.
+
+    piso/mesa (y superuser) ven todo: la bodega opera a todos los clientes.
+    portal SOLO lo de su cliente — foto ajena o irresoluble regresa el mismo
+    404 que una inexistente (cero filtración de existencia).
+    """
+    foto = get_object_or_404(EvidenciaFoto, pk=pk)
+    es_interno = request.user.is_superuser or request.rol in ("piso", "mesa")
+    if not es_interno:
+        if request.rol != "portal" or request.cliente is None:
+            raise Http404
+        if _cliente_de_evidencia(foto) != request.cliente:
+            raise Http404
+    try:
+        return FileResponse(foto.archivo.open("rb"))
+    except (FileNotFoundError, ValueError):
+        raise Http404

@@ -96,7 +96,7 @@
     <div class="eyebrow mb">Evidencia ligada</div>
     <div class="fotos">
       {% for foto in fotos %}
-      <img src="{{ foto.archivo.url }}" alt="{{ foto.entidad }} {{ foto.tipo }}" title="{{ foto.tipo }} · {{ foto.ts|date:'d/M H:i' }}{% if foto.congelada %} · congelada{% endif %}">
+      <img src="{% url 'core:evidencia' foto.pk %}" alt="{{ foto.entidad }} {{ foto.tipo }}" title="{{ foto.tipo }} · {{ foto.ts|date:'d/M H:i' }}{% if foto.congelada %} · congelada{% endif %}">
       {% endfor %}
     </div>
     {% endif %}

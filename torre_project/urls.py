@@ -1,5 +1,3 @@
-from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
@@ -15,5 +13,6 @@ urlpatterns = [
     path("api/impresion/", include("apps.envios.urls", namespace="envios")),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# MEDIA no se sirve nunca — ni en dev: la evidencia lleva datos de clientes y
+# compradores y sale SOLO por vistas con autorización (core:evidencia,
+# rastreo:pod, envios api_impresion.pdf). Dev = prod, sin rutas de cortesía.

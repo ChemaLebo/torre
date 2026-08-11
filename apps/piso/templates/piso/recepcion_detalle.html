@@ -194,7 +194,7 @@ document.addEventListener("DOMContentLoaded", function () {
   <div class="titulo"><h2>Fotos de llegada</h2></div>
   <div class="fotos">
     {% for foto in fotos_llegada %}
-    <img src="{{ foto.archivo.url }}" alt="Foto de llegada {{ orden.folio }}">
+    <img src="{% url 'core:evidencia' foto.pk %}" alt="Foto de llegada {{ orden.folio }}">
     {% endfor %}
   </div>
 </div>
