@@ -8,7 +8,7 @@ from datetime import time
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.core.models import Cliente, PerfilUsuario
@@ -208,6 +208,7 @@ class PedidosGlobalesTests(BaseMesaTest):
         self.assertNotContains(buscado, p2.folio)
 
 
+@override_settings(DEBUG=True)  # tienda sin token = modo mock, solo dev
 class SyncTests(BaseMesaTest):
     def test_correr_push_drena_la_cola(self):
         from apps.catalogo.models import SKU

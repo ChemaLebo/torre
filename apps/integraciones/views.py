@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 
+from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
@@ -36,8 +37,15 @@ def webhook_shopify(request, tienda_id):
     tienda = get_object_or_404(Tienda, pk=tienda_id, activo=True)
     cuerpo = request.body
 
-    # HMAC solo si la tienda tiene secreto configurado (dev sin token = abierto).
-    if tienda.token and not _firma_valida(
+    # Fail-closed en producción: sin token NO se aceptan webhooks. El endpoint
+    # es público y tienda_id es secuencial — abierto = inyección de pedidos sin
+    # firma. Token vacío solo es modo dev/demo (DEBUG).
+    if not tienda.token:
+        if not settings.DEBUG:
+            return JsonResponse(
+                {"ok": False, "error": "Tienda sin token configurado."}, status=403,
+            )
+    elif not _firma_valida(
         tienda.token, cuerpo, request.headers.get("X-Shopify-Hmac-Sha256")
     ):
         return JsonResponse({"ok": False, "error": "Firma HMAC inválida."}, status=401)

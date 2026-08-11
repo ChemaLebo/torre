@@ -21,7 +21,9 @@ def correr_seed():
     call_command("seed_demo", stdout=StringIO())
 
 
-@override_settings(MEDIA_ROOT=MEDIA_DEMO)
+# DEBUG=True: el seed es herramienta de demo y sus tiendas sin token usan el
+# modo mock del sync, que en producción (DEBUG=0) ahora es fail-closed.
+@override_settings(MEDIA_ROOT=MEDIA_DEMO, DEBUG=True)
 class SeedDemoTests(TestCase):
     @classmethod
     def setUpClass(cls):

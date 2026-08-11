@@ -144,6 +144,19 @@ def calcular_on_hand(sku):
 def _push_a_tienda(tienda, sku, on_hand):
     """Empuja on_hand de un SKU a una tienda. Regresa True si quedó registrado ok."""
     if not tienda.token:
+        if not settings.DEBUG:
+            # Producción sin token = misconfiguración: error visible (pill roja
+            # en Mesa → Sync) y el pendiente SOBREVIVE al siguiente drenado.
+            # Jamás "ok (mock)": eso descartaba cambios de stock en silencio.
+            SyncLog.objects.create(
+                tienda=tienda, direccion=SyncLog.DIRECCION_PUSH,
+                resultado=SyncLog.RESULTADO_ERROR,
+                detalle=(
+                    f"sin token: {sku.codigo} on_hand={on_hand} NO se empujó "
+                    "(configura el token en Mesa → Clientes → tiendas)"
+                ),
+            )
+            return False
         # Dev sin credenciales: el efecto externo se simula pero el rastro es real.
         SyncLog.objects.create(
             tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
@@ -221,6 +234,16 @@ def reconciliar_pedidos(tienda):
     ahora = timezone.now()
 
     if not tienda.token:
+        if not settings.DEBUG:
+            # Producción sin token: NO avanzar el checkpoint — avanzarlo quema
+            # la ventana de reconciliación y los pedidos de ese lapso quedarían
+            # fuera del radar para siempre cuando el token por fin exista.
+            SyncLog.objects.create(
+                tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA,
+                resultado=SyncLog.RESULTADO_ERROR,
+                detalle="sin token: reconciliación omitida (checkpoint intacto)",
+            )
+            return 0
         tienda.checkpoint_reconciliacion = ahora
         tienda.save(update_fields=["checkpoint_reconciliacion"])
         SyncLog.objects.create(

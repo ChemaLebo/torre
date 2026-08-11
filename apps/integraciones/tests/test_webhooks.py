@@ -5,7 +5,7 @@ import hmac
 import json
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.core.models import Cliente, EventoAuditoria
@@ -53,6 +53,7 @@ def payload_orders_create(order_id=5479812345678, numero=1001):
     }
 
 
+@override_settings(DEBUG=True)  # tienda sin token solo se acepta en modo dev/demo
 class WebhookShopifyTests(TestCase):
     def setUp(self):
         self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
@@ -133,6 +134,45 @@ class WebhookShopifyTests(TestCase):
         self.assertTrue(
             EventoAuditoria.objects.filter(entidad="webhook", entidad_id="wh-audit", accion="recibido").exists()
         )
+
+
+class WebhookSinTokenEnProduccionTests(TestCase):
+    """Fail-closed: con DEBUG=0 (default en tests) una tienda sin token NO
+    acepta webhooks — el endpoint es público y tienda_id es secuencial."""
+
+    def setUp(self):
+        self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        self.tienda = Tienda.objects.create(cliente=self.cliente, dominio="colima-mx.myshopify.com")
+        self.url = reverse("integraciones:webhook_shopify", args=[self.tienda.pk])
+
+    def test_sin_token_rechaza_403_y_no_guarda_nada(self):
+        r = self.client.post(
+            self.url, data=json.dumps(payload_orders_create()),
+            content_type="application/json",
+            headers={"X-Shopify-Webhook-Id": "wh-prod-abierto"},
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(WebhookEvento.objects.count(), 0)
+
+    def test_con_token_y_firma_valida_sigue_pasando(self):
+        self.tienda.token = "shhh-secreto-colima"
+        self.tienda.save()
+        cuerpo = json.dumps(payload_orders_create()).encode("utf-8")
+        firma = base64.b64encode(
+            hmac.new(self.tienda.token.encode(), cuerpo, hashlib.sha256).digest()
+        ).decode("ascii")
+        with mock.patch("apps.pedidos.services.ingerir_pedido_shopify") as ingerir:
+            ingerir.return_value = mock.Mock(folio="PED-00009")
+            r = self.client.post(
+                self.url, data=cuerpo, content_type="application/json",
+                headers={
+                    "X-Shopify-Topic": "orders/create",
+                    "X-Shopify-Webhook-Id": "wh-prod-firmado",
+                    "X-Shopify-Hmac-Sha256": firma,
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(WebhookEvento.objects.filter(webhook_id="wh-prod-firmado").count(), 1)
 
 
 class ProcesarWebhookTests(TestCase):

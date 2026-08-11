@@ -1,7 +1,7 @@
 """Tests del push de inventario: encolado idempotente y drenado (modo mock)."""
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.catalogo.models import SKU
@@ -46,6 +46,7 @@ class EncolarPushTests(TestCase):
         self.assertEqual(PushInventarioPendiente.objects.count(), 2)
 
 
+@override_settings(DEBUG=True)  # el modo mock (tienda sin token) solo existe en dev
 class PushInventarioTests(TestCase):
     def setUp(self):
         self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima", buffer_stock=0)
@@ -88,6 +89,7 @@ class PushInventarioTests(TestCase):
         self.assertEqual(services.calcular_on_hand(self.sku), 0)
 
 
+@override_settings(DEBUG=True)  # el modo mock (tienda sin token) solo existe en dev
 class ReconciliarPedidosTests(TestCase):
     def setUp(self):
         self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
@@ -103,3 +105,34 @@ class ReconciliarPedidosTests(TestCase):
         log = self.tienda.sync_logs.filter(direccion=SyncLog.DIRECCION_INGESTA).latest("ts")
         self.assertEqual(log.resultado, SyncLog.RESULTADO_OK)
         self.assertIn("mock", log.detalle)
+
+
+class SinTokenEnProduccionTests(TestCase):
+    """Fail-closed con DEBUG=0 (default en tests): una tienda sin token jamás
+    simula éxito — error visible, cola intacta, checkpoint intacto."""
+
+    def setUp(self):
+        self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        self.tienda = Tienda.objects.create(cliente=self.cliente, dominio="colima-mx.myshopify.com")
+        self.sku = crear_sku(self.cliente)
+
+    def test_push_no_drena_la_cola_y_deja_error_visible(self):
+        services.encolar_push_inventario(self.sku)
+        resumen = services.push_inventario()
+        self.assertEqual(resumen["pushes_ok"], 0)
+        self.assertEqual(resumen["pushes_error"], 1)
+        # El pendiente SOBREVIVE: el cambio de stock no se descarta en silencio.
+        self.assertEqual(PushInventarioPendiente.objects.count(), 1)
+        log = self.tienda.sync_logs.filter(direccion=SyncLog.DIRECCION_PUSH).latest("ts")
+        self.assertEqual(log.resultado, SyncLog.RESULTADO_ERROR)
+        self.assertIn("sin token", log.detalle)
+
+    def test_reconciliar_no_avanza_checkpoint_y_deja_error(self):
+        nuevos = services.reconciliar_pedidos(self.tienda)
+        self.assertEqual(nuevos, 0)
+        self.tienda.refresh_from_db()
+        # La ventana de reconciliación queda intacta para cuando haya token.
+        self.assertIsNone(self.tienda.checkpoint_reconciliacion)
+        log = self.tienda.sync_logs.filter(direccion=SyncLog.DIRECCION_INGESTA).latest("ts")
+        self.assertEqual(log.resultado, SyncLog.RESULTADO_ERROR)
+        self.assertIn("sin token", log.detalle)
