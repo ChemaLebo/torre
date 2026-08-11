@@ -26,6 +26,18 @@ ALLOWED_HOSTS = os.environ.get("TORRE_ALLOWED_HOSTS", "localhost,127.0.0.1").spl
 # Con esto las cookies solo viajan cifradas y el navegador fija HTTPS (HSTS).
 # En dev (http://) queda apagado y nada cambia.
 if os.environ.get("TORRE_HTTPS", "0") == "1":
+    # Fail-fast: con la llave dev pública en el repo, cualquiera forja
+    # sesiones/CSRF de cualquier usuario. Mejor no arrancar que arrancar así.
+    if SECRET_KEY == "dev-only-insecure-key-cambiar-en-prod":
+        raise RuntimeError(
+            "TORRE_HTTPS=1 con la SECRET_KEY de desarrollo: define "
+            "TORRE_SECRET_KEY en el .env antes de servir producción."
+        )
+    if DEBUG:
+        raise RuntimeError(
+            "TORRE_HTTPS=1 con DEBUG activo: pon TORRE_DEBUG=0 en el .env "
+            "(DEBUG en producción expone settings y tracebacks completos)."
+        )
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
@@ -90,7 +102,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "torre_project.wsgi.application"
 
-if os.environ.get("TORRE_DB") == "postgres":
+_torre_db = os.environ.get("TORRE_DB", "").strip().lower()
+if _torre_db == "postgres":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
@@ -101,13 +114,20 @@ if os.environ.get("TORRE_DB") == "postgres":
             "PORT": os.environ.get("PGPORT", "5432"),
         }
     }
-else:
+elif _torre_db in ("", "sqlite"):
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "torre.sqlite3",
         }
     }
+else:
+    # Un typo ("postgresql", "Postgres"…) caía en silencio a SQLite: en un VPS
+    # eso es arrancar contra un archivo vacío creyendo que hay Postgres.
+    raise RuntimeError(
+        f"TORRE_DB desconocido: '{_torre_db}'. Usa 'postgres', 'sqlite' o "
+        "deja la variable vacía (SQLite)."
+    )
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
