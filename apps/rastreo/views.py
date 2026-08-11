@@ -222,9 +222,12 @@ def reporte(request, token):
     texto = (request.POST.get("texto") or "").strip()[:1000]
     etiqueta = dict(TIPOS_REPORTE).get(tipo, "Otro problema")
 
+    # El registro de sistema lleva SOLO el tipo de reporte; las palabras del
+    # comprador van UNA vez, como mensaje suyo (antes iban en ambos y la Mesa
+    # veía la misma frase duplicada en el timeline).
     incidencia = abrir_incidencia(
         pedido.cliente, tipo_incidencia, "comprador", pedido=pedido,
-        texto=f"[Reporte del comprador vía página de rastreo] {etiqueta}. {texto}",
+        texto=f"[Reporte del comprador vía página de rastreo] {etiqueta}.",
     )
     if texto:
         responder(incidencia, pedido.comprador_nombre or "Comprador", "comprador", texto)
