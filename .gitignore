@@ -7,6 +7,7 @@
 # --- Entornos virtuales (dentro del repo) ---
 venv/
 .venv/
+venv/
 env/
 torre-env/
 
