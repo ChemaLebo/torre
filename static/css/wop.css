@@ -15,6 +15,10 @@
   src: url("../fonts/questrial-v19-latin.woff2") format("woff2");
 }
 
+/* El atributo hidden SIEMPRE gana: cualquier regla con display (flex, grid…)
+   lo anularía en silencio — así se rompió la banda de peso en empaque. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #050505;
   --panel: #0D0D0D;
@@ -378,7 +382,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .plano-rack-codigo { font-size: 26px; fill: var(--ink-70); }
 .plano-badge circle { fill: var(--panel); stroke: var(--accent); stroke-width: 3; }
 .plano-badge text { fill: var(--ink); font-size: 32px; font-weight: 600; }
-.panel-zona[hidden] { display: none; }
 
 /* ══════════════════════════════════════════════════════════════════
    C2 · Carril único móvil del piso: tab bar, escáner, picking gigante,
@@ -415,7 +418,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   border: 1px solid var(--hair); border-radius: var(--r);
   font-family: var(--display); font-size: 16px; letter-spacing: .02em;
 }
-.hoja-mas[hidden] { display: none; }
 
 @media (max-width: 860px) {
   body.rol-piso .shell { grid-template-columns: 1fr; }
