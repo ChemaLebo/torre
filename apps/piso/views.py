@@ -1117,6 +1117,23 @@ def salida(request):
     for grupo in grupos.values():
         grupo["firman"] = sum(1 for p in grupo["listos"] if p.cierre_ok)
         grupo["sin_cierre"] = [p for p in grupo["listos"] if not p.cierre_ok]
+        # El manifiesto se firma POR CARRIER, no por corral: SAL-OTRO junta
+        # estafeta+puntopost+fedex y cada chofer se lleva SOLO lo suyo — firmar
+        # el corral entero mandaría "va en camino" a compradores cuyo paquete
+        # sigue en el piso.
+        por_carrier = {}
+        for p in grupo["listos"]:
+            clave = (p.guia.carrier if p.guia else _carrier_probable(p)) or "?"
+            por_carrier.setdefault(clave, []).append(p)
+        grupo["carriers"] = [
+            {
+                "carrier": clave,
+                "listos": pedidos,
+                "firman": sum(1 for p in pedidos if p.cierre_ok),
+                "sin_cierre": [p for p in pedidos if not p.cierre_ok],
+            }
+            for clave, pedidos in sorted(por_carrier.items())
+        ]
 
     contexto = {
         "seccion": "salida",
@@ -1160,21 +1177,40 @@ def _salida_generar_guia(request):
 
 
 def _salida_manifiesto(request):
-    """Manifiesto firmado: marca RECOLECTADO en lote todo el corral.
+    """Manifiesto firmado: marca RECOLECTADO lo palomeado de UN carrier.
 
     Aquí — y solo aquí — se dispara el "va en camino" al comprador
     (lo hace pedidos.services.marcar_recolectado, plantilla B).
+
+    Por carrier y con selección: SAL-OTRO junta varios carriers y cada chofer
+    firma SOLO por lo que sube a SU camión; lo no palomeado (camión lleno,
+    caja con detalle) se queda en el corral para la siguiente recolección.
     """
     corral = (request.POST.get("corral") or "").strip()
     if corral not in {codigo for codigo, _ in CORRALES}:
         messages.error(request, "Corral desconocido. Usa los botones de la pantalla.")
         return redirect("piso:salida")
+    carrier = (request.POST.get("carrier") or "").strip()
+    if not carrier:
+        messages.error(request, "Falta el carrier del manifiesto. Usa los botones de la pantalla.")
+        return redirect("piso:salida")
+    seleccion = {v for v in request.POST.getlist("pedido_id") if v.isdigit()}
+    if not seleccion:
+        messages.error(
+            request,
+            "No palomeaste ningún pedido: marca lo que el chofer se lleva y vuelve a firmar.",
+        )
+        return redirect("piso:salida")
 
     listos, sin_cierre = [], []
-    for pedido in Pedido.objects.filter(estado=Pedido.GUIA_GENERADA).select_related("cliente"):
+    for pedido in Pedido.objects.filter(
+        estado=Pedido.GUIA_GENERADA, pk__in=seleccion,
+    ).select_related("cliente"):
         guia = _guia_activa(pedido)
-        carrier = guia.carrier if guia else _carrier_probable(pedido)
-        if _corral_de_carrier(carrier) != corral:
+        carrier_pedido = guia.carrier if guia else _carrier_probable(pedido)
+        # Un pedido de otro carrier u otro corral no sube a ESTE manifiesto
+        # aunque venga palomeado (formulario viejo, doble submit, manipulación).
+        if _corral_de_carrier(carrier_pedido) != corral or carrier_pedido != carrier:
             continue
         # Sin evidencia de cierre (foto de la caja cerrada con su etiqueta
         # pegada) el pedido NO sube al manifiesto: se queda y se avisa.
@@ -1189,7 +1225,10 @@ def _salida_manifiesto(request):
         )
     if not listos:
         if not sin_cierre:
-            messages.error(request, f"No hay pedidos con guía en {corral}. Genera las guías primero.")
+            messages.error(
+                request,
+                f"Nada de {carrier} listo en {corral} entre lo palomeado. Revisa la lista.",
+            )
         return redirect("piso:salida")
 
     from apps.pedidos.services import marcar_recolectado  # lazy por contrato
@@ -1204,13 +1243,13 @@ def _salida_manifiesto(request):
     if recolectados:
         registrar_evento(
             "manifiesto", corral, "manifiesto_firmado", actor=request.user,
-            delta={"corral": corral, "pedidos": recolectados},
-            motivo="Manifiesto firmado por el chofer: RECOLECTADO en lote.",
+            delta={"corral": corral, "carrier": carrier, "pedidos": recolectados},
+            motivo=f"Manifiesto de {carrier} firmado por el chofer: RECOLECTADO en lote.",
         )
         messages.success(
             request,
-            f"Manifiesto de {corral} firmado: {len(recolectados)} pedido(s) recolectado(s). "
-            "Ahora sí, el comprador recibe su \"va en camino\".",
+            f"Manifiesto de {carrier} en {corral} firmado: {len(recolectados)} pedido(s) "
+            "recolectado(s). Ahora sí, el comprador recibe su \"va en camino\".",
         )
     for error in errores:
         messages.error(request, error)

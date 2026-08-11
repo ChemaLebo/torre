@@ -44,16 +44,22 @@
     {% endif %}
 
     {% if corral.listos %}
+    {% for grupo in corral.carriers %}
     <hr class="sep">
-    {% for p in corral.listos %}
+    <div class="small"><b class="mono">{{ grupo.carrier|upper }}</b> · palomea lo que sube a ESTE camión:</div>
+    {% for p in grupo.listos %}
     <div class="corral-fila">
-      <div class="crece">
+      <label class="crece">
+        {% if p.cierre_ok %}
+        <input type="checkbox" name="pedido_id" value="{{ p.pk }}" checked
+               form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">
+        {% endif %}
         <span class="mono">{{ p.folio }}</span>
         · <span class="mono small">{{ p.guia.numero|default:"—" }}</span>
         <div class="small">{{ p.cliente.nombre }}
           {% if not p.cierre_ok %}<span class="pill crit">falta foto de cierre</span>{% endif %}
         </div>
-      </div>
+      </label>
       <div class="fila">
         {% for g in p.guias_activas %}
         <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
@@ -67,19 +73,23 @@
     </div>
     {% endfor %}
 
-    {% for p in corral.sin_cierre %}
+    {% for p in grupo.sin_cierre %}
     <p class="small"><span class="pill crit">se queda</span> {{ p.folio }} se queda: falta foto de caja cerrada con la etiqueta pegada —
       <a href="{% url 'piso:empaque_pedido' p.pk %}">tomar foto de cierre</a></p>
     {% endfor %}
 
-    <form method="post" class="mt">{% csrf_token %}
+    {# El form va al final (los botones de etiqueta son forms propios: no se anidan); #}
+    {# los checkboxes de arriba le pertenecen vía el atributo form=. #}
+    <form method="post" class="mt" id="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">{% csrf_token %}
       <input type="hidden" name="accion" value="manifiesto">
       <input type="hidden" name="corral" value="{{ corral.codigo }}">
-      <button class="btn primario gigante" type="submit" {% if corral.firman == 0 %}disabled{% endif %}>
-        FIRMÓ EL CHOFER · SALEN {{ corral.firman }}
+      <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
+      <button class="btn primario gigante" type="submit" {% if grupo.firman == 0 %}disabled{% endif %}>
+        FIRMÓ EL CHOFER DE {{ grupo.carrier|upper }} · SALE LO PALOMEADO
       </button>
     </form>
-    <p class="small muted">Firma del chofer en mano ANTES de tocar este botón. Marca RECOLECTADO en lote y avisa al comprador.</p>
+    {% endfor %}
+    <p class="small muted">Firma del chofer en mano ANTES de tocar el botón. Lo palomeado se marca RECOLECTADO y se avisa al comprador; lo demás se queda para la siguiente recolección.</p>
     {% elif not corral.sin_guia %}
     <p class="muted mt">Corral vacío.</p>
     {% else %}

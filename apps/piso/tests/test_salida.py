@@ -66,7 +66,8 @@ class SalidaPisoTests(PisoTestCase):
 
         corral = "SAL-OTRO"  # puntopost (el más barato del lane) vive aquí
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": corral,
+            "accion": "manifiesto", "corral": corral, "carrier": "puntopost",
+            "pedido_id": [p.pk for p in pedidos],
         }, follow=True)
         self.assertEqual(respuesta.status_code, 200)
 
@@ -100,7 +101,8 @@ class SalidaPisoTests(PisoTestCase):
         self.evidencia_cierre(con_cierre)  # solo uno tiene su foto de cierre
 
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO",
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "pedido_id": [con_cierre.pk, sin_cierre.pk],
         }, follow=True)
         self.assertContains(
             respuesta, f"{sin_cierre.folio} se queda: falta foto de caja cerrada"
@@ -115,15 +117,72 @@ class SalidaPisoTests(PisoTestCase):
     def test_manifiesto_de_corral_vacio_avisa(self):
         corral = "SAL-OTRO"  # puntopost (el más barato del lane) vive aquí
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": corral,
+            "accion": "manifiesto", "corral": corral, "carrier": "puntopost",
+            "pedido_id": ["99999"],
         }, follow=True)
-        self.assertContains(respuesta, "No hay pedidos con guía")
+        self.assertContains(respuesta, "Nada de puntopost listo")
 
     def test_manifiesto_corral_desconocido_avisa(self):
         respuesta = self.client.post(self.url, {
             "accion": "manifiesto", "corral": "SAL-FALSO",
         }, follow=True)
         self.assertContains(respuesta, "Corral desconocido")
+
+    def test_manifiesto_sin_seleccion_avisa(self):
+        respuesta = self.client.post(self.url, {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+        }, follow=True)
+        self.assertContains(respuesta, "No palomeaste")
+
+    def test_lo_no_palomeado_se_queda_para_la_siguiente_recoleccion(self):
+        """Camión lleno / caja con detalle: el chofer firma SOLO lo palomeado."""
+        se_va = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        se_queda = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        for pedido in (se_va, se_queda):
+            self.client.post(self.url, {"accion": "generar_guia", "pedido_id": pedido.pk})
+            self.evidencia_cierre(pedido)
+
+        respuesta = self.client.post(self.url, {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "pedido_id": [se_va.pk],  # solo uno palomeado
+        }, follow=True)
+        self.assertEqual(respuesta.status_code, 200)
+
+        se_va.refresh_from_db()
+        se_queda.refresh_from_db()
+        self.assertEqual(se_va.estado, Pedido.RECOLECTADO)
+        self.assertEqual(se_queda.estado, Pedido.GUIA_GENERADA)  # sigue en el corral
+
+    def test_el_manifiesto_de_un_carrier_jamas_se_lleva_los_de_otro(self):
+        """SAL-OTRO junta carriers: firmarle a puntopost no toca lo de estafeta
+        aunque venga palomeado (formulario viejo / doble submit)."""
+        de_puntopost = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        self.client.post(self.url, {"accion": "generar_guia", "pedido_id": de_puntopost.pk})
+        self.evidencia_cierre(de_puntopost)
+
+        de_estafeta = self.crear_pedido(cantidad=1, estado=Pedido.GUIA_GENERADA)
+        Guia.objects.create(
+            pedido=de_estafeta, carrier="estafeta", servicio="ground",
+            numero="EST-001", estado=Guia.GUIA_CREADA,
+        )
+        self.evidencia_cierre(de_estafeta)
+
+        # La pantalla pinta un bloque de firma por carrier.
+        pantalla = self.client.get(self.url)
+        self.assertContains(pantalla, "PUNTOPOST")
+        self.assertContains(pantalla, "ESTAFETA")
+        self.assertContains(pantalla, "SALE LO PALOMEADO")
+
+        respuesta = self.client.post(self.url, {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "pedido_id": [de_puntopost.pk, de_estafeta.pk],  # el ajeno viene colado
+        }, follow=True)
+        self.assertEqual(respuesta.status_code, 200)
+
+        de_puntopost.refresh_from_db()
+        de_estafeta.refresh_from_db()
+        self.assertEqual(de_puntopost.estado, Pedido.RECOLECTADO)
+        self.assertEqual(de_estafeta.estado, Pedido.GUIA_GENERADA)  # intacto
 
 
 class SalidaCorralesFlotaTests(PisoTestCase):
