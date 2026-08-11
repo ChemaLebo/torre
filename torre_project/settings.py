@@ -1,7 +1,8 @@
 """
 Torre — núcleo operativo del 3PL boutique (Local 380 E).
-Configuración de desarrollo: SQLite + jobs síncronos vía management commands.
-Producción: Postgres + Redis/Celery (ver README).
+Desarrollo: Postgres vía docker-compose (o SQLite sin TORRE_DB) + jobs
+síncronos vía management commands. Producción: Postgres + gunicorn + cron —
+sin broker ni workers: la base de datos es la única cola.
 """
 from pathlib import Path
 import os
@@ -230,3 +231,28 @@ import mimetypes  # noqa: E402
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+# Sin esto, con DEBUG=0 el default de Django manda los 500 a un handler
+# filtrado por require_debug_true y a mail_admins (sin ADMINS configurado):
+# un traceback de producción moría SIN DEJAR RASTRO. Aquí siempre sale a
+# stderr → gunicorn → journald. Los módulos loguean con
+# logging.getLogger("torre.<modulo>").
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "torre": {
+            "format": "{levelname} {asctime} {name} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "consola": {"class": "logging.StreamHandler", "formatter": "torre"},
+    },
+    "root": {"handlers": ["consola"], "level": "WARNING"},
+    "loggers": {
+        "django.request": {"handlers": ["consola"], "level": "ERROR", "propagate": False},
+        "torre": {"handlers": ["consola"], "level": "INFO", "propagate": False},
+    },
+}
