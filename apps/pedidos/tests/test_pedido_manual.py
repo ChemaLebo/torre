@@ -179,3 +179,20 @@ class CrearPedidoManualTests(BasePedidoManual):
         planificar.assert_called_once()
         self.assertEqual(pedido.estado, Pedido.PENDIENTE)
         self.assertTrue(Pedido.objects.filter(pk=pedido.pk).exists())
+
+    def test_planificacion_sale_en_on_commit_jamas_dentro_del_atomic(self):
+        """Cotizar un lane frío pega a la API real: primero el commit (suelta
+        los locks de Saldo), luego el plan."""
+        datos = {
+            "comprador_nombre": "Karina Ordaz",
+            "direccion": direccion_manual(),
+            "cp": "01780",
+            "lineas": [(self.sku, 1)],
+            "actor": None,
+        }
+        with patch("apps.inventario.services.reservar", return_value=True), \
+             patch("apps.envios.cotizador.planificar_envio") as planificar:
+            with self.captureOnCommitCallbacks(execute=True):
+                services.crear_pedido_manual(self.cliente, **datos)
+                planificar.assert_not_called()  # aún dentro del atomic
+        planificar.assert_called_once()

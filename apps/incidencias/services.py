@@ -9,6 +9,7 @@ Consumidores conocidos (llaman lazy a este módulo):
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -128,18 +129,26 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
 
     # Web Push a la Mesa, best-effort TOTAL: un push caído o sin VAPID
     # JAMÁS bloquea la apertura de la incidencia.
-    try:
-        from apps.mensajeria import push  # lazy por contrato
+    #
+    # Sale en transaction.on_commit: abrir_incidencia corre DENTRO de la
+    # transacción del caller (p.ej. la ingesta Shopify con locks de Saldo
+    # tomados vía la incidencia FAL) — un push service colgado con el lock
+    # tomado apilaría workers. Mismo patrón que pedidos._avisar_piso.
+    sobre = f" · {pedido.folio}" if pedido is not None else ""
 
-        sobre = f" · {pedido.folio}" if pedido is not None else ""
-        push.enviar_push_a_rol(
-            "mesa",
-            f"⚠️ Incidencia {incidencia.folio}",
-            f"{incidencia.get_tipo_display()} · {cliente.nombre}{sobre}",
-            url=f"/mesa/incidencias/{incidencia.pk}/",
-        )
-    except Exception:
-        pass
+    def _avisar_mesa():
+        try:
+            from apps.mensajeria import push  # lazy por contrato
+
+            push.enviar_push_a_rol(
+                "mesa",
+                f"⚠️ Incidencia {incidencia.folio}",
+                f"{incidencia.get_tipo_display()} · {cliente.nombre}{sobre}",
+                url=f"/mesa/incidencias/{incidencia.pk}/",
+            )
+        except Exception:
+            pass
+    transaction.on_commit(_avisar_mesa)
 
     return incidencia
 

@@ -163,3 +163,19 @@ class IncidenciasConPedidoTests(TestCase):
         incidencia.refresh_from_db()
         self.assertEqual(incidencia.estado, Incidencia.CERRADA)
         self.assertIsNotNone(incidencia.ts_cierre)
+
+
+class PushEnOnCommitTests(TestCase):
+    """El push a la Mesa sale en transaction.on_commit — abrir_incidencia corre
+    dentro de la transacción del caller (p.ej. ingesta Shopify con locks de
+    Saldo tomados) y un push service colgado apilaría workers."""
+
+    def test_push_a_mesa_sale_tras_el_commit_jamas_dentro(self):
+        from unittest.mock import patch
+
+        cliente = crear_cliente()
+        with patch("apps.mensajeria.push.enviar_push_a_rol") as enviar:
+            with self.captureOnCommitCallbacks(execute=True):
+                abrir_incidencia(cliente, Incidencia.TIPO_DAN, Incidencia.ORIGEN_MANUAL)
+                enviar.assert_not_called()  # dentro de la transacción: nada
+        enviar.assert_called_once()  # tras el commit: sale el aviso

@@ -93,12 +93,19 @@ def _planificar_best_effort(pedido):
     """División de envío (≤20 kg, optimizada por costo) planificada desde el alta.
 
     Best-effort: sin plan no se detiene el alta; generar_guias replanifica.
+
+    Sale en transaction.on_commit: cotizar un lane frío pega a la API real de
+    Envia (varios segundos) y el alta corre dentro de un atomic con locks de
+    Saldo tomados — otro pedido del mismo SKU (u operador pickeando) quedaría
+    esperando detrás de un HTTP externo. Primero el commit, luego el plan.
     """
-    try:
-        from apps.envios.cotizador import planificar_envio  # lazy
-        planificar_envio(pedido)
-    except (ImportError, ValueError):
-        pass
+    def _planificar():
+        try:
+            from apps.envios.cotizador import planificar_envio  # lazy
+            planificar_envio(pedido)
+        except (ImportError, ValueError):
+            pass
+    transaction.on_commit(_planificar)
 
 
 def _enviar_confirmacion_best_effort(pedido):
