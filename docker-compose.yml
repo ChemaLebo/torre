@@ -1,0 +1,28 @@
+# Postgres de desarrollo — mismo motor que producción.
+#
+#   docker compose up -d      # levanta la base (puerto 5432)
+#   $env:TORRE_DB = "postgres"; $env:PGPASSWORD = "torre"   # PowerShell
+#   python manage.py migrate && python manage.py test apps
+#
+# Las credenciales coinciden con los defaults de torre_project/settings.py
+# (NAME/USER "torre", localhost:5432) — solo PGPASSWORD hace falta en el .env.
+# SQLite sigue siendo el fallback sin la variable TORRE_DB.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: torre
+      POSTGRES_USER: torre
+      POSTGRES_PASSWORD: torre
+    ports:
+      - "5432:5432"
+    volumes:
+      - torre_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U torre -d torre"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  torre_pgdata:
