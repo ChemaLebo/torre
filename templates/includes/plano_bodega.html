@@ -101,7 +101,10 @@ visibilidad. Sin JS, todos los paneles quedan visibles apilados.
 </div>
 
 <script>
-(function () {
+// Los [data-panel] se renderizan DESPUÉS de este include: el bloque espera
+// DOMContentLoaded — si corre al parsear, querySelectorAll regresa vacío y
+// los paneles nunca cambian (misma clase de bug que el defer del escáner).
+document.addEventListener("DOMContentLoaded", function () {
   var raiz = document.getElementById("plano-bodega");
   if (!raiz) { return; }
   var zonas = raiz.querySelectorAll("[data-zona]");
@@ -129,5 +132,5 @@ visibilidad. Sin JS, todos los paneles quedan visibles apilados.
   });
 
   activar(raiz.getAttribute("data-zona-activa"));
-})();
+});
 </script>
