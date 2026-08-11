@@ -51,10 +51,32 @@ class PerfilUsuario(models.Model):
         Cliente, null=True, blank=True, on_delete=models.CASCADE, related_name="usuarios",
         help_text="Obligatorio para rol portal; vacío para piso/mesa",
     )
-    pin = models.CharField(max_length=6, blank=True, help_text="PIN de firma para ajustes (piso/mesa)")
+    pin = models.CharField(
+        max_length=128, blank=True,
+        help_text="PIN de firma para ajustes (piso/mesa) — se guarda hasheado",
+    )
 
     def __str__(self):
         return f"{self.usuario.username} · {self.get_rol_display()}"
+
+    def save(self, *args, **kwargs):
+        # El PIN JAMÁS vive en claro en la base: un respaldo filtrado no regala
+        # firmas. Cualquier valor plano (seed, admin, fixtures) se hashea aquí
+        # — un PIN de 4-6 dígitos nunca tiene el formato "algo$..." de un hash.
+        if self.pin:
+            from django.contrib.auth.hashers import identify_hasher, make_password
+            try:
+                identify_hasher(self.pin)
+            except ValueError:
+                self.pin = make_password(str(self.pin))
+        super().save(*args, **kwargs)
+
+    def check_pin(self, pin_crudo):
+        """True si el PIN coincide (comparación con hash, tiempo constante)."""
+        from django.contrib.auth.hashers import check_password
+        if not self.pin or pin_crudo in (None, ""):
+            return False
+        return check_password(str(pin_crudo), self.pin)
 
 
 class EventoAuditoria(models.Model):

@@ -114,7 +114,7 @@ class DictamenMermaTests(CuarentenaBase):
 class DictamenValidacionesTests(CuarentenaBase):
     def test_pin_malo_no_toca_stock(self):
         self.cuarentena_por_recepcion(4)
-        with self.assertRaisesMessage(ValueError, "PIN incorrecto"):
+        with self.assertRaisesMessage(ValueError, "Firma inválida"):
             services.dictaminar_cuarentena(
                 self.sku, 2, "merma", "piso1", "9999", "jefe", "2222", self.piso1,
             )
@@ -134,7 +134,7 @@ class DictamenValidacionesTests(CuarentenaBase):
         karina.perfil.cliente = self.cliente
         karina.perfil.save()
         self.cuarentena_por_recepcion(4)
-        with self.assertRaisesMessage(ValueError, "no puede firmar"):
+        with self.assertRaisesMessage(ValueError, "Firma inválida"):
             services.dictaminar_cuarentena(
                 self.sku, 2, "merma", "karina", "4444", "jefe", "2222", self.piso1,
             )

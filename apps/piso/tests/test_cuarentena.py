@@ -103,7 +103,7 @@ class DictamenPisoTests(CuarentenaPisoBase):
         saldo = self.crear_cuarentena(4)
         self.login_piso()
         respuesta = self.post_dictamen(saldo, "merma", pin_2="0000")
-        self.assertContains(respuesta, "PIN incorrecto")
+        self.assertContains(respuesta, "Firma inválida")
         self.assertEqual(self.suma_cuarentena(), 4)
         self.assertFalse(Movimiento.objects.filter(tipo=Movimiento.MERMA).exists())
 

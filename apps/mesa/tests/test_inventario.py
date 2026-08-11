@@ -150,7 +150,7 @@ class AjusteDesdeMesaTests(BaseInventarioMesa):
         respuesta = self.client.post(
             self.url, self.datos_ajuste(pin_2="0000"), follow=True,
         )
-        self.assertContains(respuesta, "PIN incorrecto")
+        self.assertContains(respuesta, "Firma inválida")
         self.assertEqual(Ajuste.objects.count(), 0)
         self.assertEqual(self.vendible(), 20)
 

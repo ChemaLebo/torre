@@ -44,7 +44,12 @@ class SeedDemoTests(TestCase):
             self.assertEqual(user.is_superuser, es_super)
             if rol is not None:
                 self.assertEqual(user.perfil.rol, rol)
-                self.assertEqual(user.perfil.pin, pin)
+                if pin:
+                    # El PIN vive hasheado: se verifica, no se compara en claro.
+                    self.assertTrue(user.perfil.check_pin(pin), f"PIN de {username} no coincide")
+                    self.assertNotEqual(user.perfil.pin, pin, "el PIN quedó en claro en la BD")
+                else:
+                    self.assertEqual(user.perfil.pin, "")
                 if cliente_slug:
                     self.assertEqual(user.perfil.cliente.slug, cliente_slug)
 

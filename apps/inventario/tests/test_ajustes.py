@@ -43,11 +43,11 @@ class AjusteDobleFirmaTests(InventarioTestCase):
         self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE), 10)  # nada se movió
 
     def test_pin_incorrecto_rechaza(self):
-        with self.assertRaisesMessage(ValueError, "PIN incorrecto"):
+        with self.assertRaisesMessage(ValueError, "Firma inválida"):
             services.aplicar_ajuste(
                 self.sku, -1, Ajuste.MOTIVO_DANO, "piso1", "9999", "jefe", "2222",
             )
-        with self.assertRaisesMessage(ValueError, "PIN incorrecto"):
+        with self.assertRaisesMessage(ValueError, "Firma inválida"):
             services.aplicar_ajuste(
                 self.sku, -1, Ajuste.MOTIVO_DANO, "piso1", "1111", "jefe", "0000",
             )
@@ -57,7 +57,7 @@ class AjusteDobleFirmaTests(InventarioTestCase):
         karina = self.crear_firmante("karina", PerfilUsuario.ROL_PORTAL, "4444")
         karina.perfil.cliente = self.cliente
         karina.perfil.save()
-        with self.assertRaisesMessage(ValueError, "no puede firmar"):
+        with self.assertRaisesMessage(ValueError, "Firma inválida"):
             services.aplicar_ajuste(
                 self.sku, -1, Ajuste.MOTIVO_DANO, "karina", "4444", "jefe", "2222",
             )
@@ -68,7 +68,7 @@ class AjusteDobleFirmaTests(InventarioTestCase):
                 self.sku, -1, Ajuste.MOTIVO_DANO, "fantasma", "1111", "jefe", "2222",
             )
         sin_pin = self.crear_firmante("sinpin", PerfilUsuario.ROL_PISO, "")
-        with self.assertRaisesMessage(ValueError, "no tiene PIN"):
+        with self.assertRaisesMessage(ValueError, "Firma inválida"):
             services.aplicar_ajuste(
                 self.sku, -1, Ajuste.MOTIVO_DANO, "sinpin", "", "jefe", "2222",
             )

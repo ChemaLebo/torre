@@ -624,8 +624,17 @@ def registrar_conteo(sku, contado, contador):
     return conteo
 
 
+FIRMA_INVALIDA = "Firma inválida: revisa el usuario y el PIN."
+
+
 def _validar_firma(usuario, pin):
-    """Valida una firma: el usuario existe, es de piso/mesa y su PIN coincide."""
+    """Valida una firma: el usuario existe, es de piso/mesa y su PIN coincide.
+
+    UN solo mensaje para todos los fallos: distinguir "no existe" / "sin PIN" /
+    "PIN incorrecto" era un oráculo que le ahorraba la mitad del trabajo a
+    quien intentara adivinar la firma de un colega. El PIN se compara contra
+    hash (PerfilUsuario.check_pin), jamás en claro.
+    """
     from django.contrib.auth import get_user_model
 
     from apps.core.models import PerfilUsuario
@@ -633,16 +642,12 @@ def _validar_firma(usuario, pin):
     username = usuario.username if hasattr(usuario, "username") else str(usuario)
     user = get_user_model().objects.filter(username=username).first()
     perfil = getattr(user, "perfil", None) if user else None
-    if perfil is None:
-        raise ValueError(f"No puedo validar la firma: '{username}' no existe o no tiene perfil.")
-    if perfil.rol not in (PerfilUsuario.ROL_PISO, PerfilUsuario.ROL_MESA):
-        raise ValueError(
-            f"'{username}' no puede firmar ajustes: solo el personal de piso o mesa autoriza."
-        )
-    if not perfil.pin:
-        raise ValueError(f"'{username}' no tiene PIN asignado; pídelo a Mesa de Control.")
-    if perfil.pin != str(pin):
-        raise ValueError(f"PIN incorrecto para '{username}'.")
+    if (
+        perfil is None
+        or perfil.rol not in (PerfilUsuario.ROL_PISO, PerfilUsuario.ROL_MESA)
+        or not perfil.check_pin(pin)
+    ):
+        raise ValueError(FIRMA_INVALIDA)
     return perfil
 
 
