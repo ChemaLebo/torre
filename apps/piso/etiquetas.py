@@ -17,6 +17,7 @@ import tempfile
 from decimal import Decimal
 from io import BytesIO
 
+import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from reportlab.graphics import renderPDF
@@ -325,6 +326,48 @@ def generar_pdf_etiqueta(guia):
     return buffer.getvalue()
 
 
+# La etiqueta del carrier baja del CDN de Envia: timeout corto, el caller ya
+# es best-effort (un fallo se reintenta desde Salida, jamás revierte la guía).
+TIMEOUT_ETIQUETA_CARRIER_S = 20
+
+
+def _pdf_etiqueta(guia):
+    """Bytes del PDF a imprimir para esta guía.
+
+    ENVIA_MODO=full (guías reales): SIEMPRE la etiqueta OFICIAL del carrier
+    (guia.etiqueta_url) — Estafeta/PuntoPost rutean con SUS códigos de barras;
+    la etiqueta dibujada de Torre no sirve en su red. Si no baja, se falla con
+    instrucciones: imprimir una etiqueta inservible es peor que reintentar.
+    Modos mock/dev: la etiqueta dibujada (no existe PDF real que bajar).
+    Decisión 2026-08-10 (tech lead + founder): solo la del carrier, sin
+    segunda hoja.
+    """
+    if getattr(settings, "ENVIA_MODO", "cotizar") != "full":
+        return generar_pdf_etiqueta(guia)
+    url = (guia.etiqueta_url or "").strip()
+    # https-only: la etiqueta lleva datos del comprador y Envia siempre sirve https.
+    if not url.lower().startswith("https://"):
+        raise ValueError(
+            f"La guía {guia.numero} no trae etiqueta del carrier. "
+            "Regenera la guía desde Salida o avisa a Mesa de Control."
+        )
+    try:
+        respuesta = requests.get(url, timeout=TIMEOUT_ETIQUETA_CARRIER_S)
+        respuesta.raise_for_status()
+    except requests.RequestException as exc:
+        raise ValueError(
+            f"No pude bajar la etiqueta del carrier para {guia.numero} ({exc}). "
+            "Reintenta la impresión desde Salida en un momento."
+        )
+    pdf = respuesta.content
+    if not pdf.startswith(b"%PDF"):
+        raise ValueError(
+            f"Lo que regresó el carrier para {guia.numero} no es un PDF. "
+            "Avisa a Mesa de Control para revisar la guía con Envia."
+        )
+    return pdf
+
+
 def _encolar_etiqueta(guia):
     """Modo relay: guarda el PDF en un TrabajoImpresion; el agente de bodega imprime.
 
@@ -334,7 +377,7 @@ def _encolar_etiqueta(guia):
     from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
 
     pedido = guia.pedido
-    pdf = generar_pdf_etiqueta(guia)
+    pdf = _pdf_etiqueta(guia)
     trabajo = TrabajoImpresion.objects.create(
         guia=guia,
         pdf=ContentFile(pdf, name=f"etiqueta-{pedido.folio}-g{guia.pk}.pdf"),
@@ -364,7 +407,7 @@ def imprimir_etiqueta(guia):
             "mientras, usa el botón Imprimir del navegador."
         )
     pedido = guia.pedido
-    pdf = generar_pdf_etiqueta(guia)
+    pdf = _pdf_etiqueta(guia)
     with tempfile.NamedTemporaryFile(
         suffix=".pdf", prefix=f"etiqueta-{pedido.folio}-", delete=False
     ) as archivo:
