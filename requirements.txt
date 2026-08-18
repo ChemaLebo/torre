@@ -6,3 +6,4 @@ pywebpush>=2.0
 pillow>=12,<13
 gunicorn>=23
 psycopg[binary]>=3.2,<4
+django-storages[s3]>=1.14

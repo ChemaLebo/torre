@@ -15,5 +15,6 @@ DIR=/srv/torre/torre
 30 17 * * 1-5    cd $DIR && $PY manage.py digest_diario >> /var/log/torre/digest.log 2>&1
 # Entregas presuntas (madrugada)
 15 2 * * *       cd $DIR && $PY manage.py cerrar_entregas_presuntas >> /var/log/torre/presuntas.log 2>&1
-# Respaldo de la base (Postgres) — 3:00, retiene 14 días
-0 3 * * *        pg_dump torre | gzip > /srv/torre/backups/torre-$(date +\%F).sql.gz && find /srv/torre/backups -name "*.sql.gz" -mtime +14 -delete
+# Respaldo de la base (Postgres) — 3:00: dump local + copia OFFSITE al bucket
+# (s3cmd configurado con las llaves del bucket: s3cmd --configure), retiene 14 días local.
+0 3 * * *        pg_dump torre | gzip > /srv/torre/backups/torre-$(date +\%F).sql.gz && s3cmd put /srv/torre/backups/torre-$(date +\%F).sql.gz s3://torre-evidencia/respaldos/ && find /srv/torre/backups -name "*.sql.gz" -mtime +14 -delete

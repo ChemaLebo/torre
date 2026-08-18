@@ -252,6 +252,38 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 
+# ── Evidencia en Spaces (S3) ─────────────────────────────────────────────────
+# Con credenciales: las fotos de evidencia viven en el bucket privado (el disco
+# del droplet deja de ser su única copia). Sin credenciales: disco local (dev).
+# La vista autorizada (core:evidencia) no cambia — .open() streamea desde el
+# bucket a través de Django; el bucket JAMÁS se expone directo (CDN off,
+# listing restricted).
+SPACES_KEY = os.environ.get("SPACES_KEY", "")
+SPACES_SECRET = os.environ.get("SPACES_SECRET", "")
+SPACES_BUCKET = os.environ.get("SPACES_BUCKET", "torre-evidencia")
+SPACES_ENDPOINT = os.environ.get("SPACES_ENDPOINT", "https://nyc3.digitaloceanspaces.com")
+SPACES_REGION = os.environ.get("SPACES_REGION", "nyc3")
+if SPACES_KEY and SPACES_SECRET:
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+            "OPTIONS": {
+                "access_key": SPACES_KEY,
+                "secret_key": SPACES_SECRET,
+                "bucket_name": SPACES_BUCKET,
+                "endpoint_url": SPACES_ENDPOINT,
+                "region_name": SPACES_REGION,
+                "default_acl": "private",
+                "file_overwrite": False,   # dos fotos con el mismo nombre jamás se pisan
+                "querystring_auth": True,
+            },
+        },
+        # El default de Django para estáticos se conserva (whitenoise es middleware).
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 # Sin esto, con DEBUG=0 el default de Django manda los 500 a un handler
 # filtrado por require_debug_true y a mail_admins (sin ADMINS configurado):
