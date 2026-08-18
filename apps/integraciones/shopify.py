@@ -44,6 +44,29 @@ mutation fijarOnHand($input: InventorySetQuantitiesInput!) {
 """
 
 
+CONSULTA_FULFILLMENT_ORDERS = """
+query ordenesDeFulfillment($id: ID!) {
+  order(id: $id) {
+    id
+    fulfillmentOrders(first: 10) {
+      edges { node { id status } }
+    }
+  }
+}
+"""
+
+# fulfillmentCreateV2 quedó deprecado (2024-07): en versiones modernas la
+# mutación es fulfillmentCreate con el mismo input.
+MUTACION_CREAR_FULFILLMENT = """
+mutation crearFulfillment($fulfillment: FulfillmentInput!) {
+  fulfillmentCreate(fulfillment: $fulfillment) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
+
 class ShopifyError(Exception):
     """Error de la API de Shopify (HTTP, GraphQL o userErrors)."""
 
@@ -136,6 +159,51 @@ class ShopifyClient:
         if errores:
             raise ShopifyError(f"inventorySetQuantities {self.tienda.dominio}: {errores}")
         return resultado
+
+    # ── fulfillment (write-back al marcar RECOLECTADO) ──
+    def fulfillment_orders(self, order_id):
+        """[(gid, status)] de las fulfillment orders del pedido.
+
+        Shopify moderno no 'fulfillea' el pedido directo: se fulfillean sus
+        fulfillment orders. El caller decide cuáles son fulfilleables.
+        """
+        gid = str(order_id)
+        if not gid.startswith("gid://"):
+            gid = f"gid://shopify/Order/{gid}"
+        datos = self.graphql(CONSULTA_FULFILLMENT_ORDERS, {"id": gid})
+        orden = datos.get("order") or {}
+        if not orden:
+            raise ShopifyError(f"Pedido {order_id} no existe en {self.tienda.dominio}.")
+        edges = (orden.get("fulfillmentOrders") or {}).get("edges") or []
+        nodos = [e.get("node") or {} for e in edges]
+        return [(n["id"], n.get("status") or "") for n in nodos if n.get("id")]
+
+    def crear_fulfillment(self, fulfillment_order_ids, numeros_guia, url_rastreo, carrier, notificar=True):
+        """Crea UN fulfillment sobre esas fulfillment orders, con tracking.
+
+        notifyCustomer=True es el gatillo del correo nativo de envío de
+        Shopify — el link de rastreo es NUESTRA página brandeada del cliente.
+        """
+        tracking = {"company": carrier or "", "url": url_rastreo or ""}
+        numeros = [n for n in numeros_guia if n]
+        if len(numeros) == 1:
+            tracking["number"] = numeros[0]
+        elif numeros:
+            tracking["numbers"] = numeros
+        datos = self.graphql(MUTACION_CREAR_FULFILLMENT, {
+            "fulfillment": {
+                "lineItemsByFulfillmentOrder": [
+                    {"fulfillmentOrderId": fid} for fid in fulfillment_order_ids
+                ],
+                "notifyCustomer": bool(notificar),
+                "trackingInfo": tracking,
+            },
+        })
+        resultado = datos.get("fulfillmentCreate") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"fulfillmentCreate {self.tienda.dominio}: {errores}")
+        return resultado.get("fulfillment") or {}
 
     # ── pedidos (polling de respaldo) ──
     def listar_pedidos(self, updated_at_min=None):

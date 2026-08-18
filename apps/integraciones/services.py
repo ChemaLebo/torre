@@ -214,6 +214,88 @@ def push_inventario():
     return resumen
 
 
+# ── Fulfillment (write-back al firmar el manifiesto) ─────────────────────────
+
+# Estados de fulfillment order que SÍ se pueden fulfillear. SCHEDULED y ON_HOLD
+# requieren acciones previas del cliente; CLOSED ya está hecho.
+_FO_FULFILLEABLES = ("OPEN", "IN_PROGRESS")
+
+
+def marcar_fulfillment(pedido):
+    """Marca el pedido como fulfilled en Shopify, con tracking y notifyCustomer.
+
+    Hermano del "va en camino" de mensajería (mismo momento canónico:
+    marcar_recolectado, vía on_commit) — con esto Shopify manda SU correo
+    nativo de envío (link a NUESTRA página brandeada) y el admin del cliente
+    muestra Fulfilled en vez de quedarse Unfulfilled para siempre.
+
+    Best-effort: el resultado queda en SyncLog; jamás levanta hacia el caller.
+    Idempotente sin campo nuevo: sin fulfillment orders abiertas = ya estaba.
+    """
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return False  # pedido manual: no existe en Shopify
+
+    numeros, carrier = [], ""
+    for guia in pedido.guias.all().order_by("pk"):  # orden estable: caja 1 primero
+        if guia.es_activa and guia.numero:
+            numeros.append(guia.numero)
+            carrier = carrier or guia.carrier
+
+    if not tienda.token:
+        if not settings.DEBUG:
+            # Producción sin token = misconfiguración visible, jamás "ok" falso.
+            SyncLog.objects.create(
+                tienda=tienda, direccion=SyncLog.DIRECCION_PUSH,
+                resultado=SyncLog.RESULTADO_ERROR,
+                detalle=f"fulfillment: {pedido.folio} NO se marcó (tienda sin token)",
+            )
+            return False
+        SyncLog.objects.create(
+            tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
+            detalle=f"ok (mock): fulfillment de {pedido.folio} guías {', '.join(numeros) or '—'}",
+        )
+        return True
+
+    try:
+        from apps.rastreo.services import url_publica  # lazy por contrato
+        url_rastreo = url_publica(pedido)
+    except ImportError:
+        url_rastreo = ""
+
+    try:
+        api = ShopifyClient(tienda)
+        estados = api.fulfillment_orders(pedido.shopify_order_id)
+        abiertas = [fid for fid, estado in estados if estado in _FO_FULFILLEABLES]
+        if not abiertas:
+            SyncLog.objects.create(
+                tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
+                detalle=(
+                    f"fulfillment: {pedido.folio} sin fulfillment orders abiertas "
+                    f"(ya fulfilled o retenido: {[e for _, e in estados] or 'sin FOs'})"
+                ),
+            )
+            return True
+        api.crear_fulfillment(abiertas, numeros, url_rastreo, carrier)
+    except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no bloquea nada
+        SyncLog.objects.create(
+            tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_ERROR,
+            detalle=f"fulfillment {pedido.folio}: {exc}",
+        )
+        return False
+
+    SyncLog.objects.create(
+        tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
+        detalle=f"fulfillment: {pedido.folio} marcado ({len(abiertas)} FO, guías {', '.join(numeros) or '—'})",
+    )
+    registrar_evento(
+        "pedido", pedido.pk, "fulfillment_shopify", cliente=pedido.cliente,
+        delta={"tienda": tienda.dominio, "guias": numeros},
+        motivo="Fulfillment escrito en Shopify al firmar el manifiesto (notifyCustomer).",
+    )
+    return True
+
+
 # ── Reconciliación (polling de respaldo) ─────────────────────────────────────
 
 def _topic_desde_payload(payload):

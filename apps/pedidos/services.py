@@ -806,6 +806,18 @@ def marcar_recolectado(pedido, actor):
         pass
     else:
         enviar_en_camino(pedido)
+
+    # Hermano del "va en camino": el fulfillment en Shopify sale del MISMO
+    # momento canónico (correo nativo de envío + Fulfilled en el admin del
+    # cliente). Best-effort total en on_commit: Shopify jamás bloquea un
+    # manifiesto.
+    def _fulfillment():
+        try:
+            from apps.integraciones.services import marcar_fulfillment  # lazy
+            marcar_fulfillment(pedido)
+        except Exception:
+            pass
+    transaction.on_commit(_fulfillment)
     return pedido
 
 
