@@ -37,16 +37,18 @@ def webhook_shopify(request, tienda_id):
     tienda = get_object_or_404(Tienda, pk=tienda_id, activo=True)
     cuerpo = request.body
 
-    # Fail-closed en producción: sin token NO se aceptan webhooks. El endpoint
-    # es público y tienda_id es secuencial — abierto = inyección de pedidos sin
-    # firma. Token vacío solo es modo dev/demo (DEBUG).
-    if not tienda.token:
+    # La firma se valida contra webhook_secret — NUNCA contra el access token:
+    # Shopify firma con el signing secret de Notificaciones (webhooks creados en
+    # el admin) o con el API secret key de la app (creados por API); el shpat_
+    # jamás firma nada. Fail-closed en producción: sin secreto NO se aceptan
+    # webhooks (endpoint público, tienda_id secuencial). Vacío solo en dev/demo.
+    if not tienda.webhook_secret:
         if not settings.DEBUG:
             return JsonResponse(
-                {"ok": False, "error": "Tienda sin token configurado."}, status=403,
+                {"ok": False, "error": "Tienda sin webhook secret configurado."}, status=403,
             )
     elif not _firma_valida(
-        tienda.token, cuerpo, request.headers.get("X-Shopify-Hmac-Sha256")
+        tienda.webhook_secret, cuerpo, request.headers.get("X-Shopify-Hmac-Sha256")
     ):
         return JsonResponse({"ok": False, "error": "Firma HMAC inválida."}, status=401)
 

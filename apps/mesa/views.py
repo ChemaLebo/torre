@@ -1378,6 +1378,7 @@ def _guardar_tienda(request, cliente):
     if not dominio:
         raise ValueError("Captura el dominio de la tienda (ej. marca.myshopify.com).")
     token = (request.POST.get("token") or "").strip()
+    webhook_secret = (request.POST.get("webhook_secret") or "").strip()
     location_id = (request.POST.get("location_id") or "").strip()
     activo = request.POST.get("activo") == "on"
 
@@ -1395,11 +1396,14 @@ def _guardar_tienda(request, cliente):
             if viejo != nuevo:
                 delta[campo] = [viejo, nuevo]
                 setattr(tienda, campo, nuevo)
-        # Token vacío en edición = conservar el actual: el form nunca lo
-        # prefillea (es credencial; solo se muestra su cola de referencia).
+        # Credenciales vacías en edición = conservar las actuales: el form
+        # nunca las prefillea (solo muestra su cola de referencia).
         if token and tienda.token != token:
             tienda.token = token
             delta["token"] = "actualizado (el valor no se registra)"
+        if webhook_secret and tienda.webhook_secret != webhook_secret:
+            tienda.webhook_secret = webhook_secret
+            delta["webhook_secret"] = "actualizado (el valor no se registra)"
         tienda.save()
         registrar_evento(
             "tienda", tienda.dominio, "edicion", actor=request.user, cliente=cliente,
@@ -1411,7 +1415,7 @@ def _guardar_tienda(request, cliente):
         raise ValueError(f"Ya hay una tienda conectada con el dominio {dominio}.")
     tienda = Tienda.objects.create(
         cliente=cliente, dominio=dominio, token=token,
-        location_id=location_id, activo=activo,
+        webhook_secret=webhook_secret, location_id=location_id, activo=activo,
     )
     registrar_evento(
         "tienda", tienda.dominio, "alta", actor=request.user, cliente=cliente,

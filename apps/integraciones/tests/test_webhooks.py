@@ -92,18 +92,18 @@ class WebhookShopifyTests(TestCase):
         self.assertEqual(ingerir.call_count, 1)
 
     def test_hmac_invalido_regresa_401_y_no_guarda(self):
-        self.tienda.token = "shhh-secreto-colima"
+        self.tienda.webhook_secret = "shhh-secreto-colima"
         self.tienda.save()
         r = self._post(payload_orders_create(), webhook_id="wh-mal", firma="ZmlybWEtZmFsc2E=")
         self.assertEqual(r.status_code, 401)
         self.assertEqual(WebhookEvento.objects.count(), 0)
 
     def test_hmac_valido_pasa(self):
-        self.tienda.token = "shhh-secreto-colima"
+        self.tienda.webhook_secret = "shhh-secreto-colima"
         self.tienda.save()
         cuerpo = json.dumps(payload_orders_create()).encode("utf-8")
         firma = base64.b64encode(
-            hmac.new(self.tienda.token.encode(), cuerpo, hashlib.sha256).digest()
+            hmac.new(self.tienda.webhook_secret.encode(), cuerpo, hashlib.sha256).digest()
         ).decode("ascii")
         with mock.patch("apps.pedidos.services.ingerir_pedido_shopify") as ingerir:
             ingerir.return_value = mock.Mock(folio="PED-00003")
@@ -136,16 +136,36 @@ class WebhookShopifyTests(TestCase):
         )
 
 
-class WebhookSinTokenEnProduccionTests(TestCase):
-    """Fail-closed: con DEBUG=0 (default en tests) una tienda sin token NO
-    acepta webhooks — el endpoint es público y tienda_id es secuencial."""
+class WebhookSinSecretoEnProduccionTests(TestCase):
+    """Fail-closed: con DEBUG=0 (default en tests) una tienda sin webhook_secret
+    NO acepta webhooks — el endpoint es público y tienda_id es secuencial. La
+    firma se valida contra webhook_secret, JAMÁS contra el access token."""
 
     def setUp(self):
         self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
         self.tienda = Tienda.objects.create(cliente=self.cliente, dominio="colima-mx.myshopify.com")
         self.url = reverse("integraciones:webhook_shopify", args=[self.tienda.pk])
 
-    def test_sin_token_rechaza_403_y_no_guarda_nada(self):
+    def _post_firmado(self, llave, webhook_id):
+        cuerpo = json.dumps(payload_orders_create()).encode("utf-8")
+        firma = base64.b64encode(
+            hmac.new(llave.encode(), cuerpo, hashlib.sha256).digest()
+        ).decode("ascii")
+        with mock.patch("apps.pedidos.services.ingerir_pedido_shopify") as ingerir:
+            ingerir.return_value = mock.Mock(folio="PED-00009")
+            return self.client.post(
+                self.url, data=cuerpo, content_type="application/json",
+                headers={
+                    "X-Shopify-Topic": "orders/create",
+                    "X-Shopify-Webhook-Id": webhook_id,
+                    "X-Shopify-Hmac-Sha256": firma,
+                },
+            )
+
+    def test_sin_webhook_secret_rechaza_403_y_no_guarda_nada(self):
+        # Aunque el access token SÍ esté configurado: el token no es el secreto.
+        self.tienda.token = "shpat_token_de_api"
+        self.tienda.save()
         r = self.client.post(
             self.url, data=json.dumps(payload_orders_create()),
             content_type="application/json",
@@ -154,25 +174,23 @@ class WebhookSinTokenEnProduccionTests(TestCase):
         self.assertEqual(r.status_code, 403)
         self.assertEqual(WebhookEvento.objects.count(), 0)
 
-    def test_con_token_y_firma_valida_sigue_pasando(self):
-        self.tienda.token = "shhh-secreto-colima"
+    def test_con_webhook_secret_y_firma_valida_pasa(self):
+        # El access token puede estar vacío: el webhook no depende de él.
+        self.tienda.webhook_secret = "secreto-de-webhooks"
         self.tienda.save()
-        cuerpo = json.dumps(payload_orders_create()).encode("utf-8")
-        firma = base64.b64encode(
-            hmac.new(self.tienda.token.encode(), cuerpo, hashlib.sha256).digest()
-        ).decode("ascii")
-        with mock.patch("apps.pedidos.services.ingerir_pedido_shopify") as ingerir:
-            ingerir.return_value = mock.Mock(folio="PED-00009")
-            r = self.client.post(
-                self.url, data=cuerpo, content_type="application/json",
-                headers={
-                    "X-Shopify-Topic": "orders/create",
-                    "X-Shopify-Webhook-Id": "wh-prod-firmado",
-                    "X-Shopify-Hmac-Sha256": firma,
-                },
-            )
+        r = self._post_firmado("secreto-de-webhooks", "wh-prod-firmado")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(WebhookEvento.objects.filter(webhook_id="wh-prod-firmado").count(), 1)
+
+    def test_firma_hecha_con_el_access_token_se_rechaza(self):
+        """El bug que este campo corrige: Shopify jamás firma con el shpat_ —
+        una firma hecha con el token debe rechazarse, no aceptarse."""
+        self.tienda.token = "shpat_token_de_api"
+        self.tienda.webhook_secret = "secreto-de-webhooks"
+        self.tienda.save()
+        r = self._post_firmado("shpat_token_de_api", "wh-prod-mal-firmado")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(WebhookEvento.objects.count(), 0)
 
 
 class ProcesarWebhookTests(TestCase):

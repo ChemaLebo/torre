@@ -82,10 +82,16 @@
                value="{{ tienda_editar.location_id|default:'' }}">
       </div>
       <div>
-        <label for="id_tienda_token">Token (también firma los webhooks)</label>
+        <label for="id_tienda_token">Access token de la Admin API (shpat_…)</label>
         <input type="password" name="token" id="id_tienda_token" autocomplete="new-password"
                placeholder="{% if tienda_editar %}vacío = conservar el actual{% else %}vacío = modo mock (dev){% endif %}">
         {% if tienda_editar.token %}<div class="small muted">Token actual: <span class="mono">…{{ tienda_editar.token|slice:"-4:" }}</span></div>{% endif %}
+      </div>
+      <div>
+        <label for="id_tienda_webhook_secret">Webhook secret (firma de los webhooks — NO es el token)</label>
+        <input type="password" name="webhook_secret" id="id_tienda_webhook_secret" autocomplete="new-password"
+               placeholder="{% if tienda_editar %}vacío = conservar el actual{% else %}signing secret de Notificaciones o API secret key de la app{% endif %}">
+        {% if tienda_editar.webhook_secret %}<div class="small muted">Secret actual: <span class="mono">…{{ tienda_editar.webhook_secret|slice:"-4:" }}</span></div>{% endif %}
       </div>
       <div>
         <label for="id_tienda_activo">Activa</label>

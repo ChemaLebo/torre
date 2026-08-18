@@ -17,7 +17,16 @@ class Tienda(models.Model):
     dominio = models.CharField(max_length=120, unique=True, help_text="p. ej. colima-mx.myshopify.com")
     token = models.CharField(
         max_length=200, blank=True,
-        help_text="Access token de la custom app. Vacío = modo mock (dev).",
+        help_text="Access token (shpat_…) de la custom app para la Admin API. Vacío = modo mock (dev).",
+    )
+    webhook_secret = models.CharField(
+        max_length=200, blank=True,
+        help_text=(
+            "Secreto con el que Shopify FIRMA los webhooks — el 'signing secret' de "
+            "Configuración → Notificaciones o el API secret key de la app. NO es el "
+            "access token: Shopify jamás firma con el shpat_. Vacío = webhooks "
+            "rechazados en producción."
+        ),
     )
     location_id = models.CharField(
         max_length=60, blank=True,
