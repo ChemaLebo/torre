@@ -4,6 +4,7 @@ Desarrollo: Postgres vía docker-compose (o SQLite sin TORRE_DB) + jobs
 síncronos vía management commands. Producción: Postgres + gunicorn + cron —
 sin broker ni workers: la base de datos es la única cola.
 """
+
 from pathlib import Path
 import os
 
@@ -173,7 +174,8 @@ TORRE = {
     # Bodega real: Av. Torres de Ixtapantongo 380 Local E, Olivar de los Padres,
     # Álvaro Obregón, CDMX, CP 01780. Entrega local propia: $100 flat por paquete
     # ≤20 kg, cobertura CDMX (00-16) + metropolitano EdoMex/Toluca (50-57).
-    "CP_LOCAL_PREFIJOS": [f"{i:02d}" for i in range(0, 17)] + [f"{i}" for i in range(50, 58)],
+    "CP_LOCAL_PREFIJOS": [f"{i:02d}" for i in range(0, 17)]
+    + [f"{i}" for i in range(50, 58)],
     "TARIFA_LOCAL_MXN": 100,
     # Flota propia de entrega local: HOY NO EXISTE (todo sale por carrier).
     # False = elegir_carrier jamás regresa "local" (los es_local viajan con su
@@ -189,10 +191,16 @@ TORRE = {
     "IMPORT_CSV_MAX_MB": 2,
     "IMPORT_CSV_MAX_FILAS": 5000,
     # ── Envíos: división y meta de tarifa (regla Colima, ago 2026) ──
-    "MAX_PESO_ENVIO_KG": 20,          # tope duro por paquete; arriba de esto SIEMPRE se divide
-    "TARIFA_OBJETIVO_MXN": 115,       # meta nacional por envío; si la mejor opción la excede, se marca fuera de meta
-    "CARRIERS_COTIZAR": ["puntopost", "estafeta", "paquetexpress", "fedex"],
-    "COTIZACION_CACHE_DIAS": 7,       # vigencia del caché de cotizaciones por (CP, peso)
+    "MAX_PESO_ENVIO_KG": 20,  # tope duro por paquete; arriba de esto SIEMPRE se divide
+    "TARIFA_OBJETIVO_MXN": 115,  # meta nacional por envío; si la mejor opción la excede, se marca fuera de meta
+    "CARRIERS_COTIZAR": [
+        "puntopost",
+        "estafeta",
+        "paquetexpress",
+        "fedex",
+        "noventa9Minutos",
+    ],
+    "COTIZACION_CACHE_DIAS": 7,  # vigencia del caché de cotizaciones por (CP, peso)
     # ── Finanzas: tarifario default y costos (dashboard Mesa → Finanzas) ──
     # Modelo A (Colima): calibrado sobre junio-2026 real para dar ~9% de ahorro
     # vs la factura de Melonn ($408,774 sin IVA). El envío se factura POR PEDIDO
@@ -211,9 +219,9 @@ TORRE = {
         "recepcion_tarima": 0,
         "minimo_mes": 0,
     },
-    "COSTOS_FIJOS_MES_MXN": 101202,   # renta 60,413 + colaboración 6,289 + sueldos 30,000 + servicios 4,500
-    "INSUMO_PAQUETE_MXN": 12,         # relleno/esquineros/cinta por bulto físico
-    "BENCHMARK_PEDIDO_MXN": 357,      # Melonn jun-2026: $408,774 / ~1,146 pedidos despachados
+    "COSTOS_FIJOS_MES_MXN": 101202,  # renta 60,413 + colaboración 6,289 + sueldos 30,000 + servicios 4,500
+    "INSUMO_PAQUETE_MXN": 12,  # relleno/esquineros/cinta por bulto físico
+    "BENCHMARK_PEDIDO_MXN": 357,  # Melonn jun-2026: $408,774 / ~1,146 pedidos despachados
     "META_PROFIT_MES_MXN": 100000,
     # ── Relay de impresión: fallas del agente antes de marcar ERROR ──
     "IMPRESION_MAX_INTENTOS": 5,
@@ -228,16 +236,17 @@ TORRE_MODO_IMPRESION = os.environ.get("TORRE_MODO_IMPRESION", "local")
 TORRE_TOKEN_IMPRESION = os.environ.get("TORRE_TOKEN_IMPRESION", "")
 
 # ── Integraciones ──
-ENVIA_API_KEY = os.environ.get("ENVIA_API_KEY", "")        # sin key → modo mock
+ENVIA_API_KEY = os.environ.get("ENVIA_API_KEY", "")  # sin key → modo mock
 # Modo Envia: "off" = todo mock · "cotizar" = tarifas reales, guías mock (default
 # seguro: cotizar no cuesta; generar etiquetas sí) · "full" = guías reales.
 ENVIA_MODO = os.environ.get("ENVIA_MODO", "cotizar")
 import sys  # noqa: E402
+
 if "test" in sys.argv:
     ENVIA_MODO = "off"  # los tests jamás tocan la API real
 ENVIA_API_BASE = os.environ.get("ENVIA_API_BASE", "https://api.envia.com")
 ENVIA_QUERIES_BASE = os.environ.get("ENVIA_QUERIES_BASE", "https://queries.envia.com")
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")      # sin token → consola
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")  # sin token → consola
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-01")
 
@@ -245,9 +254,12 @@ SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-01")
 # Sin las 3 variables (o sin el .pem) el push es no-op silencioso: la
 # operación jamás depende de que las notificaciones estén configuradas.
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
-VAPID_PRIVATE_PEM = os.environ.get("VAPID_PRIVATE_PEM", "")   # ruta al .pem, relativa a BASE_DIR
+VAPID_PRIVATE_PEM = os.environ.get(
+    "VAPID_PRIVATE_PEM", ""
+)  # ruta al .pem, relativa a BASE_DIR
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "")
 import mimetypes  # noqa: E402
+
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
@@ -261,7 +273,9 @@ MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 SPACES_KEY = os.environ.get("SPACES_KEY", "")
 SPACES_SECRET = os.environ.get("SPACES_SECRET", "")
 SPACES_BUCKET = os.environ.get("SPACES_BUCKET", "torre-evidencia")
-SPACES_ENDPOINT = os.environ.get("SPACES_ENDPOINT", "https://nyc3.digitaloceanspaces.com")
+SPACES_ENDPOINT = os.environ.get(
+    "SPACES_ENDPOINT", "https://nyc3.digitaloceanspaces.com"
+)
 SPACES_REGION = os.environ.get("SPACES_REGION", "nyc3")
 if SPACES_KEY and SPACES_SECRET:
     STORAGES = {
@@ -274,7 +288,7 @@ if SPACES_KEY and SPACES_SECRET:
                 "endpoint_url": SPACES_ENDPOINT,
                 "region_name": SPACES_REGION,
                 "default_acl": "private",
-                "file_overwrite": False,   # dos fotos con el mismo nombre jamás se pisan
+                "file_overwrite": False,  # dos fotos con el mismo nombre jamás se pisan
                 "querystring_auth": True,
             },
         },
@@ -304,7 +318,11 @@ LOGGING = {
     },
     "root": {"handlers": ["consola"], "level": "WARNING"},
     "loggers": {
-        "django.request": {"handlers": ["consola"], "level": "ERROR", "propagate": False},
+        "django.request": {
+            "handlers": ["consola"],
+            "level": "ERROR",
+            "propagate": False,
+        },
         "torre": {"handlers": ["consola"], "level": "INFO", "propagate": False},
     },
 }
