@@ -19,7 +19,15 @@ from .base import crear_cliente, crear_pedido, crear_tienda
 SIX_GR = 4000       # six pack ≈ 4 kg
 CAJA12_GR = 8000    # caja de 12 ≈ 8 kg
 
+# Pool pinneado: esta suite ejercita la economía de división CON puntopost,
+# independiente de qué carriers estén comercialmente activos en settings.
+TORRE_POOL_LEGADO = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["puntopost", "estafeta", "paquetexpress", "fedex"],
+}
 
+
+@override_settings(TORRE=TORRE_POOL_LEGADO)
 class BaseCotizador(TestCase):
     def setUp(self):
         self.cliente = crear_cliente()

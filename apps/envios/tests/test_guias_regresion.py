@@ -24,7 +24,14 @@ from apps.pedidos.models import LineaPedido
 from .base import crear_cliente, crear_pedido, crear_tienda
 
 
-@override_settings(ENVIA_API_KEY="")
+# Pool pinneado: la economía de estos planes depende de puntopost en el pool.
+TORRE_POOL_LEGADO = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["puntopost", "estafeta", "paquetexpress", "fedex"],
+}
+
+
+@override_settings(ENVIA_API_KEY="", TORRE=TORRE_POOL_LEGADO)
 class PlanViejoLocalSinFlotaTests(TestCase):
     """Alto #4: paquete.carrier='local' guardado cuando había flota propia."""
 
@@ -61,7 +68,7 @@ class PlanViejoLocalSinFlotaTests(TestCase):
         self.assertTrue(guias[0].numero.startswith("LOCAL-"))
 
 
-@override_settings(ENVIA_API_KEY="")
+@override_settings(ENVIA_API_KEY="", TORRE=TORRE_POOL_LEGADO)
 class CommitPorPaqueteTests(TestCase):
     """Alto #10: la guía YA COMPRADA de la caja 1 jamás se revierte."""
 
@@ -122,7 +129,7 @@ class CommitPorPaqueteTests(TestCase):
         self.assertEqual(self.pedido.estado, "GUIA_GENERADA")
 
 
-@override_settings(ENVIA_API_KEY="")
+@override_settings(ENVIA_API_KEY="", TORRE=TORRE_POOL_LEGADO)
 class CarrierUnicoPorPlanTests(TestCase):
     """Alto #5: un plan jamás mezcla carriers (manifiesto por corral)."""
 

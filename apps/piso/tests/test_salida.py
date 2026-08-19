@@ -19,8 +19,14 @@ from apps.pedidos.models import Pedido
 from .base import PisoTestCase
 
 TORRE_CON_FLOTA = {**settings.TORRE, "FLOTA_PROPIA": True}
+# Pool pinneado: estas pruebas asumen que puntopost gana el lane local.
+TORRE_POOL_LEGADO = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["puntopost", "estafeta", "paquetexpress", "fedex"],
+}
 
 
+@override_settings(TORRE=TORRE_POOL_LEGADO)
 class SalidaPisoTests(PisoTestCase):
     def setUp(self):
         self.login_piso()

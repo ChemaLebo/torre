@@ -193,8 +193,9 @@ TORRE = {
     # ── Envíos: división y meta de tarifa (regla Colima, ago 2026) ──
     "MAX_PESO_ENVIO_KG": 20,  # tope duro por paquete; arriba de esto SIEMPRE se divide
     "TARIFA_OBJETIVO_MXN": 115,  # meta nacional por envío; si la mejor opción la excede, se marca fuera de meta
+    # Lista blanca Y exclusión (2026-08-19: fuera iMile/AmPm/puntopost); gana el más barato.
+    # noventa9Minutos no tiene "ground": jamás usarlo de carrier_preferente.
     "CARRIERS_COTIZAR": [
-        "puntopost",
         "estafeta",
         "paquetexpress",
         "fedex",
