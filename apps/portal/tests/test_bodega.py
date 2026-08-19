@@ -39,8 +39,8 @@ class BaseBodegaPortal(TestCase):
         cls.ubic_a1 = Ubicacion.objects.create(codigo="A-01-1", tipo=Ubicacion.PICKING)
         cls.ubic_a2 = Ubicacion.objects.create(codigo="A-01-2", tipo=Ubicacion.PICKING)
         Ubicacion.objects.create(codigo="RES-01", tipo=Ubicacion.RESERVA)
-        for codigo in ("SAL-PQX", "SAL-LOCAL", "SAL-OTRO"):
-            Ubicacion.objects.create(codigo=codigo, tipo=Ubicacion.SALIDA)
+        for codigo, carriers in (("SAL-PQX", "paquetexpress"), ("SAL-LOCAL", "local"), ("SAL-OTRO", "")):
+            Ubicacion.objects.create(codigo=codigo, tipo=Ubicacion.SALIDA, carriers=carriers)
 
         cls.sku = SKU.objects.create(
             cliente=cls.colima, codigo="COLIMITA-SIX", descripcion="Colimita six pack",

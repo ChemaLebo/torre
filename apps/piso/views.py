@@ -25,15 +25,28 @@ from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.inventario.models import LineaASN, OrdenEntrada, Saldo, TareaConteo
 from apps.pedidos.models import Pedido
 
-# Corrales de staging del Local 380 E (catalogo.Ubicacion tipo=salida).
-CORRAL_PQX = "SAL-PQX"
+# Corrales de staging (catalogo.Ubicacion tipo=salida): cada corral declara sus
+# carriers en el campo `carriers`; el que no declara ninguno es el comodín.
 CORRAL_LOCAL = "SAL-LOCAL"
 CORRAL_OTRO = "SAL-OTRO"
-CORRALES = [
-    (CORRAL_PQX, "Paquetexpress"),
+CORRALES_LEGACY = [
+    ("SAL-PQX", "Paquetexpress"),
     (CORRAL_LOCAL, "Entrega local"),
     (CORRAL_OTRO, "Otros carriers"),
 ]
+
+
+def _corrales_bd():
+    from apps.catalogo.models import Ubicacion  # lazy por contrato
+    return list(Ubicacion.objects.filter(tipo=Ubicacion.SALIDA, activo=True).order_by("codigo"))
+
+
+def corrales_activos():
+    """[(codigo, nombre)] de los corrales vivos; sin corrales en BD, trío legacy."""
+    filas = _corrales_bd()
+    if not filas:
+        return list(CORRALES_LEGACY)
+    return [(u.codigo, ", ".join(u.lista_carriers()) or "Otros carriers") for u in filas]
 
 ESTADOS_ASN_ABIERTOS = [OrdenEntrada.ANUNCIADA, OrdenEntrada.EN_RECEPCION, OrdenEntrada.RECIBIDA]
 
@@ -48,18 +61,32 @@ def _flota_propia():
     return bool(settings.TORRE.get("FLOTA_PROPIA", False))
 
 
-def _corral_de_carrier(carrier):
-    """Corral de staging que le toca a un carrier.
+def _mapa_corrales():
+    """({carrier: corral}, comodín) leído de los corrales activos.
 
-    "local" sigue mapeando a SAL-LOCAL a propósito: las guías/planes "local"
-    ya emitidos (datos viejos) conservan su corral aunque no haya flota propia.
-    Sin flota, elegir_carrier ya no produce "local" para pedidos nuevos.
+    "local" jamás entra aquí: conserva SAL-LOCAL (guías viejas, ver
+    _corral_de_carrier). Sin corrales en BD aplica el mapeo legacy.
     """
+    mapa, comodin = {}, None
+    for ubic in _corrales_bd():
+        declarados = ubic.lista_carriers()
+        if not declarados and comodin is None and ubic.codigo != CORRAL_LOCAL:
+            comodin = ubic.codigo
+        for carrier in declarados:
+            mapa.setdefault(carrier, ubic.codigo)
+    if not mapa and comodin is None:
+        mapa = {"paquetexpress": "SAL-PQX"}
+    return mapa, comodin or CORRAL_OTRO
+
+
+def _corral_de_carrier(carrier, mapa=None):
+    """Corral de staging del carrier; "local" conserva SAL-LOCAL (datos viejos)."""
     if carrier == "local":
         return CORRAL_LOCAL
-    if carrier == "paquetexpress":
-        return CORRAL_PQX
-    return CORRAL_OTRO
+    if mapa is None:
+        mapa = _mapa_corrales()
+    asignados, comodin = mapa
+    return asignados.get(carrier, comodin)
 
 
 def _carrier_probable(pedido):
@@ -1097,12 +1124,22 @@ def salida(request):
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:salida")
 
+    orden_corrales = corrales_activos()
+    mapa = _mapa_corrales()
     grupos = {
         codigo: {"codigo": codigo, "nombre": nombre, "sin_guia": [], "listos": []}
-        for codigo, nombre in CORRALES
+        for codigo, nombre in orden_corrales
     }
+
+    def _grupo(carrier):
+        corral = _corral_de_carrier(carrier, mapa)
+        if corral not in grupos:  # corral sin ubicación viva (p. ej. SAL-LOCAL viejo)
+            grupos[corral] = {"codigo": corral, "nombre": corral, "sin_guia": [], "listos": []}
+            orden_corrales.append((corral, corral))
+        return grupos[corral]
+
     for pedido in Pedido.objects.filter(estado=Pedido.EMPACADO).select_related("cliente"):
-        grupos[_corral_de_carrier(_carrier_probable(pedido))]["sin_guia"].append(pedido)
+        _grupo(_carrier_probable(pedido))["sin_guia"].append(pedido)
     for pedido in Pedido.objects.filter(estado=Pedido.GUIA_GENERADA).select_related("cliente"):
         # Todas las guías vigentes: multi-paquete = una etiqueta por guía.
         pedido.guias_activas = list(
@@ -1113,7 +1150,7 @@ def salida(request):
         # Sin foto de cierre el manifiesto lo deja fuera: se avisa desde antes.
         pedido.cierre_ok = pedido.cajas_cerradas_completas
         carrier = guia.carrier if guia else _carrier_probable(pedido)
-        grupos[_corral_de_carrier(carrier)]["listos"].append(pedido)
+        _grupo(carrier)["listos"].append(pedido)
     for grupo in grupos.values():
         grupo["firman"] = sum(1 for p in grupo["listos"] if p.cierre_ok)
         grupo["sin_cierre"] = [p for p in grupo["listos"] if not p.cierre_ok]
@@ -1137,7 +1174,7 @@ def salida(request):
 
     contexto = {
         "seccion": "salida",
-        "corrales": [grupos[codigo] for codigo, _ in CORRALES],
+        "corrales": [grupos[codigo] for codigo, _ in orden_corrales],
         "corral_local": CORRAL_LOCAL,
         "flota_propia": _flota_propia(),
     }
@@ -1187,7 +1224,8 @@ def _salida_manifiesto(request):
     caja con detalle) se queda en el corral para la siguiente recolección.
     """
     corral = (request.POST.get("corral") or "").strip()
-    if corral not in {codigo for codigo, _ in CORRALES}:
+    conocidos = {codigo for codigo, _ in corrales_activos()} | {CORRAL_LOCAL, CORRAL_OTRO}
+    if corral not in conocidos:
         messages.error(request, "Corral desconocido. Usa los botones de la pantalla.")
         return redirect("piso:salida")
     carrier = (request.POST.get("carrier") or "").strip()
@@ -1203,6 +1241,7 @@ def _salida_manifiesto(request):
         return redirect("piso:salida")
 
     listos, sin_cierre = [], []
+    mapa = _mapa_corrales()
     for pedido in Pedido.objects.filter(
         estado=Pedido.GUIA_GENERADA, pk__in=seleccion,
     ).select_related("cliente"):
@@ -1210,7 +1249,7 @@ def _salida_manifiesto(request):
         carrier_pedido = guia.carrier if guia else _carrier_probable(pedido)
         # Un pedido de otro carrier u otro corral no sube a ESTE manifiesto
         # aunque venga palomeado (formulario viejo, doble submit, manipulación).
-        if _corral_de_carrier(carrier_pedido) != corral or carrier_pedido != carrier:
+        if _corral_de_carrier(carrier_pedido, mapa) != corral or carrier_pedido != carrier:
             continue
         # Sin evidencia de cierre (foto de la caja cerrada con su etiqueta
         # pegada) el pedido NO sube al manifiesto: se queda y se avisa.

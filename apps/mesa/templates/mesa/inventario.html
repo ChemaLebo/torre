@@ -29,13 +29,23 @@
   <div class="tabla-wrap">
     <table>
       <thead>
-        <tr><th>Código</th><th>Tipo</th><th>Estado</th><th>Saldos vivos</th><th class="derecha"></th></tr>
+        <tr><th>Código</th><th>Tipo</th><th>Carriers (corrales)</th><th>Estado</th><th>Saldos vivos</th><th class="derecha"></th></tr>
       </thead>
       <tbody>
         {% for ubic in ubicaciones %}
         <tr>
           <td class="mono">{{ ubic.codigo }}</td>
           <td>{{ ubic.get_tipo_display }}</td>
+          <td>
+            {% if ubic.tipo == "salida" %}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="ubicacion_carriers">
+              <input type="hidden" name="ubicacion_id" value="{{ ubic.pk }}">
+              <input type="text" name="carriers" class="mono" value="{{ ubic.carriers }}" placeholder="comodín" autocomplete="off" aria-label="Carriers del corral {{ ubic.codigo }}">
+              <button class="btn chico" type="submit">Guardar</button>
+            </form>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
           <td>{% if ubic.activo %}<span class="pill ok">activa</span>{% else %}<span class="pill warn">apagada</span>{% endif %}</td>
           <td class="num">{{ ubic.saldos_vivos }}</td>
           <td class="derecha">
@@ -47,7 +57,7 @@
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="5" class="muted centro">Sin ubicaciones dadas de alta.</td></tr>
+        <tr><td colspan="6" class="muted centro">Sin ubicaciones dadas de alta.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -72,7 +82,12 @@
           {% endfor %}
         </select>
       </div>
+      <div>
+        <label for="ubic-carriers">Carriers (solo corrales)</label>
+        <input type="text" name="carriers" id="ubic-carriers" class="mono" placeholder="noventa9Minutos — vacío = comodín" autocomplete="off">
+      </div>
     </div>
+    <p class="small mt">El corral sin carriers es el comodín: recibe las guías de todo carrier no asignado.</p>
     <div class="mt"><button class="btn primario" type="submit">Dar de alta</button></div>
   </form>
 </div>

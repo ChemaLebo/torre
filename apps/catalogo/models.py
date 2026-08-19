@@ -42,7 +42,8 @@ class SKU(models.Model):
 
 
 class Ubicacion(models.Model):
-    """Ubicación física del Local 380 E. Corrales de salida: SAL-PQX, SAL-LOCAL, SAL-OTRO."""
+    """Ubicación física del Local 380 E. Los corrales (tipo salida) declaran en
+    `carriers` qué guías se estacionan ahí; uno sin carriers es el comodín."""
 
     RECEPCION = "recepcion"
     PICKING = "picking"
@@ -61,6 +62,10 @@ class Ubicacion(models.Model):
 
     codigo = models.CharField(max_length=20, unique=True, help_text="Ej. A-01-2, REC-01, SAL-PQX")
     tipo = models.CharField(max_length=12, choices=TIPOS)
+    carriers = models.CharField(
+        max_length=200, blank=True, default="",
+        help_text="Solo corrales: carriers separados por coma (vacío = comodín)",
+    )
     activo = models.BooleanField(default=True)
 
     class Meta:
@@ -70,6 +75,10 @@ class Ubicacion(models.Model):
 
     def __str__(self):
         return f"{self.codigo} ({self.get_tipo_display()})"
+
+    def lista_carriers(self):
+        """Carriers declarados del corral, ya limpios."""
+        return [c.strip() for c in (self.carriers or "").split(",") if c.strip()]
 
 
 class Lote(models.Model):

@@ -715,6 +715,8 @@ def inventario(request):
             return _inventario_ubicacion_nueva(request)
         if accion == "ubicacion_toggle":
             return _inventario_ubicacion_toggle(request)
+        if accion == "ubicacion_carriers":
+            return _inventario_ubicacion_carriers(request)
         messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
         return redirect("mesa:inventario")
 
@@ -820,24 +822,61 @@ def _inventario_ubicacion_nueva(request):
     destino = _redirect_inventario(ver="ubicaciones")
     codigo = (request.POST.get("codigo") or "").strip().upper()
     tipo = request.POST.get("tipo") or ""
+    carriers = _normalizar_carriers(request.POST.get("carriers"))
     try:
         if not codigo:
             raise ValueError("Captura el código de la ubicación (ej. A-02-1).")
         if tipo not in dict(Ubicacion.TIPOS):
             raise ValueError("Elige el tipo de ubicación del catálogo.")
+        if carriers and tipo != Ubicacion.SALIDA:
+            raise ValueError("Los carriers solo aplican a corrales (tipo salida).")
         if Ubicacion.objects.filter(codigo__iexact=codigo).exists():
             raise ValueError(f"Ya existe la ubicación {codigo}.")
     except ValueError as exc:
         messages.error(request, str(exc))
         return destino
-    ubicacion = Ubicacion.objects.create(codigo=codigo, tipo=tipo)
+    ubicacion = Ubicacion.objects.create(codigo=codigo, tipo=tipo, carriers=carriers)
     registrar_evento(
         "ubicacion", ubicacion.codigo, "alta", actor=request.user,
-        delta={"tipo": tipo}, motivo="Alta de ubicación desde Mesa de Control",
+        delta={"tipo": tipo, "carriers": carriers},
+        motivo="Alta de ubicación desde Mesa de Control",
     )
     messages.success(
         request,
         f"Ubicación {ubicacion.codigo} dada de alta ({ubicacion.get_tipo_display()}).",
+    )
+    return destino
+
+
+def _normalizar_carriers(crudo):
+    """"a, b ,," → "a,b" (el orden se respeta)."""
+    return ",".join(p.strip() for p in (crudo or "").split(",") if p.strip())
+
+
+def _inventario_ubicacion_carriers(request):
+    """Edita los carriers de un corral (tipo salida), con auditoría."""
+    from apps.catalogo.models import Ubicacion
+
+    destino = _redirect_inventario(ver="ubicaciones")
+    ubicacion = get_object_or_404(Ubicacion, pk=request.POST.get("ubicacion_id"))
+    if ubicacion.tipo != Ubicacion.SALIDA:
+        messages.error(request, "Los carriers solo aplican a corrales (tipo salida).")
+        return destino
+    nuevos = _normalizar_carriers(request.POST.get("carriers"))
+    viejos = ubicacion.carriers
+    if nuevos == viejos:
+        messages.info(request, f"{ubicacion.codigo} ya tenía esos carriers.")
+        return destino
+    ubicacion.carriers = nuevos
+    ubicacion.save(update_fields=["carriers"])
+    registrar_evento(
+        "ubicacion", ubicacion.codigo, "carriers_actualizados", actor=request.user,
+        delta={"antes": viejos, "ahora": nuevos},
+        motivo="Editor de corrales de Mesa de Control",
+    )
+    messages.success(
+        request,
+        f"Corral {ubicacion.codigo}: {nuevos or 'comodín (todos los carriers no asignados)'}.",
     )
     return destino
 

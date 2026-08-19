@@ -223,3 +223,47 @@ class UbicacionesMesaTests(BaseInventarioMesa):
         self.client.post(self.url, {"accion": "ubicacion_toggle", "ubicacion_id": vacia.pk})
         vacia.refresh_from_db()
         self.assertTrue(vacia.activo)
+
+    def test_corral_nuevo_con_carriers(self):
+        self.entrar_mesa()
+        self.client.post(self.url, {
+            "accion": "ubicacion_nueva", "codigo": "sal-99min", "tipo": "salida",
+            "carriers": " noventa9Minutos , fedex ,",
+        }, follow=True)
+        ubic = Ubicacion.objects.get(codigo="SAL-99MIN")
+        self.assertEqual(ubic.carriers, "noventa9Minutos,fedex")  # normalizados
+
+    def test_carriers_en_no_corral_rechazados(self):
+        self.entrar_mesa()
+        respuesta = self.client.post(self.url, {
+            "accion": "ubicacion_nueva", "codigo": "c-02-1", "tipo": "picking",
+            "carriers": "fedex",
+        }, follow=True)
+        self.assertContains(respuesta, "solo aplican a corrales")
+        self.assertFalse(Ubicacion.objects.filter(codigo="C-02-1").exists())
+
+    def test_editar_carriers_de_corral_con_auditoria(self):
+        corral = Ubicacion.objects.create(
+            codigo="SAL-X", tipo=Ubicacion.SALIDA, carriers="fedex",
+        )
+        self.entrar_mesa()
+        self.client.post(self.url, {
+            "accion": "ubicacion_carriers", "ubicacion_id": corral.pk,
+            "carriers": "noventa9Minutos",
+        }, follow=True)
+        corral.refresh_from_db()
+        self.assertEqual(corral.carriers, "noventa9Minutos")
+        evento = EventoAuditoria.objects.get(
+            entidad="ubicacion", entidad_id="SAL-X", accion="carriers_actualizados",
+        )
+        self.assertEqual(evento.delta, {"antes": "fedex", "ahora": "noventa9Minutos"})
+
+    def test_editar_carriers_de_no_corral_rechazado(self):
+        self.entrar_mesa()
+        respuesta = self.client.post(self.url, {
+            "accion": "ubicacion_carriers", "ubicacion_id": self.ubic_picking.pk,
+            "carriers": "fedex",
+        }, follow=True)
+        self.assertContains(respuesta, "solo aplican a corrales")
+        self.ubic_picking.refresh_from_db()
+        self.assertEqual(self.ubic_picking.carriers, "")

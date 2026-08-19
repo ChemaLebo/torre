@@ -16,9 +16,9 @@ class SKUAdmin(admin.ModelAdmin):
 
 @admin.register(Ubicacion)
 class UbicacionAdmin(admin.ModelAdmin):
-    list_display = ("codigo", "tipo", "activo")
+    list_display = ("codigo", "tipo", "carriers", "activo")
     list_filter = ("tipo", "activo")
-    search_fields = ("codigo",)
+    search_fields = ("codigo", "carriers")
 
 
 @admin.register(Lote)

@@ -40,8 +40,8 @@ class PisoTestCase(TestCase):
 
         cls.ubic_recepcion = Ubicacion.objects.create(codigo="REC-01", tipo=Ubicacion.RECEPCION)
         cls.ubic_picking = Ubicacion.objects.create(codigo="A-01-1", tipo=Ubicacion.PICKING)
-        for codigo in ("SAL-PQX", "SAL-LOCAL", "SAL-OTRO"):
-            Ubicacion.objects.create(codigo=codigo, tipo=Ubicacion.SALIDA)
+        for codigo, carriers in (("SAL-PQX", "paquetexpress"), ("SAL-LOCAL", "local"), ("SAL-OTRO", "")):
+            Ubicacion.objects.create(codigo=codigo, tipo=Ubicacion.SALIDA, carriers=carriers)
 
         cls.sku = SKU.objects.create(
             cliente=cls.cliente,

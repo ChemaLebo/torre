@@ -70,7 +70,8 @@ def zonas_bodega(cliente=None):
     from apps.inventario.models import OrdenEntrada, Saldo  # lazy por contrato
     from apps.pedidos.models import Pedido  # lazy por contrato
     from apps.piso.views import (  # lazy: el mapeo carrier→corral vive en piso
-        CORRALES, _carrier_probable, _corral_de_carrier, _guia_activa,
+        _carrier_probable, _corral_de_carrier, _guia_activa, _mapa_corrales,
+        corrales_activos,
     )
 
     hoy = timezone.localdate()
@@ -155,16 +156,22 @@ def zonas_bodega(cliente=None):
     )
     if cliente is not None:
         qs_corral = qs_corral.filter(cliente=cliente)
+    orden_corrales = corrales_activos()
+    mapa = _mapa_corrales()
     corrales = {
         codigo: {"codigo": codigo, "nombre": nombre, "pedidos": [], "paquetes": 0}
-        for codigo, nombre in CORRALES
+        for codigo, nombre in orden_corrales
     }
     en_corral = list(qs_corral)
     for pedido in en_corral:
         guia = _guia_activa(pedido) if pedido.estado == Pedido.GUIA_GENERADA else None
         carrier = guia.carrier if guia else _carrier_probable(pedido)
         pedido.n_paquetes = pedido.paquetes.count() or 1
-        grupo = corrales[_corral_de_carrier(carrier)]
+        codigo = _corral_de_carrier(carrier, mapa)
+        if codigo not in corrales:  # corral sin ubicación viva (p. ej. SAL-LOCAL viejo)
+            corrales[codigo] = {"codigo": codigo, "nombre": codigo, "pedidos": [], "paquetes": 0}
+            orden_corrales.append((codigo, codigo))
+        grupo = corrales[codigo]
         grupo["pedidos"].append(pedido)
         grupo["paquetes"] += pedido.n_paquetes
 
@@ -175,7 +182,7 @@ def zonas_bodega(cliente=None):
         "surtiendo": surtiendo,
         "listos_empaque": listos_empaque,
         "en_picking_n": len(surtiendo) + len(listos_empaque),
-        "corrales": [corrales[codigo] for codigo, _ in CORRALES],
+        "corrales": [corrales[codigo] for codigo, _ in orden_corrales],
         "en_corral_n": len(en_corral),
         "paquetes_n": sum(grupo["paquetes"] for grupo in corrales.values()),
         "cuarentena": cuarentena,

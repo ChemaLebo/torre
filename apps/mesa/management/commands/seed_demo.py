@@ -60,15 +60,17 @@ SKUS_NOCTURNO = [
     ("MN-REP-750", "Mezcal Nocturno Reposado · botella 750 ml", 1380, 33, 9, 9, "690.00", 4, "7501031310024"),
 ]
 
-# (codigo, tipo) — Local 380 E
+# (codigo, tipo, carriers) — Local 380 E; carriers solo aplica a corrales
 UBICACIONES = [
-    ("REC-01", "recepcion"),
-    ("A-01-1", "picking"), ("A-01-2", "picking"), ("A-02-1", "picking"),
-    ("A-02-2", "picking"), ("A-03-1", "picking"),
-    ("B-01-1", "picking"), ("B-01-2", "picking"), ("B-02-1", "picking"), ("B-02-2", "picking"),
-    ("RES-01", "reserva"), ("RES-02", "reserva"),
-    ("MER-01", "merma"), ("RET-01", "retorno"),
-    ("SAL-PQX", "salida"), ("SAL-LOCAL", "salida"), ("SAL-OTRO", "salida"),
+    ("REC-01", "recepcion", ""),
+    ("A-01-1", "picking", ""), ("A-01-2", "picking", ""), ("A-02-1", "picking", ""),
+    ("A-02-2", "picking", ""), ("A-03-1", "picking", ""),
+    ("B-01-1", "picking", ""), ("B-01-2", "picking", ""), ("B-02-1", "picking", ""),
+    ("B-02-2", "picking", ""),
+    ("RES-01", "reserva", ""), ("RES-02", "reserva", ""),
+    ("MER-01", "merma", ""), ("RET-01", "retorno", ""),
+    ("SAL-PQX", "salida", "paquetexpress"), ("SAL-LOCAL", "salida", "local"),
+    ("SAL-OTRO", "salida", ""),
 ]
 
 # Stock inicial: sku → (cantidad_ok, cantidad_danada, lote, [(ubicacion, cantidad), ...])
@@ -259,8 +261,10 @@ class Command(BaseCommand):
     def _catalogo(self, colima, nocturno):
         from apps.catalogo.models import SKU, Lote, Ubicacion
 
-        for codigo, tipo in UBICACIONES:
-            Ubicacion.objects.get_or_create(codigo=codigo, defaults={"tipo": tipo, "activo": True})
+        for codigo, tipo, carriers in UBICACIONES:
+            Ubicacion.objects.get_or_create(
+                codigo=codigo, defaults={"tipo": tipo, "carriers": carriers, "activo": True},
+            )
 
         skus = {}
         for cliente, especificacion in ((colima, SKUS_COLIMA), (nocturno, SKUS_NOCTURNO)):
