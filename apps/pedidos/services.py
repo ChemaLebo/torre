@@ -172,9 +172,10 @@ def ingerir_pedido_shopify(tienda, payload, origen="webhook"):
     incidencia_activa y se abre incidencia FAL (lazy).
     Orden repetida: refresca datos de contacto/dirección; NO duplica ni
     re-reserva. Orden con cancelled_at → pasa por la matriz de cancelación.
-    Orden NUEVA que llega ya fulfilled → NO se ingiere (solo evento): fue
-    atendida fuera de Torre (histórico tocado, suscripción auto-fulfilled) y
-    crearla reservaría stock por trabajo que nadie va a hacer.
+    Filtros de entrada (solo órdenes NUEVAS; decisión 2026-08-19): se ingiere
+    únicamente lo pagado (paid/partially_refunded) y sin fulfillment previo.
+    Lo demás deja evento y NO se crea: una orden pendiente entra sola cuando
+    se paga (el pago bumpea updated_at y regresa por sync/webhook).
     """
     shopify_order_id = str(payload.get("id") or "").strip()
     if not shopify_order_id:
@@ -187,11 +188,22 @@ def ingerir_pedido_shopify(tienda, payload, origen="webhook"):
     )
     if existente is not None:
         return _actualizar_pedido_existente(existente, payload, origen, cancelada)
-    if (payload.get("fulfillment_status") or "") == "fulfilled":
+    estado_fulfillment = payload.get("fulfillment_status") or ""
+    if estado_fulfillment:  # fulfilled/partial/restocked: atendida fuera de Torre
         registrar_evento(
             "pedido", shopify_order_id, "ingesta_omitida_fulfilled", actor=origen,
-            cliente=tienda.cliente, delta={"origen": origen},
-            motivo="Orden nueva pero ya fulfilled en Shopify: atendida fuera de Torre.",
+            cliente=tienda.cliente,
+            delta={"origen": origen, "fulfillment_status": estado_fulfillment},
+            motivo="Orden nueva pero ya atendida (total o parcialmente) fuera de Torre.",
+        )
+        return None
+    financiero = payload.get("financial_status") or ""
+    if financiero not in ("paid", "partially_refunded"):
+        registrar_evento(
+            "pedido", shopify_order_id, "ingesta_omitida_pago", actor=origen,
+            cliente=tienda.cliente,
+            delta={"origen": origen, "financial_status": financiero},
+            motivo="Solo se ingiere lo pagado; al pagarse la orden entra sola.",
         )
         return None
     return _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada)

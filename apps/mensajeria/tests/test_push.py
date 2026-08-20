@@ -409,6 +409,7 @@ class TriggerPedidoNuevoTests(TestCase):
         )
         payload = {
             "id": 987654, "name": "#1001", "total_price": "500.00",
+            "financial_status": "paid",
             "shipping_address": {"zip": "28017", "city": "Colima"},
             "line_items": [{"sku": "COL-SIX", "quantity": 3}],
         }

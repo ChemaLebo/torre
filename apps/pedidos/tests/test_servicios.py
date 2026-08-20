@@ -25,6 +25,7 @@ def payload_shopify(order_id=5501234, sku="COL-SIX", cantidad=2, cp="28017", can
         "id": order_id,
         "name": f"#{order_id}",
         "email": "comprador@example.com",
+        "financial_status": "paid",
         "total_price": "378.00",
         "note": "",
         "customer": {"first_name": "Luis", "last_name": "Mendoza", "phone": "+523121234567"},
@@ -174,6 +175,53 @@ class IngestaTests(BaseServicios):
         segundo, _, _, _ = self._ingerir(payload)
         self.assertEqual(segundo.pk, primero.pk)
         self.assertEqual(Pedido.objects.count(), 1)
+
+    def test_orden_nueva_parcialmente_fulfilled_no_se_ingiere(self):
+        payload = payload_shopify()
+        payload["fulfillment_status"] = "partial"
+        resultado, reservar, _, _ = self._ingerir(payload)
+        self.assertIsNone(resultado)
+        self.assertEqual(Pedido.objects.count(), 0)
+        reservar.assert_not_called()
+
+    def test_orden_no_pagada_no_se_ingiere(self):
+        payload = payload_shopify()
+        payload["financial_status"] = "pending"
+        resultado, reservar, confirmacion, _ = self._ingerir(payload)
+        self.assertIsNone(resultado)
+        self.assertEqual(Pedido.objects.count(), 0)
+        reservar.assert_not_called()
+        confirmacion.assert_not_called()
+        self.assertTrue(
+            EventoAuditoria.objects.filter(
+                entidad="pedido", entidad_id="5501234", accion="ingesta_omitida_pago",
+            ).exists()
+        )
+
+    def test_orden_pendiente_entra_sola_cuando_se_paga(self):
+        pendiente = payload_shopify()
+        pendiente["financial_status"] = "pending"
+        self._ingerir(pendiente)
+        self.assertEqual(Pedido.objects.count(), 0)
+        # El pago bumpea updated_at y la orden regresa por sync/webhook: ahora entra.
+        pagado, _, _, _ = self._ingerir(payload_shopify())
+        self.assertIsNotNone(pagado)
+        self.assertEqual(Pedido.objects.count(), 1)
+
+    def test_reembolso_parcial_cuenta_como_pagado(self):
+        payload = payload_shopify()
+        payload["financial_status"] = "partially_refunded"
+        pedido, _, _, _ = self._ingerir(payload)
+        self.assertIsNotNone(pedido)
+        self.assertEqual(Pedido.objects.count(), 1)
+
+    def test_payload_sin_financial_status_no_se_ingiere(self):
+        # Fail-closed: un payload sin el campo no es una orden Shopify sana.
+        payload = payload_shopify()
+        payload.pop("financial_status")
+        resultado, _, _, _ = self._ingerir(payload)
+        self.assertIsNone(resultado)
+        self.assertEqual(Pedido.objects.count(), 0)
 
     def test_payload_sin_id_truena(self):
         with self.assertRaises(ValueError):
