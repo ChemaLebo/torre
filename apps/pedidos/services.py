@@ -172,6 +172,9 @@ def ingerir_pedido_shopify(tienda, payload, origen="webhook"):
     incidencia_activa y se abre incidencia FAL (lazy).
     Orden repetida: refresca datos de contacto/dirección; NO duplica ni
     re-reserva. Orden con cancelled_at → pasa por la matriz de cancelación.
+    Orden NUEVA que llega ya fulfilled → NO se ingiere (solo evento): fue
+    atendida fuera de Torre (histórico tocado, suscripción auto-fulfilled) y
+    crearla reservaría stock por trabajo que nadie va a hacer.
     """
     shopify_order_id = str(payload.get("id") or "").strip()
     if not shopify_order_id:
@@ -184,6 +187,13 @@ def ingerir_pedido_shopify(tienda, payload, origen="webhook"):
     )
     if existente is not None:
         return _actualizar_pedido_existente(existente, payload, origen, cancelada)
+    if (payload.get("fulfillment_status") or "") == "fulfilled":
+        registrar_evento(
+            "pedido", shopify_order_id, "ingesta_omitida_fulfilled", actor=origen,
+            cliente=tienda.cliente, delta={"origen": origen},
+            motivo="Orden nueva pero ya fulfilled en Shopify: atendida fuera de Torre.",
+        )
+        return None
     return _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada)
 
 

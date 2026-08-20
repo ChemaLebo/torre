@@ -14,7 +14,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.catalogo.models import SKU
-from apps.core.models import Cliente, EvidenciaFoto
+from apps.core.models import Cliente, EventoAuditoria, EvidenciaFoto
 from apps.integraciones.models import Tienda
 from apps.pedidos import services
 from apps.pedidos.models import LineaPedido, Pedido
@@ -150,6 +150,30 @@ class IngestaTests(BaseServicios):
         self.assertIsNotNone(pedido.corte_vigente_al_ingreso)
         self.assertEqual(pedido.corte_vigente_al_ingreso.hour, int(hora))
         self.assertEqual(pedido.corte_vigente_al_ingreso.minute, int(minuto))
+
+    def test_orden_nueva_ya_fulfilled_no_se_ingiere(self):
+        payload = payload_shopify()
+        payload["fulfillment_status"] = "fulfilled"
+        resultado, reservar, confirmacion, _ = self._ingerir(payload)
+        self.assertIsNone(resultado)
+        self.assertEqual(Pedido.objects.count(), 0)
+        reservar.assert_not_called()
+        confirmacion.assert_not_called()
+        self.assertTrue(
+            EventoAuditoria.objects.filter(
+                entidad="pedido", entidad_id="5501234", accion="ingesta_omitida_fulfilled",
+            ).exists()
+        )
+
+    def test_orden_conocida_que_vuelve_fulfilled_sigue_idempotente(self):
+        # Nuestro propio write-back bumpéa updated_at: la orden regresa por el
+        # sync ya fulfilled y NO debe desaparecer ni duplicarse.
+        primero, _, _, _ = self._ingerir(payload_shopify())
+        payload = payload_shopify()
+        payload["fulfillment_status"] = "fulfilled"
+        segundo, _, _, _ = self._ingerir(payload)
+        self.assertEqual(segundo.pk, primero.pk)
+        self.assertEqual(Pedido.objects.count(), 1)
 
     def test_payload_sin_id_truena(self):
         with self.assertRaises(ValueError):
