@@ -375,6 +375,57 @@ class SkusTests(BaseGestionClientes):
         self.assertContains(respuesta, "Disponible")
         self.assertContains(respuesta, "TICUS-SIX")
 
+    def test_alta_sin_categoria_cae_en_otros(self):
+        from apps.catalogo.models import SKU, Categoria
+
+        self.client.post(self.url, datos_form_sku())
+        sku = SKU.objects.get(cliente=self.colima, codigo="COLIMITA-SIX")
+        self.assertEqual(sku.categoria.nombre, Categoria.OTROS)
+
+    def test_categoria_nueva_y_alta_con_ella(self):
+        from apps.catalogo.models import SKU, Categoria
+
+        self.client.post(self.url, {"accion": "categoria_nueva", "nombre": "Cervezas"})
+        cerveza = Categoria.objects.get(cliente=self.colima, nombre="Cervezas")
+        self.client.post(self.url, datos_form_sku(categoria=str(cerveza.pk)))
+        sku = SKU.objects.get(cliente=self.colima, codigo="COLIMITA-SIX")
+        self.assertEqual(sku.categoria, cerveza)
+
+    def test_categoria_duplicada_rechazada(self):
+        from apps.catalogo.models import Categoria
+
+        Categoria.objects.create(cliente=self.colima, nombre="Cervezas")
+        respuesta = self.client.post(
+            self.url, {"accion": "categoria_nueva", "nombre": "cervezas"}, follow=True,
+        )
+        self.assertContains(respuesta, "Ya existe la categoría")
+        self.assertEqual(
+            Categoria.objects.filter(cliente=self.colima, nombre__iexact="cervezas").count(), 1,
+        )
+
+    def test_categorias_bulk_recategoriza_con_evento(self):
+        from apps.catalogo.models import SKU, Categoria
+
+        cerveza = Categoria.objects.create(cliente=self.colima, nombre="Cervezas")
+        sku = SKU.objects.create(cliente=self.colima, codigo="TICUS-SIX", descripcion="Ticús", peso_gr=1)
+        self.client.post(self.url, {"accion": "categorias_bulk", f"cat_{sku.pk}": str(cerveza.pk)})
+        sku.refresh_from_db()
+        self.assertEqual(sku.categoria, cerveza)
+        evento = EventoAuditoria.objects.get(
+            entidad="sku", entidad_id="categorias_bulk", accion="categorias_actualizadas",
+        )
+        self.assertEqual(evento.delta["cambios"][0]["ahora"], "Cervezas")
+
+    def test_categorias_bulk_ignora_categoria_ajena(self):
+        from apps.catalogo.models import SKU, Categoria
+
+        nocturno = Cliente.objects.create(nombre="Mezcal Nocturno", slug="mezcal-nocturno")
+        ajena = Categoria.objects.create(cliente=nocturno, nombre="Mezcales")
+        sku = SKU.objects.create(cliente=self.colima, codigo="TICUS-SIX", descripcion="Ticús", peso_gr=1)
+        self.client.post(self.url, {"accion": "categorias_bulk", f"cat_{sku.pk}": str(ajena.pk)})
+        sku.refresh_from_db()
+        self.assertIsNone(sku.categoria)
+
 
 ENCABEZADOS_CSV = (
     "codigo,descripcion,codigo_barras,peso_gr,largo_cm,ancho_cm,alto_cm,"
@@ -396,7 +447,7 @@ class ImportCsvTests(BaseGestionClientes):
         )
 
     def test_import_feliz_crea_y_actualiza(self):
-        from apps.catalogo.models import SKU
+        from apps.catalogo.models import SKU, Categoria
 
         SKU.objects.create(cliente=self.colima, codigo="YA-EXISTE", descripcion="Vieja", peso_gr=1)
         contenido = "\n".join([
@@ -418,11 +469,29 @@ class ImportCsvTests(BaseGestionClientes):
         self.assertEqual(nuevo.precio_declarado, Decimal("250.50"))
         self.assertEqual(nuevo.empaques_divisibles, 2)
         self.assertTrue(nuevo.requiere_lote)
+        # El creado sin columna categoria cae en Otros.
+        self.assertEqual(nuevo.categoria.nombre, Categoria.OTROS)
 
         evento = EventoAuditoria.objects.get(entidad="sku", entidad_id="import_csv", accion="import_csv")
         self.assertEqual(evento.delta["creados"], 1)
         self.assertEqual(evento.delta["actualizados"], 1)
         self.assertEqual(evento.delta["errores"], [])
+
+    def test_import_con_categoria_la_crea_y_reusa(self):
+        from apps.catalogo.models import SKU, Categoria
+
+        contenido = "\n".join([
+            "codigo,descripcion,categoria",
+            "TE-1,Té verde,Tés",
+            "TE-2,Té negro,tés",
+            "TAZA-1,Taza,",
+        ])
+        respuesta = self._importar(contenido)
+        self.assertContains(respuesta, "3 SKUs creados")
+        tes = Categoria.objects.get(cliente=self.colima, nombre="Tés")
+        self.assertEqual(SKU.objects.get(codigo="TE-1").categoria, tes)
+        self.assertEqual(SKU.objects.get(codigo="TE-2").categoria, tes)  # iexact: no duplica
+        self.assertEqual(SKU.objects.get(codigo="TAZA-1").categoria.nombre, Categoria.OTROS)
 
     def test_fila_con_error_no_detiene_a_las_demas(self):
         from apps.catalogo.models import SKU

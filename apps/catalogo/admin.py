@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from .models import SKU, Lote, Ubicacion
+from .models import SKU, Categoria, Lote, Ubicacion
+
+
+@admin.register(Categoria)
+class CategoriaAdmin(admin.ModelAdmin):
+    list_display = ("nombre", "cliente")
+    list_filter = ("cliente",)
+    search_fields = ("nombre",)
 
 
 @admin.register(SKU)

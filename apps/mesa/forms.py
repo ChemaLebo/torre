@@ -11,13 +11,15 @@ from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
 
+from apps.catalogo.forms import ConRenglonesSKU
 from apps.catalogo.models import SKU
 from apps.core.models import Cliente
+from apps.inventario.forms import FormAnuncioASNBase
 
-# Renglones fijos de la captura de ASN desde Mesa (sin JavaScript, sin formsets).
+# Renglones INICIALES de la captura de ASN desde Mesa (el + del template agrega más).
 RENGLONES_ASN_MESA = 6
 
-# Renglones fijos del pedido manual desde Mesa (sin JavaScript, sin formsets).
+# Renglones INICIALES del pedido manual desde Mesa (el + del template agrega más).
 RENGLONES_PEDIDO_MANUAL = 6
 
 # Claves del JSON `branding` que administra el formulario de cliente
@@ -229,7 +231,11 @@ class FormTarifario(forms.Form):
 
 
 class FormSKU(forms.Form):
-    """Alta/edición de un SKU del catálogo del cliente desde Mesa."""
+    """Alta/edición de un SKU del catálogo del cliente desde Mesa.
+
+    Recibe el cliente como primer argumento: la categoría se acota a las suyas
+    y por default cae en "Otros" (que se asegura al construir el form).
+    """
 
     sku_id = forms.IntegerField(required=False, widget=forms.HiddenInput())
     codigo = forms.CharField(
@@ -278,11 +284,28 @@ class FormSKU(forms.Form):
     backorder_habilitado = forms.BooleanField(label="Backorder habilitado", required=False, initial=False)
     activo = forms.BooleanField(label="Activo", required=False, initial=True)
 
+    def __init__(self, cliente, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from apps.catalogo.models import Categoria  # lazy: modelo de otra app
+        self.cliente = cliente
+        otros = Categoria.otros_de(cliente)
+        # required=False + empty_label=None: el select siempre trae una opción
+        # elegida en la UI y un POST sin el campo cae al default (Otros).
+        self.fields["categoria"] = forms.ModelChoiceField(
+            queryset=Categoria.objects.filter(cliente=cliente),
+            label="Categoría",
+            required=False,
+            initial=self.initial.get("categoria") or otros.pk,
+            empty_label=None,
+        )
+
     def datos_sku(self):
         """Campos del modelo SKU (sin cliente) ya limpios."""
         d = self.cleaned_data
+        from apps.catalogo.models import Categoria
         return {
             "codigo": d["codigo"].strip(),
+            "categoria": d.get("categoria") or Categoria.otros_de(self.cliente),
             "descripcion": d["descripcion"].strip(),
             "codigo_barras": (d.get("codigo_barras") or "").strip(),
             "peso_gr": d["peso_gr"],
@@ -299,13 +322,15 @@ class FormSKU(forms.Form):
         }
 
 
-class FormPedidoManual(forms.Form):
+class FormPedidoManual(ConRenglonesSKU, forms.Form):
     """Captura de un pedido manual: clientes sin Shopify (mayoreo, B2B).
 
     Patrón portal: recibe el cliente como primer argumento y acota los SKUs a
     ese cliente (solo activos). La dirección se captura por campos y direccion()
     la arma con el mismo shape que el shipping_address de la ingesta Shopify.
     """
+
+    renglones_iniciales = RENGLONES_PEDIDO_MANUAL
 
     comprador_nombre = forms.CharField(
         label="Nombre del comprador",
@@ -363,27 +388,7 @@ class FormPedidoManual(forms.Form):
 
     def __init__(self, cliente, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.cliente = cliente
-        qs = SKU.objects.filter(cliente=cliente, activo=True).order_by("codigo")
-        for i in range(1, RENGLONES_PEDIDO_MANUAL + 1):
-            self.fields[f"sku_{i}"] = forms.ModelChoiceField(
-                queryset=qs,
-                required=False,
-                label="Producto",
-                empty_label="Elige un producto",
-            )
-            self.fields[f"cantidad_{i}"] = forms.IntegerField(
-                required=False,
-                min_value=1,
-                label="Piezas",
-                widget=forms.NumberInput(attrs={"placeholder": "Piezas"}),
-                error_messages={"min_value": "Las piezas deben ser al menos 1."},
-            )
-
-    def renglones(self):
-        """Pares (producto, piezas) para pintar la tabla del formulario."""
-        for i in range(1, RENGLONES_PEDIDO_MANUAL + 1):
-            yield self[f"sku_{i}"], self[f"cantidad_{i}"]
+        self._armar_renglones(cliente)
 
     def clean_cp(self):
         cp = (self.cleaned_data["cp"] or "").strip()
@@ -393,21 +398,12 @@ class FormPedidoManual(forms.Form):
 
     def clean(self):
         datos = super().clean()
-        consolidadas = {}
-        for i in range(1, RENGLONES_PEDIDO_MANUAL + 1):
-            sku = datos.get(f"sku_{i}")
-            cantidad = datos.get(f"cantidad_{i}")
-            if sku is not None and cantidad:
-                consolidadas[sku] = consolidadas.get(sku, 0) + cantidad
-            elif sku is not None or cantidad:
-                raise forms.ValidationError(
-                    "Completa producto y piezas en cada renglón que uses."
-                )
-        if not consolidadas:
+        lineas = self.consolidar_renglones(datos)
+        if not lineas:
             raise forms.ValidationError(
                 "Captura al menos un producto con sus piezas para crear el pedido."
             )
-        datos["lineas"] = list(consolidadas.items())
+        datos["lineas"] = lineas
         return datos
 
     def direccion(self):
@@ -431,78 +427,11 @@ class FormPedidoManual(forms.Form):
         }
 
 
-class FormAnuncioASNMesa(forms.Form):
+class FormAnuncioASNMesa(FormAnuncioASNBase):
     """Captura de una ASN que llegó por WhatsApp: la Mesa la registra en ≤15 min.
 
-    Mismo patrón que portal.FormAnuncioASN: recibe el cliente como primer
-    argumento, acota los SKUs a ese cliente y consolida renglones duplicados.
+    Toda la mecánica (renglones dinámicos, dropdown por categoría, CSV de
+    renglones) vive en inventario.FormAnuncioASNBase, compartida con el portal.
     """
 
-    fecha_compromiso = forms.DateField(
-        label="¿Qué día llega?",
-        widget=forms.DateInput(attrs={"type": "date"}),
-        error_messages={
-            "required": "Captura la fecha de la cita para agendar la descarga.",
-            "invalid": "Esa fecha no se entiende; elígela del calendario.",
-        },
-    )
-    tarimas = forms.IntegerField(
-        required=False,
-        min_value=0,
-        label="Tarimas anunciadas",
-        help_text="Las que el cliente dijo por WhatsApp; vacío si no las mencionó.",
-        widget=forms.NumberInput(attrs={"placeholder": "0"}),
-        error_messages={
-            "min_value": "Las tarimas no pueden ser un número negativo.",
-            "invalid": "Captura las tarimas con un número entero.",
-        },
-    )
-
-    def __init__(self, cliente, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.cliente = cliente
-        qs = SKU.objects.filter(cliente=cliente, activo=True).order_by("codigo")
-        for i in range(1, RENGLONES_ASN_MESA + 1):
-            self.fields[f"sku_{i}"] = forms.ModelChoiceField(
-                queryset=qs,
-                required=False,
-                label="Producto",
-                empty_label="Elige un producto",
-            )
-            self.fields[f"cantidad_{i}"] = forms.IntegerField(
-                required=False,
-                min_value=1,
-                label="Piezas",
-                widget=forms.NumberInput(attrs={"placeholder": "Piezas"}),
-                error_messages={"min_value": "Las piezas deben ser al menos 1."},
-            )
-
-    def renglones(self):
-        """Pares (producto, piezas) para pintar la tabla del formulario."""
-        for i in range(1, RENGLONES_ASN_MESA + 1):
-            yield self[f"sku_{i}"], self[f"cantidad_{i}"]
-
-    def clean_fecha_compromiso(self):
-        fecha = self.cleaned_data["fecha_compromiso"]
-        if fecha < timezone.localdate():
-            raise forms.ValidationError("La cita debe ser de hoy en adelante.")
-        return fecha
-
-    def clean(self):
-        datos = super().clean()
-        consolidadas = {}
-        for i in range(1, RENGLONES_ASN_MESA + 1):
-            sku = datos.get(f"sku_{i}")
-            cantidad = datos.get(f"cantidad_{i}")
-            if sku is not None and cantidad:
-                consolidadas[sku] = consolidadas.get(sku, 0) + cantidad
-            elif sku is not None or cantidad:
-                raise forms.ValidationError(
-                    "Completa producto y piezas en cada renglón que uses."
-                )
-        if not consolidadas:
-            raise forms.ValidationError(
-                "Captura al menos un producto con sus piezas para registrar la ASN."
-            )
-        datos["lineas"] = list(consolidadas.items())
-        return datos
+    renglones_iniciales = RENGLONES_ASN_MESA

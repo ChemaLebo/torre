@@ -614,7 +614,7 @@ def _avisar_piso_asn(orden):
 
 @portal_requerido
 def recepciones(request):
-    form = FormAnuncioASN(request.cliente, request.POST or None)
+    form = FormAnuncioASN(request.cliente, request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
         fecha = form.cleaned_data["fecha_compromiso"]
         tarimas = form.cleaned_data.get("tarimas") or 0

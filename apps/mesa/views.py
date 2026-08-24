@@ -985,7 +985,7 @@ def recepciones(request):
 
     form = None
     if cliente is not None:
-        form = FormAnuncioASNMesa(cliente, request.POST or None)
+        form = FormAnuncioASNMesa(cliente, request.POST or None, request.FILES or None)
         if request.method == "POST" and form.is_valid():
             fecha = form.cleaned_data["fecha_compromiso"]
             tarimas = form.cleaned_data.get("tarimas") or 0
@@ -1484,8 +1484,19 @@ def cliente_skus(request, pk):
             else:
                 messages.success(request, exito)
             return redirect("mesa:cliente_skus", pk=cliente.pk)
+        if accion == "categoria_nueva":
+            try:
+                exito = _skus_categoria_nueva(request, cliente)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, exito)
+            return redirect("mesa:cliente_skus", pk=cliente.pk)
+        if accion == "categorias_bulk":
+            messages.success(request, _skus_categorias_bulk(request, cliente))
+            return redirect("mesa:cliente_skus", pk=cliente.pk)
         if accion == "sku_guardar":
-            form = FormSKU(request.POST)
+            form = FormSKU(cliente, request.POST)
             if form.is_valid():
                 try:
                     exito = _guardar_sku(request, cliente, form)
@@ -1504,8 +1515,9 @@ def cliente_skus(request, pk):
         editar_id = request.GET.get("editar", "").strip()
         if editar_id:
             sku_editar = get_object_or_404(SKU, pk=editar_id, cliente=cliente)
-            form = FormSKU(initial={
+            form = FormSKU(cliente, initial={
                 "sku_id": sku_editar.pk,
+                "categoria": sku_editar.categoria_id,
                 "codigo": sku_editar.codigo,
                 "descripcion": sku_editar.descripcion,
                 "codigo_barras": sku_editar.codigo_barras,
@@ -1522,11 +1534,14 @@ def cliente_skus(request, pk):
                 "activo": sku_editar.activo,
             })
         else:
-            form = FormSKU()
+            form = FormSKU(cliente)
 
-    skus = list(SKU.objects.filter(cliente=cliente).order_by("codigo"))
+    from apps.catalogo.models import Categoria
+    otros = Categoria.otros_de(cliente)
+    skus = list(SKU.objects.filter(cliente=cliente).select_related("categoria").order_by("codigo"))
     for sku in skus:
         sku.disponible = resumen_sku(sku)["disponible"]
+        sku.categoria_efectiva_id = sku.categoria_id or otros.pk
 
     return render(request, "mesa/cliente_skus.html", {
         "seccion": "clientes",
@@ -1534,7 +1549,49 @@ def cliente_skus(request, pk):
         "skus": skus,
         "form": form,
         "sku_editar": sku_editar,
+        "categorias": list(Categoria.objects.filter(cliente=cliente)),
     })
+
+
+def _skus_categoria_nueva(request, cliente):
+    """Alta de una categoría del catálogo del cliente, con auditoría."""
+    from apps.catalogo.models import Categoria
+
+    nombre = (request.POST.get("nombre") or "").strip()
+    if not nombre:
+        raise ValueError("Captura el nombre de la categoría.")
+    if Categoria.objects.filter(cliente=cliente, nombre__iexact=nombre).exists():
+        raise ValueError(f"Ya existe la categoría {nombre}.")
+    categoria = Categoria.objects.create(cliente=cliente, nombre=nombre)
+    registrar_evento(
+        "categoria", f"{cliente.slug}:{categoria.nombre}", "alta", actor=request.user,
+        cliente=cliente, motivo="Alta de categoría desde Mesa de Control",
+    )
+    return f"Categoría {categoria.nombre} dada de alta."
+
+
+def _skus_categorias_bulk(request, cliente):
+    """Guarda las categorías elegidas en la tabla del catálogo (edición masiva)."""
+    from apps.catalogo.models import SKU, Categoria
+
+    validas = {str(c.pk): c for c in Categoria.objects.filter(cliente=cliente)}
+    cambios = []
+    for sku in SKU.objects.filter(cliente=cliente).select_related("categoria"):
+        elegida = validas.get(request.POST.get(f"cat_{sku.pk}", ""))
+        if elegida is None or sku.categoria_id == elegida.pk:
+            continue
+        antes = sku.categoria.nombre if sku.categoria else Categoria.OTROS
+        sku.categoria = elegida
+        sku.save(update_fields=["categoria"])
+        cambios.append({"sku": sku.codigo, "antes": antes, "ahora": elegida.nombre})
+    if cambios:
+        registrar_evento(
+            "sku", "categorias_bulk", "categorias_actualizadas", actor=request.user,
+            cliente=cliente, delta={"cambios": cambios},
+            motivo="Edición masiva de categorías desde el catálogo",
+        )
+        return f"{len(cambios)} producto(s) recategorizado(s)."
+    return "Sin cambios de categoría."
 
 
 def _guardar_sku(request, cliente, form):
@@ -1627,7 +1684,17 @@ def _parsear_fila_csv(fila):
             datos["requiere_lote"] = False
         else:
             raise ValueError("requiere_lote acepta si/no/1/0")
+    if celda("categoria"):
+        datos["categoria_nombre"] = celda("categoria")
     return datos
+
+
+def _categoria_por_nombre(cliente, nombre):
+    """Categoría del cliente por nombre (insensible a mayúsculas); se crea si no existe."""
+    from apps.catalogo.models import Categoria
+
+    existente = Categoria.objects.filter(cliente=cliente, nombre__iexact=nombre).first()
+    return existente or Categoria.objects.create(cliente=cliente, nombre=nombre)
 
 
 def _importar_csv_skus(request, cliente):
@@ -1637,7 +1704,7 @@ def _importar_csv_skus(request, cliente):
     resume el import completo. Todo corre dentro de una transacción: un error
     inesperado revierte el import entero — nunca mutación de catálogo sin evento.
     """
-    from apps.catalogo.models import SKU
+    from apps.catalogo.models import SKU, Categoria
 
     archivo = request.FILES.get("archivo")
     if archivo is None:
@@ -1678,9 +1745,15 @@ def _importar_csv_skus(request, cliente):
                 errores.append(f"fila {numero}: {exc}")
                 continue
             codigo = datos.pop("codigo")
-            _, creado = SKU.objects.update_or_create(
+            nombre_categoria = datos.pop("categoria_nombre", "")
+            if nombre_categoria:
+                datos["categoria"] = _categoria_por_nombre(cliente, nombre_categoria)
+            sku, creado = SKU.objects.update_or_create(
                 cliente=cliente, codigo=codigo, defaults=datos
             )
+            if creado and sku.categoria_id is None:
+                sku.categoria = Categoria.otros_de(cliente)
+                sku.save(update_fields=["categoria"])
             if creado:
                 creados += 1
             else:

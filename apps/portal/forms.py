@@ -8,9 +8,10 @@ from django.utils import timezone
 
 from apps.catalogo.models import SKU
 from apps.incidencias.models import Incidencia
+from apps.inventario.forms import FormAnuncioASNBase
 from apps.pedidos.models import Pedido
 
-# Renglones fijos del anuncio de recepción (sin JavaScript, sin formsets).
+# Renglones INICIALES del anuncio de recepción (el + del template agrega más).
 RENGLONES_ASN = 4
 
 # Tipos de incidencia en palabras de cliente, no claves de catálogo.
@@ -70,8 +71,15 @@ class FormNuevaIncidencia(forms.Form):
         )
 
 
-class FormAnuncioASN(forms.Form):
-    """Anuncio de una entrega entrante: cita + hasta 4 renglones de producto."""
+class FormAnuncioASN(FormAnuncioASNBase):
+    """Anuncio de una entrega entrante desde el portal (copy para Karina).
+
+    La mecánica (renglones dinámicos, dropdown por categoría, CSV de renglones)
+    vive en inventario.FormAnuncioASNBase, compartida con la Mesa.
+    """
+
+    renglones_iniciales = RENGLONES_ASN
+    error_sin_lineas = "Anuncia al menos un producto con sus piezas para registrar la entrega."
 
     fecha_compromiso = forms.DateField(
         label="¿Qué día llega?",
@@ -92,54 +100,6 @@ class FormAnuncioASN(forms.Form):
             "invalid": "Captura las tarimas con un número entero.",
         },
     )
-
-    def __init__(self, cliente, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        qs = SKU.objects.filter(cliente=cliente, activo=True).order_by("codigo")
-        for i in range(1, RENGLONES_ASN + 1):
-            self.fields[f"sku_{i}"] = forms.ModelChoiceField(
-                queryset=qs,
-                required=False,
-                label="Producto",
-                empty_label="Elige un producto",
-            )
-            self.fields[f"cantidad_{i}"] = forms.IntegerField(
-                required=False,
-                min_value=1,
-                label="Piezas",
-                widget=forms.NumberInput(attrs={"placeholder": "Piezas"}),
-                error_messages={"min_value": "Las piezas deben ser al menos 1."},
-            )
-
-    def renglones(self):
-        """Pares (producto, piezas) para pintar la tabla del formulario."""
-        for i in range(1, RENGLONES_ASN + 1):
-            yield self[f"sku_{i}"], self[f"cantidad_{i}"]
-
-    def clean_fecha_compromiso(self):
-        fecha = self.cleaned_data["fecha_compromiso"]
-        if fecha < timezone.localdate():
-            raise forms.ValidationError("La cita debe ser de hoy en adelante.")
-        return fecha
-
-    def clean(self):
-        datos = super().clean()
-        consolidadas = {}
-        for i in range(1, RENGLONES_ASN + 1):
-            sku = datos.get(f"sku_{i}")
-            cantidad = datos.get(f"cantidad_{i}")
-            if sku is not None and cantidad:
-                consolidadas[sku] = consolidadas.get(sku, 0) + cantidad
-            elif sku is not None or cantidad:
-                raise forms.ValidationError(
-                    "Completa producto y piezas en cada renglón que uses."
-                )
-        if not consolidadas:
-            raise forms.ValidationError(
-                "Anuncia al menos un producto con sus piezas para registrar la entrega."
-            )
-        datos["lineas"] = list(consolidadas.items())
-        return datos
 
 
 class FormSugerenciaManual(forms.Form):

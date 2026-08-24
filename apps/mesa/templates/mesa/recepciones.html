@@ -13,7 +13,7 @@
 <div class="card mb">
   {% if cliente_captura %}
     <div class="titulo"><h2>Capturar ASN de {{ cliente_captura.nombre }}</h2><a class="btn chico" href="{% url 'mesa:recepciones' %}">Cambiar de cliente</a></div>
-    <form method="post">
+    <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <input type="hidden" name="cliente" value="{{ cliente_captura.slug }}">
       {{ form.non_field_errors }}
@@ -32,10 +32,11 @@
         </div>
       </div>
 
-      {% for sku_campo, cantidad_campo in form.renglones %}
-        <div class="grid g2">
+      <div id="renglones-asn">
+        {% for sku_campo, cantidad_campo in form.renglones %}
+        <div class="grid g2 renglon-asn">
           <div>
-            <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }} {{ forloop.counter }}</label>
+            <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }}</label>
             {{ sku_campo }}
             {{ sku_campo.errors }}
           </div>
@@ -45,10 +46,42 @@
             {{ cantidad_campo.errors }}
           </div>
         </div>
-      {% endfor %}
+        {% endfor %}
+      </div>
+      <div class="mt"><button class="btn chico" type="button" id="btn-mas-renglon">+ Agregar renglón</button></div>
+
+      <div class="mt">
+        <label for="{{ form.renglones_csv.id_for_label }}">{{ form.renglones_csv.label }}</label>
+        {{ form.renglones_csv }}
+        <div class="small muted">{{ form.renglones_csv.help_text }}</div>
+        {{ form.renglones_csv.errors }}
+      </div>
 
       <div class="mt"><button class="btn primario" type="submit">Registrar ASN</button></div>
     </form>
+    <script>
+    (function () {
+      var boton = document.getElementById("btn-mas-renglon");
+      var caja = document.getElementById("renglones-asn");
+      if (!boton || !caja) return;
+      boton.addEventListener("click", function () {
+        var filas = caja.querySelectorAll(".renglon-asn");
+        var nueva = filas[filas.length - 1].cloneNode(true);
+        var indice = filas.length + 1;
+        nueva.querySelectorAll("select,input").forEach(function (campo) {
+          campo.name = campo.name.replace(/_\d+$/, "_" + indice);
+          if (campo.id) campo.id = campo.id.replace(/_\d+$/, "_" + indice);
+          if (campo.tagName === "SELECT") campo.selectedIndex = 0; else campo.value = "";
+        });
+        nueva.querySelectorAll("label").forEach(function (etiqueta) {
+          var destino = etiqueta.getAttribute("for");
+          if (destino) etiqueta.setAttribute("for", destino.replace(/_\d+$/, "_" + indice));
+        });
+        nueva.querySelectorAll("ul.errorlist").forEach(function (e) { e.remove(); });
+        caja.appendChild(nueva);
+      });
+    })();
+    </script>
   {% else %}
     <div class="titulo"><h2>Capturar una ASN (aviso por WhatsApp)</h2></div>
     <p class="small">Primero elige el cliente: sus productos dependen de él.</p>

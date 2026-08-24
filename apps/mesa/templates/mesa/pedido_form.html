@@ -84,10 +84,11 @@
 
       <div class="mt">
         <div class="eyebrow">Renglones del pedido</div>
+        <div id="renglones-pedido">
         {% for sku_campo, cantidad_campo in form.renglones %}
-          <div class="grid g2">
+          <div class="grid g2 renglon-pedido">
             <div>
-              <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }} {{ forloop.counter }}</label>
+              <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }}</label>
               {{ sku_campo }}
               {{ sku_campo.errors }}
             </div>
@@ -98,10 +99,35 @@
             </div>
           </div>
         {% endfor %}
+        </div>
+        <div class="mt"><button class="btn chico" type="button" id="btn-mas-renglon">+ Agregar renglón</button></div>
       </div>
 
       <div class="mt"><button class="btn primario" type="submit">Crear pedido</button></div>
     </form>
+    <script>
+    (function () {
+      var boton = document.getElementById("btn-mas-renglon");
+      var caja = document.getElementById("renglones-pedido");
+      if (!boton || !caja) return;
+      boton.addEventListener("click", function () {
+        var filas = caja.querySelectorAll(".renglon-pedido");
+        var nueva = filas[filas.length - 1].cloneNode(true);
+        var indice = filas.length + 1;
+        nueva.querySelectorAll("select,input").forEach(function (campo) {
+          campo.name = campo.name.replace(/_\d+$/, "_" + indice);
+          if (campo.id) campo.id = campo.id.replace(/_\d+$/, "_" + indice);
+          if (campo.tagName === "SELECT") campo.selectedIndex = 0; else campo.value = "";
+        });
+        nueva.querySelectorAll("label").forEach(function (etiqueta) {
+          var destino = etiqueta.getAttribute("for");
+          if (destino) etiqueta.setAttribute("for", destino.replace(/_\d+$/, "_" + indice));
+        });
+        nueva.querySelectorAll("ul.errorlist").forEach(function (e) { e.remove(); });
+        caja.appendChild(nueva);
+      });
+    })();
+    </script>
   {% else %}
     <div class="titulo"><h2>¿De qué cliente es el pedido?</h2></div>
     <p class="small">Primero elige el cliente: sus productos dependen de él.</p>
