@@ -393,6 +393,7 @@ class Command(BaseCommand):
             "id": order_id,
             "name": f"#{order_id}",
             "email": f"comprador{order_id}@example.com",
+            "financial_status": "paid",  # los filtros de ingesta solo dejan pasar lo pagado
             "total_price": str(total),
             "note": note,
             "customer": {"first_name": partes[0], "last_name": partes[1] if len(partes) > 1 else ""},
