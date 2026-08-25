@@ -283,6 +283,8 @@ class EnviaAdapter(CarrierAdapter):
             "destination": self._destino(pedido),
             "packages": self._paquetes(pedido, paquete=paquete),
             "shipment": {"carrier": carrier, "service": servicio, "type": 1},
+            # /ship/generate/ exige settings (400 sin él); /ship/rate/ lo tolera.
+            "settings": {"currency": "MXN"},
         })
 
     # ── Operaciones ──
