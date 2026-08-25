@@ -283,9 +283,9 @@ class EnviaAdapter(CarrierAdapter):
             "destination": self._destino(pedido),
             "packages": self._paquetes(pedido, paquete=paquete),
             "shipment": {"carrier": carrier, "service": servicio, "type": 1},
-            # /ship/generate/ exige settings con printFormat (400s sucesivos sin
-            # ellos); el rate tolera claves extra. STICKER = etiqueta 10×15.
-            "settings": {"currency": "MXN", "printFormat": "PDF", "printSize": "STICKER"},
+            # /ship/generate/ exige settings con printFormat y printSize (enum de
+            # envia.com); STOCK_4X6 = etiqueta térmica 10×15. El rate tolera extras.
+            "settings": {"currency": "MXN", "printFormat": "PDF", "printSize": "STOCK_4X6"},
         })
 
     # ── Operaciones ──
