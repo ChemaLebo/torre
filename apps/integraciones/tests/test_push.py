@@ -1,4 +1,5 @@
 """Tests del push de inventario: encolado idempotente y drenado (modo mock)."""
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -182,6 +183,49 @@ class ReconciliarPedidosTests(TestCase):
         log = self.tienda.sync_logs.filter(direccion=SyncLog.DIRECCION_INGESTA).latest("ts")
         self.assertEqual(log.resultado, SyncLog.RESULTADO_OK)
         self.assertIn("mock", log.detalle)
+
+
+class BackfillPrimerSyncTests(TestCase):
+    """Checkpoint nulo = backfill acotado (90d, pagadas, sin fulfillear);
+    checkpoint puesto = sync recurrente por updated_at, sin acotar."""
+
+    def setUp(self):
+        self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        self.tienda = Tienda.objects.create(
+            cliente=self.cliente, dominio="colima-mx.myshopify.com",
+            token="shpat_prueba", location_id="",
+        )
+
+    def test_primer_sync_usa_backfill_acotado(self):
+        antes = timezone.now()
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.listar_pedidos_backfill.return_value = [
+                {"id": 4444, "updated_at": "2026-08-20T10:00:00-06:00",
+                 "financial_status": "paid", "line_items": []},
+            ]
+            with patch("apps.pedidos.services.ingerir_pedido_shopify", return_value=None):
+                nuevos = services.reconciliar_pedidos(self.tienda)
+        self.assertEqual(nuevos, 1)
+        api.listar_pedidos.assert_not_called()
+        desde = api.listar_pedidos_backfill.call_args.kwargs["created_at_min"]
+        esperado = antes - timedelta(days=90)
+        self.assertLess(abs(desde - esperado), timedelta(seconds=10))
+        self.tienda.refresh_from_db()
+        self.assertIsNotNone(self.tienda.checkpoint_reconciliacion)
+        log = self.tienda.sync_logs.filter(direccion=SyncLog.DIRECCION_INGESTA).latest("ts")
+        self.assertIn("backfill inicial (90d)", log.detalle)
+
+    def test_sync_recurrente_usa_updated_at_sin_acotar(self):
+        checkpoint = timezone.now()
+        self.tienda.checkpoint_reconciliacion = checkpoint
+        self.tienda.save(update_fields=["checkpoint_reconciliacion"])
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.listar_pedidos.return_value = []
+            services.reconciliar_pedidos(self.tienda)
+        api.listar_pedidos_backfill.assert_not_called()
+        api.listar_pedidos.assert_called_once_with(updated_at_min=checkpoint)
 
 
 class SinTokenEnProduccionTests(TestCase):

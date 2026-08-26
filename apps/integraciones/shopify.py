@@ -306,11 +306,8 @@ class ShopifyClient:
         return resultado.get("fulfillment") or {}
 
     # ── pedidos (polling de respaldo) ──
-    def listar_pedidos(self, updated_at_min=None):
-        """GET /orders.json?updated_at_min=... con paginación por Link header."""
-        params = {"status": "any", "limit": 250}
-        if updated_at_min:
-            params["updated_at_min"] = updated_at_min.isoformat()
+    def _paginar_pedidos(self, params):
+        """GET /orders.json paginado por Link header (tope MAX_PAGINAS_PEDIDOS)."""
         url = f"{self.base}/orders.json"
         pedidos = []
         for _ in range(MAX_PAGINAS_PEDIDOS):
@@ -326,3 +323,23 @@ class ShopifyClient:
                 break
             url, params = siguiente["url"], None  # el cursor page_info ya viene en la URL
         return pedidos
+
+    def listar_pedidos(self, updated_at_min=None):
+        """Sync recurrente: TODO lo tocado desde el checkpoint (cancelaciones
+        y refunds incluidos — por eso status=any, sin acotar)."""
+        params = {"status": "any", "limit": 250}
+        if updated_at_min:
+            params["updated_at_min"] = updated_at_min.isoformat()
+        return self._paginar_pedidos(params)
+
+    def listar_pedidos_backfill(self, created_at_min):
+        """Primer sync (checkpoint nulo): solo lo OPERABLE — abiertas, pagadas
+        y sin fulfillear ("unshipped" = fulfillment_status nulo, exactamente
+        el guard de la ingesta) dentro de la ventana acordada."""
+        return self._paginar_pedidos({
+            "status": "open",
+            "financial_status": "paid",
+            "fulfillment_status": "unshipped",
+            "created_at_min": created_at_min.isoformat(),
+            "limit": 250,
+        })

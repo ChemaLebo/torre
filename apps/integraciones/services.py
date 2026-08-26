@@ -7,6 +7,8 @@
 
 Todo job puede correr dos veces sin duplicar efecto (BLUEPRINT §2.2.7).
 """
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import IntegrityError
 from django.db.models import Sum
@@ -398,9 +400,17 @@ def reconciliar_pedidos(tienda):
         )
         return 0
 
+    # Primer sync (checkpoint nulo) = backfill acotado: pagadas + sin
+    # fulfillear + ventana BACKFILL_DIAS. Retira el ritual de fijar el
+    # checkpoint por consola y el riesgo de jalar años de historia.
+    primera = tienda.checkpoint_reconciliacion is None
     try:
         api = ShopifyClient(tienda)
-        pedidos = api.listar_pedidos(updated_at_min=tienda.checkpoint_reconciliacion)
+        if primera:
+            desde = ahora - timedelta(days=settings.TORRE["BACKFILL_DIAS"])
+            pedidos = api.listar_pedidos_backfill(created_at_min=desde)
+        else:
+            pedidos = api.listar_pedidos(updated_at_min=tienda.checkpoint_reconciliacion)
     except ShopifyError as exc:
         SyncLog.objects.create(
             tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
@@ -421,9 +431,12 @@ def reconciliar_pedidos(tienda):
 
     tienda.checkpoint_reconciliacion = ahora
     tienda.save(update_fields=["checkpoint_reconciliacion"])
+    etiqueta = (
+        f"backfill inicial ({settings.TORRE['BACKFILL_DIAS']}d)" if primera else "reconciliación"
+    )
     SyncLog.objects.create(
         tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_OK,
-        detalle=f"reconciliación: {len(pedidos)} pedidos revisados, {nuevos} nuevos",
+        detalle=f"{etiqueta}: {len(pedidos)} pedidos revisados, {nuevos} nuevos",
     )
     return nuevos
 

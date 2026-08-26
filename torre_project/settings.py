@@ -204,6 +204,9 @@ TORRE = {
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
     "PROVEEDOR_POR_CARRIER": {},
+    # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
+    # ventana (acuerdo con el founder). El sync recurrente no se acota.
+    "BACKFILL_DIAS": 90,
     "COTIZACION_CACHE_DIAS": 7,  # vigencia del caché de cotizaciones por (CP, peso)
     # ── Finanzas: tarifario default y costos (dashboard Mesa → Finanzas) ──
     # Modelo A (Colima): calibrado sobre junio-2026 real para dar ~9% de ahorro
