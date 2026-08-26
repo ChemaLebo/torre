@@ -12,6 +12,24 @@ from apps.envios.models import Guia
 from .base import crear_cliente, crear_pedido, crear_tienda
 
 
+class GetAdapterRoutingTests(TestCase):
+    """get_adapter: el proveedor de la guía manda; el mapa por carrier decide lo demás."""
+
+    def test_proveedor_mock_regresa_mock_siempre(self):
+        with override_settings(ENVIA_API_KEY="k", ENVIA_MODO="full"):
+            self.assertIsInstance(services.get_adapter(proveedor="mock"), MockAdapter)
+
+    def test_envia_full_da_adapter_real(self):
+        from apps.envios.adapters import EnviaAdapter
+        with override_settings(ENVIA_API_KEY="k", ENVIA_MODO="full"):
+            self.assertIsInstance(services.get_adapter(carrier="estafeta"), EnviaAdapter)
+
+    def test_sin_configuracion_todo_es_mock(self):
+        with override_settings(ENVIA_API_KEY=""):
+            self.assertIsInstance(services.get_adapter(carrier="estafeta"), MockAdapter)
+            self.assertIsInstance(services.get_adapter(), MockAdapter)
+
+
 @override_settings(ENVIA_API_KEY="")
 class GenerarGuiaTests(TestCase):
     def setUp(self):
@@ -23,6 +41,7 @@ class GenerarGuiaTests(TestCase):
         pedido = crear_pedido(self.cliente, self.tienda)
         guia = services.generar_guia(pedido)
         self.assertTrue(guia.numero.startswith("MOCK-"))
+        self.assertEqual(guia.proveedor, "mock")  # cancelar/rastrear rutean por aquí
         self.assertEqual(guia.carrier, "paquetexpress")
         self.assertEqual(guia.estado, Guia.GUIA_CREADA)
         self.assertGreater(guia.costo_cotizado, Decimal("0"))
@@ -57,6 +76,7 @@ class GenerarGuiaTests(TestCase):
         # Flota local: $100 flat por paquete ≤20 kg (CDMX + metro hasta Toluca)
         self.assertEqual(guia.costo_preferencial, Decimal("100"))
         self.assertEqual(guia.etiqueta_url, "")
+        self.assertEqual(guia.proveedor, "local")
 
     def test_pedido_local_sin_flota_viaja_con_carrier_real(self):
         # Default TORRE["FLOTA_PROPIA"]=False: el es_local genera guía externa

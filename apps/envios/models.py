@@ -68,6 +68,14 @@ class Guia(models.Model):
         max_digits=10, decimal_places=2, default=0, help_text="Tasa preferencial envia.com"
     )
     etiqueta_url = models.CharField(max_length=500, blank=True)
+    etiqueta_pdf = models.FileField(
+        upload_to="etiquetas/%Y%m/", null=True, blank=True,
+        help_text="PDF de la etiqueta cuando el proveedor la entrega en línea (no por URL)",
+    )
+    proveedor = models.CharField(
+        max_length=20, blank=True, default="envia",
+        help_text="Integración que emitió la guía (envia / 99minutos / mock / local): cancelar y rastrear rutean por aquí",
+    )
     estado = models.CharField(max_length=20, choices=ESTADOS, default=GUIA_CREADA, db_index=True)
     ultimo_evento = models.CharField(max_length=300, blank=True)
     ts_ultimo_movimiento = models.DateTimeField(null=True, blank=True)

@@ -201,6 +201,9 @@ TORRE = {
         "fedex",
         "noventa9Minutos",
     ],
+    # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
+    # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
+    "PROVEEDOR_POR_CARRIER": {},
     "COTIZACION_CACHE_DIAS": 7,  # vigencia del caché de cotizaciones por (CP, peso)
     # ── Finanzas: tarifario default y costos (dashboard Mesa → Finanzas) ──
     # Modelo A (Colima): calibrado sobre junio-2026 real para dar ~9% de ahorro
@@ -247,6 +250,13 @@ if "test" in sys.argv:
     ENVIA_MODO = "off"  # los tests jamás tocan la API real
 ENVIA_API_BASE = os.environ.get("ENVIA_API_BASE", "https://api.envia.com")
 ENVIA_QUERIES_BASE = os.environ.get("ENVIA_QUERIES_BASE", "https://queries.envia.com")
+# 99minutos directo (proveedor "99minutos"). Sin key o modo != "full" → nada
+# real; sandbox: NOVENTA9_API_BASE=https://sandbox.99minutos.com.
+NOVENTA9_API_KEY = os.environ.get("NOVENTA9_API_KEY", "")  # client_id:client_secret
+NOVENTA9_API_BASE = os.environ.get("NOVENTA9_API_BASE", "https://delivery.99minutos.com")
+NOVENTA9_MODO = os.environ.get("NOVENTA9_MODO", "off")
+if "test" in sys.argv:
+    NOVENTA9_MODO = "off"
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")  # sin token → consola
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-01")

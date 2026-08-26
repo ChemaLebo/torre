@@ -1,5 +1,6 @@
 """poll_tracking: sincronización de pedido, incidencias RF/RET y umbrales."""
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -31,6 +32,21 @@ class PollTrackingTests(TestCase):
         Guia.objects.filter(pk=guia.pk).update(
             ts_ultimo_movimiento=timezone.now() - timedelta(hours=horas)
         )
+
+    def test_poll_rutea_adapter_por_proveedor_de_la_guia(self):
+        """Cada guía se rastrea con la integración que la emitió, no con una global."""
+        pedido = crear_pedido(self.cliente, self.tienda, estado="RECOLECTADO")
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="MOCK-0077", proveedor="mock")
+        Guia.objects.create(pedido=pedido, carrier="noventa9Minutos", numero="99M-1", proveedor="envia")
+        pedidos_proveedor = []
+
+        def fabrica(carrier=None, proveedor=None):
+            pedidos_proveedor.append(proveedor)
+            return MockAdapter()
+
+        with patch.object(services, "get_adapter", side_effect=fabrica):
+            services.poll_tracking()
+        self.assertEqual(sorted(pedidos_proveedor), ["envia", "mock"])
 
     def test_en_transito_actualiza_guia_y_pedido(self):
         pedido, guia = self._pedido_recolectado()

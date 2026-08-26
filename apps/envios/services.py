@@ -25,11 +25,26 @@ CARRIER_LOCAL = "local"
 SERVICIO_LOCAL = "entrega_local"
 SERVICIO_DEFAULT = "ground"  # Paquetexpress terrestre vía envia.com
 
+PROVEEDOR_ENVIA = "envia"
+PROVEEDOR_99MIN = "99minutos"
+PROVEEDOR_MOCK = "mock"
 
-def get_adapter():
-    """Adapter según ENVIA_MODO: generar guías reales cuesta dinero, así que
-    solo "full" usa EnviaAdapter; "cotizar" y "off" generan con MockAdapter
-    (las cotizaciones reales viven aparte, en cotizador.cotizar_lane)."""
+
+def _proveedor_para(carrier):
+    """Proveedor configurado para el carrier (TORRE['PROVEEDOR_POR_CARRIER']; default envia)."""
+    mapa = settings.TORRE.get("PROVEEDOR_POR_CARRIER") or {}
+    return mapa.get(carrier or "", PROVEEDOR_ENVIA)
+
+
+def get_adapter(carrier=None, proveedor=None):
+    """Adapter por proveedor: el de la guía manda (cancelar/rastrear van con
+    quien la EMITIÓ); si no, el mapa por carrier decide. Cada proveedor gatea
+    con su key+modo — generar guías reales cuesta dinero, así que solo "full"
+    habla con la API real; sin configuración → Mock. El slug de 99minutos sin
+    adapter directo configurado viaja por envia (fallback de configuración)."""
+    elegido = proveedor or _proveedor_para(carrier)
+    if elegido == PROVEEDOR_MOCK:
+        return MockAdapter()
     if getattr(settings, "ENVIA_API_KEY", "") and getattr(settings, "ENVIA_MODO", "cotizar") == "full":
         return EnviaAdapter()
     return MockAdapter()
@@ -76,12 +91,12 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
             pedido=pedido, paquete=paquete, carrier=carrier, servicio=servicio,
             numero=f"LOCAL-{pedido.folio}{sufijo}",
             costo_cotizado=costo_local, costo_preferencial=costo_local,
-            etiqueta_url="", estado=Guia.GUIA_CREADA,
+            etiqueta_url="", proveedor="local", estado=Guia.GUIA_CREADA,
             ultimo_evento="Entrega local propia: sin guía externa",
             ts_ultimo_movimiento=ahora,
         )
     else:
-        adapter = get_adapter()
+        adapter = get_adapter(carrier=carrier)
         costo_plan = paquete.precio_cotizado if paquete is not None else None
         try:
             datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)
@@ -100,6 +115,7 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
             costo_cotizado=costo_plan or costo,
             costo_preferencial=costo,
             etiqueta_url=datos.get("etiqueta_url", ""),
+            proveedor=getattr(adapter, "PROVEEDOR", PROVEEDOR_ENVIA),
             estado=Guia.GUIA_CREADA,
             ultimo_evento="Guía creada",
             ts_ultimo_movimiento=ahora,
@@ -233,7 +249,6 @@ def poll_tracking():
     - Si el rastreo falla, se cuenta como error de integración y NO se abren
       incidencias falsas (BLUEPRINT §1.4).
     """
-    adapter = get_adapter()
     resumen = {"rastreadas": 0, "actualizadas": 0, "incidencias": 0, "errores": 0}
     ahora = timezone.now()
     guias = (
@@ -241,8 +256,13 @@ def poll_tracking():
         .exclude(carrier=CARRIER_LOCAL)
         .select_related("pedido", "pedido__cliente")
     )
+    adapters = {}  # una guía se rastrea con el proveedor que la emitió
     for guia in guias:
         resumen["rastreadas"] += 1
+        proveedor = guia.proveedor or PROVEEDOR_ENVIA
+        adapter = adapters.get(proveedor)
+        if adapter is None:
+            adapter = adapters[proveedor] = get_adapter(proveedor=proveedor)
         try:
             info = adapter.rastrear(guia.numero)
         except ErrorCarrier as exc:

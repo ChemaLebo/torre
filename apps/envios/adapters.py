@@ -168,6 +168,8 @@ class CarrierAdapter:
 class EnviaAdapter(CarrierAdapter):
     """API real de envia.com: /ship/rate/, /ship/generate/, queries /guide/."""
 
+    PROVEEDOR = "envia"
+
     def __init__(self):
         self.api_base = settings.ENVIA_API_BASE.rstrip("/")
         self.queries_base = settings.ENVIA_QUERIES_BASE.rstrip("/")
@@ -363,6 +365,8 @@ class MockAdapter(CarrierAdapter):
     Se usa cuando no hay `ENVIA_API_KEY` (dev/demo/tests). `avanzar_estado`
     permite simular el viaje del paquete sin tocar la API real.
     """
+
+    PROVEEDOR = "mock"
 
     SECUENCIA_FELIZ = ["GUIA_CREADA", "RECOLECTADO", "EN_TRANSITO", "EN_RUTA", "ENTREGADO"]
     DESCRIPCIONES = {
