@@ -69,8 +69,8 @@ UBICACIONES = [
     ("B-02-2", "picking", ""),
     ("RES-01", "reserva", ""), ("RES-02", "reserva", ""),
     ("MER-01", "merma", ""), ("RET-01", "retorno", ""),
-    ("SAL-PQX", "salida", "paquetexpress"), ("SAL-LOCAL", "salida", "local"),
-    ("SAL-OTRO", "salida", ""),
+    ("SAL-PQX", "salida", "paquetexpress"), ("SAL-99MIN", "salida", "noventa9Minutos"),
+    ("SAL-LOCAL", "salida", "local"), ("SAL-OTRO", "salida", ""),
 ]
 
 # Stock inicial: sku → (cantidad_ok, cantidad_danada, lote, [(ubicacion, cantidad), ...])
@@ -259,12 +259,22 @@ class Command(BaseCommand):
         return usuarios
 
     def _catalogo(self, colima, nocturno):
-        from apps.catalogo.models import SKU, Lote, Ubicacion
+        from apps.catalogo.models import SKU, Categoria, Lote, Ubicacion
 
         for codigo, tipo, carriers in UBICACIONES:
             Ubicacion.objects.get_or_create(
                 codigo=codigo, defaults={"tipo": tipo, "carriers": carriers, "activo": True},
             )
+
+        def _categoria(cliente, codigo):
+            if codigo.endswith("-SIX"):
+                nombre = "Six packs"
+            elif "-C" in codigo:
+                nombre = "Cajas"
+            else:
+                nombre = "Botellas"
+            cat, _ = Categoria.objects.get_or_create(cliente=cliente, nombre=nombre)
+            return cat
 
         skus = {}
         for cliente, especificacion in ((colima, SKUS_COLIMA), (nocturno, SKUS_NOCTURNO)):
@@ -285,6 +295,9 @@ class Command(BaseCommand):
                 if "C24" in codigo and sku.empaques_divisibles != 2:
                     sku.empaques_divisibles = 2
                     sku.save(update_fields=["empaques_divisibles"])
+                if sku.categoria_id is None:
+                    sku.categoria = _categoria(cliente, codigo)
+                    sku.save(update_fields=["categoria"])
                 skus[codigo] = sku
 
         caducidad_cerveza = timezone.localdate() + timedelta(days=240)

@@ -735,8 +735,13 @@ MOCK_TARIFARIO = {
     "estafeta": {4: 149, 8: 177, 12: 201, 16: 224, 20: 247, 25: 278},
     "paquetexpress": {4: 194, 8: 228, 12: 260, 16: 291, 20: 323, 25: 362},
     "fedex": {4: 184, 8: 229, 12: 248, 16: 297, 20: 331, 25: 376},
+    # Estimado para demo/dev (carril SAL-99MIN): medir contra la API directa.
+    "noventa9Minutos": {4: 139, 8: 165, 12: 189, 16: 210, 20: 232, 25: 260},
 }
-MOCK_ESTIMADOS = {"puntopost": "5-7 días", "estafeta": "2-3 días", "paquetexpress": "1-2 días", "fedex": "1-2 días"}
+MOCK_ESTIMADOS = {
+    "puntopost": "5-7 días", "estafeta": "2-3 días", "paquetexpress": "1-2 días",
+    "fedex": "1-2 días", "noventa9Minutos": "2-4 días",
+}
 
 
 def _interpolar(tabla, peso):
