@@ -174,9 +174,10 @@ class DireccionPedidoManualTests(BasePedidoManualVista):
         self.assertTrue(form.is_valid(), form.errors)
         return form
 
-    def test_cp_de_guadalajara_trae_province_code_ja(self):
+    def test_cp_de_guadalajara_trae_province_code_jal(self):
         direccion = self._form_valido("44100").direccion()
-        self.assertEqual(direccion["province_code"], "JA")
+        # Vocabulario code_shopify de envia (JAL, no el JA de la tabla vieja).
+        self.assertEqual(direccion["province_code"], "JAL")
         self.assertEqual(direccion["province"], "Jalisco")  # el texto capturado se conserva
 
     def test_cp_sin_mapa_deja_province_code_vacio(self):

@@ -20,23 +20,29 @@ from apps.core.services import registrar_evento
 
 from .models import CotizacionCache, Paquete, PaqueteLinea
 
-# CP mexicano (2 primeros dígitos) → código de estado que espera envia.com.
+# CP mexicano (2 primeros dígitos) → código de estado de envia.com, columna
+# code_shopify de GET /state?country_code=MX — el vocabulario que
+# /ship/generate/ VALIDA (FAQ de envia: jamás ISO/2-dígitos; el rate es laxo
+# y aceptaba cualquier cosa, por eso la tabla vieja con CL/JA/GJ durmió hasta
+# la primera guía foránea, error 1129 "State code not founded").
 CP_ESTADO = {
     "00": "DF", "01": "DF", "02": "DF", "03": "DF", "04": "DF", "05": "DF", "06": "DF",
     "07": "DF", "08": "DF", "09": "DF", "10": "DF", "11": "DF", "12": "DF", "13": "DF",
     "14": "DF", "15": "DF", "16": "DF",
-    "20": "AG", "21": "BC", "22": "BC", "23": "BS", "24": "CM", "25": "CO", "26": "CO",
-    "27": "CO", "28": "CL", "29": "CS", "30": "CS", "31": "CH", "32": "CH", "33": "CH",
-    "34": "DG", "35": "DG", "36": "GJ", "37": "GJ", "38": "GJ", "39": "GR", "40": "GR",
-    "41": "GR", "42": "HG", "43": "HG", "44": "JA", "45": "JA", "46": "JA", "47": "JA",
-    "48": "JA", "49": "JA", "50": "EM", "51": "EM", "52": "EM", "53": "EM", "54": "EM",
-    "55": "EM", "56": "EM", "57": "EM", "58": "MI", "59": "MI", "60": "MI", "61": "MI",
-    "62": "MO", "63": "NA", "64": "NL", "65": "NL", "66": "NL", "67": "NL", "68": "OA",
-    "69": "OA", "70": "OA", "71": "OA", "72": "PU", "73": "PU", "74": "PU", "75": "PU",
-    "76": "QT", "77": "QR", "78": "SL", "79": "SL", "80": "SI", "81": "SI", "82": "SI",
-    "83": "SO", "84": "SO", "85": "SO", "86": "TB", "87": "TM", "88": "TM", "89": "TM",
-    "90": "TL", "91": "VE", "92": "VE", "93": "VE", "94": "VE", "95": "VE", "96": "VE",
-    "97": "YU", "98": "ZA", "99": "ZA",
+    "20": "AGS", "21": "BC", "22": "BC", "23": "BCS", "24": "CAMP", "25": "COAH",
+    "26": "COAH", "27": "COAH", "28": "COL", "29": "CHIS", "30": "CHIS", "31": "CHIH",
+    "32": "CHIH", "33": "CHIH", "34": "DGO", "35": "DGO", "36": "GTO", "37": "GTO",
+    "38": "GTO", "39": "GRO", "40": "GRO", "41": "GRO", "42": "HGO", "43": "HGO",
+    "44": "JAL", "45": "JAL", "46": "JAL", "47": "JAL", "48": "JAL", "49": "JAL",
+    "50": "MEX", "51": "MEX", "52": "MEX", "53": "MEX", "54": "MEX", "55": "MEX",
+    "56": "MEX", "57": "MEX", "58": "MICH", "59": "MICH", "60": "MICH", "61": "MICH",
+    "62": "MOR", "63": "NAY", "64": "NL", "65": "NL", "66": "NL", "67": "NL",
+    "68": "OAX", "69": "OAX", "70": "OAX", "71": "OAX", "72": "PUE", "73": "PUE",
+    "74": "PUE", "75": "PUE", "76": "QRO", "77": "Q ROO", "78": "SLP", "79": "SLP",
+    "80": "SIN", "81": "SIN", "82": "SIN", "83": "SON", "84": "SON", "85": "SON",
+    "86": "TAB", "87": "TAMPS", "88": "TAMPS", "89": "TAMPS", "90": "TLAX",
+    "91": "VER", "92": "VER", "93": "VER", "94": "VER", "95": "VER", "96": "VER",
+    "97": "YUC", "98": "ZAC", "99": "ZAC",
 }
 
 def sanear_texto(texto):

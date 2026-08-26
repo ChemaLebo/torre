@@ -13,32 +13,38 @@ from .base import crear_cliente, crear_pedido, crear_tienda
 
 
 class DestinoEnviaTests(TestCase):
-    """El state del destino sale del CP (tabla de envia), no del código ISO de Shopify."""
+    """El state va en el vocabulario code_shopify de envia (FAQ: /ship/generate/
+    lo valida; el province_code de Shopify ES ese vocabulario y pasa derecho)."""
 
     def _pedido(self, cp, province_code):
         from types import SimpleNamespace
+        direccion = {"address1": "Calle 1", "city": "X", "zip": cp}
+        if province_code is not None:
+            direccion["province_code"] = province_code
         return SimpleNamespace(
-            cp=cp,
-            direccion={"address1": "Calle 1", "city": "X", "zip": cp, "province_code": province_code},
+            cp=cp, direccion=direccion,
             comprador_nombre="Prueba", comprador_tel="", comprador_email="",
         )
 
-    def test_colima_manda_cl_no_col(self):
+    def test_province_code_de_shopify_pasa_derecho(self):
         from apps.envios.adapters import EnviaAdapter
         destino = EnviaAdapter._destino(self._pedido("28048", "COL"))
-        self.assertEqual(destino["state"], "CL")  # COL de Shopify = error 1129 en envia
+        self.assertEqual(destino["state"], "COL")  # jamás CL: el 2-dígitos da 1129
 
-    def test_cdmx_sigue_siendo_df(self):
+    def test_pedido_manual_sin_province_code_deriva_del_cp(self):
         from apps.envios.adapters import EnviaAdapter
-        destino = EnviaAdapter._destino(self._pedido("01780", "DF"))
+        destino = EnviaAdapter._destino(self._pedido("28048", None))
+        self.assertEqual(destino["state"], "COL")
+
+    def test_cdmx_manual_es_df(self):
+        from apps.envios.adapters import EnviaAdapter
+        destino = EnviaAdapter._destino(self._pedido("01780", None))
         self.assertEqual(destino["state"], "DF")
 
-    def test_sin_cp_cae_al_codigo_de_la_direccion(self):
+    def test_guadalajara_manual_es_jal(self):
         from apps.envios.adapters import EnviaAdapter
-        pedido = self._pedido("", "COL")
-        pedido.direccion["zip"] = ""
-        destino = EnviaAdapter._destino(pedido)
-        self.assertEqual(destino["state"], "COL")
+        destino = EnviaAdapter._destino(self._pedido("44100", None))
+        self.assertEqual(destino["state"], "JAL")  # la tabla vieja decía JA
 
 
 TORRE_99MIN_DIRECTO = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}

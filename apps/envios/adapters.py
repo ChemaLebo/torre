@@ -221,11 +221,11 @@ class EnviaAdapter(CarrierAdapter):
 
         d = pedido.direccion or {}
         cp = str(pedido.cp or d.get("zip") or d.get("postalCode") or "").strip()
-        # Shopify manda códigos ISO (COL, JAL, MOR...); envia quiere los suyos
-        # (CL, JA, MO...). El CP es la fuente que no miente — DF era la única
-        # coincidencia entre vocabularios y por eso el bug durmió hasta el
-        # primer envío foráneo (error 1129 "State code not founded").
-        estado = CP_ESTADO.get(cp[:2]) or d.get("province_code") or d.get("state") or d.get("estado", "")
+        # /ship/generate/ valida contra la columna code_shopify de su catálogo
+        # (FAQ de envia) — que es EXACTAMENTE el province_code de Shopify: se
+        # pasa derecho, y el CP (tabla en ese mismo vocabulario) cubre los
+        # pedidos manuales sin province_code.
+        estado = d.get("province_code") or CP_ESTADO.get(cp[:2]) or d.get("state") or d.get("estado", "")
         return {
             "name": pedido.comprador_nombre or d.get("name", ""),
             "street": d.get("address1") or d.get("street") or d.get("calle", ""),

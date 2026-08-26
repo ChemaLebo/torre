@@ -41,17 +41,18 @@ from django.utils import timezone
 CARRIERS_METRO = {"puntopost"}
 CARRIER_LOCAL = "local"
 
-# Nombre legible por código de estado de envia.com (cotizador.CP_ESTADO).
+# Nombre legible por código de estado (cotizador.CP_ESTADO, vocabulario
+# code_shopify de envia).
 NOMBRE_ESTADO = {
-    "DF": "Ciudad de México", "AG": "Aguascalientes", "BC": "Baja California",
-    "BS": "Baja California Sur", "CM": "Campeche", "CO": "Coahuila", "CL": "Colima",
-    "CS": "Chiapas", "CH": "Chihuahua", "DG": "Durango", "GJ": "Guanajuato",
-    "GR": "Guerrero", "HG": "Hidalgo", "JA": "Jalisco", "EM": "Estado de México",
-    "MI": "Michoacán", "MO": "Morelos", "NA": "Nayarit", "NL": "Nuevo León",
-    "OA": "Oaxaca", "PU": "Puebla", "QT": "Querétaro", "QR": "Quintana Roo",
-    "SL": "San Luis Potosí", "SI": "Sinaloa", "SO": "Sonora", "TB": "Tabasco",
-    "TM": "Tamaulipas", "TL": "Tlaxcala", "VE": "Veracruz", "YU": "Yucatán",
-    "ZA": "Zacatecas",
+    "DF": "Ciudad de México", "AGS": "Aguascalientes", "BC": "Baja California",
+    "BCS": "Baja California Sur", "CAMP": "Campeche", "COAH": "Coahuila",
+    "COL": "Colima", "CHIS": "Chiapas", "CHIH": "Chihuahua", "DGO": "Durango",
+    "GTO": "Guanajuato", "GRO": "Guerrero", "HGO": "Hidalgo", "JAL": "Jalisco",
+    "MEX": "Estado de México", "MICH": "Michoacán", "MOR": "Morelos",
+    "NAY": "Nayarit", "NL": "Nuevo León", "OAX": "Oaxaca", "PUE": "Puebla",
+    "QRO": "Querétaro", "Q ROO": "Quintana Roo", "SLP": "San Luis Potosí",
+    "SIN": "Sinaloa", "SON": "Sonora", "TAB": "Tabasco", "TAMPS": "Tamaulipas",
+    "TLAX": "Tlaxcala", "VER": "Veracruz", "YUC": "Yucatán", "ZAC": "Zacatecas",
 }
 SIN_ESTADO = "Sin estado (no capturado)"
 
