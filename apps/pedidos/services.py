@@ -345,8 +345,11 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
     peso_esperado = 0
     for item in payload.get("line_items") or []:
         codigo = str(item.get("sku") or "").strip()
+        # current_quantity = lo que QUEDA por surtir tras refunds parciales o
+        # ediciones (quantity es lo pedido original y nunca cambia). Payloads
+        # sin la llave caen a quantity; una línea removida (0) no crea línea.
         try:
-            cantidad = int(item.get("quantity") or 0)
+            cantidad = int(item.get("current_quantity", item.get("quantity")) or 0)
         except (TypeError, ValueError):
             cantidad = 0
         if cantidad <= 0:

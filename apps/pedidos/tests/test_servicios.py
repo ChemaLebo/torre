@@ -114,6 +114,25 @@ class IngestaTests(BaseServicios):
         confirmacion.assert_called_once()
         abrir.assert_not_called()
 
+    def test_ingesta_respeta_current_quantity(self):
+        """Orden que llega ya parcialmente reembolsada: se surte lo que QUEDA."""
+        payload = payload_shopify()
+        payload["line_items"][0]["current_quantity"] = 1  # pidió 2, le reembolsaron 1
+        pedido, reservar, _, _ = self._ingerir(payload)
+        linea = pedido.lineas.get()
+        self.assertEqual(linea.cantidad, 1)
+        self.assertEqual(pedido.peso_esperado_gr, 2400)
+        reservar.assert_called_once_with(self.sku, 1, pedido.folio)
+
+    def test_linea_totalmente_removida_no_crea_linea(self):
+        payload = payload_shopify()
+        payload["line_items"].append({
+            "sku": "COL-SIX", "quantity": 1, "current_quantity": 0,
+            "price": "189.00", "title": "Colimita six",
+        })
+        pedido, _, _, _ = self._ingerir(payload)
+        self.assertEqual(pedido.lineas.count(), 1)  # solo la línea viva
+
     def test_ingesta_idempotente_no_duplica(self):
         with patch("apps.inventario.services.reservar", return_value=True) as reservar, \
              patch("apps.mensajeria.services.enviar_confirmacion"):
