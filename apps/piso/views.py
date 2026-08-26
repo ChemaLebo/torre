@@ -1421,8 +1421,10 @@ def etiqueta(request, guia_pk):
 
 def _etiqueta_imprimir(request, guia):
     """Botón 🖨: manda la etiqueta a la térmica y regresa (PRG) a donde estaba
-    el packer — la propia etiqueta, o salida si el POST trae volver=salida."""
-    if request.POST.get("accion") != "imprimir":
+    el packer — la propia etiqueta, o salida si el POST trae volver=salida.
+    accion=imprimir → la del carrier (default); imprimir_interna → la de Torre."""
+    accion = request.POST.get("accion")
+    if accion not in ("imprimir", "imprimir_interna"):
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:etiqueta", guia_pk=guia.pk)
     destino = (
@@ -1433,7 +1435,7 @@ def _etiqueta_imprimir(request, guia):
     from .etiquetas import imprimir_etiqueta
 
     try:
-        mensaje = imprimir_etiqueta(guia)
+        mensaje = imprimir_etiqueta(guia, interna=(accion == "imprimir_interna"))
     except ValueError as exc:
         messages.error(request, str(exc))
     else:

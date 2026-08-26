@@ -168,10 +168,12 @@ class VistaImprimirTests(EtiquetaTestCase):
         self.assertContains(respuesta, "Imprimir en bodega")
         self.assertContains(respuesta, 'name="accion" value="imprimir"')
 
-    def test_salida_muestra_el_boton_de_impresion_por_guia_activa(self):
+    def test_salida_muestra_ambos_botones_de_impresion_por_guia_activa(self):
         guia = self.crear_guia()  # pedido queda GUIA_GENERADA
         respuesta = self.client.get(reverse("piso:salida"))
-        self.assertContains(respuesta, "🖨")
-        self.assertContains(respuesta, 'title="Imprimir en bodega"')
+        self.assertContains(respuesta, "🖨 carrier")
+        self.assertContains(respuesta, "🖨 interna")
+        self.assertContains(respuesta, 'value="imprimir"')
+        self.assertContains(respuesta, 'value="imprimir_interna"')
         self.assertContains(respuesta, f'action="{reverse("piso:etiqueta", args=[guia.pk])}"')
         self.assertContains(respuesta, 'name="volver" value="salida"')

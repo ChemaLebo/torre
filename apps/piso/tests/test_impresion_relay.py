@@ -58,6 +58,45 @@ class ImprimirEtiquetaRelayTests(EtiquetaTestCase):
         ).latest("id")
         self.assertEqual(evento.delta["folio"], guia.pedido.folio)
         self.assertEqual(evento.delta["trabajo"], trabajo.pk)
+
+    def test_interna_encola_la_dibujada_jamas_la_del_carrier(self):
+        guia = self.crear_guia()
+        with mock.patch("apps.piso.etiquetas._pdf_etiqueta") as carrier, \
+             mock.patch(
+                 "apps.piso.etiquetas.generar_pdf_etiqueta", return_value=b"%PDF-interna"
+             ) as dibujada:
+            mensaje = imprimir_etiqueta(guia, interna=True)
+        carrier.assert_not_called()
+        dibujada.assert_called_once_with(guia)
+        trabajo = TrabajoImpresion.objects.get()
+        self.assertIn("-interna", trabajo.pdf.name)
+        self.assertIn("interna", mensaje)
+        evento = EventoAuditoria.objects.filter(accion="encolada_impresion").latest("id")
+        self.assertTrue(evento.delta["interna"])
+
+    def test_default_sigue_siendo_la_del_carrier(self):
+        """Decisión 2026-08-10 intacta: sin interna=True, la oficial del carrier."""
+        guia = self.crear_guia()
+        with mock.patch(
+            "apps.piso.etiquetas._pdf_etiqueta", return_value=b"%PDF-carrier"
+        ) as carrier, \
+             mock.patch("apps.piso.etiquetas.generar_pdf_etiqueta") as dibujada:
+            imprimir_etiqueta(guia)
+        carrier.assert_called_once_with(guia)
+        dibujada.assert_not_called()
+
+    def test_boton_imprimir_interna_desde_salida(self):
+        guia = self.crear_guia()
+        self.login_piso()
+        with mock.patch(
+            "apps.piso.etiquetas.imprimir_etiqueta", return_value="interna en cola"
+        ) as imprimir:
+            respuesta = self.client.post(
+                reverse("piso:etiqueta", args=[guia.pk]),
+                {"accion": "imprimir_interna", "volver": "salida"},
+            )
+        imprimir.assert_called_once_with(guia, interna=True)
+        self.assertRedirects(respuesta, reverse("piso:salida"), fetch_redirect_response=False)
         # En relay nada se imprimió aún: ese evento lo gana el trabajo al confirmarse.
         self.assertFalse(
             EventoAuditoria.objects.filter(accion="impresa_en_bodega").exists()

@@ -65,11 +65,16 @@
         {% if g.etiqueta_url %}
         <a class="btn chico" href="{{ g.etiqueta_url }}" target="_blank" rel="noopener">PDF carrier{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
         {% endif %}
-        <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
+        <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta interna{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
         <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
           <input type="hidden" name="accion" value="imprimir">
           <input type="hidden" name="volver" value="salida">
-          <button class="btn chico" type="submit" title="Imprimir en bodega" aria-label="Imprimir etiqueta en la impresora de bodega">🖨</button>
+          <button class="btn chico" type="submit" title="Imprimir etiqueta del CARRIER en bodega (la que rutea el paquete)" aria-label="Imprimir etiqueta del carrier en la impresora de bodega">🖨 carrier</button>
+        </form>
+        <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
+          <input type="hidden" name="accion" value="imprimir_interna">
+          <input type="hidden" name="volver" value="salida">
+          <button class="btn chico" type="submit" title="Imprimir etiqueta INTERNA de Torre en bodega (QR del repartidor)" aria-label="Imprimir etiqueta interna en la impresora de bodega">🖨 interna</button>
         </form>
         {% endfor %}
       </div>

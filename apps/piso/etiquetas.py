@@ -378,37 +378,45 @@ def _pdf_etiqueta(guia):
     return pdf
 
 
-def _encolar_etiqueta(guia):
+def _encolar_etiqueta(guia, interna=False):
     """Modo relay: guarda el PDF en un TrabajoImpresion; el agente de bodega imprime.
 
     No toca `lp` ni necesita impresora en el servidor. El trabajo queda
     PENDIENTE y el agente lo recoge por la API en el siguiente poll (segundos).
+    interna=True encola la etiqueta DIBUJADA de Torre (QR del repartidor) en
+    vez de la oficial del carrier.
     """
     from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
 
     pedido = guia.pedido
-    pdf = _pdf_etiqueta(guia)
+    pdf = generar_pdf_etiqueta(guia) if interna else _pdf_etiqueta(guia)
+    sufijo = "-interna" if interna else ""
     trabajo = TrabajoImpresion.objects.create(
         guia=guia,
-        pdf=ContentFile(pdf, name=f"etiqueta-{pedido.folio}-g{guia.pk}.pdf"),
+        pdf=ContentFile(pdf, name=f"etiqueta-{pedido.folio}-g{guia.pk}{sufijo}.pdf"),
     )
     registrar_evento(
         "etiqueta", guia.numero, "encolada_impresion",
-        delta={"folio": pedido.folio, "trabajo": trabajo.pk},
+        delta={"folio": pedido.folio, "trabajo": trabajo.pk, "interna": interna},
     )
-    return f"Etiqueta de {pedido.folio} en cola de impresión — sale en segundos en la bodega."
+    cual = "interna " if interna else ""
+    return f"Etiqueta {cual}de {pedido.folio} en cola de impresión — sale en segundos en la bodega."
 
 
-def imprimir_etiqueta(guia):
+def imprimir_etiqueta(guia, interna=False):
     """Imprime la etiqueta según TORRE_MODO_IMPRESION. Regresa el mensaje de éxito.
 
     "local" (default): genera el PDF y lo manda a la térmica con `lp` — la cola
     CUPS viene de TORRE_IMPRESORA_ETIQUETAS (torre/.env). "relay": la encola
     para el agente de bodega. Cualquier falla se traduce a ValueError con qué
     pasó y qué hacer, para el flash del piso.
+
+    interna=True imprime la etiqueta DIBUJADA de Torre (QR + Code128 + token
+    del repartidor) bajo demanda. El default sigue la decisión 2026-08-10:
+    la etiqueta del carrier — sus códigos son los que rutean en su red.
     """
     if getattr(settings, "TORRE_MODO_IMPRESION", "local") == "relay":
-        return _encolar_etiqueta(guia)
+        return _encolar_etiqueta(guia, interna=interna)
     cola = os.environ.get("TORRE_IMPRESORA_ETIQUETAS", "").strip()
     if not cola:
         raise ValueError(
@@ -417,7 +425,7 @@ def imprimir_etiqueta(guia):
             "mientras, usa el botón Imprimir del navegador."
         )
     pedido = guia.pedido
-    pdf = _pdf_etiqueta(guia)
+    pdf = generar_pdf_etiqueta(guia) if interna else _pdf_etiqueta(guia)
     with tempfile.NamedTemporaryFile(
         suffix=".pdf", prefix=f"etiqueta-{pedido.folio}-", delete=False
     ) as archivo:
