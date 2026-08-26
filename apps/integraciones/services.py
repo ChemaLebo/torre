@@ -99,6 +99,39 @@ def registrar_webhook(tienda, webhook_id, topic, payload, origen=WebhookEvento.O
     return evento, creado
 
 
+def lineas_fulfillment_nuestras(tienda, order_id):
+    """Qué líneas/cantidades de la orden amparan NUESTROS tickets de fulfillment.
+
+    None → sin datos para filtrar (tienda sin token o sin location_id, o la
+    orden aún no trae FOs): el caller ingiere la orden completa, el
+    comportamiento de siempre. Dict → {"parcial": bool (hay tickets ajenos),
+    "cantidades": {line_item_id: piezas}, "fos": [gids nuestros]};
+    cantidades vacías = ningún ticket es nuestro. ShopifyError se propaga:
+    el webhook queda sin procesar para replay (fail-closed).
+    """
+    if not tienda.token or not (tienda.location_id or "").strip():
+        return None
+    api = ShopifyClient(tienda)
+    nuestra = api.location_gid
+    fos = api.fulfillment_orders_lineas(order_id)
+    if not fos:
+        return None  # sin FOs (¿routing en curso?): mejor completo que perder la orden
+    cantidades, nuestros = {}, []
+    ajenos = False
+    for fo in fos:
+        ubicacion = fo["location_gid"]
+        if ubicacion and ubicacion != nuestra:
+            ajenos = True
+            continue
+        nuestros.append(fo["gid"])
+        for linea in fo["lineas"]:
+            if linea["line_item_id"]:
+                cantidades[linea["line_item_id"]] = (
+                    cantidades.get(linea["line_item_id"], 0) + linea["cantidad"]
+                )
+    return {"parcial": ajenos, "cantidades": cantidades, "fos": nuestros}
+
+
 # ── Push de inventario ───────────────────────────────────────────────────────
 
 def encolar_push_inventario(sku):

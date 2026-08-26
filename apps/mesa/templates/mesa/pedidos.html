@@ -55,7 +55,10 @@
         <td class="small">{% if pedido.tienda %}{{ pedido.tienda.dominio }}{% else %}manual{% endif %}</td>
         <td>{{ pedido.comprador_nombre|default:"—" }}</td>
         <td>{% if pedido.es_local %}<span class="pill accent">local</span>{% else %}<span class="small">CP {{ pedido.cp|default:"—" }}</span>{% endif %}</td>
-        <td><span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span></td>
+        <td>
+          <span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span>
+          {% if pedido.parcial_de_orden %}<span class="pill accent" title="La orden se dividió entre locations: este pedido ampara solo nuestro ticket">parcial</span>{% endif %}
+        </td>
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% else %}<span class="small">—</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
         <td>

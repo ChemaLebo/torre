@@ -53,12 +53,16 @@ class BaseServicios(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        # location_id vacío: la suite ejercita el camino legado (orden completa,
+        # sin consulta de fulfillment orders). El camino acotado a nuestro
+        # ticket tiene su propia clase (IngestaPorTicketTests) con el seam
+        # de integraciones parchado.
         cls.tienda = Tienda.objects.create(
             cliente=cls.cliente,
             plataforma="shopify",
             dominio="colima-mx.myshopify.com",
             token="tok-demo",
-            location_id="1",
+            location_id="",
         )
         cls.sku = SKU.objects.create(
             cliente=cls.cliente,
@@ -245,6 +249,97 @@ class IngestaTests(BaseServicios):
     def test_payload_sin_id_truena(self):
         with self.assertRaises(ValueError):
             services.ingerir_pedido_shopify(self.tienda, {"line_items": []})
+
+
+class IngestaPorTicketTests(BaseServicios):
+    """Stage 2 multi-location: se ingieren solo líneas/cantidades de NUESTRO ticket."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.sku_caja = SKU.objects.create(
+            cliente=cls.cliente, codigo="COL-C12", descripcion="Caja 12 Colimita",
+            peso_gr=8000, precio_declarado=Decimal("400.00"),
+        )
+
+    def _payload_dos_lineas(self, order_id):
+        payload = payload_shopify(order_id=order_id)
+        payload["line_items"] = [
+            {"id": 111, "sku": "COL-SIX", "quantity": 2, "price": "189.00", "title": "Six"},
+            {"id": 222, "sku": "COL-C12", "quantity": 1, "price": "400.00", "title": "Caja"},
+        ]
+        payload["total_price"] = "778.00"
+        return payload
+
+    def _ingerir_con_ticket(self, payload, ticket):
+        with patch("apps.integraciones.services.lineas_fulfillment_nuestras", **ticket), \
+             patch("apps.inventario.services.reservar", return_value=True) as reservar, \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             self.captureOnCommitCallbacks(execute=True):
+            pedido = services.ingerir_pedido_shopify(self.tienda, payload)
+        return pedido, reservar
+
+    def test_subset_ingiere_solo_lo_nuestro(self):
+        ticket = {"parcial": True, "cantidades": {"111": 2}, "fos": ["gid://shopify/FulfillmentOrder/1"]}
+        pedido, reservar = self._ingerir_con_ticket(
+            self._payload_dos_lineas(8001), {"return_value": ticket},
+        )
+        self.assertEqual(pedido.lineas.count(), 1)
+        linea = pedido.lineas.get()
+        self.assertEqual(linea.sku, self.sku)
+        self.assertEqual(linea.cantidad, 2)
+        self.assertTrue(pedido.parcial_de_orden)
+        self.assertEqual(pedido.valor_declarado, Decimal("378.00"))  # solo lo nuestro
+        self.assertEqual(pedido.peso_esperado_gr, 4800)
+        reservar.assert_called_once_with(self.sku, 2, pedido.folio)
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="ingesta",
+        )
+        self.assertTrue(evento.delta["parcial"])
+        self.assertEqual(evento.delta["fos"], ["gid://shopify/FulfillmentOrder/1"])
+
+    def test_split_de_linea_toma_solo_lo_asignado(self):
+        ticket = {"parcial": True, "cantidades": {"111": 1}, "fos": ["gid://x/1"]}
+        pedido, reservar = self._ingerir_con_ticket(
+            self._payload_dos_lineas(8002), {"return_value": ticket},
+        )
+        self.assertEqual(pedido.lineas.get().cantidad, 1)
+        reservar.assert_called_once_with(self.sku, 1, pedido.folio)
+
+    def test_nada_nuestro_omite_sin_crear_pedido(self):
+        ticket = {"parcial": True, "cantidades": {}, "fos": []}
+        pedido, _ = self._ingerir_con_ticket(
+            self._payload_dos_lineas(8003), {"return_value": ticket},
+        )
+        self.assertIsNone(pedido)
+        self.assertEqual(Pedido.objects.count(), 0)
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id="8003", accion="ingesta_omitida_otra_location",
+        ).exists())
+
+    def test_todo_nuestro_no_es_parcial_y_conserva_el_total(self):
+        ticket = {"parcial": False, "cantidades": {"111": 2, "222": 1}, "fos": ["gid://x/1"]}
+        pedido, _ = self._ingerir_con_ticket(
+            self._payload_dos_lineas(8004), {"return_value": ticket},
+        )
+        self.assertEqual(pedido.lineas.count(), 2)
+        self.assertFalse(pedido.parcial_de_orden)
+        self.assertEqual(pedido.valor_declarado, Decimal("778.00"))  # total de la orden
+
+    def test_sin_datos_ingiere_completo(self):
+        pedido, _ = self._ingerir_con_ticket(
+            self._payload_dos_lineas(8005), {"return_value": None},
+        )
+        self.assertEqual(pedido.lineas.count(), 2)
+        self.assertFalse(pedido.parcial_de_orden)
+
+    def test_error_de_shopify_se_propaga_para_replay(self):
+        from apps.integraciones.shopify import ShopifyError
+        with self.assertRaises(ShopifyError):
+            self._ingerir_con_ticket(
+                self._payload_dos_lineas(8006), {"side_effect": ShopifyError("caída")},
+            )
+        self.assertEqual(Pedido.objects.count(), 0)
 
 
 class EdicionOrdenTests(BaseServicios):

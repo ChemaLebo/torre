@@ -91,6 +91,10 @@ class Pedido(models.Model):
     direccion = models.JSONField(default=dict, blank=True)
     cp = models.CharField("código postal", max_length=10, blank=True)
     es_local = models.BooleanField(default=False, help_text="CP de Colima (28xxx): entrega local propia")
+    parcial_de_orden = models.BooleanField(
+        default=False,
+        help_text="La orden de Shopify se dividió entre locations: este pedido ampara solo NUESTRO ticket",
+    )
     valor_declarado = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     nota_regalo = models.TextField(blank=True)
     estado = models.CharField(max_length=30, choices=ESTADOS, default=PENDIENTE, db_index=True)

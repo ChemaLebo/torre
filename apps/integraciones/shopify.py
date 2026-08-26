@@ -64,6 +64,32 @@ query ordenesDeFulfillment($id: ID!) {
 }
 """
 
+CONSULTA_FOS_LINEAS = """
+query lineasDeFulfillment($id: ID!) {
+  order(id: $id) {
+    id
+    fulfillmentOrders(first: 10) {
+      edges {
+        node {
+          id
+          status
+          assignedLocation { location { id } }
+          lineItems(first: 100) {
+            edges {
+              node {
+                totalQuantity
+                remainingQuantity
+                lineItem { id sku }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 # fulfillmentCreateV2 quedó deprecado (2024-07): en versiones modernas la
 # mutación es fulfillmentCreate con el mismo input.
 MUTACION_CREAR_FULFILLMENT = """
@@ -211,6 +237,45 @@ class ShopifyClient:
                 continue
             ubicacion = ((nodo.get("assignedLocation") or {}).get("location") or {}).get("id") or ""
             resultado.append((nodo["id"], nodo.get("status") or "", ubicacion))
+        return resultado
+
+    def fulfillment_orders_lineas(self, order_id):
+        """FOs con sus líneas: [{gid, status, location_gid, lineas}] donde cada
+        línea es {line_item_id (numérico, como el REST), sku, cantidad}.
+
+        cantidad = remainingQuantity del ticket (lo que FALTA por surtir —
+        descuenta refunds/ediciones, misma semántica que current_quantity).
+        """
+        gid = str(order_id)
+        if not gid.startswith("gid://"):
+            gid = f"gid://shopify/Order/{gid}"
+        datos = self.graphql(CONSULTA_FOS_LINEAS, {"id": gid})
+        orden = datos.get("order") or {}
+        if not orden:
+            raise ShopifyError(f"Pedido {order_id} no existe en {self.tienda.dominio}.")
+        resultado = []
+        for edge in (orden.get("fulfillmentOrders") or {}).get("edges") or []:
+            nodo = edge.get("node") or {}
+            if not nodo.get("id"):
+                continue
+            ubicacion = ((nodo.get("assignedLocation") or {}).get("location") or {}).get("id") or ""
+            lineas = []
+            for linea_edge in (nodo.get("lineItems") or {}).get("edges") or []:
+                linea = linea_edge.get("node") or {}
+                item = linea.get("lineItem") or {}
+                item_gid = str(item.get("id") or "")
+                restante = linea.get("remainingQuantity")
+                if restante is None:
+                    restante = linea.get("totalQuantity") or 0
+                lineas.append({
+                    "line_item_id": item_gid.rsplit("/", 1)[-1],
+                    "sku": (item.get("sku") or "").strip(),
+                    "cantidad": int(restante),
+                })
+            resultado.append({
+                "gid": nodo["id"], "status": nodo.get("status") or "",
+                "location_gid": ubicacion, "lineas": lineas,
+            })
         return resultado
 
     def crear_fulfillment(self, fulfillment_order_ids, numeros_guia, url_rastreo, carrier, notificar=True):

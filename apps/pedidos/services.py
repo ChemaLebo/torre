@@ -455,10 +455,71 @@ def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
     return pedido
 
 
-def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
+def _ticket_nuestro(tienda, shopify_order_id):
+    """Cantidades por line_item de NUESTROS tickets (integraciones). None =
+    sin datos para filtrar → se ingiere la orden completa (comportamiento de
+    siempre). Un ShopifyError se propaga: el webhook queda para replay."""
+    try:
+        from apps.integraciones.services import lineas_fulfillment_nuestras  # lazy por contrato
+    except ImportError:
+        return None
+    return lineas_fulfillment_nuestras(tienda, shopify_order_id)
+
+
+def _cantidad_de_item(item, ticket):
+    """Piezas a surtir de un item del payload.
+
+    current_quantity = lo que QUEDA tras refunds/ediciones (quantity es lo
+    original y nunca cambia; payloads sin la llave caen a quantity), acotado
+    a lo que ampara NUESTRO ticket cuando la orden se dividió entre
+    locations. None = la línea es de otro ticket.
+    """
+    try:
+        cantidad = int(item.get("current_quantity", item.get("quantity")) or 0)
+    except (TypeError, ValueError):
+        cantidad = 0
+    if ticket is not None:
+        asignada = ticket["cantidades"].get(str(item.get("id") or ""))
+        if asignada is None:
+            return None
+        cantidad = min(cantidad, asignada)  # split de línea: solo lo nuestro
+    return cantidad
+
+
+def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
+    """Crea la línea del item (si su SKU existe) y reserva. Regresa (peso_gr, valor)."""
     from apps.catalogo.models import SKU  # lazy: modelo de otra app
 
+    codigo = str(item.get("sku") or "").strip()
+    sku = SKU.objects.filter(cliente=pedido.cliente, codigo=codigo).first() if codigo else None
+    if sku is None:
+        faltantes.append(f"SKU desconocido: {codigo or item.get('title', '?')} × {cantidad}")
+        return 0, Decimal("0")
+    try:
+        valor = Decimal(str(item.get("price") or "0")) * cantidad
+    except InvalidOperation:
+        valor = Decimal("0")
+    linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
+    # Orden que llega ya cancelada: no se aparta stock.
+    if not cancelada and not _reservar_linea(linea):
+        faltantes.append(f"Sin stock suficiente: {sku.codigo} × {cantidad}")
+    return (sku.peso_gr or 0) * cantidad, valor
+
+
+def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
     cliente = tienda.cliente
+
+    # Multi-location (Stage 2): la orden puede dividirse entre bodegas — solo
+    # se ingieren las líneas/cantidades de NUESTROS tickets de fulfillment.
+    ticket = _ticket_nuestro(tienda, shopify_order_id)
+    if ticket is not None and not ticket["cantidades"]:
+        registrar_evento(
+            "pedido", shopify_order_id, "ingesta_omitida_otra_location", actor=origen,
+            cliente=cliente, delta={"origen": origen},
+            motivo="Todos los tickets de fulfillment de la orden son de otra location.",
+        )
+        return None
+
     direccion = payload.get("shipping_address") or payload.get("billing_address") or {}
     cp = str(direccion.get("zip") or "").strip()
     nombre, tel, email = _datos_comprador(payload)
@@ -478,6 +539,7 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
         direccion=direccion,
         cp=cp,
         es_local=_es_local(cp),
+        parcial_de_orden=bool(ticket and ticket["parcial"]),
         valor_declarado=valor_declarado,
         nota_regalo=payload.get("note") or "",
         corte_vigente_al_ingreso=_corte_contractual(),
@@ -486,30 +548,21 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
 
     faltantes = []
     peso_esperado = 0
+    valor_nuestro = Decimal("0")
     for item in payload.get("line_items") or []:
-        codigo = str(item.get("sku") or "").strip()
-        # current_quantity = lo que QUEDA por surtir tras refunds parciales o
-        # ediciones (quantity es lo pedido original y nunca cambia). Payloads
-        # sin la llave caen a quantity; una línea removida (0) no crea línea.
-        try:
-            cantidad = int(item.get("current_quantity", item.get("quantity")) or 0)
-        except (TypeError, ValueError):
-            cantidad = 0
-        if cantidad <= 0:
-            continue
-        sku = SKU.objects.filter(cliente=cliente, codigo=codigo).first() if codigo else None
-        if sku is None:
-            faltantes.append(f"SKU desconocido: {codigo or item.get('title', '?')} × {cantidad}")
-            continue
-        linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
-        peso_esperado += (sku.peso_gr or 0) * cantidad
-        if cancelada:
-            continue  # orden que llega ya cancelada: no se aparta stock
-        if not _reservar_linea(linea):
-            faltantes.append(f"Sin stock suficiente: {sku.codigo} × {cantidad}")
+        cantidad = _cantidad_de_item(item, ticket)
+        if not cantidad or cantidad <= 0:
+            continue  # removida por refund/edición, o línea de otro ticket
+        peso, valor = _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes)
+        peso_esperado += peso
+        valor_nuestro += valor
 
     pedido.peso_esperado_gr = peso_esperado
     campos = ["peso_esperado_gr"]
+    if pedido.parcial_de_orden:
+        # El total_price ampara la orden completa; lo declarado es solo lo nuestro.
+        pedido.valor_declarado = valor_nuestro
+        campos.append("valor_declarado")
     if faltantes and not cancelada:
         pedido.incidencia_activa = True
         campos.append("incidencia_activa")
@@ -522,6 +575,8 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
             "lineas": pedido.lineas.count(),
             "faltantes": faltantes,
             "es_local": pedido.es_local,
+            "parcial": pedido.parcial_de_orden,
+            "fos": ticket["fos"] if ticket else [],
         },
         motivo=f"Orden {payload.get('name') or shopify_order_id} ingerida vía {origen}.",
     )
