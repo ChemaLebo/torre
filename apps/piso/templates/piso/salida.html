@@ -62,6 +62,9 @@
       </label>
       <div class="fila">
         {% for g in p.guias_activas %}
+        {% if g.etiqueta_url %}
+        <a class="btn chico" href="{{ g.etiqueta_url }}" target="_blank" rel="noopener">PDF carrier{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
+        {% endif %}
         <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
         <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
           <input type="hidden" name="accion" value="imprimir">
