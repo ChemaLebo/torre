@@ -22,10 +22,13 @@ class ErrorCarrier(Exception):
     """Falla de comunicación o respuesta inválida del carrier/agregador."""
 
 
-# Origen por defecto: bodega Local 380 E, Colima. Sobrescribible con settings.ENVIA_ORIGEN.
+# Origen por defecto: bodega Local 380 E. Sobrescribible con settings.ENVIA_ORIGEN.
+# Este bloque viaja al carrier en CADA guía como contacto del remitente.
 ORIGEN_DEFAULT = {
-    "name": "Torre 3PL - Local 380 E",
-    "company": "Torre 3PL",
+    "name": "WOP Fulfillment - Local 380 E",
+    "company": "WOP Fulfillment",
+    # Teléfono/email: PLACEHOLDERS de la era del arranque — cambiarlos a los
+    # reales de operaciones (el carrier los usa para recolecta y retornos).
     "email": "operaciones@torre3pl.mx",
     "phone": "5512340000",
     "street": "Av. Torres de Ixtapantongo 380, Local E",
@@ -600,7 +603,7 @@ class Adapter99Minutos(CarrierAdapter):
             "internalKey": interno,
             "deliveryType": delivery_type_99min(servicio),
             "sender": {
-                "firstName": bodega.get("company") or bodega.get("name") or "Torre 3PL",
+                "firstName": bodega.get("company") or bodega.get("name") or "WOP Fulfillment",
                 "lastName": "Bodega",
                 "phone": self._telefono(bodega.get("phone")),
                 "email": bodega.get("email", ""),
