@@ -5,10 +5,12 @@ preferenciales; Paquetexpress como carrier físico preferente para Colima).
 `MockAdapter` simula todo en memoria cuando no hay `ENVIA_API_KEY` (dev/demo).
 La selección vive en `services.get_adapter()`.
 """
+import base64
 import itertools
 import re
+import time
 import unicodedata
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import requests
 from django.conf import settings
@@ -402,6 +404,326 @@ class EnviaAdapter(CarrierAdapter):
         if fechados:
             return max(fechados, key=lambda par: par[1])[0]
         return limpios[-1]
+
+
+# ── 99minutos directo (API v3) ───────────────────────────────────────────────
+
+# Estado numérico de 99minutos → estado canónico de Guia.
+CODIGOS_ESTADO_99MIN = {
+    1001: "GUIA_CREADA", 1002: "GUIA_CREADA",   # borrador / confirmada
+    2001: "GUIA_CREADA", 2002: "GUIA_CREADA",   # por recoger / chofer asignado
+    2003: "RECOLECTADO",
+    2101: "EXCEPCION",                          # recogida fallida
+    3001: "EN_TRANSITO", 3002: "EN_TRANSITO", 3003: "EN_TRANSITO", 3004: "EN_TRANSITO",
+    4001: "EN_RUTA",
+    4002: "ENTREGADO",
+    4101: "INTENTO_FALLIDO",
+    5001: "RETORNO", 5002: "RETORNO",
+    5101: "EXCEPCION",
+    8001: "EXCEPCION", 8002: "EXCEPCION", 8004: "EXCEPCION",  # robo / perdido / dañado
+    8003: "EXCEPCION",                          # cancelada fuera de Torre
+}
+
+_DELIVERY_TYPES_99MIN = {"NAL", "SPT", "SMD", "99M", "CO2F", "RET", "TLM", "P2P"}
+# Servicio de Torre → deliveryType nativo; "ground" (el default del ruteo) = NAL.
+SERVICIOS_99MIN = {"ground": "NAL", "": "NAL", "express": "SPT", "same_day": "SMD"}
+
+
+def delivery_type_99min(servicio):
+    codigo = (servicio or "").strip()
+    if codigo.upper() in _DELIVERY_TYPES_99MIN:
+        return codigo.upper()
+    return SERVICIOS_99MIN.get(codigo.lower(), "NAL")
+
+
+class Adapter99Minutos(CarrierAdapter):
+    """API directa de 99minutos (v3): oauth JWT ~1h, /orders + /documents/guides
+    (etiqueta zebra 4×6 en BASE64, no URL), rates por par de CP y retrieve de
+    shipments. Sandbox con el mismo contrato vía NOVENTA9_API_BASE.
+    OJO unidades: 99minutos habla GRAMOS donde envia habla KG."""
+
+    PROVEEDOR = "99minutos"
+    PAIS = "MEX"  # verificar en sandbox (MEX vs MX)
+    _token_cache = {"token": "", "expira": 0.0}  # compartido entre instancias
+
+    def __init__(self):
+        self.base = getattr(settings, "NOVENTA9_API_BASE", "https://delivery.99minutos.com").rstrip("/")
+        credencial = getattr(settings, "NOVENTA9_API_KEY", "")
+        self.client_id, _, self.client_secret = credencial.partition(":")
+
+    # ── auth ──
+    @classmethod
+    def reiniciar_token(cls):
+        cls._token_cache = {"token": "", "expira": 0.0}
+
+    def _token(self):
+        cache = type(self)._token_cache
+        if cache["token"] and cache["expira"] > time.time():
+            return cache["token"]
+        try:
+            resp = requests.post(
+                f"{self.base}/api/v3/oauth/token",
+                json={"client_id": self.client_id, "client_secret": self.client_secret},
+                timeout=25,
+            )
+        except requests.RequestException as exc:
+            raise ErrorCarrier(f"No se pudo autenticar con 99minutos: {exc}") from exc
+        if resp.status_code >= 400:
+            raise ErrorCarrier(f"99minutos oauth respondió {resp.status_code}: {resp.text[:200]}")
+        cuerpo = resp.json()
+        token = cuerpo.get("access_token") or ""
+        if not token:
+            raise ErrorCarrier("99minutos no regresó access_token")
+        cache["token"] = token
+        cache["expira"] = time.time() + max(int(cuerpo.get("expires_in") or 3599) - 60, 60)
+        return token
+
+    def _request(self, metodo, ruta, params=None, json_body=None, reintento=True):
+        try:
+            resp = requests.request(
+                metodo, f"{self.base}{ruta}", params=params, json=json_body,
+                headers={"Authorization": f"Bearer {self._token()}", "Accept": "application/json"},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise ErrorCarrier(f"No se pudo contactar a 99minutos ({ruta}): {exc}") from exc
+        if resp.status_code == 401 and reintento:
+            type(self).reiniciar_token()  # JWT vencido: re-auth una sola vez
+            return self._request(metodo, ruta, params=params, json_body=json_body, reintento=False)
+        return resp
+
+    @staticmethod
+    def _json(resp, ruta):
+        if resp.status_code >= 400:
+            raise ErrorCarrier(f"99minutos respondió {resp.status_code} en {ruta}: {resp.text[:300]}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise ErrorCarrier(f"Respuesta de 99minutos no es JSON ({ruta})") from exc
+
+    @staticmethod
+    def _origen_info():
+        return dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
+
+    # ── cotización por lane ──
+    def _size_para(self, peso_kg, dims):
+        largo, ancho, alto = dims or (30, 25, 20)
+        resp = self._request("GET", "/api/v3/shipping/rates/sizes", params={
+            "weight": int(Decimal(str(peso_kg)) * 1000), "width": ancho, "height": alto, "depth": largo,
+        })
+        cuerpo = self._json(resp, "/shipping/rates/sizes")
+        datos = cuerpo.get("data") if isinstance(cuerpo, dict) else cuerpo
+        if isinstance(datos, list) and datos:
+            datos = datos[0]
+        if isinstance(datos, dict):
+            return str(datos.get("size") or datos.get("name") or "")
+        return str(datos or "")
+
+    @staticmethod
+    def _mejor_tarifa(cuerpo):
+        datos = cuerpo.get("data") if isinstance(cuerpo, dict) else cuerpo
+        if isinstance(datos, dict):
+            datos = [datos]
+        if not isinstance(datos, list):
+            return None
+        opciones = []
+        for opcion in datos:
+            if not isinstance(opcion, dict):
+                continue
+            crudo = (opcion.get("totalPrice") or opcion.get("price")
+                     or opcion.get("amount") or opcion.get("total"))
+            if crudo is None:
+                continue
+            try:
+                precio = Decimal(str(crudo)).quantize(Decimal("0.01"))
+            except (InvalidOperation, ValueError):
+                continue
+            opciones.append((
+                precio,
+                str(opcion.get("deliveryType") or opcion.get("service") or "NAL"),
+                str(opcion.get("deliveryEstimate") or opcion.get("estimatedDelivery") or ""),
+            ))
+        return min(opciones, key=lambda o: o[0]) if opciones else None
+
+    def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
+        origen_cp = str(self._origen_info().get("postalCode", "01780"))
+        sin_cobertura = {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
+        try:
+            size = self._size_para(peso_kg, dims)
+            params = {"delivery_type": "NAL"}
+            if size:
+                params["size"] = size
+            resp = self._request(
+                "GET",
+                f"/api/v3/shipping/rates/zipcodes/{self.PAIS}/{origen_cp}/{self.PAIS}/{cp_destino}",
+                params=params,
+            )
+            if resp.status_code == 412:  # sin cobertura del par de CPs: resultado, no error
+                return sin_cobertura
+            cuerpo = self._json(resp, "/shipping/rates/zipcodes")
+        except ErrorCarrier:
+            return sin_cobertura
+        mejor = self._mejor_tarifa(cuerpo)
+        if mejor is None:
+            return sin_cobertura
+        precio, servicio, estimado = mejor
+        return {"carrier": carrier, "servicio": servicio, "precio": precio, "estimado": estimado, "ok": True}
+
+    # ── generación ──
+    @staticmethod
+    def _fisico(pedido, paquete):
+        if paquete is not None:
+            lineas = list(paquete.lineas.select_related("linea_pedido__sku"))
+            contenido = ", ".join(
+                f"{pl.cantidad}x {(pl.linea_pedido.sku.descripcion or pl.linea_pedido.sku.codigo)}"
+                for pl in lineas
+            )[:120] or "Mercancía"
+            return (int(Decimal(str(paquete.peso_kg)) * 1000),
+                    paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm, contenido)
+        peso_gr = int(pedido.peso_real_gr or pedido.peso_esperado_gr or 1000)
+        return (peso_gr, 30, 25, 20, "Mercancía")
+
+    @staticmethod
+    def _telefono(crudo):
+        tel = str(crudo or "").strip().replace(" ", "")
+        if not tel:
+            return ""
+        return tel if tel.startswith("+") else f"+52{tel}"
+
+    def _shipment(self, pedido, servicio, paquete, interno):
+        bodega = self._origen_info()
+        d = pedido.direccion or {}
+        nombre = (pedido.comprador_nombre or d.get("name") or "").strip() or "Comprador"
+        partes = nombre.split(" ", 1)
+        peso_gr, largo, ancho, alto, contenido = self._fisico(pedido, paquete)
+        return EnviaAdapter._sanear({
+            "internalKey": interno,
+            "deliveryType": delivery_type_99min(servicio),
+            "sender": {
+                "firstName": bodega.get("company") or bodega.get("name") or "Torre 3PL",
+                "lastName": "Bodega",
+                "phone": self._telefono(bodega.get("phone")),
+                "email": bodega.get("email", ""),
+            },
+            "recipient": {
+                "firstName": partes[0],
+                "lastName": partes[1] if len(partes) > 1 else ".",
+                "phone": self._telefono(pedido.comprador_tel or d.get("phone")),
+                "email": pedido.comprador_email or d.get("email") or "",
+            },
+            "origin": {
+                "address": ", ".join(filter(None, [
+                    bodega.get("street", ""), bodega.get("district", ""), bodega.get("city", ""),
+                ])),
+                "country": self.PAIS,
+                "zipcode": str(bodega.get("postalCode", "")),
+                "city": bodega.get("city", ""),
+            },
+            "destination": {
+                "address": ", ".join(filter(None, [
+                    d.get("address1") or d.get("street") or "",
+                    d.get("address2") or "",
+                    d.get("city") or "",
+                    d.get("province") or "",
+                ])),
+                "country": self.PAIS,
+                "zipcode": str(pedido.cp or d.get("zip") or ""),
+                "city": d.get("city") or "",
+            },
+            "items": [{
+                "description": contenido,
+                "weight": peso_gr,  # GRAMOS — no confundir con los KG de envia
+                "length": largo, "width": ancho, "height": alto,
+            }],
+        })
+
+    def _tracking_de_orden(self, cuerpo):
+        datos = cuerpo.get("data") or {}
+        envios = datos.get("shipments") if isinstance(datos, dict) else None
+        if envios and isinstance(envios[0], dict):
+            return envios[0].get("trackingId") or envios[0].get("tracking_id") or ""
+        return ""
+
+    def _shipment_remoto(self, identificador):
+        resp = self._request("GET", f"/api/v3/shipments/{identificador}")
+        cuerpo = self._json(resp, "/shipments")
+        datos = cuerpo.get("data") if isinstance(cuerpo, dict) else cuerpo
+        if isinstance(datos, list):
+            datos = datos[0] if datos else {}
+        return datos if isinstance(datos, dict) else {}
+
+    def _etiqueta_zebra(self, tracking):
+        resp = self._request("POST", "/api/v3/documents/guides", json_body={
+            "guides": [{"identifier": str(tracking), "size": "zebra"}],  # zebra = térmica 4×6
+        })
+        cuerpo = self._json(resp, "/documents/guides")
+        datos = cuerpo.get("data") or []
+        if isinstance(datos, dict):
+            datos = [datos]
+        b64 = datos[0].get("pdf") if datos and isinstance(datos[0], dict) else ""
+        if not b64:
+            raise ErrorCarrier(f"99minutos no regresó el PDF de la guía {tracking}")
+        try:
+            pdf = base64.b64decode(b64)
+        except (ValueError, TypeError) as exc:
+            raise ErrorCarrier(f"El PDF de la guía {tracking} no se pudo decodificar") from exc
+        if not pdf.startswith(b"%PDF"):
+            raise ErrorCarrier(f"La etiqueta de {tracking} no es un PDF válido")
+        return pdf
+
+    def generar(self, pedido, carrier, servicio, paquete=None):
+        interno = f"{pedido.folio}-{paquete.numero if paquete is not None else 1}"
+        envio = self._shipment(pedido, servicio, paquete, interno)
+        resp = self._request("POST", "/api/v3/orders", json_body={"shipments": [envio]})
+        if resp.status_code == 202:
+            # internalKey duplicado: la guía ya existe allá — se recupera, no se recompra.
+            tracking = self._shipment_remoto(interno).get("trackingId") or ""
+        else:
+            tracking = self._tracking_de_orden(self._json(resp, "/orders"))
+        if not tracking:
+            raise ErrorCarrier("99minutos no regresó trackingId en /orders")
+        return {
+            "numero": str(tracking),
+            "etiqueta_url": "",
+            "etiqueta_pdf": self._etiqueta_zebra(tracking),
+            "costo": None,  # el rate ya vive en el plan (precio_cotizado)
+            "raw": {"proveedor": "99minutos", "trackingId": tracking, "internalKey": interno},
+        }
+
+    def cancelar(self, guia):
+        resp = self._request("DELETE", f"/api/v3/shipments/{guia.numero}")
+        self._json(resp, "/shipments (cancel)")
+        return True
+
+    def rastrear(self, numero):
+        datos = self._shipment_remoto(numero)
+        if not datos:
+            raise ErrorCarrier(f"99minutos sin datos de rastreo para {numero}")
+        codigo, texto = self._estado_crudo(datos)
+        estado = CODIGOS_ESTADO_99MIN.get(codigo) if codigo is not None else None
+        if estado is None:
+            estado = normalizar_estado_envia(texto)
+        ts_evento = _parsear_fecha(
+            datos.get("updatedAt") or datos.get("lastUpdate") or datos.get("updated_at")
+        )
+        descripcion = (texto or (str(codigo) if codigo is not None else ""))[:300]
+        return {"estado": estado, "descripcion": descripcion, "ts_evento": ts_evento, "raw": datos}
+
+    @staticmethod
+    def _estado_crudo(datos):
+        crudo = datos.get("status")
+        if isinstance(crudo, dict):
+            codigo = crudo.get("code") or crudo.get("id")
+            texto = str(crudo.get("name") or crudo.get("description") or "")
+        else:
+            codigo = crudo
+            texto = str(datos.get("statusName") or datos.get("statusDescription") or "")
+        try:
+            codigo = int(codigo)
+        except (TypeError, ValueError):
+            texto = texto or (str(codigo) if codigo else "")
+            codigo = None
+        return codigo, texto
 
 
 # Tarifario MOCK (tabla real medida contra la API 2026-08; se usa sin

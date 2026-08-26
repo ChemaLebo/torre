@@ -78,10 +78,10 @@ def cotizar_lane(cp_destino, peso_kg, dims=None):
         cache[c.carrier] = c
     faltantes = [c for c in carriers if c not in cache]
     if faltantes:
-        from .services import get_adapter_cotizacion  # lazy: evita ciclo en carga
+        from .services import cotizar_lane_carrier  # lazy: evita ciclo en carga
 
         def _cotizar(carrier):
-            return get_adapter_cotizacion(carrier).cotizar_lane(carrier, cp_destino, peso, dims)
+            return cotizar_lane_carrier(carrier, cp_destino, peso, dims)
 
         with ThreadPoolExecutor(max_workers=min(len(faltantes), 6)) as pool:
             nuevas = list(pool.map(_cotizar, faltantes))

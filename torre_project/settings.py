@@ -257,6 +257,9 @@ NOVENTA9_API_BASE = os.environ.get("NOVENTA9_API_BASE", "https://delivery.99minu
 NOVENTA9_MODO = os.environ.get("NOVENTA9_MODO", "off")
 if "test" in sys.argv:
     NOVENTA9_MODO = "off"
+# Fallback runtime: si el directo de 99minutos falla, re-cotizar/re-generar ese
+# carrier por envia (tarifa de envia, auditado con evento). Default apagado.
+NOVENTA9_FALLBACK_ENVIA = os.environ.get("NOVENTA9_FALLBACK_ENVIA", "0") == "1"
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")  # sin token → consola
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-01")

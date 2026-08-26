@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from apps.core.services import registrar_evento
 
-from .adapters import EnviaAdapter, ErrorCarrier, MockAdapter
+from .adapters import Adapter99Minutos, EnviaAdapter, ErrorCarrier, MockAdapter
 from .models import Guia, Paquete, ReglaEnvio
 
 CARRIER_LOCAL = "local"
@@ -45,7 +45,25 @@ def get_adapter(carrier=None, proveedor=None):
     elegido = proveedor or _proveedor_para(carrier)
     if elegido == PROVEEDOR_MOCK:
         return MockAdapter()
+    if elegido == PROVEEDOR_99MIN and _99min_habilitado("full"):
+        return Adapter99Minutos()
+    return _adapter_envia_generar()
+
+
+def _99min_habilitado(modo_requerido):
+    modo = getattr(settings, "NOVENTA9_MODO", "off")
+    habil = modo == "full" if modo_requerido == "full" else modo != "off"
+    return bool(getattr(settings, "NOVENTA9_API_KEY", "")) and habil
+
+
+def _adapter_envia_generar():
     if getattr(settings, "ENVIA_API_KEY", "") and getattr(settings, "ENVIA_MODO", "cotizar") == "full":
+        return EnviaAdapter()
+    return MockAdapter()
+
+
+def _adapter_envia_cotizacion():
+    if getattr(settings, "ENVIA_API_KEY", "") and getattr(settings, "ENVIA_MODO", "cotizar") != "off":
         return EnviaAdapter()
     return MockAdapter()
 
@@ -53,9 +71,21 @@ def get_adapter(carrier=None, proveedor=None):
 def get_adapter_cotizacion(carrier):
     """Adapter para COTIZAR ese carrier. Mismo routing que get_adapter pero el
     gating es modo != "off": cotizar no cuesta dinero, generar sí exige "full"."""
-    if getattr(settings, "ENVIA_API_KEY", "") and getattr(settings, "ENVIA_MODO", "cotizar") != "off":
-        return EnviaAdapter()
-    return MockAdapter()
+    if _proveedor_para(carrier) == PROVEEDOR_99MIN and _99min_habilitado("cotizar"):
+        return Adapter99Minutos()
+    return _adapter_envia_cotizacion()
+
+
+def cotizar_lane_carrier(carrier, cp_destino, peso_kg, dims=None):
+    """Fila de UN carrier vía su proveedor. Con NOVENTA9_FALLBACK_ENVIA, un
+    fallo del directo de 99minutos re-cotiza ese carrier por envia."""
+    adapter = get_adapter_cotizacion(carrier)
+    fila = adapter.cotizar_lane(carrier, cp_destino, peso_kg, dims)
+    if fila.get("ok") or getattr(adapter, "PROVEEDOR", "") != PROVEEDOR_99MIN:
+        return fila
+    if not getattr(settings, "NOVENTA9_FALLBACK_ENVIA", False):
+        return fila
+    return _adapter_envia_cotizacion().cotizar_lane(carrier, cp_destino, peso_kg, dims)
 
 
 def _flota_propia():
@@ -87,6 +117,33 @@ def elegir_carrier(pedido):
     return (pedido.cliente.carrier_preferente or "paquetexpress", SERVICIO_DEFAULT)
 
 
+def _respaldo_envia(adapter, pedido, carrier, exc):
+    """Con NOVENTA9_FALLBACK_ENVIA: un fallo del directo de 99minutos reintenta
+    UNA vez por envia (tarifa de envia, auditado). Sin flag → None (surface)."""
+    if getattr(adapter, "PROVEEDOR", "") != PROVEEDOR_99MIN:
+        return None
+    if not getattr(settings, "NOVENTA9_FALLBACK_ENVIA", False):
+        return None
+    registrar_evento(
+        "pedido", pedido.pk, "fallback_envia", cliente=pedido.cliente,
+        delta={"carrier": carrier},
+        motivo=f"99minutos directo falló ({str(exc)[:200]}); se reintenta por envia.",
+    )
+    return _adapter_envia_generar()
+
+
+def _guardar_etiqueta_pdf(guia, pdf):
+    """Proveedores que entregan la etiqueta en línea (base64): se persiste y la
+    URL interna del archivo alimenta el link de Salida."""
+    if not pdf:
+        return
+    from django.core.files.base import ContentFile
+    guia.etiqueta_pdf.save(f"{guia.numero}.pdf", ContentFile(pdf), save=True)
+    if not guia.etiqueta_url:
+        guia.etiqueta_url = guia.etiqueta_pdf.url
+        guia.save(update_fields=["etiqueta_url"])
+
+
 def _crear_guia(pedido, carrier, servicio, paquete=None):
     """Crea UNA guía (del pedido completo o de un paquete específico)."""
     ahora = timezone.now()
@@ -109,13 +166,25 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
         try:
             datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)
         except ErrorCarrier as exc:
-            registrar_evento(
-                "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
-                delta={"carrier": carrier, "servicio": servicio,
-                       "paquete": paquete.numero if paquete else None},
-                motivo=str(exc)[:300],
-            )
-            raise
+            adapter = _respaldo_envia(adapter, pedido, carrier, exc)
+            if adapter is None:
+                registrar_evento(
+                    "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
+                    delta={"carrier": carrier, "servicio": servicio,
+                           "paquete": paquete.numero if paquete else None},
+                    motivo=str(exc)[:300],
+                )
+                raise
+            try:
+                datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)
+            except ErrorCarrier as exc2:
+                registrar_evento(
+                    "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
+                    delta={"carrier": carrier, "servicio": servicio, "respaldo": "envia",
+                           "paquete": paquete.numero if paquete else None},
+                    motivo=str(exc2)[:300],
+                )
+                raise
         costo = datos.get("costo") or costo_plan or Decimal("0.00")
         guia = Guia.objects.create(
             pedido=pedido, paquete=paquete, carrier=carrier, servicio=servicio,
@@ -129,6 +198,7 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
             ts_ultimo_movimiento=ahora,
             raw=datos.get("raw") or {},
         )
+        _guardar_etiqueta_pdf(guia, datos.get("etiqueta_pdf"))
 
     registrar_evento(
         "guia", guia.pk, "guia_generada", cliente=pedido.cliente,

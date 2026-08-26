@@ -12,6 +12,70 @@ from apps.envios.models import Guia
 from .base import crear_cliente, crear_pedido, crear_tienda
 
 
+TORRE_99MIN_DIRECTO = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}
+
+
+@override_settings(
+    TORRE=TORRE_99MIN_DIRECTO, ENVIA_API_KEY="",
+    NOVENTA9_API_KEY="cid:sec", NOVENTA9_MODO="full",
+)
+class Fallback99MinutosTests(TestCase):
+    """El directo de 99minutos falla → NOVENTA9_FALLBACK_ENVIA decide."""
+
+    def setUp(self):
+        from apps.envios.adapters import MockAdapter
+        MockAdapter.reiniciar()
+        # carrier_preferente noventa9Minutos + mapa directo → Adapter99Minutos
+        self.cliente = crear_cliente(carrier_preferente="noventa9Minutos")
+        self.tienda = crear_tienda(self.cliente)
+
+    def _generar_con_directo_caido(self):
+        from unittest.mock import patch
+
+        from apps.envios.adapters import Adapter99Minutos, ErrorCarrier
+        pedido = crear_pedido(self.cliente, self.tienda)
+        with patch.object(Adapter99Minutos, "generar", side_effect=ErrorCarrier("caído")):
+            return services.generar_guia(pedido), pedido
+
+    @override_settings(NOVENTA9_FALLBACK_ENVIA=True)
+    def test_con_flag_reintenta_por_envia_y_audita(self):
+        guia, pedido = self._generar_con_directo_caido()
+        self.assertEqual(guia.carrier, "noventa9Minutos")
+        self.assertEqual(guia.proveedor, "mock")  # envia sin key en tests = mock
+        self.assertTrue(
+            EventoAuditoria.objects.filter(
+                entidad="pedido", entidad_id=str(pedido.pk), accion="fallback_envia",
+            ).exists()
+        )
+
+    @override_settings(NOVENTA9_FALLBACK_ENVIA=False)
+    def test_sin_flag_el_error_se_superficia(self):
+        from apps.envios.adapters import ErrorCarrier
+        with self.assertRaises(ErrorCarrier):
+            self._generar_con_directo_caido()
+
+    @override_settings(NOVENTA9_FALLBACK_ENVIA=False)
+    def test_guia_directa_persiste_el_pdf_base64(self):
+        import tempfile
+
+        from unittest.mock import patch
+
+        from apps.envios.adapters import Adapter99Minutos
+        pedido = crear_pedido(self.cliente, self.tienda)
+        datos = {
+            "numero": "990001", "etiqueta_url": "", "etiqueta_pdf": b"%PDF-1.4 x",
+            "costo": None, "raw": {"trackingId": 990001},
+        }
+        with override_settings(MEDIA_ROOT=tempfile.mkdtemp()), \
+             patch.object(Adapter99Minutos, "generar", return_value=datos):
+            guia = services.generar_guia(pedido)
+            self.assertEqual(guia.proveedor, "99minutos")
+            self.assertTrue(guia.etiqueta_pdf)
+            self.assertEqual(guia.etiqueta_url, guia.etiqueta_pdf.url)
+            with guia.etiqueta_pdf.open("rb") as archivo:
+                self.assertTrue(archivo.read().startswith(b"%PDF"))
+
+
 class GetAdapterRoutingTests(TestCase):
     """get_adapter: el proveedor de la guía manda; el mapa por carrier decide lo demás."""
 

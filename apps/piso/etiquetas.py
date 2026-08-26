@@ -342,6 +342,16 @@ def _pdf_etiqueta(guia):
     Decisión 2026-08-10 (tech lead + founder): solo la del carrier, sin
     segunda hoja.
     """
+    # Etiqueta persistida (proveedores que la entregan en línea, ej. 99minutos
+    # directo): es la oficial — se imprime tal cual, en cualquier modo.
+    if getattr(guia, "etiqueta_pdf", None):
+        try:
+            with guia.etiqueta_pdf.open("rb") as archivo:
+                pdf = archivo.read()
+            if pdf.startswith(b"%PDF"):
+                return pdf
+        except (OSError, ValueError):
+            pass  # archivo perdido en disco: se cae al camino por URL/dibujada
     if getattr(settings, "ENVIA_MODO", "cotizar") != "full":
         return generar_pdf_etiqueta(guia)
     url = (guia.etiqueta_url or "").strip()
