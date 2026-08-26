@@ -31,6 +31,24 @@ class SKUTests(TestCase):
         self.assertEqual(sku.unidad, "pieza")
 
 
+class OpcionesAgrupadasTests(TestCase):
+    """El dropdown distingue variantes del mismo producto."""
+
+    def test_etiqueta_incluye_la_variante_cuando_existe(self):
+        from apps.core.models import Cliente
+
+        from ..models import SKU, opciones_sku_agrupadas
+
+        cliente = Cliente.objects.create(nombre="Infinitea", slug="infinitea")
+        SKU.objects.create(cliente=cliente, codigo="TN-500", descripcion="Té negro", variante="500 g")
+        SKU.objects.create(cliente=cliente, codigo="TN-1K", descripcion="Té negro", variante="1 kg")
+        SKU.objects.create(cliente=cliente, codigo="CHAI", descripcion="Chai masala")
+        etiquetas = [texto for _, opciones in opciones_sku_agrupadas(cliente) for _, texto in opciones]
+        self.assertIn("Té negro (500 g) — TN-500", etiquetas)
+        self.assertIn("Té negro (1 kg) — TN-1K", etiquetas)
+        self.assertIn("Chai masala — CHAI", etiquetas)
+
+
 class UbicacionYLoteTests(TestCase):
     def setUp(self):
         self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")

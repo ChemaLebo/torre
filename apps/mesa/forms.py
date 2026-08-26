@@ -248,6 +248,10 @@ class FormSKU(forms.Form):
         max_length=200,
         error_messages={"required": "La descripción del SKU es obligatoria."},
     )
+    variante = forms.CharField(
+        label="Variante", max_length=100, required=False,
+        help_text="Sabor/tamaño/presentación si el producto tiene variantes (vacío si no).",
+    )
     codigo_barras = forms.CharField(label="Código de barras", max_length=64, required=False)
     peso_gr = forms.IntegerField(
         label="Peso (gramos)",
@@ -307,6 +311,7 @@ class FormSKU(forms.Form):
             "codigo": d["codigo"].strip(),
             "categoria": d.get("categoria") or Categoria.otros_de(self.cliente),
             "descripcion": d["descripcion"].strip(),
+            "variante": (d.get("variante") or "").strip(),
             "codigo_barras": (d.get("codigo_barras") or "").strip(),
             "peso_gr": d["peso_gr"],
             "largo_cm": d.get("largo_cm") or 0,

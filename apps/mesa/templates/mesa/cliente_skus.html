@@ -34,6 +34,7 @@
           <tr>
             <th>Código</th>
             <th>Descripción</th>
+            <th>Variante</th>
             <th>Categoría</th>
             <th>Barras</th>
             <th class="derecha">Peso (gr)</th>
@@ -50,6 +51,7 @@
           <tr>
             <td class="mono"><b>{{ sku.codigo }}</b></td>
             <td>{{ sku.descripcion }}</td>
+            <td>{{ sku.variante|default:"—" }}</td>
             <td>
               <select name="cat_{{ sku.pk }}" aria-label="Categoría de {{ sku.codigo }}">
                 {% for c in categorias %}
@@ -67,7 +69,7 @@
             <td class="derecha"><a class="btn chico" href="?editar={{ sku.pk }}#form-sku">editar</a></td>
           </tr>
           {% empty %}
-          <tr><td colspan="11" class="muted centro">Sin SKUs todavía. Da de alta el primero abajo o importa el catálogo por CSV.</td></tr>
+          <tr><td colspan="12" class="muted centro">Sin SKUs todavía. Da de alta el primero abajo o importa el catálogo por CSV.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -110,6 +112,14 @@
         <div>
           <label for="{{ form.categoria.id_for_label }}">{{ form.categoria.label }}</label>
           {{ form.categoria }}{{ form.categoria.errors }}
+        </div>
+      </div>
+      <div class="grid g2 mt">
+        <div>
+          <label for="{{ form.variante.id_for_label }}">{{ form.variante.label }}</label>
+          {{ form.variante }}
+          <div class="small muted">{{ form.variante.help_text }}</div>
+          {{ form.variante.errors }}
         </div>
       </div>
       <div class="grid g2 mt">

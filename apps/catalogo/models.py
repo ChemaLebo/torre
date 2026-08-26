@@ -41,6 +41,10 @@ class SKU(models.Model):
     codigo = models.CharField(max_length=60)
     codigo_barras = models.CharField(max_length=64, blank=True)
     descripcion = models.CharField(max_length=200)
+    variante = models.CharField(
+        max_length=100, blank=True, default="",
+        help_text="Sabor/tamaño/presentación cuando el producto tiene variantes (ej. 500 g); vacío si no",
+    )
     peso_gr = models.PositiveIntegerField(default=0, help_text="Peso unitario en gramos")
     largo_cm = models.PositiveIntegerField(default=0)
     ancho_cm = models.PositiveIntegerField(default=0)
@@ -80,7 +84,8 @@ def opciones_sku_agrupadas(cliente):
     qs = SKU.objects.filter(cliente=cliente, activo=True).select_related("categoria").order_by("descripcion")
     for sku in qs:
         nombre = sku.categoria.nombre if sku.categoria else Categoria.OTROS
-        grupos.setdefault(nombre, []).append((sku.pk, f"{sku.descripcion} — {sku.codigo}"))
+        etiqueta = f"{sku.descripcion} ({sku.variante})" if sku.variante else sku.descripcion
+        grupos.setdefault(nombre, []).append((sku.pk, f"{etiqueta} — {sku.codigo}"))
     orden = sorted(grupos, key=lambda n: (n == Categoria.OTROS, n.lower()))
     return [(nombre, grupos[nombre]) for nombre in orden]
 

@@ -375,6 +375,15 @@ class SkusTests(BaseGestionClientes):
         self.assertContains(respuesta, "Disponible")
         self.assertContains(respuesta, "TICUS-SIX")
 
+    def test_variante_se_guarda_y_prefillea(self):
+        from apps.catalogo.models import SKU
+
+        self.client.post(self.url, datos_form_sku(variante="500 g"))
+        sku = SKU.objects.get(cliente=self.colima, codigo="COLIMITA-SIX")
+        self.assertEqual(sku.variante, "500 g")
+        prefill = self.client.get(self.url, {"editar": sku.pk})
+        self.assertContains(prefill, 'value="500 g"')
+
     def test_alta_sin_categoria_cae_en_otros(self):
         from apps.catalogo.models import SKU, Categoria
 
@@ -445,6 +454,18 @@ class ImportCsvTests(BaseGestionClientes):
         return self.client.post(
             self.url, {"accion": "importar_csv", "archivo": archivo}, follow=True
         )
+
+    def test_import_con_columna_variante(self):
+        from apps.catalogo.models import SKU
+
+        contenido = (
+            "codigo,descripcion,variante,peso_gr\n"
+            "TE-NEGRO-500,Té negro,500 g,520\n"
+        )
+        respuesta = self._importar(contenido)
+        self.assertContains(respuesta, "1 SKUs creados")
+        sku = SKU.objects.get(cliente=self.colima, codigo="TE-NEGRO-500")
+        self.assertEqual(sku.variante, "500 g")
 
     def test_import_feliz_crea_y_actualiza(self):
         from apps.catalogo.models import SKU, Categoria

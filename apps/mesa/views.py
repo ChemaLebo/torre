@@ -1538,6 +1538,7 @@ def cliente_skus(request, pk):
                 "categoria": sku_editar.categoria_id,
                 "codigo": sku_editar.codigo,
                 "descripcion": sku_editar.descripcion,
+                "variante": sku_editar.variante,
                 "codigo_barras": sku_editar.codigo_barras,
                 "peso_gr": sku_editar.peso_gr,
                 "largo_cm": sku_editar.largo_cm,
@@ -1666,6 +1667,8 @@ def _parsear_fila_csv(fila):
     if not descripcion:
         raise ValueError("falta la descripcion")
     datos = {"codigo": codigo, "descripcion": descripcion}
+    if celda("variante"):
+        datos["variante"] = celda("variante")
     if celda("codigo_barras"):
         datos["codigo_barras"] = celda("codigo_barras")
     for campo in _COLUMNAS_CSV_ENTERAS:
