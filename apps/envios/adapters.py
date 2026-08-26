@@ -23,14 +23,14 @@ class ErrorCarrier(Exception):
 
 
 # Origen por defecto: bodega Local 380 E. Sobrescribible con settings.ENVIA_ORIGEN.
-# Este bloque viaja al carrier en CADA guía como contacto del remitente.
+# Este bloque viaja al carrier en CADA guía como contacto del remitente
+# (recolecta y retornos). Teléfono en 10 dígitos: envia lo acepta nacional y
+# el adapter de 99minutos le antepone el +52 solo.
 ORIGEN_DEFAULT = {
     "name": "WOP Fulfillment - Local 380 E",
     "company": "WOP Fulfillment",
-    # Teléfono/email: PLACEHOLDERS de la era del arranque — cambiarlos a los
-    # reales de operaciones (el carrier los usa para recolecta y retornos).
-    "email": "operaciones@torre3pl.mx",
-    "phone": "5512340000",
+    "email": "alonso@wop.partners",
+    "phone": "5528587520",
     "street": "Av. Torres de Ixtapantongo 380, Local E",
     "number": "380",
     "district": "Olivar de los Padres",
@@ -310,7 +310,7 @@ class EnviaAdapter(CarrierAdapter):
         payload = {
             "origin": self._origen(),
             "destination": {
-                "name": "Cotizacion", "email": "cotiza@torre3pl.mx", "phone": "5500000000",
+                "name": "Cotizacion", "email": "alonso@wop.partners", "phone": "5500000000",
                 "street": "Conocida", "number": "1", "district": "Centro", "city": "Ciudad",
                 "state": CP_ESTADO.get(str(cp_destino)[:2], "DF"), "country": "MX",
                 "postalCode": str(cp_destino),
