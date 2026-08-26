@@ -53,6 +53,85 @@ def payload_orders_create(order_id=5479812345678, numero=1001):
     }
 
 
+class MovedFulfillmentOrderTests(TestCase):
+    """fulfillment_orders/moved: matriz de política (Stage 2 multi-location)."""
+
+    def setUp(self):
+        self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        self.tienda = Tienda.objects.create(
+            cliente=self.cliente, dominio="colima-mx.myshopify.com",
+            token="shpat_prueba", location_id="77",
+        )
+
+    def _evento(self, destino, order_id=9100, webhook_id="wh-moved-1"):
+        return WebhookEvento.objects.create(
+            tienda=self.tienda, webhook_id=webhook_id, topic="fulfillment_orders/moved",
+            payload={"moved_fulfillment_order": {
+                "id": 1, "order_id": order_id, "assigned_location_id": destino,
+            }},
+        )
+
+    def _pedido(self, order_id, estado):
+        from apps.pedidos.models import Pedido
+        return Pedido.objects.create(
+            cliente=self.cliente, tienda=self.tienda, shopify_order_id=str(order_id),
+            origen="webhook", comprador_nombre="Ana Prueba", cp="44100",
+            es_local=False, estado=estado,
+        )
+
+    def test_movido_hacia_nosotros_reingiere_la_orden(self):
+        evento = self._evento(destino=77)
+        with mock.patch("apps.integraciones.services.ShopifyClient") as cliente_cls, \
+             mock.patch("apps.pedidos.services.ingerir_pedido_shopify", return_value=None) as ingerir:
+            cliente_cls.return_value.obtener_pedido.return_value = payload_orders_create(order_id=9100)
+            procesar_webhook(evento)
+        evento.refresh_from_db()
+        self.assertTrue(evento.procesado)
+        ingerir.assert_called_once()
+        self.assertTrue(WebhookEvento.objects.filter(
+            webhook_id=f"moved:{self.tienda.pk}:9100:wh-moved-1",
+        ).exists())
+        self.assertIn("HACIA nosotros", SyncLog.objects.filter(
+            resultado=SyncLog.RESULTADO_OK).latest("ts").detalle)
+
+    def test_movido_fuera_sin_despachar_cancela_y_libera(self):
+        pedido = self._pedido(9200, "PENDIENTE")
+        evento = self._evento(destino=99, order_id=9200, webhook_id="wh-moved-2")
+        procesar_webhook(evento)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "CANCELADO")
+        evento.refresh_from_db()
+        self.assertTrue(evento.procesado)
+
+    def test_movido_fuera_ya_despachado_abre_incidencia(self):
+        pedido = self._pedido(9300, "RECOLECTADO")
+        evento = self._evento(destino=99, order_id=9300, webhook_id="wh-moved-3")
+        with mock.patch("apps.incidencias.services.abrir_incidencia") as abrir:
+            procesar_webhook(evento)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "RECOLECTADO")  # ya salió: no se toca
+        self.assertTrue(pedido.incidencia_activa)
+        abrir.assert_called_once()
+        self.assertEqual(abrir.call_args.args[1], "CAN")
+
+    def test_movido_fuera_orden_desconocida_es_noop(self):
+        evento = self._evento(destino=99, order_id=9400, webhook_id="wh-moved-4")
+        procesar_webhook(evento)
+        evento.refresh_from_db()
+        self.assertTrue(evento.procesado)
+        self.assertIn("no estaba en Torre", SyncLog.objects.latest("ts").detalle)
+
+    def test_error_al_traer_la_orden_queda_para_replay(self):
+        from apps.integraciones.shopify import ShopifyError
+        evento = self._evento(destino=77, order_id=9500, webhook_id="wh-moved-5")
+        with mock.patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            cliente_cls.return_value.obtener_pedido.side_effect = ShopifyError("caída")
+            procesar_webhook(evento)
+        evento.refresh_from_db()
+        self.assertFalse(evento.procesado)  # replay lo reintenta
+        self.assertEqual(SyncLog.objects.latest("ts").resultado, SyncLog.RESULTADO_ERROR)
+
+
 @override_settings(DEBUG=True)  # tienda sin token solo se acepta en modo dev/demo
 class WebhookShopifyTests(TestCase):
     def setUp(self):

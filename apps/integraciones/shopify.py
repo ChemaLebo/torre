@@ -332,6 +332,15 @@ class ShopifyClient:
             params["updated_at_min"] = updated_at_min.isoformat()
         return self._paginar_pedidos(params)
 
+    def obtener_pedido(self, order_id):
+        """GET /orders/{id}.json — la orden completa (re-ingesta tras un move)."""
+        try:
+            resp = self.sesion.get(f"{self.base}/orders/{order_id}.json", timeout=self.timeout)
+            resp.raise_for_status()
+            return (resp.json() or {}).get("order") or {}
+        except requests.RequestException as exc:
+            raise ShopifyError(f"HTTP orders/{order_id}.json {self.tienda.dominio}: {exc}") from exc
+
     def listar_pedidos_backfill(self, created_at_min):
         """Primer sync (checkpoint nulo): solo lo OPERABLE — abiertas, pagadas
         y sin fulfillear ("unshipped" = fulfillment_status nulo, exactamente

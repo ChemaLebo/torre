@@ -20,6 +20,9 @@ from .models import PushInventarioPendiente, SyncLog, Tienda, WebhookEvento
 from .shopify import ErrorItemNoStockeado, ShopifyClient, ShopifyError
 
 TOPICS_PEDIDOS = {"orders/create", "orders/updated", "orders/cancelled"}
+# Webhook creado por UI (misma firma de Notifications) AL DESPLEGAR este código
+# — un topic sin handler queda "ignorado" (procesado=True) y no es replayable.
+TOPICS_FOS = {"fulfillment_orders/moved"}
 
 
 # ── Ingesta ──────────────────────────────────────────────────────────────────
@@ -36,6 +39,8 @@ def procesar_webhook(evento):
         return None
 
     tienda = evento.tienda
+    if evento.topic in TOPICS_FOS:
+        return _webhook_fo_movida(evento)
     if evento.topic not in TOPICS_PEDIDOS:
         evento.procesado = True
         evento.save(update_fields=["procesado"])
@@ -76,6 +81,81 @@ def procesar_webhook(evento):
         delta={"topic": evento.topic, "origen": evento.origen},
     )
     return pedido
+
+
+def _procesar_fo_movida(evento):
+    """fulfillment_orders/moved — matriz de política (moves = acto manual y raro).
+
+    HACIA nosotros → se trae la orden y se re-evalúa por el carril normal
+    (upsert idempotente crea si antes se omitió por ajena). A OTRA location →
+    la matriz de cancelación decide: sin despachar cancela/libera reservas;
+    ya despachado abre incidencia CAN. Payload defensivo — shape se confirma
+    en el checklist de conexión de Colima.
+    """
+    tienda = evento.tienda
+    payload = evento.payload or {}
+    movido = payload.get("moved_fulfillment_order") or payload.get("fulfillment_order") or {}
+    order_id = str(movido.get("order_id") or payload.get("order_id") or "").strip()
+    if not order_id:
+        return "moved sin order_id: ignorado"
+    destino = str(movido.get("assigned_location_id") or "").strip().rsplit("/", 1)[-1]
+    nuestra = str(tienda.location_id or "").strip().rsplit("/", 1)[-1]
+
+    if nuestra and destino and destino == nuestra:
+        api = ShopifyClient(tienda)
+        payload_orden = api.obtener_pedido(order_id)
+        if not payload_orden:
+            raise ShopifyError(f"orden {order_id} vino vacía tras el move")
+        nuevo, creado = registrar_webhook(
+            tienda, f"moved:{tienda.pk}:{order_id}:{evento.webhook_id}",
+            "orders/updated", payload_orden, origen=WebhookEvento.ORIGEN_RECONCILIACION,
+        )
+        if creado:
+            procesar_webhook(nuevo)
+        return f"ticket movido HACIA nosotros: orden {order_id} re-evaluada"
+
+    try:
+        from apps.pedidos.models import Pedido  # lazy por contrato
+        from apps.pedidos.services import cancelar  # lazy por contrato
+    except ImportError:
+        return f"moved: módulo pedidos no disponible (orden {order_id})"
+    pedido = Pedido.objects.filter(tienda=tienda, shopify_order_id=order_id).first()
+    if pedido is None:
+        return f"moved a otra location: la orden {order_id} no estaba en Torre"
+    try:
+        cancelar(pedido, actor="sistema", motivo="Ticket de fulfillment movido a otra location")
+    except ValueError as exc:
+        registrar_evento(
+            "pedido", pedido.pk, "movida_no_aplicable", actor="sistema",
+            cliente=pedido.cliente, motivo=str(exc),
+        )
+        return f"moved: {pedido.folio} en estado no cancelable ({pedido.estado})"
+    return f"moved a otra location: {pedido.folio} pasó por la matriz de cancelación"
+
+
+def _webhook_fo_movida(evento):
+    """Mismo contrato de errores que la ingesta: la falla queda en SyncLog y
+    el evento sin procesar para replay; el éxito marca procesado + auditoría."""
+    tienda = evento.tienda
+    try:
+        detalle = _procesar_fo_movida(evento)
+    except Exception as exc:  # noqa: BLE001 — el error se registra, el evento queda para replay
+        SyncLog.objects.create(
+            tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
+            detalle=f"{evento.topic} {evento.webhook_id}: {exc}",
+        )
+        return None
+    evento.procesado = True
+    evento.save(update_fields=["procesado"])
+    SyncLog.objects.create(
+        tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_OK,
+        detalle=f"{evento.topic}: {detalle}",
+    )
+    registrar_evento(
+        "webhook", evento.webhook_id, "procesado", actor=f"shopify:{tienda.dominio}",
+        cliente=tienda.cliente, delta={"topic": evento.topic, "origen": evento.origen},
+    )
+    return None
 
 
 def registrar_webhook(tienda, webhook_id, topic, payload, origen=WebhookEvento.ORIGEN_WEBHOOK):
