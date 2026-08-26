@@ -12,6 +12,35 @@ from apps.envios.models import Guia
 from .base import crear_cliente, crear_pedido, crear_tienda
 
 
+class DestinoEnviaTests(TestCase):
+    """El state del destino sale del CP (tabla de envia), no del código ISO de Shopify."""
+
+    def _pedido(self, cp, province_code):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            cp=cp,
+            direccion={"address1": "Calle 1", "city": "X", "zip": cp, "province_code": province_code},
+            comprador_nombre="Prueba", comprador_tel="", comprador_email="",
+        )
+
+    def test_colima_manda_cl_no_col(self):
+        from apps.envios.adapters import EnviaAdapter
+        destino = EnviaAdapter._destino(self._pedido("28048", "COL"))
+        self.assertEqual(destino["state"], "CL")  # COL de Shopify = error 1129 en envia
+
+    def test_cdmx_sigue_siendo_df(self):
+        from apps.envios.adapters import EnviaAdapter
+        destino = EnviaAdapter._destino(self._pedido("01780", "DF"))
+        self.assertEqual(destino["state"], "DF")
+
+    def test_sin_cp_cae_al_codigo_de_la_direccion(self):
+        from apps.envios.adapters import EnviaAdapter
+        pedido = self._pedido("", "COL")
+        pedido.direccion["zip"] = ""
+        destino = EnviaAdapter._destino(pedido)
+        self.assertEqual(destino["state"], "COL")
+
+
 TORRE_99MIN_DIRECTO = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}
 
 
