@@ -271,8 +271,148 @@ def ingerir_pedido_shopify(tienda, payload, origen="webhook"):
     return _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada)
 
 
+# Estados donde una edición ya no ajusta nada (refund sobre entregado = puro
+# tema financiero; cancelados los gobierna su propia matriz).
+_ESTADOS_EDICION_TERMINAL = (
+    "ENTREGADO", "RETORNADO", "CANCELADO", "CANCELACION_PENDIENTE",
+)
+
+
+def _cantidades_objetivo(payload):
+    """{codigo_sku: piezas} sumando current_quantity; None si ningún item trae la llave."""
+    objetivo = {}
+    con_llave = False
+    for item in payload.get("line_items") or []:
+        codigo = str(item.get("sku") or "").strip()
+        if not codigo or "current_quantity" not in item:
+            continue
+        try:
+            piezas = int(item.get("current_quantity") or 0)
+        except (TypeError, ValueError):
+            continue
+        con_llave = True
+        objetivo[codigo] = objetivo.get(codigo, 0) + max(piezas, 0)
+    return objetivo if con_llave else None
+
+
+def _reducir_lineas(pedido, filas, faltan, liberar_reserva):
+    """Encoge/borra filas SIN avance físico hasta consumir `faltan`. Regresa lo no consumido."""
+    quitadas_peso = 0
+    for linea in filas:
+        if faltan <= 0:
+            break
+        if linea.cantidad_pickeada:
+            continue  # avance físico: intocable, va a conflicto
+        quitar = min(linea.cantidad, faltan)
+        if linea.reservada:
+            liberar_reserva(linea.sku, quitar, pedido.folio)
+        quitadas_peso += (linea.sku.peso_gr or 0) * quitar
+        faltan -= quitar
+        if quitar == linea.cantidad:
+            linea.delete()
+        else:
+            linea.cantidad -= quitar
+            linea.save(update_fields=["cantidad"])
+    return faltan, quitadas_peso
+
+
+def _aplicar_cambios_cantidades(pedido, payload, origen):
+    """Refund parcial / edición de orden: ajusta las líneas al current_quantity.
+
+    Reducción sin avance físico → encoge y libera reserva; con avance
+    (pickeada, empacado o después) → incidencia CAN, cantidades intactas.
+    Aumento o línea nueva en PENDIENTE → camino de ingesta (reserva o FAL);
+    en estados posteriores → incidencia. Diff-based: repetir el mismo update
+    es no-op.
+    """
+    if pedido.estado in _ESTADOS_EDICION_TERMINAL:
+        return
+    objetivo = _cantidades_objetivo(payload)
+    if objetivo is None:
+        return
+    from apps.inventario.services import liberar_reserva  # lazy por contrato
+
+    por_sku = {}
+    for linea in pedido.lineas.select_related("sku"):
+        por_sku.setdefault(linea.sku.codigo, []).append(linea)
+
+    editable = pedido.estado in (Pedido.PENDIENTE, Pedido.EN_PICKING)
+    reducidas, aumentadas, conflictos, faltantes_stock = [], [], [], []
+    delta_peso = 0
+    for codigo, piezas_objetivo in objetivo.items():
+        filas = por_sku.get(codigo, [])
+        delta = piezas_objetivo - sum(l.cantidad for l in filas)
+        if delta == 0:
+            continue
+        if delta < 0:
+            faltan = -delta
+            if editable:
+                faltan, peso_quitado = _reducir_lineas(pedido, filas, faltan, liberar_reserva)
+                delta_peso -= peso_quitado
+                if faltan < -delta:
+                    reducidas.append({"sku": codigo, "quitadas": (-delta) - faltan})
+            if faltan > 0:
+                conflictos.append(f"{codigo}: reducir {faltan} pieza(s) ya en proceso físico")
+        elif pedido.estado == Pedido.PENDIENTE:
+            delta_peso += _aumentar_linea(
+                pedido, filas, codigo, delta, aumentadas, conflictos, faltantes_stock,
+            )
+        else:
+            conflictos.append(f"{codigo}: la edición agrega {delta} pieza(s) con el pedido ya en proceso")
+
+    if not (reducidas or aumentadas or conflictos):
+        return
+    if delta_peso:
+        pedido.peso_esperado_gr = max((pedido.peso_esperado_gr or 0) + delta_peso, 0)
+        pedido.save(update_fields=["peso_esperado_gr", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "edicion_orden", actor=origen, cliente=pedido.cliente,
+        delta={"reducidas": reducidas, "aumentadas": aumentadas, "conflictos": conflictos},
+        motivo="Refund parcial o edición de la orden en Shopify.",
+    )
+    _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos)
+
+
+def _aumentar_linea(pedido, filas, codigo, delta, aumentadas, conflictos, faltantes_stock):
+    """Edición que agrega piezas en PENDIENTE: línea nueva por el delta (reserva o FAL)."""
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+    sku = filas[0].sku if filas else SKU.objects.filter(cliente=pedido.cliente, codigo=codigo).first()
+    if sku is None:
+        conflictos.append(f"{codigo}: la edición agrega un SKU desconocido × {delta}")
+        return 0
+    linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=delta)
+    reservada = _reservar_linea(linea)
+    aumentadas.append({"sku": codigo, "agregadas": delta, "reservada": reservada})
+    if not reservada:
+        faltantes_stock.append(f"Sin stock suficiente: {codigo} × {delta}")
+    return (sku.peso_gr or 0) * delta
+
+
+def _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos):
+    """FAL si la edición agregó piezas sin stock; CAN si tocó piezas en proceso.
+    Con una incidencia ya activa no se duplica (la pelota ya está en juego)."""
+    if not (faltantes_stock or conflictos) or pedido.incidencia_activa:
+        return
+    pedido.incidencia_activa = True
+    pedido.save(update_fields=["incidencia_activa", "actualizado"])
+    try:
+        from apps.incidencias.services import abrir_incidencia  # lazy
+    except ImportError:
+        return
+    if faltantes_stock:
+        abrir_incidencia(
+            pedido.cliente, "FAL", "auto", pedido=pedido,
+            texto="Faltante en edición de la orden: " + "; ".join(faltantes_stock),
+        )
+    else:
+        abrir_incidencia(
+            pedido.cliente, "CAN", "auto", pedido=pedido,
+            texto="Edición de orden con el pedido en proceso: " + "; ".join(conflictos),
+        )
+
+
 def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
-    """Rama idempotente del upsert: solo refresca datos blandos."""
+    """Rama idempotente del upsert: refresca datos blandos y aplica ediciones de cantidades."""
     campos = []
     direccion = payload.get("shipping_address")
     if direccion:
@@ -294,6 +434,9 @@ def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
         campos.append("nota_regalo")
     if campos:
         pedido.save(update_fields=campos + ["actualizado"])
+    if not cancelada:
+        # Una orden cancelada la gobierna su matriz; lo demás ajusta cantidades.
+        _aplicar_cambios_cantidades(pedido, payload, origen)
     registrar_evento(
         "pedido", pedido.pk, "ingesta_repetida", actor=origen, cliente=pedido.cliente,
         delta={"origen": origen, "campos": campos},

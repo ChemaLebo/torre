@@ -247,6 +247,122 @@ class IngestaTests(BaseServicios):
             services.ingerir_pedido_shopify(self.tienda, {"line_items": []})
 
 
+class EdicionOrdenTests(BaseServicios):
+    """Refund parcial / edición de orden sobre pedidos ya ingeridos (2f)."""
+
+    def _ingerido(self, order_id, cantidad=2):
+        with patch("apps.inventario.services.reservar", return_value=True), \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             self.captureOnCommitCallbacks(execute=True):
+            return services.ingerir_pedido_shopify(
+                self.tienda, payload_shopify(order_id=order_id, cantidad=cantidad),
+            )
+
+    def _actualizar(self, pedido, payload, reservar_ok=True):
+        with patch("apps.inventario.services.liberar_reserva") as liberar, \
+             patch("apps.inventario.services.reservar", return_value=reservar_ok) as reservar, \
+             patch("apps.incidencias.services.abrir_incidencia") as abrir, \
+             self.captureOnCommitCallbacks(execute=True):
+            services.ingerir_pedido_shopify(self.tienda, payload)
+        pedido.refresh_from_db()
+        return liberar, reservar, abrir
+
+    def _payload_con(self, order_id, current_quantity):
+        payload = payload_shopify(order_id=order_id)
+        payload["line_items"][0]["current_quantity"] = current_quantity
+        return payload
+
+    def test_reduccion_libera_y_encoge(self):
+        pedido = self._ingerido(7001)
+        liberar, _, abrir = self._actualizar(pedido, self._payload_con(7001, 1))
+        linea = pedido.lineas.get()
+        self.assertEqual(linea.cantidad, 1)
+        self.assertEqual(pedido.peso_esperado_gr, 2400)
+        liberar.assert_called_once_with(self.sku, 1, pedido.folio)
+        abrir.assert_not_called()
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="edicion_orden",
+        )
+        self.assertEqual(evento.delta["reducidas"], [{"sku": "COL-SIX", "quitadas": 1}])
+
+    def test_reduccion_a_cero_borra_la_linea(self):
+        pedido = self._ingerido(7002)
+        liberar, _, _ = self._actualizar(pedido, self._payload_con(7002, 0))
+        self.assertEqual(pedido.lineas.count(), 0)
+        liberar.assert_called_once_with(self.sku, 2, pedido.folio)
+
+    def test_reduccion_con_avance_fisico_abre_can_sin_tocar_cantidades(self):
+        pedido = self._ingerido(7003)
+        pedido.estado = Pedido.EN_PICKING
+        pedido.save(update_fields=["estado"])
+        linea = pedido.lineas.get()
+        linea.cantidad_pickeada = 1
+        linea.save(update_fields=["cantidad_pickeada"])
+        liberar, _, abrir = self._actualizar(pedido, self._payload_con(7003, 1))
+        linea.refresh_from_db()
+        self.assertEqual(linea.cantidad, 2)
+        liberar.assert_not_called()
+        abrir.assert_called_once()
+        self.assertEqual(abrir.call_args.args[1], "CAN")
+        self.assertTrue(pedido.incidencia_activa)
+
+    def test_aumento_en_pendiente_crea_linea_y_reserva(self):
+        pedido = self._ingerido(7004)
+        liberar, reservar, abrir = self._actualizar(pedido, self._payload_con(7004, 4))
+        self.assertEqual(pedido.lineas.count(), 2)
+        self.assertEqual(sum(l.cantidad for l in pedido.lineas.all()), 4)
+        nueva = pedido.lineas.latest("pk")
+        self.assertEqual(nueva.cantidad, 2)
+        self.assertTrue(nueva.reservada)
+        reservar.assert_called_once_with(self.sku, 2, pedido.folio)
+        liberar.assert_not_called()
+        abrir.assert_not_called()
+
+    def test_aumento_sin_stock_abre_fal(self):
+        pedido = self._ingerido(7005)
+        _, _, abrir = self._actualizar(pedido, self._payload_con(7005, 4), reservar_ok=False)
+        nueva = pedido.lineas.latest("pk")
+        self.assertFalse(nueva.reservada)
+        abrir.assert_called_once()
+        self.assertEqual(abrir.call_args.args[1], "FAL")
+        self.assertTrue(pedido.incidencia_activa)
+
+    def test_aumento_fuera_de_pendiente_es_conflicto(self):
+        pedido = self._ingerido(7006)
+        pedido.estado = Pedido.EMPACADO
+        pedido.save(update_fields=["estado"])
+        _, reservar, abrir = self._actualizar(pedido, self._payload_con(7006, 4))
+        self.assertEqual(pedido.lineas.count(), 1)
+        reservar.assert_not_called()
+        self.assertEqual(abrir.call_args.args[1], "CAN")
+
+    def test_payload_sin_current_quantity_es_noop(self):
+        pedido = self._ingerido(7007)
+        liberar, _, abrir = self._actualizar(pedido, payload_shopify(order_id=7007))
+        self.assertEqual(pedido.lineas.get().cantidad, 2)
+        liberar.assert_not_called()
+        abrir.assert_not_called()
+        self.assertFalse(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="edicion_orden",
+        ).exists())
+
+    def test_mismo_update_dos_veces_solo_actua_una(self):
+        pedido = self._ingerido(7008)
+        self._actualizar(pedido, self._payload_con(7008, 1))
+        liberar, _, _ = self._actualizar(pedido, self._payload_con(7008, 1))
+        liberar.assert_not_called()
+        self.assertEqual(pedido.lineas.get().cantidad, 1)
+
+    def test_estado_terminal_no_ajusta(self):
+        pedido = self._ingerido(7009)
+        pedido.estado = Pedido.ENTREGADO
+        pedido.save(update_fields=["estado"])
+        liberar, _, abrir = self._actualizar(pedido, self._payload_con(7009, 1))
+        self.assertEqual(pedido.lineas.get().cantidad, 2)
+        liberar.assert_not_called()
+        abrir.assert_not_called()
+
+
 class ReintentoReservasTests(BaseServicios):
     """Auto-retry al entrar stock + botón manual de Mesa (pedidos nacidos sin stock)."""
 
