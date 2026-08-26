@@ -251,6 +251,87 @@ class IngestaTests(BaseServicios):
             services.ingerir_pedido_shopify(self.tienda, {"line_items": []})
 
 
+class LineasKitTests(BaseServicios):
+    """es_kit: real para picking, invisible para inventario (7A·1)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.kit = SKU.objects.create(
+            cliente=cls.cliente, codigo="TEABOX", descripcion="TeaBox mensual",
+            peso_gr=400, es_kit=True, requiere_lote=False,
+        )
+
+    def _payload_kit_y_normal(self, order_id):
+        payload = payload_shopify(order_id=order_id)
+        payload["line_items"] = [
+            {"id": 11, "sku": "TEABOX", "quantity": 1, "price": "499.00", "title": "TeaBox"},
+            {"id": 12, "sku": "COL-SIX", "quantity": 2, "price": "189.00", "title": "Six"},
+        ]
+        return payload
+
+    def _ingerir(self, payload, reservar_ok=True):
+        with patch("apps.inventario.services.reservar", return_value=reservar_ok) as reservar, \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             patch("apps.incidencias.services.abrir_incidencia") as abrir, \
+             self.captureOnCommitCallbacks(execute=True):
+            pedido = services.ingerir_pedido_shopify(self.tienda, payload)
+        return pedido, reservar, abrir
+
+    def test_kit_no_reserva_y_no_bloquea(self):
+        pedido, reservar, abrir = self._ingerir(self._payload_kit_y_normal(8101))
+        linea_kit = pedido.lineas.get(sku=self.kit)
+        self.assertTrue(linea_kit.reservada)  # bookkeeping: "no bloquea"
+        reservar.assert_called_once_with(self.sku, 2, pedido.folio)  # solo la normal
+        abrir.assert_not_called()
+        self.assertEqual(pedido.peso_esperado_gr, 400 + 4800)
+
+    def test_sin_stock_el_fal_es_solo_de_la_linea_normal(self):
+        pedido, _, abrir = self._ingerir(self._payload_kit_y_normal(8102), reservar_ok=False)
+        abrir.assert_called_once()
+        texto = abrir.call_args.kwargs.get("texto") or abrir.call_args.args[-1]
+        self.assertIn("COL-SIX", texto)
+        self.assertNotIn("TEABOX", texto)
+
+    def test_cancelar_pendiente_no_libera_el_kit(self):
+        pedido, _, _ = self._ingerir(self._payload_kit_y_normal(8103))
+        with patch("apps.inventario.services.liberar_reserva") as liberar:
+            services.cancelar(pedido, actor="mesa1", motivo="prueba")
+        liberar.assert_called_once_with(self.sku, 2, pedido.folio)  # jamás el kit
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.CANCELADO)
+
+    def _pedido_picado(self):
+        pedido = self.pedido_directo(estado=Pedido.EN_PICKING)
+        LineaPedido.objects.create(
+            pedido=pedido, sku=self.kit, cantidad=1, cantidad_pickeada=1, reservada=True,
+        )
+        LineaPedido.objects.create(
+            pedido=pedido, sku=self.sku, cantidad=1, cantidad_pickeada=1, reservada=True,
+        )
+        return pedido
+
+    def test_empacar_no_confirma_el_kit_en_inventario(self):
+        pedido = self._pedido_picado()
+        with patch("apps.inventario.services.confirmar_pick") as confirmar:
+            services.empacar(pedido, "packer1", peso_real_gr=2800, fotos=[foto()])
+        confirmar.assert_called_once_with(self.sku, 1, pedido.folio)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.EMPACADO)
+
+    def test_recolectado_no_despacha_el_kit(self):
+        pedido = self._pedido_picado()
+        pedido.estado = Pedido.GUIA_GENERADA
+        pedido.save(update_fields=["estado"])
+        with patch("apps.inventario.services.despachar") as despachar, \
+             patch("apps.mensajeria.services.enviar_en_camino"), \
+             self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, "salida1")
+        despachar.assert_called_once_with(self.sku, 1, pedido.folio)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+
+
 class IngestaPorTicketTests(BaseServicios):
     """Stage 2 multi-location: se ingieren solo líneas/cantidades de NUESTRO ticket."""
 

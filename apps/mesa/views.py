@@ -1559,6 +1559,7 @@ def cliente_skus(request, pk):
                 "punto_reorden": sku_editar.punto_reorden,
                 "empaques_divisibles": sku_editar.empaques_divisibles,
                 "backorder_habilitado": sku_editar.backorder_habilitado,
+                "es_kit": sku_editar.es_kit,
                 "activo": sku_editar.activo,
             })
         else:
@@ -1668,7 +1669,7 @@ _COLUMNAS_CSV_ENTERAS = (
 COLUMNAS_CSV_CATALOGO = (
     "codigo", "descripcion", "variante", "codigo_barras", "categoria",
     "peso_gr", "largo_cm", "ancho_cm", "alto_cm",
-    "precio_declarado", "punto_reorden", "requiere_lote", "empaques_divisibles",
+    "precio_declarado", "punto_reorden", "requiere_lote", "empaques_divisibles", "es_kit",
 )
 
 
@@ -1732,6 +1733,7 @@ def cliente_skus_exportar(request, pk):
             sku.peso_gr, sku.largo_cm, sku.ancho_cm, sku.alto_cm,
             sku.precio_declarado, sku.punto_reorden,
             "si" if sku.requiere_lote else "no", sku.empaques_divisibles,
+            "si" if sku.es_kit else "no",
         ])
     return respuesta
 
@@ -1786,6 +1788,14 @@ def _parsear_fila_csv(fila):
             datos["requiere_lote"] = False
         else:
             raise ValueError("requiere_lote acepta si/no/1/0")
+    kit = celda("es_kit").lower()
+    if kit:
+        if kit in ("si", "sí", "1"):
+            datos["es_kit"] = True
+        elif kit in ("no", "0"):
+            datos["es_kit"] = False
+        else:
+            raise ValueError("es_kit acepta si/no/1/0")
     if celda("categoria"):
         datos["categoria_nombre"] = celda("categoria")
     return datos

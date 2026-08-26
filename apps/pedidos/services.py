@@ -304,7 +304,7 @@ def _reducir_lineas(pedido, filas, faltan, liberar_reserva):
         if linea.cantidad_pickeada:
             continue  # avance físico: intocable, va a conflicto
         quitar = min(linea.cantidad, faltan)
-        if linea.reservada:
+        if linea.reservada and not linea.sku.es_kit:
             liberar_reserva(linea.sku, quitar, pedido.folio)
         quitadas_peso += (linea.sku.peso_gr or 0) * quitar
         faltan -= quitar
@@ -380,6 +380,11 @@ def _aumentar_linea(pedido, filas, codigo, delta, aumentadas, conflictos, faltan
     if sku is None:
         conflictos.append(f"{codigo}: la edición agrega un SKU desconocido × {delta}")
         return 0
+    if sku.es_kit:
+        # Kit agregado por edición: misma semántica que en la ingesta.
+        LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=delta, reservada=True)
+        aumentadas.append({"sku": codigo, "agregadas": delta, "reservada": True})
+        return (sku.peso_gr or 0) * delta
     linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=delta)
     reservada = _reservar_linea(linea)
     aumentadas.append({"sku": codigo, "agregadas": delta, "reservada": reservada})
@@ -499,6 +504,11 @@ def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
         valor = Decimal(str(item.get("price") or "0")) * cantidad
     except InvalidOperation:
         valor = Decimal("0")
+    if sku.es_kit:
+        # Kit: se arma al empacar — nada que reservar ni FAL que abrir.
+        # reservada=True = "no bloquea" (el reintento y los checks lo ignoran).
+        LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad, reservada=True)
+        return (sku.peso_gr or 0) * cantidad, valor
     linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
     # Orden que llega ya cancelada: no se aparta stock.
     if not cancelada and not _reservar_linea(linea):
@@ -846,8 +856,9 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
             )
 
         from apps.inventario.services import confirmar_pick  # lazy
-        for linea in fresco.lineas.all():
-            if linea.cantidad_pickeada:
+        for linea in fresco.lineas.select_related("sku"):
+            # La línea kit se escanea (la caja física) pero no tiene stock propio.
+            if linea.cantidad_pickeada and not linea.sku.es_kit:
                 confirmar_pick(linea.sku, linea.cantidad_pickeada, fresco.folio)
 
         fresco.peso_real_gr = peso_real
@@ -1078,8 +1089,8 @@ def marcar_recolectado(pedido, actor):
         )
     from apps.inventario.services import despachar  # lazy
     with transaction.atomic():
-        for linea in pedido.lineas.all():
-            if linea.cantidad_pickeada:
+        for linea in pedido.lineas.select_related("sku"):
+            if linea.cantidad_pickeada and not linea.sku.es_kit:
                 despachar(linea.sku, linea.cantidad_pickeada, pedido.folio)
         pedido.transicionar(
             Pedido.RECOLECTADO, actor=actor,
@@ -1173,7 +1184,9 @@ def confirmar_restock(pedido, actor, motivo=""):
         )
     from apps.inventario.services import liberar_reserva, retornar  # lazy
     empacado = pedido.ts_empacado is not None
-    for linea in pedido.lineas.all():
+    for linea in pedido.lineas.select_related("sku"):
+        if linea.sku.es_kit:
+            continue  # el kit no tiene stock propio; sus componentes son líneas normales
         pickeada = linea.cantidad_pickeada
         if empacado and pickeada:
             # confirmar_pick ya movió esto a en_empaque: reingresa como retorno.
@@ -1197,7 +1210,9 @@ def confirmar_restock(pedido, actor, motivo=""):
 def _liberar_reservas(pedido):
     """Libera en inventario las líneas que sí alcanzaron reserva."""
     from apps.inventario.services import liberar_reserva  # lazy
-    for linea in pedido.lineas.filter(reservada=True):
+    for linea in pedido.lineas.filter(reservada=True).select_related("sku"):
+        if linea.sku.es_kit:
+            continue  # reservada=True del kit es bookkeeping: no hay RESERVADO real
         liberar_reserva(linea.sku, linea.cantidad, pedido.folio)
         linea.reservada = False
         linea.save(update_fields=["reservada"])

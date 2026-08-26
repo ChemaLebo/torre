@@ -169,6 +169,10 @@
           {{ form.backorder_habilitado }}{{ form.backorder_habilitado.errors }}
         </div>
         <div>
+          <label for="{{ form.es_kit.id_for_label }}">{{ form.es_kit.label }}</label>
+          {{ form.es_kit }}{{ form.es_kit.errors }}
+        </div>
+        <div>
           <label for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>
           {{ form.activo }}{{ form.activo.errors }}
         </div>
@@ -187,7 +191,7 @@
       <label for="id_archivo">Archivo CSV (UTF-8, con encabezados)</label>
       <input type="file" name="archivo" id="id_archivo" accept=".csv" required>
       <p class="small muted mt">
-        Encabezados: <span class="mono">codigo,descripcion,variante,codigo_barras,categoria,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles</span>.
+        Encabezados: <span class="mono">codigo,descripcion,variante,codigo_barras,categoria,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles,es_kit</span>.
         Solo codigo y descripcion son obligatorios por fila; requiere_lote acepta si/no/1/0;
         una categoria que no existe se crea sola (vacía = Otros).
         Un código que ya existe se actualiza; las filas con error no detienen a las demás.

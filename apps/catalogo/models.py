@@ -58,6 +58,11 @@ class SKU(models.Model):
         help_text="En cuántas cajas puede reempacarse una unidad de venta para "
                   "abaratar el envío (ej. caja de 24 → 2 medias de 12). 1 = indivisible.",
     )
+    es_kit = models.BooleanField(
+        default=False,
+        help_text="Se arma al empacar (TeaBox): no reserva stock propio ni publica "
+                  "inventario; su contenido se declara en empaque o llega en la orden",
+    )
     backorder_habilitado = models.BooleanField(default=False)
     fecha_resurtido = models.DateField(null=True, blank=True)
     activo = models.BooleanField(default=True)
@@ -73,15 +78,18 @@ class SKU(models.Model):
         return f"{self.codigo} · {self.descripcion}"
 
 
-def opciones_sku_agrupadas(cliente):
+def opciones_sku_agrupadas(cliente, excluir_kits=False):
     """Choices de SKU agrupadas por categoría para selects con optgroup.
 
     [(categoria, [(pk, "Descripción — SKU"), ...]), ...] — categorías en orden
     alfabético con Otros al final; productos por descripción. SKU sin categoría
-    cuenta como Otros.
+    cuenta como Otros. excluir_kits: para ASN (recibir un kit fabricaría stock
+    de algo que no existe físico) y para el contenido de kits (kit en kit, no).
     """
     grupos = {}
     qs = SKU.objects.filter(cliente=cliente, activo=True).select_related("categoria").order_by("descripcion")
+    if excluir_kits:
+        qs = qs.filter(es_kit=False)
     for sku in qs:
         nombre = sku.categoria.nombre if sku.categoria else Categoria.OTROS
         etiqueta = f"{sku.descripcion} ({sku.variante})" if sku.variante else sku.descripcion

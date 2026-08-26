@@ -286,6 +286,10 @@ class FormSKU(forms.Form):
         },
     )
     backorder_habilitado = forms.BooleanField(label="Backorder habilitado", required=False, initial=False)
+    es_kit = forms.BooleanField(
+        label="Es kit (se arma al empacar)", required=False, initial=False,
+        help_text="TeaBox y similares: no reserva stock propio ni publica inventario.",
+    )
     activo = forms.BooleanField(label="Activo", required=False, initial=True)
 
     def __init__(self, cliente, *args, **kwargs):
@@ -323,6 +327,7 @@ class FormSKU(forms.Form):
             "punto_reorden": d.get("punto_reorden") or 0,
             "empaques_divisibles": d["empaques_divisibles"],
             "backorder_habilitado": d.get("backorder_habilitado", False),
+            "es_kit": d.get("es_kit", False),
             "activo": d.get("activo", False),
         }
 

@@ -48,6 +48,20 @@ class OpcionesAgrupadasTests(TestCase):
         self.assertIn("Té negro (1 kg) — TN-1K", etiquetas)
         self.assertIn("Chai masala — CHAI", etiquetas)
 
+    def test_excluir_kits_los_saca_del_dropdown(self):
+        from apps.core.models import Cliente
+
+        from ..models import SKU, opciones_sku_agrupadas
+
+        cliente = Cliente.objects.create(nombre="Infinitea 2", slug="infinitea-2")
+        SKU.objects.create(cliente=cliente, codigo="TEABOX", descripcion="TeaBox", es_kit=True)
+        SKU.objects.create(cliente=cliente, codigo="CHAI", descripcion="Chai")
+        con_kits = [t for _, ops in opciones_sku_agrupadas(cliente) for _, t in ops]
+        sin_kits = [t for _, ops in opciones_sku_agrupadas(cliente, excluir_kits=True) for _, t in ops]
+        self.assertTrue(any("TEABOX" in t for t in con_kits))
+        self.assertFalse(any("TEABOX" in t for t in sin_kits))
+        self.assertTrue(any("CHAI" in t for t in sin_kits))
+
 
 class UbicacionYLoteTests(TestCase):
     def setUp(self):

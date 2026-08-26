@@ -84,6 +84,21 @@ class PushInventarioTests(TestCase):
         self.assertEqual(resumen, {"skus": 0, "pushes_ok": 0, "pushes_error": 0})
         self.assertFalse(SyncLog.objects.exists())
 
+    def test_push_descarta_los_kits_con_evento(self):
+        from apps.core.models import EventoAuditoria
+
+        kit = SKU.objects.create(
+            cliente=self.cliente, codigo="TEABOX", descripcion="TeaBox", es_kit=True,
+        )
+        services.encolar_push_inventario(kit)
+        resumen = services.push_inventario()
+        # El kit se descarta ANTES de tocar tiendas: no cuenta ni ensucia SyncLog.
+        self.assertEqual(resumen, {"skus": 0, "pushes_ok": 0, "pushes_error": 0})
+        self.assertEqual(PushInventarioPendiente.objects.count(), 0)
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="sku", entidad_id="TEABOX", accion="push_omitido_kit",
+        ).exists())
+
     def test_on_hand_nunca_es_negativo(self):
         """Sin saldos, con buffer del cliente: el on_hand publicado se acota en 0."""
         self.cliente.buffer_stock = 10

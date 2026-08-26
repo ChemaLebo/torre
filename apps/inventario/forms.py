@@ -15,6 +15,7 @@ from apps.catalogo.models import SKU
 
 
 class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
+    excluir_kits = True  # un kit no se recibe: se arma al empacar
     error_sin_lineas = "Captura al menos un producto con sus piezas para registrar la ASN."
 
     fecha_compromiso = forms.DateField(
@@ -74,7 +75,10 @@ class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
             raise forms.ValidationError(
                 "El CSV de renglones lleva encabezados codigo,cantidad."
             )
-        por_codigo = {s.codigo: s for s in SKU.objects.filter(cliente=self.cliente, activo=True)}
+        por_codigo = {
+            s.codigo: s
+            for s in SKU.objects.filter(cliente=self.cliente, activo=True, es_kit=False)
+        }
         consolidadas, errores = {}, []
         for numero, fila in enumerate(lector, start=2):
             codigo = (fila.get("codigo") or "").strip()

@@ -19,11 +19,14 @@ class ConRenglonesSKU:
     """Mixin: llamar `_armar_renglones(cliente)` al final del __init__ del form."""
 
     renglones_iniciales = 6
+    excluir_kits = False  # ASN lo prende: recibir un kit fabricaría stock inexistente
     error_renglon_incompleto = "Completa producto y piezas en cada renglón que uses."
 
     def _armar_renglones(self, cliente):
         self.cliente = cliente
-        opciones = [("", "Elige un producto")] + opciones_sku_agrupadas(cliente)
+        opciones = [("", "Elige un producto")] + opciones_sku_agrupadas(
+            cliente, excluir_kits=self.excluir_kits,
+        )
         if self.is_bound:
             indices = sorted({
                 int(m.group(1))
@@ -52,7 +55,10 @@ class ConRenglonesSKU:
 
     def consolidar_renglones(self, datos):
         """[(SKU, piezas)] consolidando duplicados; ValidationError si un renglón cojea."""
-        activos = {str(s.pk): s for s in SKU.objects.filter(cliente=self.cliente, activo=True)}
+        qs = SKU.objects.filter(cliente=self.cliente, activo=True)
+        if self.excluir_kits:
+            qs = qs.filter(es_kit=False)
+        activos = {str(s.pk): s for s in qs}
         consolidadas = {}
         for i in self.indices_renglones:
             sku = activos.get(datos.get(f"sku_{i}") or "")

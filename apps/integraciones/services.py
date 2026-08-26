@@ -323,6 +323,15 @@ def push_inventario():
     )
     for pendiente in pendientes:
         sku = pendiente.sku
+        if getattr(sku, "es_kit", False):
+            # Un kit no tiene stock físico: Torre publicaría 0 y estrangularía
+            # sus ventas. Su disponibilidad es comercial, no de bodega.
+            registrar_evento(
+                "sku", sku.codigo, "push_omitido_kit", cliente=sku.cliente,
+                motivo="Kit: no se publica inventario a Shopify.",
+            )
+            pendiente.delete()
+            continue
         on_hand = calcular_on_hand(sku)
         tiendas = list(Tienda.objects.filter(cliente=sku.cliente, activo=True))
         todo_ok = True
