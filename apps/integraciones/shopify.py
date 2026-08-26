@@ -43,6 +43,15 @@ mutation fijarOnHand($input: InventorySetQuantitiesInput!) {
 }
 """
 
+MUTACION_ACTIVAR_INVENTARIO = """
+mutation activarInventario($itemId: ID!, $locationId: ID!) {
+  inventoryActivate(inventoryItemId: $itemId, locationId: $locationId) {
+    inventoryLevel { id }
+    userErrors { field message }
+  }
+}
+"""
+
 
 CONSULTA_FULFILLMENT_ORDERS = """
 query ordenesDeFulfillment($id: ID!) {
@@ -69,6 +78,11 @@ mutation crearFulfillment($fulfillment: FulfillmentInput!) {
 
 class ShopifyError(Exception):
     """Error de la API de Shopify (HTTP, GraphQL o userErrors)."""
+
+
+class ErrorItemNoStockeado(ShopifyError):
+    """El item no está stockeado en nuestra location (ITEM_NOT_STOCKED_AT_LOCATION):
+    producto creado/reactivado después del alta masiva. Curable con inventoryActivate."""
 
 
 class ShopifyClient:
@@ -157,7 +171,21 @@ class ShopifyClient:
         resultado = datos.get("inventorySetQuantities") or {}
         errores = resultado.get("userErrors") or []
         if errores:
+            if any((e.get("code") or "") == "ITEM_NOT_STOCKED_AT_LOCATION" for e in errores):
+                raise ErrorItemNoStockeado(f"inventorySetQuantities {self.tienda.dominio}: {errores}")
             raise ShopifyError(f"inventorySetQuantities {self.tienda.dominio}: {errores}")
+        return resultado
+
+    def activar_inventario(self, inventory_item_gid):
+        """Stockea el item en nuestra location (cura ITEM_NOT_STOCKED_AT_LOCATION)."""
+        datos = self.graphql(MUTACION_ACTIVAR_INVENTARIO, {
+            "itemId": inventory_item_gid,
+            "locationId": self.location_gid,
+        })
+        resultado = datos.get("inventoryActivate") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"inventoryActivate {self.tienda.dominio}: {errores}")
         return resultado
 
     # ── fulfillment (write-back al marcar RECOLECTADO) ──

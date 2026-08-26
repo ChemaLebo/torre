@@ -1,5 +1,6 @@
 """Tests del push de inventario: encolado idempotente y drenado (modo mock)."""
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -8,6 +9,7 @@ from apps.catalogo.models import SKU
 from apps.core.models import Cliente
 from apps.integraciones import services
 from apps.integraciones.models import PushInventarioPendiente, SyncLog, Tienda
+from apps.integraciones.shopify import ErrorItemNoStockeado, ShopifyClient, ShopifyError
 
 
 def crear_sku(cliente, codigo="COLIMITA-SIX"):
@@ -87,6 +89,81 @@ class PushInventarioTests(TestCase):
         self.cliente.save()
         self.sku.cliente.refresh_from_db()
         self.assertEqual(services.calcular_on_hand(self.sku), 0)
+
+
+class AutoActivarInventarioTests(TestCase):
+    """El push cura ITEM_NOT_STOCKED_AT_LOCATION: activa el item y reintenta."""
+
+    def setUp(self):
+        self.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima", buffer_stock=0)
+        self.tienda = Tienda.objects.create(
+            cliente=self.cliente, dominio="colima-mx.myshopify.com",
+            token="shpat_prueba", location_id="123",
+        )
+        self.sku = crear_sku(self.cliente)
+        services.encolar_push_inventario(self.sku)
+
+    def test_item_no_stockeado_activa_y_reintenta_con_compare_cero(self):
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.consultar_inventario_sku.return_value = ("gid://shopify/InventoryItem/1", 7)
+            api.set_on_hand.side_effect = [ErrorItemNoStockeado("no stockeado"), {}]
+            resumen = services.push_inventario()
+        self.assertEqual(resumen["pushes_ok"], 1)
+        api.activar_inventario.assert_called_once_with("gid://shopify/InventoryItem/1")
+        self.assertEqual(api.set_on_hand.call_count, 2)
+        self.assertEqual(api.set_on_hand.call_args_list[1].kwargs["compare_quantity"], 0)
+        self.assertEqual(PushInventarioPendiente.objects.count(), 0)
+        log = SyncLog.objects.latest("ts")
+        self.assertEqual(log.resultado, SyncLog.RESULTADO_OK)
+        self.assertIn("activado", log.detalle)
+
+    def test_activacion_fallida_deja_error_y_el_pendiente_sobrevive(self):
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.consultar_inventario_sku.return_value = ("gid://shopify/InventoryItem/1", 0)
+            api.set_on_hand.side_effect = ErrorItemNoStockeado("no stockeado")
+            api.activar_inventario.side_effect = ShopifyError("activate falló")
+            resumen = services.push_inventario()
+        self.assertEqual(resumen["pushes_error"], 1)
+        self.assertEqual(PushInventarioPendiente.objects.count(), 1)
+        self.assertEqual(SyncLog.objects.latest("ts").resultado, SyncLog.RESULTADO_ERROR)
+
+    def test_error_generico_no_intenta_activar(self):
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.consultar_inventario_sku.return_value = ("gid://shopify/InventoryItem/1", 3)
+            api.set_on_hand.side_effect = ShopifyError("compare viejo")
+            resumen = services.push_inventario()
+        self.assertEqual(resumen["pushes_error"], 1)
+        api.activar_inventario.assert_not_called()
+
+
+class SetOnHandClasificaErroresTests(TestCase):
+    """El código ITEM_NOT_STOCKED_AT_LOCATION se distingue del resto de userErrors."""
+
+    def _api(self):
+        tienda = Tienda(dominio="x.myshopify.com", token="shpat_x", location_id="1")
+        return ShopifyClient(tienda)
+
+    def test_item_not_stocked_lanza_su_excepcion(self):
+        api = self._api()
+        respuesta = {"inventorySetQuantities": {"userErrors": [
+            {"code": "ITEM_NOT_STOCKED_AT_LOCATION", "field": None, "message": "not stocked"},
+        ]}}
+        with patch.object(api, "graphql", return_value=respuesta):
+            with self.assertRaises(ErrorItemNoStockeado):
+                api.set_on_hand("gid://shopify/InventoryItem/1", 5, 0)
+
+    def test_otro_user_error_lanza_shopify_error_plano(self):
+        api = self._api()
+        respuesta = {"inventorySetQuantities": {"userErrors": [
+            {"code": "INVALID", "field": None, "message": "otra cosa"},
+        ]}}
+        with patch.object(api, "graphql", return_value=respuesta):
+            with self.assertRaises(ShopifyError) as ctx:
+                api.set_on_hand("gid://shopify/InventoryItem/1", 5, 0)
+        self.assertNotIsInstance(ctx.exception, ErrorItemNoStockeado)
 
 
 @override_settings(DEBUG=True)  # el modo mock (tienda sin token) solo existe en dev

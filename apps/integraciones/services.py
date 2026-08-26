@@ -15,7 +15,7 @@ from django.utils import timezone
 from apps.core.services import registrar_evento
 
 from .models import PushInventarioPendiente, SyncLog, Tienda, WebhookEvento
-from .shopify import ShopifyClient, ShopifyError
+from .shopify import ErrorItemNoStockeado, ShopifyClient, ShopifyError
 
 TOPICS_PEDIDOS = {"orders/create", "orders/updated", "orders/cancelled"}
 
@@ -163,10 +163,21 @@ def _push_a_tienda(tienda, sku, on_hand):
             detalle=f"ok (mock): {sku.codigo} on_hand={on_hand}",
         )
         return True
+    activado = False
     try:
         api = ShopifyClient(tienda)
         item_gid, on_hand_actual = api.consultar_inventario_sku(sku.codigo)
-        api.set_on_hand(item_gid, on_hand, compare_quantity=on_hand_actual)
+        try:
+            api.set_on_hand(item_gid, on_hand, compare_quantity=on_hand_actual)
+        except ErrorItemNoStockeado:
+            # Producto creado/reactivado después del alta masiva: recibirlo =
+            # lo fulfilleamos. Se activa en nuestra location y se reintenta;
+            # tras activar el on_hand es 0 (una carrera falla el compare y el
+            # siguiente drenado trae snapshot fresco).
+            api.activar_inventario(item_gid)
+            api.set_on_hand(item_gid, on_hand, compare_quantity=0)
+            activado = True
+            on_hand_actual = 0
     except Exception as exc:  # noqa: BLE001 — un push caído (ShopifyError, red) no tumba el drenado
         SyncLog.objects.create(
             tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_ERROR,
@@ -175,7 +186,10 @@ def _push_a_tienda(tienda, sku, on_hand):
         return False
     SyncLog.objects.create(
         tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
-        detalle=f"{sku.codigo} on_hand={on_hand} (compareQuantity={on_hand_actual})",
+        detalle=(
+            f"{sku.codigo} on_hand={on_hand} (compareQuantity={on_hand_actual})"
+            + (" · item activado en la location" if activado else "")
+        ),
     )
     return True
 
