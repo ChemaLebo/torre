@@ -279,14 +279,27 @@ def marcar_fulfillment(pedido):
 
     try:
         api = ShopifyClient(tienda)
+        # Stage 1 multi-location: SOLO se cierran tickets de NUESTRA location.
+        # Location nula (borrada en Shopify) cuenta como nuestra — comportamiento
+        # legado, jamás estrangula una tienda de una sola bodega. Tienda sin
+        # location_id configurado → sin filtro (compat total).
+        nuestra = api.location_gid if (tienda.location_id or "").strip() else ""
         estados = api.fulfillment_orders(pedido.shopify_order_id)
-        abiertas = [fid for fid, estado in estados if estado in _FO_FULFILLEABLES]
+        abiertas, ajenas = [], []
+        for fid, estado, ubicacion in estados:
+            if estado not in _FO_FULFILLEABLES:
+                continue
+            if nuestra and ubicacion and ubicacion != nuestra:
+                ajenas.append(fid)
+            else:
+                abiertas.append(fid)
         if not abiertas:
+            detalle_ajenas = f"; {len(ajenas)} FO de otra location (no se tocan)" if ajenas else ""
             SyncLog.objects.create(
                 tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
                 detalle=(
-                    f"fulfillment: {pedido.folio} sin fulfillment orders abiertas "
-                    f"(ya fulfilled o retenido: {[e for _, e in estados] or 'sin FOs'})"
+                    f"fulfillment: {pedido.folio} sin fulfillment orders nuestras abiertas "
+                    f"(estados: {[e for _, e, _ in estados] or 'sin FOs'}){detalle_ajenas}"
                 ),
             )
             return True
@@ -298,9 +311,13 @@ def marcar_fulfillment(pedido):
         )
         return False
 
+    detalle_ajenas = f"; {len(ajenas)} FO de otra location intactas" if ajenas else ""
     SyncLog.objects.create(
         tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
-        detalle=f"fulfillment: {pedido.folio} marcado ({len(abiertas)} FO, guías {', '.join(numeros) or '—'})",
+        detalle=(
+            f"fulfillment: {pedido.folio} marcado ({len(abiertas)} FO, "
+            f"guías {', '.join(numeros) or '—'}){detalle_ajenas}"
+        ),
     )
     registrar_evento(
         "pedido", pedido.pk, "fulfillment_shopify", cliente=pedido.cliente,

@@ -58,7 +58,7 @@ query ordenesDeFulfillment($id: ID!) {
   order(id: $id) {
     id
     fulfillmentOrders(first: 10) {
-      edges { node { id status } }
+      edges { node { id status assignedLocation { location { id } } } }
     }
   }
 }
@@ -190,10 +190,11 @@ class ShopifyClient:
 
     # ── fulfillment (write-back al marcar RECOLECTADO) ──
     def fulfillment_orders(self, order_id):
-        """[(gid, status)] de las fulfillment orders del pedido.
+        """[(gid, status, location_gid)] de las fulfillment orders del pedido.
 
         Shopify moderno no 'fulfillea' el pedido directo: se fulfillean sus
-        fulfillment orders. El caller decide cuáles son fulfilleables.
+        fulfillment orders. location_gid = "" si la location fue borrada.
+        El caller decide cuáles son fulfilleables y cuáles son NUESTRAS.
         """
         gid = str(order_id)
         if not gid.startswith("gid://"):
@@ -203,8 +204,14 @@ class ShopifyClient:
         if not orden:
             raise ShopifyError(f"Pedido {order_id} no existe en {self.tienda.dominio}.")
         edges = (orden.get("fulfillmentOrders") or {}).get("edges") or []
-        nodos = [e.get("node") or {} for e in edges]
-        return [(n["id"], n.get("status") or "") for n in nodos if n.get("id")]
+        resultado = []
+        for edge in edges:
+            nodo = edge.get("node") or {}
+            if not nodo.get("id"):
+                continue
+            ubicacion = ((nodo.get("assignedLocation") or {}).get("location") or {}).get("id") or ""
+            resultado.append((nodo["id"], nodo.get("status") or "", ubicacion))
+        return resultado
 
     def crear_fulfillment(self, fulfillment_order_ids, numeros_guia, url_rastreo, carrier, notificar=True):
         """Crea UN fulfillment sobre esas fulfillment orders, con tracking.

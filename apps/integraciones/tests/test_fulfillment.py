@@ -35,7 +35,9 @@ class MarcarFulfillmentTests(BaseFulfillment):
         crear_guia(self.pedido, "ETQ-2")
         with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
             api = cliente_cls.return_value
-            api.fulfillment_orders.return_value = [("gid://shopify/FulfillmentOrder/1", "OPEN")]
+            api.fulfillment_orders.return_value = [
+                ("gid://shopify/FulfillmentOrder/1", "OPEN", "gid://shopify/Location/77"),
+            ]
             self.assertTrue(marcar_fulfillment(self.pedido))
 
         api.crear_fulfillment.assert_called_once()
@@ -53,10 +55,66 @@ class MarcarFulfillmentTests(BaseFulfillment):
         """Reintentos gratis: ya fulfilled (o retenido) = ok sin mutación."""
         with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
             api = cliente_cls.return_value
-            api.fulfillment_orders.return_value = [("gid://shopify/FulfillmentOrder/1", "CLOSED")]
+            api.fulfillment_orders.return_value = [
+                ("gid://shopify/FulfillmentOrder/1", "CLOSED", "gid://shopify/Location/77"),
+            ]
             self.assertTrue(marcar_fulfillment(self.pedido))
         api.crear_fulfillment.assert_not_called()
-        self.assertIn("sin fulfillment orders abiertas", SyncLog.objects.latest("ts").detalle)
+        self.assertIn("sin fulfillment orders nuestras abiertas", SyncLog.objects.latest("ts").detalle)
+
+
+class LocationScopedTests(BaseFulfillment):
+    """Stage 1 multi-location: solo se cierran tickets de NUESTRA location."""
+
+    LOC_NUESTRA = "gid://shopify/Location/77"
+    LOC_AJENA = "gid://shopify/Location/99"
+
+    def setUp(self):
+        super().setUp()
+        self.tienda.location_id = "77"
+        self.tienda.save(update_fields=["location_id"])
+        crear_guia(self.pedido, "ETQ-1")
+
+    def _marcar(self, estados):
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.location_gid = self.LOC_NUESTRA
+            api.fulfillment_orders.return_value = estados
+            resultado = marcar_fulfillment(self.pedido)
+        return resultado, api
+
+    def test_mixta_solo_cierra_las_nuestras(self):
+        resultado, api = self._marcar([
+            ("gid://shopify/FulfillmentOrder/1", "OPEN", self.LOC_NUESTRA),
+            ("gid://shopify/FulfillmentOrder/2", "OPEN", self.LOC_AJENA),
+        ])
+        self.assertTrue(resultado)
+        fo_ids = api.crear_fulfillment.call_args.args[0]
+        self.assertEqual(fo_ids, ["gid://shopify/FulfillmentOrder/1"])
+        self.assertIn("1 FO de otra location", SyncLog.objects.latest("ts").detalle)
+
+    def test_todas_ajenas_es_noop_ok(self):
+        resultado, api = self._marcar([
+            ("gid://shopify/FulfillmentOrder/2", "OPEN", self.LOC_AJENA),
+        ])
+        self.assertTrue(resultado)  # nada nuestro que fulfillear: no-op idempotente
+        api.crear_fulfillment.assert_not_called()
+        log = SyncLog.objects.latest("ts")
+        self.assertEqual(log.resultado, SyncLog.RESULTADO_OK)
+        self.assertIn("no se tocan", log.detalle)
+
+    def test_location_nula_cuenta_como_nuestra(self):
+        # Location borrada en Shopify: comportamiento legado (se fulfillea).
+        resultado, api = self._marcar([("gid://shopify/FulfillmentOrder/1", "OPEN", "")])
+        self.assertTrue(resultado)
+        api.crear_fulfillment.assert_called_once()
+
+    def test_tienda_sin_location_id_no_filtra(self):
+        self.tienda.location_id = ""
+        self.tienda.save(update_fields=["location_id"])
+        resultado, api = self._marcar([("gid://shopify/FulfillmentOrder/2", "OPEN", self.LOC_AJENA)])
+        self.assertTrue(resultado)
+        api.crear_fulfillment.assert_called_once()  # compat: sin config no hay filtro
 
     def test_error_de_shopify_queda_en_synclog_y_no_revienta(self):
         from apps.integraciones.shopify import ShopifyError
