@@ -50,6 +50,14 @@ def get_adapter(carrier=None, proveedor=None):
     return MockAdapter()
 
 
+def get_adapter_cotizacion(carrier):
+    """Adapter para COTIZAR ese carrier. Mismo routing que get_adapter pero el
+    gating es modo != "off": cotizar no cuesta dinero, generar sí exige "full"."""
+    if getattr(settings, "ENVIA_API_KEY", "") and getattr(settings, "ENVIA_MODO", "cotizar") != "off":
+        return EnviaAdapter()
+    return MockAdapter()
+
+
 def _flota_propia():
     """TORRE["FLOTA_PROPIA"]: sin flota, el carrier "local" no es elegible."""
     return bool(settings.TORRE.get("FLOTA_PROPIA", False))

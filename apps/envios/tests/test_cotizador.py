@@ -64,9 +64,9 @@ class TestCotizarLane(BaseCotizador):
     def test_cache_evita_segunda_consulta(self):
         cotizador.cotizar_lane("44100", 8)
         antes = CotizacionCache.objects.count()
-        with patch.object(cotizador, "_cotizar_mock") as mock_tabla:
+        with patch("apps.envios.services.get_adapter_cotizacion") as resolver:
             cotizador.cotizar_lane("44100", 8)
-            mock_tabla.assert_not_called()
+            resolver.assert_not_called()  # cache hit: ni siquiera se resuelve adapter
         self.assertEqual(CotizacionCache.objects.count(), antes)
 
     def test_mejor_opcion_elige_la_mas_barata(self):

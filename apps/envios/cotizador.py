@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
 
-import requests
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -40,26 +39,6 @@ CP_ESTADO = {
     "97": "YU", "98": "ZA", "99": "ZA",
 }
 
-# Tarifario MOCK (tabla real medida; se usa sin ENVIA_API_KEY: dev, demo y tests).
-MOCK_PUNTOPOST_PREFIJOS = {"06", "44", "64", "91", "72", "76", "01", "02", "03", "45", "66", "67"}
-MOCK_PUNTOPOST_MAX_KG = Decimal("10")
-MOCK_TARIFARIO = {
-    "puntopost": {4: 86, 8: 91, 10: 91},
-    "estafeta": {4: 149, 8: 177, 12: 201, 16: 224, 20: 247, 25: 278},
-    "paquetexpress": {4: 194, 8: 228, 12: 260, 16: 291, 20: 323, 25: 362},
-    "fedex": {4: 184, 8: 229, 12: 248, 16: 297, 20: 331, 25: 376},
-}
-MOCK_ESTIMADOS = {"puntopost": "5-7 días", "estafeta": "2-3 días", "paquetexpress": "1-2 días", "fedex": "1-2 días"}
-
-BODEGA_ORIGEN = {
-    "name": "Torre 3PL - Local 380 E", "company": "Torre 3PL",
-    "email": "operaciones@torre3pl.mx", "phone": "5512340000",
-    "street": "Av. Torres de Ixtapantongo", "number": "380",
-    "district": "Olivar de los Padres", "city": "Ciudad de Mexico",
-    "state": "DF", "country": "MX", "postalCode": "01780",
-}
-
-
 def sanear_texto(texto):
     """La API de Envia truena con em-dashes y símbolos raros: a ASCII seguro."""
     reemplazos = {"—": "-", "–": "-", "\u2019": "'", "\u201c": '"', "\u201d": '"', "º": "", "ª": ""}
@@ -79,78 +58,11 @@ def _redondear_peso(peso_kg):
     return max(medio, Decimal("0.5"))
 
 
-def _interpolar(tabla, peso):
-    """Interpola/extrapola linealmente el tarifario mock."""
-    puntos = sorted(tabla.items())
-    peso = float(peso)
-    if peso <= puntos[0][0]:
-        return Decimal(str(puntos[0][1]))
-    for (p1, c1), (p2, c2) in zip(puntos, puntos[1:]):
-        if peso <= p2:
-            frac = (peso - p1) / (p2 - p1)
-            return Decimal(str(round(c1 + frac * (c2 - c1), 2)))
-    (p1, c1), (p2, c2) = puntos[-2], puntos[-1]
-    pendiente = (c2 - c1) / (p2 - p1)
-    return Decimal(str(round(c2 + (peso - p2) * pendiente, 2)))
-
-
-def _cotizar_mock(cp_destino, peso_kg):
-    """Tarifario simulado fiel a lo medido: cobertura y topes incluidos."""
-    filas = []
-    prefijo = str(cp_destino)[:2]
-    for carrier in settings.TORRE["CARRIERS_COTIZAR"]:
-        tabla = MOCK_TARIFARIO.get(carrier)
-        if tabla is None:
-            continue
-        if carrier == "puntopost" and (prefijo not in MOCK_PUNTOPOST_PREFIJOS or peso_kg > MOCK_PUNTOPOST_MAX_KG):
-            filas.append({"carrier": carrier, "servicio": "", "precio": None,
-                          "estimado": "", "ok": False})
-            continue
-        filas.append({"carrier": carrier, "servicio": "mock", "precio": _interpolar(tabla, peso_kg),
-                      "estimado": MOCK_ESTIMADOS.get(carrier, ""), "ok": True})
-    return filas
-
-
-def _cotizar_api_carrier(carrier, cp_destino, peso_kg, dims):
-    """Una cotización real contra envia.com. 'No cotiza' es resultado, no error."""
-    largo, ancho, alto = dims
-    payload = {
-        "origin": BODEGA_ORIGEN,
-        "destination": {
-            "name": "Cotizacion", "email": "cotiza@torre3pl.mx", "phone": "5500000000",
-            "street": "Conocida", "number": "1", "district": "Centro", "city": "Ciudad",
-            "state": CP_ESTADO.get(str(cp_destino)[:2], "DF"), "country": "MX",
-            "postalCode": str(cp_destino),
-        },
-        "packages": [{
-            "content": "Mercancia", "amount": 1, "type": "box",
-            "weight": float(peso_kg), "weightUnit": "KG", "lengthUnit": "CM",
-            "dimensions": {"length": largo, "width": ancho, "height": alto},
-        }],
-        "shipment": {"carrier": carrier, "type": 1},
-        "settings": {"currency": "MXN"},
-    }
-    try:
-        resp = requests.post(
-            f"{settings.ENVIA_API_BASE.rstrip('/')}/ship/rate/", json=payload,
-            headers={"Authorization": f"Bearer {settings.ENVIA_API_KEY}"}, timeout=30,
-        )
-        datos = resp.json()
-    except (requests.RequestException, ValueError):
-        return {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
-    tarifas = datos.get("data")
-    if not isinstance(tarifas, list) or not tarifas:
-        return {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
-    mejor = min(tarifas, key=lambda t: t.get("totalPrice", 10**9))
-    return {
-        "carrier": carrier, "servicio": mejor.get("service", ""),
-        "precio": Decimal(str(mejor["totalPrice"])),
-        "estimado": mejor.get("deliveryEstimate", ""), "ok": True,
-    }
-
-
 def cotizar_lane(cp_destino, peso_kg, dims=None):
-    """Tarifas por carrier para un (CP, peso). Caché primero; incluye negativos."""
+    """Tarifas por carrier para un (CP, peso). Caché primero; incluye negativos.
+
+    Cada carrier faltante se cotiza a través del adapter de su proveedor
+    (services.get_adapter_cotizacion): el planificador no sabe quién responde."""
     peso = _redondear_peso(peso_kg)
     dims = dims or dims_para(peso)
     carriers = settings.TORRE["CARRIERS_COTIZAR"]
@@ -166,15 +78,13 @@ def cotizar_lane(cp_destino, peso_kg, dims=None):
         cache[c.carrier] = c
     faltantes = [c for c in carriers if c not in cache]
     if faltantes:
-        if settings.ENVIA_API_KEY and getattr(settings, "ENVIA_MODO", "cotizar") != "off":
-            with ThreadPoolExecutor(max_workers=min(len(faltantes), 6)) as pool:
-                nuevas = list(pool.map(
-                    lambda c: _cotizar_api_carrier(c, cp_destino, peso, dims), faltantes
-                ))
-        else:
-            todas_mock = {f["carrier"]: f for f in _cotizar_mock(cp_destino, peso)}
-            nuevas = [todas_mock.get(c, {"carrier": c, "servicio": "", "precio": None, "estimado": "", "ok": False})
-                      for c in faltantes]
+        from .services import get_adapter_cotizacion  # lazy: evita ciclo en carga
+
+        def _cotizar(carrier):
+            return get_adapter_cotizacion(carrier).cotizar_lane(carrier, cp_destino, peso, dims)
+
+        with ThreadPoolExecutor(max_workers=min(len(faltantes), 6)) as pool:
+            nuevas = list(pool.map(_cotizar, faltantes))
         for fila in nuevas:
             obj, _ = CotizacionCache.objects.update_or_create(
                 cp_destino=cp_destino, peso_kg=peso, carrier=fila["carrier"],

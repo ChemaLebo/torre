@@ -146,10 +146,17 @@ def _parsear_fecha(valor):
 
 
 class CarrierAdapter:
-    """Contrato mínimo de un carrier: cotizar, generar, cancelar, rastrear."""
+    """Contrato mínimo de un carrier: cotizar, cotizar_lane, generar, cancelar, rastrear."""
 
     def cotizar(self, pedido, carrier, servicio, paquete=None):
         """Regresa el costo cotizado (Decimal) del pedido o de un paquete."""
+        raise NotImplementedError
+
+    def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
+        """Cotiza un lane (CP destino, peso) para UN carrier: la fila
+        {"carrier","servicio","precio","estimado","ok"} que consume el
+        planificador. Sin cobertura o sin respuesta útil → ok=False; la
+        falta de cobertura es resultado, jamás excepción."""
         raise NotImplementedError
 
     def generar(self, pedido, carrier, servicio, paquete=None):
@@ -291,6 +298,44 @@ class EnviaAdapter(CarrierAdapter):
         })
 
     # ── Operaciones ──
+    def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
+        """Una cotización real por lane. 'No cotiza' es resultado (ok=False), no error."""
+        from .cotizador import CP_ESTADO  # lazy: mesa también importa esa tabla de ahí
+        largo, ancho, alto = dims or (30, 25, 20)
+        payload = {
+            "origin": self._origen(),
+            "destination": {
+                "name": "Cotizacion", "email": "cotiza@torre3pl.mx", "phone": "5500000000",
+                "street": "Conocida", "number": "1", "district": "Centro", "city": "Ciudad",
+                "state": CP_ESTADO.get(str(cp_destino)[:2], "DF"), "country": "MX",
+                "postalCode": str(cp_destino),
+            },
+            "packages": [{
+                "content": "Mercancia", "amount": 1, "type": "box",
+                "weight": float(peso_kg), "weightUnit": "KG", "lengthUnit": "CM",
+                "dimensions": {"length": largo, "width": ancho, "height": alto},
+            }],
+            "shipment": {"carrier": carrier, "type": 1},
+            "settings": {"currency": "MXN"},
+        }
+        try:
+            resp = requests.post(
+                f"{self.api_base}/ship/rate/", json=payload,
+                headers=self._headers(), timeout=30,
+            )
+            datos = resp.json()
+        except (requests.RequestException, ValueError):
+            return {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
+        tarifas = datos.get("data")
+        if not isinstance(tarifas, list) or not tarifas:
+            return {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
+        mejor = min(tarifas, key=lambda t: t.get("totalPrice", 10**9))
+        return {
+            "carrier": carrier, "servicio": mejor.get("service", ""),
+            "precio": Decimal(str(mejor["totalPrice"])),
+            "estimado": mejor.get("deliveryEstimate", ""), "ok": True,
+        }
+
     def cotizar(self, pedido, carrier, servicio, paquete=None):
         cuerpo = self._post("/ship/rate/", self._payload(pedido, carrier, servicio, paquete=paquete))
         opciones = cuerpo.get("data") or []
@@ -359,6 +404,34 @@ class EnviaAdapter(CarrierAdapter):
         return limpios[-1]
 
 
+# Tarifario MOCK (tabla real medida contra la API 2026-08; se usa sin
+# ENVIA_API_KEY: dev, demo y tests). Cobertura y topes incluidos.
+MOCK_PUNTOPOST_PREFIJOS = {"06", "44", "64", "91", "72", "76", "01", "02", "03", "45", "66", "67"}
+MOCK_PUNTOPOST_MAX_KG = Decimal("10")
+MOCK_TARIFARIO = {
+    "puntopost": {4: 86, 8: 91, 10: 91},
+    "estafeta": {4: 149, 8: 177, 12: 201, 16: 224, 20: 247, 25: 278},
+    "paquetexpress": {4: 194, 8: 228, 12: 260, 16: 291, 20: 323, 25: 362},
+    "fedex": {4: 184, 8: 229, 12: 248, 16: 297, 20: 331, 25: 376},
+}
+MOCK_ESTIMADOS = {"puntopost": "5-7 días", "estafeta": "2-3 días", "paquetexpress": "1-2 días", "fedex": "1-2 días"}
+
+
+def _interpolar(tabla, peso):
+    """Interpola/extrapola linealmente el tarifario mock."""
+    puntos = sorted(tabla.items())
+    peso = float(peso)
+    if peso <= puntos[0][0]:
+        return Decimal(str(puntos[0][1]))
+    for (p1, c1), (p2, c2) in zip(puntos, puntos[1:]):
+        if peso <= p2:
+            frac = (peso - p1) / (p2 - p1)
+            return Decimal(str(round(c1 + frac * (c2 - c1), 2)))
+    (p1, c1), (p2, c2) = puntos[-2], puntos[-1]
+    pendiente = (c2 - c1) / (p2 - p1)
+    return Decimal(str(round(c2 + (peso - p2) * pendiente, 2)))
+
+
 class MockAdapter(CarrierAdapter):
     """Simulador en memoria: números MOCK-#### y tracking manipulable.
 
@@ -389,6 +462,21 @@ class MockAdapter(CarrierAdapter):
         """Limpia el estado simulado (para tests)."""
         cls._registro = {}
         cls._consecutivo = itertools.count(1)
+
+    def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
+        """Tarifario simulado fiel a lo medido: cobertura y topes incluidos."""
+        tabla = MOCK_TARIFARIO.get(carrier)
+        if tabla is None:
+            return {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
+        prefijo = str(cp_destino)[:2]
+        if carrier == "puntopost" and (
+            prefijo not in MOCK_PUNTOPOST_PREFIJOS or Decimal(str(peso_kg)) > MOCK_PUNTOPOST_MAX_KG
+        ):
+            return {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
+        return {
+            "carrier": carrier, "servicio": "mock", "precio": _interpolar(tabla, peso_kg),
+            "estimado": MOCK_ESTIMADOS.get(carrier, ""), "ok": True,
+        }
 
     def cotizar(self, pedido, carrier, servicio, paquete=None):
         if paquete is not None and paquete.precio_cotizado:
