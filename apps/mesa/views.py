@@ -17,7 +17,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Q, Sum
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -1653,6 +1653,36 @@ def _guardar_sku(request, cliente, form):
 _COLUMNAS_CSV_ENTERAS = (
     "peso_gr", "largo_cm", "ancho_cm", "alto_cm", "punto_reorden", "empaques_divisibles",
 )
+
+# Contrato del CSV de catálogo (export e import hablan el MISMO formato:
+# exportar → editar en Excel → importar sin fricción).
+COLUMNAS_CSV_CATALOGO = (
+    "codigo", "descripcion", "variante", "codigo_barras", "categoria",
+    "peso_gr", "largo_cm", "ancho_cm", "alto_cm",
+    "precio_declarado", "punto_reorden", "requiere_lote", "empaques_divisibles",
+)
+
+
+@rol_requerido("mesa")
+def cliente_skus_exportar(request, pk):
+    """Catálogo completo del cliente en el formato del import (round-trip)."""
+    from apps.catalogo.models import SKU, Categoria
+
+    cliente = get_object_or_404(Cliente, pk=pk)
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    respuesta["Content-Disposition"] = f'attachment; filename="catalogo-{cliente.slug}.csv"'
+    respuesta.write("﻿")  # BOM: Excel abre los acentos bien (espejo del decode)
+    escritor = csv.writer(respuesta)
+    escritor.writerow(COLUMNAS_CSV_CATALOGO)
+    for sku in SKU.objects.filter(cliente=cliente).select_related("categoria").order_by("codigo"):
+        escritor.writerow([
+            sku.codigo, sku.descripcion, sku.variante, sku.codigo_barras,
+            sku.categoria.nombre if sku.categoria else Categoria.OTROS,
+            sku.peso_gr, sku.largo_cm, sku.ancho_cm, sku.alto_cm,
+            sku.precio_declarado, sku.punto_reorden,
+            "si" if sku.requiere_lote else "no", sku.empaques_divisibles,
+        ])
+    return respuesta
 
 
 def _parsear_fila_csv(fila):

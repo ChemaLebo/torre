@@ -12,6 +12,7 @@
   </div>
   <div class="fila">
     <span class="pill accent">{{ skus|length }} SKU(s)</span>
+    <a class="btn" href="{% url 'mesa:cliente_skus_exportar' cliente.pk %}">Exportar CSV</a>
   </div>
 </div>
 

@@ -455,6 +455,31 @@ class ImportCsvTests(BaseGestionClientes):
             self.url, {"accion": "importar_csv", "archivo": archivo}, follow=True
         )
 
+    def test_export_es_round_trip_con_el_import(self):
+        """Exportar → importar sin tocar nada = 0 creados, N actualizados, 0 errores."""
+        from apps.catalogo.models import SKU, Categoria
+
+        cerveza = Categoria.objects.create(cliente=self.colima, nombre="Cervezas")
+        SKU.objects.create(
+            cliente=self.colima, codigo="COLIMITA-SIX", descripcion="Colimita six",
+            variante="355 ml", codigo_barras="7501031100016", peso_gr=2500,
+            largo_cm=25, ancho_cm=17, alto_cm=24, precio_declarado=Decimal("155.00"),
+            punto_reorden=24, requiere_lote=False, empaques_divisibles=1, categoria=cerveza,
+        )
+        exportado = self.client.get(reverse("mesa:cliente_skus_exportar", args=[self.colima.pk]))
+        self.assertEqual(exportado.status_code, 200)
+        self.assertIn("attachment", exportado["Content-Disposition"])
+        contenido = exportado.content.decode("utf-8-sig")
+        self.assertIn("codigo,descripcion,variante,codigo_barras,categoria", contenido)
+        self.assertIn("355 ml", contenido)
+
+        respuesta = self._importar(contenido)
+        self.assertContains(respuesta, "0 SKUs creados, 1 actualizados")
+        sku = SKU.objects.get(cliente=self.colima, codigo="COLIMITA-SIX")
+        self.assertEqual(sku.variante, "355 ml")
+        self.assertEqual(sku.categoria, cerveza)
+        self.assertFalse(sku.requiere_lote)
+
     def test_import_con_columna_variante(self):
         from apps.catalogo.models import SKU
 
