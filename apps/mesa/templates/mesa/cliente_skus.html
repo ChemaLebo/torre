@@ -187,12 +187,29 @@
       <label for="id_archivo">Archivo CSV (UTF-8, con encabezados)</label>
       <input type="file" name="archivo" id="id_archivo" accept=".csv" required>
       <p class="small muted mt">
-        Encabezados: <span class="mono">codigo,descripcion,categoria,codigo_barras,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles</span>.
+        Encabezados: <span class="mono">codigo,descripcion,variante,codigo_barras,categoria,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles</span>.
         Solo codigo y descripcion son obligatorios por fila; requiere_lote acepta si/no/1/0;
         una categoria que no existe se crea sola (vacía = Otros).
         Un código que ya existe se actualiza; las filas con error no detienen a las demás.
       </p>
       <button class="btn primario mt" type="submit">Importar CSV</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Transformar export de Shopify</h3></div>
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="transformar_shopify">
+      <label for="id_export_shopify">products_export.csv de Shopify (sin modificar)</label>
+      <input type="file" name="archivo" id="id_export_shopify" accept=".csv" required>
+      <p class="small muted mt">
+        Convierte el export de productos de Shopify al formato del import de Torre:
+        SKU, título, variante (Option values), código de barras, gramos y precio; el
+        Type de Shopify llega como sugerencia de categoría. Verás un preview con
+        avisos y descargas el CSV listo para revisar en Excel e importar arriba.
+      </p>
+      <button class="btn mt" type="submit">Transformar</button>
     </form>
   </div>
 </div>

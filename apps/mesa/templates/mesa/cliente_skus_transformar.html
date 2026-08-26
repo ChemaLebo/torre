@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Transformar export de Shopify · {{ cliente.nombre }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">
+      <a href="{% url 'mesa:clientes' %}">Clientes</a> /
+      <a href="{% url 'mesa:cliente_skus' cliente.pk %}">catálogo de {{ cliente.slug }}</a> / transformar
+    </div>
+    <h1>Export de Shopify → CSV de Torre</h1>
+  </div>
+  <div class="fila">
+    <span class="pill accent">{{ total }} SKU(s) transformados</span>
+  </div>
+</div>
+
+{% if avisos %}
+<div class="card mb">
+  <div class="titulo"><h3>Avisos ({{ avisos|length }})</h3></div>
+  <ul class="small">
+    {% for aviso in avisos %}<li>{{ aviso }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card mb">
+  <div class="titulo">
+    <h3>Preview{% if total > 50 %} (primeras 50 de {{ total }}){% endif %}</h3>
+    <form method="post" action="{% url 'mesa:cliente_skus' cliente.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="descargar_transformado">
+      <input type="hidden" name="csv_transformado" value="{{ csv_transformado }}">
+      <button class="btn primario" type="submit">Descargar CSV de Torre</button>
+    </form>
+  </div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Código</th><th>Descripción</th><th>Variante</th><th>Categoría (sugerida)</th><th class="derecha">Peso (gr)</th><th class="derecha">Precio</th><th>Barras</th></tr>
+      </thead>
+      <tbody>
+        {% for fila in filas %}
+        <tr>
+          <td class="mono"><b>{{ fila.codigo }}</b></td>
+          <td>{{ fila.descripcion }}</td>
+          <td>{{ fila.variante|default:"—" }}</td>
+          <td>{{ fila.categoria|default:"—" }}</td>
+          <td class="derecha mono">{{ fila.peso_gr|default:"—" }}</td>
+          <td class="derecha mono">{{ fila.precio_declarado|default:"—" }}</td>
+          <td class="mono">{{ fila.codigo_barras|default:"—" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="muted centro">El export no trajo variantes con SKU.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted mt">
+    Descarga, revisa/edita en Excel (dimensiones, punto de reorden, lote, categorías) y
+    súbelo en «Importar catálogo por CSV». Nada se guardó todavía: las categorías nacen
+    hasta el import.
+  </p>
+</div>
+
+<a class="btn" href="{% url 'mesa:cliente_skus' cliente.pk %}">Volver al catálogo</a>
+
+{% endblock %}

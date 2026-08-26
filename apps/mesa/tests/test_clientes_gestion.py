@@ -617,6 +617,46 @@ class ImportCsvTests(BaseGestionClientes):
         self.assertEqual(sku.descripcion, "Con espacios")
 
 
+class TransformadorShopifyTests(BaseGestionClientes):
+    def setUp(self):
+        super().setUp()
+        self.url = reverse("mesa:cliente_skus", args=[self.colima.pk])
+
+    EXPORT = (
+        "Handle,Title,Type,Option1 Name,Option1 Value,Variant SKU,Variant Grams,"
+        "Variant Price,Variant Barcode\n"
+        "te-negro,Té negro,Tés,Tamaño,500 g,TN-500,520,250.00,750111\n"
+        "te-negro,,,Tamaño,1 kg,TN-1K,1050,450.00,750222\n"
+    )
+
+    def _transformar(self, contenido):
+        archivo = SimpleUploadedFile(
+            "products_export.csv", contenido.encode("utf-8-sig"), content_type="text/csv",
+        )
+        return self.client.post(self.url, {"accion": "transformar_shopify", "archivo": archivo})
+
+    def test_preview_muestra_filas_y_boton_de_descarga(self):
+        respuesta = self._transformar(self.EXPORT)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "2 SKU(s) transformados")
+        self.assertContains(respuesta, "TN-500")
+        self.assertContains(respuesta, "Té negro")
+        self.assertContains(respuesta, "descargar_transformado")
+
+    def test_descarga_regresa_el_csv_de_torre(self):
+        respuesta = self.client.post(self.url, {
+            "accion": "descargar_transformado",
+            "csv_transformado": "codigo,descripcion\nTN-500,Té negro\n",
+        })
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("attachment", respuesta["Content-Disposition"])
+        self.assertIn("TN-500", respuesta.content.decode("utf-8-sig"))
+
+    def test_archivo_ajeno_regresa_con_error(self):
+        respuesta = self._transformar("codigo,descripcion\nX,Y\n")
+        self.assertRedirects(respuesta, self.url)
+
+
 class TiendasTests(BaseGestionClientes):
     def setUp(self):
         super().setUp()

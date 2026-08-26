@@ -1502,6 +1502,15 @@ def cliente_skus(request, pk):
             else:
                 messages.success(request, exito)
             return redirect("mesa:cliente_skus", pk=cliente.pk)
+        if accion == "transformar_shopify":
+            try:
+                contexto = _transformar_shopify(request, cliente)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                return redirect("mesa:cliente_skus", pk=cliente.pk)
+            return render(request, "mesa/cliente_skus_transformar.html", contexto)
+        if accion == "descargar_transformado":
+            return _descargar_transformado(request, cliente)
         if accion == "categoria_nueva":
             try:
                 exito = _skus_categoria_nueva(request, cliente)
@@ -1661,6 +1670,48 @@ COLUMNAS_CSV_CATALOGO = (
     "peso_gr", "largo_cm", "ancho_cm", "alto_cm",
     "precio_declarado", "punto_reorden", "requiere_lote", "empaques_divisibles",
 )
+
+
+def _transformar_shopify(request, cliente):
+    """Convierte el products_export.csv de Shopify al CSV del import (preview)."""
+    from apps.catalogo.transformador import filas_a_csv, transformar_export_shopify
+
+    archivo = request.FILES.get("archivo")
+    if archivo is None:
+        raise ValueError("Adjunta el export de productos de Shopify (CSV).")
+    max_mb = settings.TORRE["IMPORT_CSV_MAX_MB"]
+    if archivo.size > max_mb * 1024 * 1024:
+        raise ValueError(f"El CSV no debe pasar de {max_mb} MB.")
+    try:
+        texto = archivo.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError(
+            "El archivo no se pudo leer. Descárgalo de Shopify sin modificarlo y súbelo de nuevo."
+        )
+    resultado = transformar_export_shopify(texto)
+    return {
+        "seccion": "clientes",
+        "cliente": cliente,
+        "avisos": resultado["avisos"],
+        "filas": resultado["filas"][:50],
+        "total": len(resultado["filas"]),
+        "csv_transformado": filas_a_csv(resultado["filas"]),
+    }
+
+
+def _descargar_transformado(request, cliente):
+    """Descarga del CSV ya transformado (viaja en el hidden del preview: sin estado)."""
+    contenido = request.POST.get("csv_transformado") or ""
+    if not contenido.strip():
+        messages.error(request, "No llegó el CSV transformado; vuelve a subir el export.")
+        return redirect("mesa:cliente_skus", pk=cliente.pk)
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    respuesta["Content-Disposition"] = (
+        f'attachment; filename="catalogo-{cliente.slug}-desde-shopify.csv"'
+    )
+    respuesta.write("﻿")
+    respuesta.write(contenido)
+    return respuesta
 
 
 @rol_requerido("mesa")
