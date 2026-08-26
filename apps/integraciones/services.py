@@ -181,6 +181,14 @@ def registrar_webhook(tienda, webhook_id, topic, payload, origen=WebhookEvento.O
     return evento, creado
 
 
+def resolver_variantes(tienda, ids):
+    """{variant_id: {sku, titulo, producto}} vía GraphQL. None sin token (mock):
+    el kit degrada a declararse en empaque, jamás se bloquea la orden."""
+    if not tienda.token:
+        return None
+    return ShopifyClient(tienda).variantes(ids)
+
+
 def lineas_fulfillment_nuestras(tienda, order_id):
     """Qué líneas/cantidades de la orden amparan NUESTROS tickets de fulfillment.
 

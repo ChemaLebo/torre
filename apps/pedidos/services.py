@@ -492,6 +492,127 @@ def _cantidad_de_item(item, ticket):
     return cantidad
 
 
+def _propiedades(item):
+    """{name: value} de las properties del line item (Appstle escribe ahí)."""
+    return {
+        str(p.get("name") or ""): str(p.get("value") or "")
+        for p in item.get("properties") or []
+        if isinstance(p, dict)
+    }
+
+
+def _parsear_bb_variants(crudo):
+    """'variantId:qty,variantId:qty' (__appstle-bb-variants) → [(id, piezas)]."""
+    pares = []
+    for parte in (crudo or "").split(","):
+        parte = parte.strip()
+        if not parte:
+            continue
+        variante, _, piezas = parte.partition(":")
+        try:
+            pares.append((variante.strip(), max(int(piezas), 1)))
+        except ValueError:
+            return []
+    return pares
+
+
+def _variantes_remotas(tienda, ids):
+    """Resolución por API de integraciones; cualquier falla = degradar, jamás bloquear."""
+    try:
+        from apps.integraciones.services import resolver_variantes  # lazy por contrato
+    except ImportError:
+        return None
+    try:
+        return resolver_variantes(tienda, ids)
+    except Exception:  # noqa: BLE001 — el kit cae al flujo de empaque, la orden entra igual
+        return None
+
+
+def _resolver_componentes_kit(pedido, props):
+    """[(SKU, piezas)] desde las properties de Appstle, o None si algo no resuelve.
+
+    Cadena por pieza: SKU posicional de _appstle-bb-product-sku → SKU de la
+    variante por API → título del PRODUCTO contra descripcion (solo si es
+    inequívoco). TODO-o-nada: una pieza sin resolver degrada el kit completo
+    al flujo de empaque — jamás se adivina media caja.
+    """
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+
+    pares = _parsear_bb_variants(props.get("__appstle-bb-variants"))
+    if not pares:
+        return None
+    posicionales = [s.strip() for s in (props.get("_appstle-bb-product-sku") or "").split(",")]
+    remotas = None
+    componentes = []
+    for indice, (variant_id, piezas) in enumerate(pares):
+        sku = None
+        codigo = posicionales[indice] if indice < len(posicionales) else ""
+        if codigo:
+            sku = SKU.objects.filter(cliente=pedido.cliente, codigo=codigo, es_kit=False).first()
+        if sku is None:
+            if remotas is None:
+                remotas = _variantes_remotas(pedido.tienda, [v for v, _ in pares]) or {}
+            datos = remotas.get(variant_id) or {}
+            codigo_remoto = (datos.get("sku") or "").strip()
+            if codigo_remoto:
+                sku = SKU.objects.filter(
+                    cliente=pedido.cliente, codigo=codigo_remoto, es_kit=False,
+                ).first()
+            if sku is None:
+                titulo = (datos.get("producto") or "").strip()
+                if titulo:
+                    candidatos = list(SKU.objects.filter(
+                        cliente=pedido.cliente, descripcion__iexact=titulo, es_kit=False,
+                    )[:2])
+                    if len(candidatos) == 1:  # ambiguo (variantes) = no se adivina
+                        sku = candidatos[0]
+        if sku is None:
+            return None
+        componentes.append((sku, piezas))
+    return componentes
+
+
+def _agregar_linea_kit(pedido, sku, cantidad, item, cancelada, faltantes):
+    """Línea kit + (si Appstle trae la elección) sus hijas materializadas.
+
+    Las hijas van por el riel NORMAL: reservan (FAL si falta stock, el
+    reintento las recupera), el picker las escanea y el cotizador las pesa
+    desde la ingesta. Sin datos resolubles → evento y el kit se declara en
+    empaque leyendo nota_kit (la orden jamás se bloquea por el parser).
+    """
+    linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad, reservada=True)
+    peso = (sku.peso_gr or 0) * cantidad
+    props = _propiedades(item)
+    if props.get("products"):
+        linea.nota_kit = props["products"][:300]
+        linea.save(update_fields=["nota_kit"])
+    componentes = _resolver_componentes_kit(pedido, props) if props else None
+    if componentes is None:
+        if props.get("__appstle-bb-variants"):
+            registrar_evento(
+                "pedido", pedido.pk, "kit_sin_resolver", cliente=pedido.cliente,
+                delta={"kit": sku.codigo, "eleccion": (props.get("products") or "")[:200]},
+                motivo="Componentes del kit sin resolver: se declaran en empaque.",
+            )
+        return peso
+    for comp_sku, piezas in componentes:
+        hija = LineaPedido.objects.create(
+            pedido=pedido, sku=comp_sku, cantidad=piezas, parte_de_kit=linea,
+        )
+        peso += (comp_sku.peso_gr or 0) * piezas
+        if not cancelada and not _reservar_linea(hija):
+            faltantes.append(f"Sin stock suficiente: {comp_sku.codigo} × {piezas}")
+    registrar_evento(
+        "pedido", pedido.pk, "kit_componentes_ingesta", cliente=pedido.cliente,
+        delta={
+            "kit": sku.codigo, "cantidad_kit": cantidad,
+            "componentes": [{"sku": s.codigo, "cantidad": c} for s, c in componentes],
+        },
+        motivo="Componentes del arma-tu-teabox materializados desde la orden.",
+    )
+    return peso
+
+
 def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
     """Crea la línea del item (si su SKU existe) y reserva. Regresa (peso_gr, valor)."""
     from apps.catalogo.models import SKU  # lazy: modelo de otra app
@@ -506,10 +627,10 @@ def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
     except InvalidOperation:
         valor = Decimal("0")
     if sku.es_kit:
-        # Kit: se arma al empacar — nada que reservar ni FAL que abrir.
-        # reservada=True = "no bloquea" (el reintento y los checks lo ignoran).
-        LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad, reservada=True)
-        return (sku.peso_gr or 0) * cantidad, valor
+        # Kit: se arma al empacar — nada que reservar ni FAL que abrir por SÍ
+        # MISMO (sus componentes, si la orden los trae, sí reservan normal).
+        peso = _agregar_linea_kit(pedido, sku, cantidad, item, cancelada, faltantes)
+        return peso, valor
     linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
     # Orden que llega ya cancelada: no se aparta stock.
     if not cancelada and not _reservar_linea(linea):

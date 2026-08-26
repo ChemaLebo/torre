@@ -64,6 +64,19 @@ query ordenesDeFulfillment($id: ID!) {
 }
 """
 
+CONSULTA_VARIANTES = """
+query variantes($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on ProductVariant {
+      id
+      sku
+      title
+      product { title }
+    }
+  }
+}
+"""
+
 CONSULTA_FOS_LINEAS = """
 query lineasDeFulfillment($id: ID!) {
   order(id: $id) {
@@ -331,6 +344,25 @@ class ShopifyClient:
         if updated_at_min:
             params["updated_at_min"] = updated_at_min.isoformat()
         return self._paginar_pedidos(params)
+
+    def variantes(self, ids):
+        """{id numérico: {sku, titulo, producto}} — resuelve los kits de Appstle."""
+        gids = [
+            str(i) if str(i).startswith("gid://") else f"gid://shopify/ProductVariant/{i}"
+            for i in ids
+        ]
+        datos = self.graphql(CONSULTA_VARIANTES, {"ids": gids})
+        resultado = {}
+        for nodo in datos.get("nodes") or []:
+            if not nodo or not nodo.get("id"):
+                continue
+            numero = str(nodo["id"]).rsplit("/", 1)[-1]
+            resultado[numero] = {
+                "sku": nodo.get("sku") or "",
+                "titulo": nodo.get("title") or "",
+                "producto": ((nodo.get("product") or {}).get("title") or ""),
+            }
+        return resultado
 
     def obtener_pedido(self, order_id):
         """GET /orders/{id}.json — la orden completa (re-ingesta tras un move)."""

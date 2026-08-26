@@ -437,6 +437,122 @@ class ContenidoKitTests(BaseServicios):
             services.declarar_contenido_kit(kit, [(otro_kit, 1)], "packer1")
 
 
+class IngestaKitAppstleTests(BaseServicios):
+    """Arma-tu-teabox (7B): componentes materializados desde las properties (#4050)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.kit = SKU.objects.create(
+            cliente=cls.cliente, codigo="BLDBOX3", descripcion="Arma Tu Teabox | 3 Pack",
+            peso_gr=400, es_kit=True, requiere_lote=False,
+        )
+        cls.chai = SKU.objects.create(
+            cliente=cls.cliente, codigo="TE-CHAI", descripcion="Spice Boost: Chai masala",
+            peso_gr=120, requiere_lote=False,
+        )
+        cls.verde = SKU.objects.create(
+            cliente=cls.cliente, codigo="TE-VERDE", descripcion="Emerald Whisper",
+            peso_gr=110, requiere_lote=False,
+        )
+
+    def _payload_bldbox(self, order_id, propiedades):
+        payload = payload_shopify(order_id=order_id)
+        payload["line_items"] = [{
+            "id": 31, "sku": "BLDBOX3", "quantity": 1, "price": "599.00",
+            "title": "Arma Tu Teabox | 3 Pack", "properties": propiedades,
+        }]
+        return payload
+
+    def _props(self, skus_posicionales=",,"):
+        return [
+            {"name": "products", "value": "1x Chai masala, 1x Emerald Whisper"},
+            {"name": "_appstle-bb-id", "value": "HgFik9n5"},
+            {"name": "_appstle-bb-product-sku", "value": skus_posicionales},
+            {"name": "__appstle-bb-variants", "value": "111:1,222:1"},
+        ]
+
+    def _ingerir(self, payload, resolver, reservar_ok=True):
+        with patch("apps.integraciones.services.resolver_variantes", **resolver) as resuelve, \
+             patch("apps.inventario.services.reservar", return_value=reservar_ok) as reservar, \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             patch("apps.incidencias.services.abrir_incidencia") as abrir, \
+             self.captureOnCommitCallbacks(execute=True):
+            pedido = services.ingerir_pedido_shopify(self.tienda, payload)
+        return pedido, resuelve, reservar, abrir
+
+    def test_variantes_resueltas_por_api_crean_hijas_que_reservan(self):
+        resolver = {"return_value": {
+            "111": {"sku": "TE-CHAI", "titulo": "Default Title", "producto": "Spice Boost: Chai masala"},
+            "222": {"sku": "", "titulo": "Default Title", "producto": "Emerald Whisper"},
+        }}
+        pedido, _, reservar, abrir = self._ingerir(self._payload_bldbox(8201, self._props()), resolver)
+        kit_linea = pedido.lineas.get(sku=self.kit)
+        hijas = list(kit_linea.componentes.select_related("sku").order_by("pk"))
+        self.assertEqual([h.sku.codigo for h in hijas], ["TE-CHAI", "TE-VERDE"])
+        self.assertTrue(all(h.reservada for h in hijas))
+        self.assertEqual(hijas[0].cantidad_pickeada, 0)  # el picker las escanea
+        self.assertEqual(reservar.call_count, 2)
+        self.assertIn("1x Chai masala", kit_linea.nota_kit)
+        abrir.assert_not_called()
+        self.assertEqual(pedido.peso_esperado_gr, 400 + 120 + 110)
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="kit_componentes_ingesta",
+        ).exists())
+
+    def test_sku_posicional_resuelve_sin_llamar_la_api(self):
+        pedido, resuelve, _, _ = self._ingerir(
+            self._payload_bldbox(8202, self._props("TE-CHAI,TE-VERDE")),
+            {"return_value": {}},
+        )
+        resuelve.assert_not_called()
+        kit_linea = pedido.lineas.get(sku=self.kit)
+        self.assertEqual(kit_linea.componentes.count(), 2)
+
+    def test_sin_resolver_degrada_al_flujo_de_empaque(self):
+        pedido, _, reservar, _ = self._ingerir(
+            self._payload_bldbox(8203, self._props()), {"return_value": {}},
+        )
+        kit_linea = pedido.lineas.get(sku=self.kit)
+        self.assertEqual(kit_linea.componentes.count(), 0)  # todo-o-nada: nada a medias
+        self.assertIn("Chai masala", kit_linea.nota_kit)  # el packer ve la elección
+        reservar.assert_not_called()
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="kit_sin_resolver",
+        ).exists())
+
+    def test_resolver_caido_degrada_sin_bloquear_la_orden(self):
+        pedido, _, _, _ = self._ingerir(
+            self._payload_bldbox(8204, self._props()), {"side_effect": RuntimeError("API caída")},
+        )
+        self.assertIsNotNone(pedido)  # la orden entra igual
+        self.assertEqual(pedido.lineas.get(sku=self.kit).componentes.count(), 0)
+
+    def test_componente_sin_stock_abre_fal(self):
+        resolver = {"return_value": {
+            "111": {"sku": "TE-CHAI", "producto": ""},
+            "222": {"sku": "TE-VERDE", "producto": ""},
+        }}
+        pedido, _, _, abrir = self._ingerir(
+            self._payload_bldbox(8205, self._props()), resolver, reservar_ok=False,
+        )
+        abrir.assert_called_once()
+        self.assertEqual(abrir.call_args.args[1], "FAL")
+        self.assertTrue(pedido.incidencia_activa)
+
+    def test_webhook_repetido_no_duplica_hijas(self):
+        resolver = {"return_value": {
+            "111": {"sku": "TE-CHAI", "producto": ""},
+            "222": {"sku": "TE-VERDE", "producto": ""},
+        }}
+        payload = self._payload_bldbox(8206, self._props())
+        pedido, _, _, _ = self._ingerir(payload, resolver)
+        with patch("apps.inventario.services.reservar", return_value=True), \
+             self.captureOnCommitCallbacks(execute=True):
+            services.ingerir_pedido_shopify(self.tienda, payload)
+        self.assertEqual(pedido.lineas.count(), 3)  # kit + 2 hijas, sin duplicar
+
+
 class IngestaPorTicketTests(BaseServicios):
     """Stage 2 multi-location: se ingieren solo líneas/cantidades de NUESTRO ticket."""
 
