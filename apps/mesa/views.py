@@ -557,14 +557,32 @@ def _pedidos_cancelar(request):
     )
 
 
+def _pedidos_reintentar_reservas(request):
+    """Botón por renglón: reintenta las reservas de UN pedido (palanca de prioridad)."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import reintentar_reservas_pedido
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido, folio=folio)
+    return reintentar_reservas_pedido(pedido, request.user)
+
+
 @rol_requerido("mesa")
 def pedidos(request):
     from apps.pedidos.models import Pedido
 
     if request.method == "POST":
-        if request.POST.get("accion") == "cancelar":
+        accion = request.POST.get("accion")
+        if accion == "cancelar":
             try:
                 exito = _pedidos_cancelar(request)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, exito)
+        elif accion == "reintentar_reservas":
+            try:
+                exito = _pedidos_reintentar_reservas(request)
             except ValueError as exc:
                 messages.error(request, str(exc))
             else:

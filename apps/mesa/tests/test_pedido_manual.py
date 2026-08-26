@@ -184,6 +184,32 @@ class DireccionPedidoManualTests(BasePedidoManualVista):
         self.assertEqual(direccion["province_code"], "")
 
 
+class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
+    def setUp(self):
+        self.url = reverse("mesa:pedidos")
+        self.client.force_login(self.usuario_mesa)
+
+    def test_boton_reintenta_reservas_del_pedido(self):
+        from unittest.mock import patch
+
+        pedido = crear_pedido(self.colima)
+        with patch(
+            "apps.pedidos.services.reintentar_reservas_pedido",
+            return_value="PED-PRUEBA: reservas al día",
+        ) as reintento:
+            respuesta = self.client.post(
+                self.url, {"accion": "reintentar_reservas", "folio": pedido.folio}, follow=True,
+            )
+        reintento.assert_called_once()
+        self.assertContains(respuesta, "reservas al día")
+
+    def test_folio_desconocido_es_404(self):
+        respuesta = self.client.post(
+            self.url, {"accion": "reintentar_reservas", "folio": "PED-99999"},
+        )
+        self.assertEqual(respuesta.status_code, 404)
+
+
 class CancelarDesdeMesaTests(BasePedidoManualVista):
     def setUp(self):
         self.url = reverse("mesa:pedidos")

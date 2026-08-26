@@ -228,6 +228,68 @@ class IngestaTests(BaseServicios):
             services.ingerir_pedido_shopify(self.tienda, {"line_items": []})
 
 
+class ReintentoReservasTests(BaseServicios):
+    """Auto-retry al entrar stock + botón manual de Mesa (pedidos nacidos sin stock)."""
+
+    def _pedido_sin_reserva(self, order_id):
+        with patch("apps.inventario.services.reservar", return_value=False), \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             patch("apps.incidencias.services.abrir_incidencia"), \
+             self.captureOnCommitCallbacks(execute=True):
+            return services.ingerir_pedido_shopify(self.tienda, payload_shopify(order_id=order_id))
+
+    def test_reintento_por_sku_es_fifo_por_antiguedad(self):
+        viejo = self._pedido_sin_reserva(1001)
+        nuevo = self._pedido_sin_reserva(1002)
+        # Solo alcanza stock para UNA línea: se la lleva el pedido más viejo.
+        with patch("apps.inventario.services.reservar", side_effect=[True, False]):
+            logrados = services.reintentar_reservas_sku(self.sku)
+        self.assertEqual(logrados, [viejo.folio])
+        self.assertTrue(viejo.lineas.get().reservada)
+        self.assertFalse(nuevo.lineas.get().reservada)
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(viejo.pk), accion="reserva_reintentada",
+        )
+        self.assertTrue(evento.delta["pedido_completo"])
+
+    def test_hook_de_inventario_dispara_el_reintento_en_on_commit(self):
+        from apps.inventario.services import _reintentar_pendientes
+
+        with patch("apps.pedidos.services.reintentar_reservas_sku") as reintento, \
+             self.captureOnCommitCallbacks(execute=True):
+            _reintentar_pendientes(self.sku)
+        reintento.assert_called_once_with(self.sku)
+
+    def test_boton_reserva_el_pedido_y_reporta(self):
+        pedido = self._pedido_sin_reserva(1003)
+        with patch("apps.inventario.services.reservar", return_value=True):
+            mensaje = services.reintentar_reservas_pedido(pedido, "mesa1")
+        self.assertIn("todas sus líneas quedaron reservadas", mensaje)
+        self.assertTrue(pedido.lineas.get().reservada)
+
+    def test_boton_reporta_lo_que_sigue_sin_stock(self):
+        pedido = self._pedido_sin_reserva(1004)
+        with patch("apps.inventario.services.reservar", return_value=False):
+            mensaje = services.reintentar_reservas_pedido(pedido, "mesa1")
+        self.assertIn("0 de 1", mensaje)
+        self.assertFalse(pedido.lineas.get().reservada)
+
+    def test_boton_fuera_de_pendiente_truena(self):
+        pedido = self._pedido_sin_reserva(1005)
+        pedido.estado = Pedido.EN_PICKING
+        pedido.save(update_fields=["estado"])
+        with self.assertRaises(ValueError):
+            services.reintentar_reservas_pedido(pedido, "mesa1")
+
+    def test_boton_sin_lineas_pendientes_avisa(self):
+        with patch("apps.inventario.services.reservar", return_value=True), \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             self.captureOnCommitCallbacks(execute=True):
+            pedido = services.ingerir_pedido_shopify(self.tienda, payload_shopify(order_id=1006))
+        mensaje = services.reintentar_reservas_pedido(pedido, "mesa1")
+        self.assertIn("ya tiene todas sus líneas reservadas", mensaje)
+
+
 class PickingTests(BaseServicios):
     def setUp(self):
         self.pedido = self.pedido_directo(estado=Pedido.EN_PICKING)

@@ -59,14 +59,26 @@
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% else %}<span class="small">—</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
         <td>
-          {% if pedido.cancelable %}
-          <form method="post" class="fila">
-            {% csrf_token %}
-            <input type="hidden" name="accion" value="cancelar">
-            <input type="hidden" name="folio" value="{{ pedido.folio }}">
-            <input type="text" name="motivo" placeholder="Motivo" required>
-            <button class="btn chico peligro" type="submit">Cancelar</button>
-          </form>
+          {% if pedido.cancelable or pedido.estado == "PENDIENTE" %}
+          <div class="fila">
+            {% if pedido.estado == "PENDIENTE" %}
+            <form method="post">
+              {% csrf_token %}
+              <input type="hidden" name="accion" value="reintentar_reservas">
+              <input type="hidden" name="folio" value="{{ pedido.folio }}">
+              <button class="btn chico" type="submit" title="Reintenta apartar el stock de sus líneas sin reservar">Reintentar reservas</button>
+            </form>
+            {% endif %}
+            {% if pedido.cancelable %}
+            <form method="post" class="fila">
+              {% csrf_token %}
+              <input type="hidden" name="accion" value="cancelar">
+              <input type="hidden" name="folio" value="{{ pedido.folio }}">
+              <input type="text" name="motivo" placeholder="Motivo" required>
+              <button class="btn chico peligro" type="submit">Cancelar</button>
+            </form>
+            {% endif %}
+          </div>
           {% else %}<span class="small">—</span>{% endif %}
         </td>
       </tr>

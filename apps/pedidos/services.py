@@ -78,6 +78,68 @@ def _reservar_linea(linea):
     return False
 
 
+def reintentar_reservas_sku(sku):
+    """Reintenta reservar líneas sin apartar de pedidos PENDIENTES de este SKU.
+
+    FIFO por antigüedad del pedido; una línea reserva completa o nada (misma
+    semántica que la ingesta). Lo dispara inventario cuando ENTRA stock
+    (putaway, ajuste, liberación por cancelación), en on_commit. La incidencia
+    FAL no se resuelve sola: el evento avisa y un humano la cierra.
+    """
+    lineas = (
+        LineaPedido.objects.select_related("pedido", "pedido__cliente", "sku")
+        .filter(sku=sku, reservada=False, pedido__estado=Pedido.PENDIENTE)
+        .order_by("pedido__creado", "pk")
+    )
+    logradas = []
+    for linea in lineas:
+        if not _reservar_linea(linea):
+            continue  # sin stock para esta; una posterior podría pedir menos piezas
+        pedido = linea.pedido
+        completo = not pedido.lineas.filter(reservada=False).exists()
+        registrar_evento(
+            "pedido", pedido.pk, "reserva_reintentada", actor="sistema",
+            cliente=pedido.cliente,
+            delta={"sku": sku.codigo, "cantidad": linea.cantidad, "pedido_completo": completo},
+            motivo="Entró stock y la reserva pendiente se completó sola.",
+        )
+        logradas.append(pedido.folio)
+    return logradas
+
+
+def reintentar_reservas_pedido(pedido, actor):
+    """Botón de Mesa: reintenta las líneas sin reservar de ESTE pedido.
+
+    Salta la fila FIFO a propósito: es la palanca humana para priorizar.
+    """
+    if pedido.estado != Pedido.PENDIENTE:
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display()}: solo los pedidos "
+            "PENDIENTES reservan stock."
+        )
+    pendientes = list(pedido.lineas.select_related("sku").filter(reservada=False))
+    if not pendientes:
+        return f"{pedido.folio} ya tiene todas sus líneas reservadas."
+    con_stock = [linea for linea in pendientes if _reservar_linea(linea)]
+    registrar_evento(
+        "pedido", pedido.pk, "reserva_reintentada", actor=actor, cliente=pedido.cliente,
+        delta={
+            "logradas": [l.sku.codigo for l in con_stock],
+            "sin_stock": [l.sku.codigo for l in pendientes if not l.reservada],
+        },
+        motivo="Reintento manual de reservas desde Mesa de Control.",
+    )
+    if len(con_stock) == len(pendientes):
+        return (
+            f"{pedido.folio}: todas sus líneas quedaron reservadas. "
+            "Si su incidencia FAL sigue abierta, resuélvela."
+        )
+    return (
+        f"{pedido.folio}: {len(con_stock)} de {len(pendientes)} líneas reservadas; "
+        "al resto le sigue faltando stock."
+    )
+
+
 def _abrir_incidencia_faltante(pedido, faltantes):
     """Sin stock suficiente al dar de alta el pedido → incidencia FAL automática."""
     texto = "Faltante al ingerir la orden: " + "; ".join(faltantes)

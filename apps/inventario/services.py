@@ -101,6 +101,20 @@ def _notificar_cambio_disponible(sku):
     return encolar_push_inventario(sku)
 
 
+def _reintentar_pendientes(sku):
+    """Al ENTRAR stock (putaway, ajuste, liberación, restock): reintenta las
+    reservas pendientes de pedidos que nacieron sin stock. En on_commit: la
+    reserva toma locks de Saldo y la operación que dispara trae los suyos.
+    Jamás desde reservar/pick/salida (ahí el stock SALE, no entra)."""
+    def _correr():
+        try:
+            from apps.pedidos.services import reintentar_reservas_sku  # lazy por contrato
+        except ImportError:
+            return
+        reintentar_reservas_sku(sku)
+    transaction.on_commit(_correr)
+
+
 def _ubicacion_tipo(*tipos):
     """Primera ubicación activa de los tipos dados, en orden de preferencia."""
     for tipo in tipos:
@@ -214,6 +228,7 @@ def liberar_reserva(sku, cantidad, referencia):
             delta={"cantidad": cantidad, "referencia": str(referencia)},
         )
     _notificar_cambio_disponible(sku)
+    _reintentar_pendientes(sku)
 
 
 def confirmar_pick(sku, cantidad, referencia):
@@ -411,6 +426,7 @@ def ubicar(sku, cantidad, ubicacion, lote, actor):
                    "lote": lote.codigo if lote else None},
         )
     _notificar_cambio_disponible(sku)
+    _reintentar_pendientes(sku)
 
 
 def _abrir_incidencia_discrepancia_recepcion(orden, discrepancias):
@@ -720,6 +736,8 @@ def aplicar_ajuste(
             motivo=dict(Ajuste.MOTIVOS)[motivo],
         )
     _notificar_cambio_disponible(sku)
+    if delta > 0:
+        _reintentar_pendientes(sku)
     return ajuste
 
 
@@ -784,6 +802,7 @@ def restock_empaque(sku, cantidad, referencia, actor=None):
             delta={"cantidad": cantidad, "referencia": str(referencia)},
         )
     _notificar_cambio_disponible(sku)
+    _reintentar_pendientes(sku)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
