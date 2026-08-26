@@ -5,6 +5,7 @@ entrega local, más los conteos cíclicos del día. Cada acción llama a los
 servicios de dominio (inventario / pedidos / envios, imports lazy por
 contrato) — el piso jamás toca Saldo, Movimiento ni estados directo.
 """
+import re
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -816,6 +817,10 @@ def empaque_pedido(request, pk):
             return _empaque_cerrar_caja(request, pedido)
         if accion == "cerrar_legacy":
             return _empaque_cerrar_legacy(request, pedido)
+        if accion == "contenido_kit":
+            return _empaque_contenido_kit(request, pedido)
+        if accion == "quitar_contenido_kit":
+            return _empaque_quitar_contenido_kit(request, pedido)
         return _empacar(request, pedido)
 
     if pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA):
@@ -835,6 +840,59 @@ def empaque_pedido(request, pk):
     return _render_paso_empacar(request, pedido)
 
 
+_INDICE_KIT = re.compile(r"^sku_(\d+)$")
+
+
+def _empaque_contenido_kit(request, pedido):
+    """Declara los componentes del kit (renglones sku_N/cantidad_N, patrón ASN)."""
+    from apps.pedidos.models import LineaPedido
+    from apps.pedidos.services import declarar_contenido_kit  # lazy por contrato
+
+    linea = get_object_or_404(LineaPedido, pk=request.POST.get("linea_kit"), pedido=pedido)
+    activos = {
+        str(s.pk): s
+        for s in SKU.objects.filter(cliente=pedido.cliente, activo=True, es_kit=False)
+    }
+    items = []
+    indices = sorted({
+        int(m.group(1)) for clave in request.POST if (m := _INDICE_KIT.match(clave))
+    })
+    for i in indices:
+        sku = activos.get(request.POST.get(f"sku_{i}") or "")
+        crudo = (request.POST.get(f"cantidad_{i}") or "").strip()
+        if sku is None and not crudo:
+            continue  # renglón vacío del "+"
+        try:
+            piezas = int(crudo)
+        except ValueError:
+            piezas = 0
+        if sku is None or piezas < 1:
+            messages.error(request, "Completa producto y piezas en cada renglón del kit.")
+            return redirect("piso:empaque_pedido", pk=pedido.pk)
+        items.append((sku, piezas))
+    try:
+        declarar_contenido_kit(linea, items, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"Contenido del kit {linea.sku.codigo} declarado.")
+    return redirect("piso:empaque_pedido", pk=pedido.pk)
+
+
+def _empaque_quitar_contenido_kit(request, pedido):
+    from apps.pedidos.models import LineaPedido
+    from apps.pedidos.services import quitar_contenido_kit  # lazy por contrato
+
+    linea = get_object_or_404(LineaPedido, pk=request.POST.get("linea_kit"), pedido=pedido)
+    try:
+        quitar_contenido_kit(linea, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"Contenido del kit {linea.sku.codigo} liberado.")
+    return redirect("piso:empaque_pedido", pk=pedido.pk)
+
+
 def _recordar_peso_empaque(request, pedido):
     """POST de empaque fallido: el navegador tira la foto, el peso NO se pierde.
 
@@ -852,6 +910,7 @@ def _render_paso_empacar(request, pedido):
     cajas = _paquetes_con_lineas(pedido)
     pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
     fallo_previo = request.session.pop(f"empaque_fallido_{pedido.pk}", None)
+    lineas = list(pedido.lineas.select_related("sku"))
     contexto = {
         "seccion": "empaque",
         "pedido": pedido,
@@ -859,10 +918,21 @@ def _render_paso_empacar(request, pedido):
         "ahorro_division": _ahorro_division(pedido),
         "checklist": checklist,
         "naked": naked,
-        "lineas": pedido.lineas.select_related("sku"),
+        "lineas": lineas,
         "hubo_error_post": fallo_previo is not None,
         "peso_previo": fallo_previo or "",
     }
+
+    # Kits: su contenido se declara aquí (candado de empacar); 7B lo trae ya
+    # declarado desde la orden y solo se muestra.
+    kits = [l for l in lineas if l.sku.es_kit and l.parte_de_kit_id is None]
+    if kits:
+        for linea in kits:
+            linea.hijas = list(linea.componentes.select_related("sku"))
+        contexto["kits"] = kits
+        if any(not l.hijas for l in kits):
+            from apps.catalogo.models import opciones_sku_agrupadas
+            contexto["opciones_kit"] = opciones_sku_agrupadas(pedido.cliente, excluir_kits=True)
 
     if cajas and pendientes:
         caja = pendientes[0]

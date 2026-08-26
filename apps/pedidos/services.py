@@ -333,7 +333,8 @@ def _aplicar_cambios_cantidades(pedido, payload, origen):
     from apps.inventario.services import liberar_reserva  # lazy por contrato
 
     por_sku = {}
-    for linea in pedido.lineas.select_related("sku"):
+    # Las hijas de kit no entran al diff: las gobierna su kit, no la orden.
+    for linea in pedido.lineas.select_related("sku").filter(parte_de_kit__isnull=True):
         por_sku.setdefault(linea.sku.codigo, []).append(linea)
 
     editable = pedido.estado in (Pedido.PENDIENTE, Pedido.EN_PICKING)
@@ -774,6 +775,96 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
     return fresca
 
 
+# ── Kits (contenido declarado en empaque — mystery box) ──
+
+def declarar_contenido_kit(linea_kit, items, actor):
+    """El packer declara los tés del kit en empaque (registro por pedido).
+
+    items = [(SKU, piezas)]. Atómico y completo-o-nada: cada componente
+    reserva de vendible; sin stock de alguno → ValueError y nada se toca.
+    Las hijas nacen pickeadas (el packer las tiene en la mano) y viajan por
+    los rieles normales: empacar las confirma, salida las despacha,
+    cancelación/restock las trata como líneas comunes.
+    """
+    if not linea_kit.sku.es_kit:
+        raise ValueError(f"{linea_kit.sku.codigo} no es un kit.")
+    pedido = linea_kit.pedido
+    if pedido.estado != Pedido.EN_PICKING:
+        raise ValueError(
+            f"El contenido del kit se declara durante el empaque; {pedido.folio} "
+            f"está {pedido.get_estado_display()}."
+        )
+    if linea_kit.componentes.exists():
+        raise ValueError(
+            f"El kit de {pedido.folio} ya tiene contenido; quítalo antes de re-declararlo."
+        )
+    consolidadas = {}
+    for sku, piezas in items:
+        if sku.es_kit:
+            raise ValueError("Un kit no puede llevar otro kit dentro.")
+        consolidadas[sku] = consolidadas.get(sku, 0) + int(piezas)
+    if not consolidadas:
+        raise ValueError("Declara al menos un producto dentro del kit.")
+
+    from apps.inventario.services import reservar  # lazy por contrato
+    with transaction.atomic():
+        for sku, piezas in consolidadas.items():
+            if not reservar(sku, piezas, pedido.folio):
+                raise ValueError(
+                    f"Sin stock de {sku.codigo} para el kit; no se apartó nada — "
+                    "elige otro producto o avisa a Mesa."
+                )
+            LineaPedido.objects.create(
+                pedido=pedido, sku=sku, cantidad=piezas,
+                cantidad_pickeada=piezas, reservada=True, parte_de_kit=linea_kit,
+            )
+        pedido.peso_esperado_gr = (pedido.peso_esperado_gr or 0) + sum(
+            (s.peso_gr or 0) * c for s, c in consolidadas.items()
+        )
+        pedido.save(update_fields=["peso_esperado_gr", "actualizado"])
+        registrar_evento(
+            "pedido", pedido.pk, "kit_contenido", actor=actor, cliente=pedido.cliente,
+            delta={
+                "kit": linea_kit.sku.codigo,
+                "componentes": [
+                    {"sku": s.codigo, "cantidad": c} for s, c in consolidadas.items()
+                ],
+            },
+            motivo="Contenido del kit declarado en empaque (registro por pedido).",
+        )
+    return consolidadas
+
+
+def quitar_contenido_kit(linea_kit, actor):
+    """Deshace la declaración (antes de empacar): libera reservas y borra hijas.
+
+    Solo estaban reservadas — la liberación además dispara el reintento de
+    reservas para quien esperara ese té.
+    """
+    pedido = linea_kit.pedido
+    if pedido.estado != Pedido.EN_PICKING:
+        raise ValueError(
+            f"El contenido solo se cambia durante el empaque; {pedido.folio} "
+            f"está {pedido.get_estado_display()}."
+        )
+    hijas = list(linea_kit.componentes.select_related("sku"))
+    if not hijas:
+        return
+    from apps.inventario.services import liberar_reserva  # lazy por contrato
+    with transaction.atomic():
+        peso = 0
+        for hija in hijas:
+            liberar_reserva(hija.sku, hija.cantidad, pedido.folio)
+            peso += (hija.sku.peso_gr or 0) * hija.cantidad
+            hija.delete()
+        pedido.peso_esperado_gr = max((pedido.peso_esperado_gr or 0) - peso, 0)
+        pedido.save(update_fields=["peso_esperado_gr", "actualizado"])
+        registrar_evento(
+            "pedido", pedido.pk, "kit_contenido_quitado", actor=actor, cliente=pedido.cliente,
+            delta={"kit": linea_kit.sku.codigo, "componentes": len(hijas)},
+        )
+
+
 # ── Empaque ──
 
 def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
@@ -809,6 +900,17 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
             )
             raise ValueError(
                 f"Faltan unidades por pickear: {detalle}. Escanea todo antes de empacar."
+            )
+        # GATE de kits: la caja no se cierra sin su contenido declarado (7B lo
+        # pre-declara desde la orden; el mystery se declara aquí en empaque).
+        kits_vacios = [
+            l for l in fresco.lineas.select_related("sku").filter(sku__es_kit=True)
+            if not l.componentes.exists()
+        ]
+        if kits_vacios:
+            raise ValueError(
+                "Declara el contenido del kit antes de empacar: "
+                + ", ".join(l.sku.codigo for l in kits_vacios)
             )
 
         try:

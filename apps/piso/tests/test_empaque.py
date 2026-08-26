@@ -14,6 +14,73 @@ from apps.pedidos.models import Pedido
 from .base import PisoTestCase
 
 
+class EmpaqueKitTests(PisoTestCase):
+    """Kit (7A·2): candado de contenido + declaración con reserva REAL del kardex."""
+
+    def setUp(self):
+        self.login_piso()
+        self.crear_stock(cantidad=50)  # stock real del té (self.sku)
+        from apps.catalogo.models import SKU as ModeloSKU
+        self.kit_sku = ModeloSKU.objects.create(
+            cliente=self.cliente, codigo="TEABOX", descripcion="TeaBox",
+            peso_gr=400, es_kit=True, requiere_lote=False,
+        )
+        from apps.pedidos.models import LineaPedido
+        self.pedido = Pedido.objects.create(
+            cliente=self.cliente, origen="manual", estado=Pedido.PENDIENTE,
+            comprador_nombre="Ana Prueba", cp="44100",
+            direccion={"address1": "Av. Prueba 123", "city": "Guadalajara"},
+            peso_esperado_gr=400,
+        )
+        self.linea_kit = LineaPedido.objects.create(
+            pedido=self.pedido, sku=self.kit_sku, cantidad=1, reservada=True,
+        )
+        from apps.pedidos.services import confirmar_linea_pick, iniciar_picking
+        iniciar_picking(self.pedido, self.operador)
+        confirmar_linea_pick(self.linea_kit, 1, self.operador)
+        self.url = reverse("piso:empaque_pedido", args=[self.pedido.pk])
+
+    def _reservado(self):
+        return (
+            Saldo.objects.filter(sku=self.sku, estado="reservado")
+            .aggregate(total=Sum("cantidad"))["total"] or 0
+        )
+
+    def test_candado_declaracion_y_reserva_real(self):
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "falta declarar")
+
+        bloqueo = self.client.post(self.url, {
+            "peso_real_gr": "400", "foto_contenido": self.foto(),
+        }, follow=True)
+        self.assertContains(bloqueo, "Declara el contenido")
+
+        declarar = self.client.post(self.url, {
+            "accion": "contenido_kit", "linea_kit": self.linea_kit.pk,
+            "sku_1": self.sku.pk, "cantidad_1": "2",
+        }, follow=True)
+        self.assertContains(declarar, "declarado")
+        hija = self.linea_kit.componentes.get()
+        self.assertEqual(hija.cantidad, 2)
+        self.assertEqual(hija.cantidad_pickeada, 2)  # nace pickeada
+        self.assertEqual(self._reservado(), 2)  # kardex REAL apartado
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.peso_esperado_gr, 400 + 2 * 2000)
+
+    def test_quitar_regresa_el_stock_al_pool(self):
+        self.client.post(self.url, {
+            "accion": "contenido_kit", "linea_kit": self.linea_kit.pk,
+            "sku_1": self.sku.pk, "cantidad_1": "2",
+        })
+        self.assertEqual(self._reservado(), 2)
+        quitar = self.client.post(self.url, {
+            "accion": "quitar_contenido_kit", "linea_kit": self.linea_kit.pk,
+        }, follow=True)
+        self.assertContains(quitar, "liberado")
+        self.assertEqual(self.linea_kit.componentes.count(), 0)
+        self.assertEqual(self._reservado(), 0)
+
+
 class EmpaquePisoTests(PisoTestCase):
     def setUp(self):
         self.login_piso()

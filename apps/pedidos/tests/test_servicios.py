@@ -313,9 +313,17 @@ class LineasKitTests(BaseServicios):
 
     def test_empacar_no_confirma_el_kit_en_inventario(self):
         pedido = self._pedido_picado()
+        kit_linea = pedido.lineas.get(sku=self.kit)
+        # El gate de 7A·2 exige contenido: hija declarada (riel normal).
+        LineaPedido.objects.create(
+            pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2,
+            reservada=True, parte_de_kit=kit_linea,
+        )
         with patch("apps.inventario.services.confirmar_pick") as confirmar:
             services.empacar(pedido, "packer1", peso_real_gr=2800, fotos=[foto()])
-        confirmar.assert_called_once_with(self.sku, 1, pedido.folio)
+        skus_confirmados = [c.args[0] for c in confirmar.call_args_list]
+        self.assertNotIn(self.kit, skus_confirmados)  # el kit jamás toca inventario
+        self.assertEqual(confirmar.call_count, 2)  # la línea normal y la hija
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.EMPACADO)
 
@@ -330,6 +338,103 @@ class LineasKitTests(BaseServicios):
         despachar.assert_called_once_with(self.sku, 1, pedido.folio)
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+
+
+class ContenidoKitTests(BaseServicios):
+    """Declaración del contenido del kit en empaque (7A·2): hijas por los rieles normales."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.kit = SKU.objects.create(
+            cliente=cls.cliente, codigo="TEABOX", descripcion="TeaBox mensual",
+            peso_gr=400, es_kit=True, requiere_lote=False,
+        )
+        cls.te = SKU.objects.create(
+            cliente=cls.cliente, codigo="TE-CHAI", descripcion="Chai masala",
+            peso_gr=120, requiere_lote=False,
+        )
+
+    def _pedido_con_kit(self, estado=Pedido.EN_PICKING):
+        pedido = self.pedido_directo(estado=estado)
+        linea = LineaPedido.objects.create(
+            pedido=pedido, sku=self.kit, cantidad=1, cantidad_pickeada=1, reservada=True,
+        )
+        return pedido, linea
+
+    def test_declarar_reserva_y_crea_hijas_pickeadas(self):
+        pedido, kit = self._pedido_con_kit()
+        with patch("apps.inventario.services.reservar", return_value=True) as reservar:
+            services.declarar_contenido_kit(kit, [(self.te, 2), (self.sku, 1)], "packer1")
+        hijas = list(kit.componentes.select_related("sku"))
+        self.assertEqual(len(hijas), 2)
+        for hija in hijas:
+            self.assertEqual(hija.cantidad_pickeada, hija.cantidad)  # nacen pickeadas
+            self.assertTrue(hija.reservada)
+        reservar.assert_any_call(self.te, 2, pedido.folio)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.peso_esperado_gr, 120 * 2 + 2400)
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="kit_contenido",
+        )
+        self.assertEqual(evento.delta["kit"], "TEABOX")
+
+    def test_sin_stock_de_un_te_nada_se_declara(self):
+        _, kit = self._pedido_con_kit()
+        with patch("apps.inventario.services.reservar", side_effect=[True, False]):
+            with self.assertRaises(ValueError):
+                services.declarar_contenido_kit(kit, [(self.te, 2), (self.sku, 1)], "packer1")
+        self.assertEqual(kit.componentes.count(), 0)  # completo-o-nada
+
+    def test_empacar_bloqueado_sin_contenido_y_fluye_con_el(self):
+        pedido, kit = self._pedido_con_kit()
+        with self.assertRaises(ValueError) as ctx:
+            services.empacar(pedido, "packer1", peso_real_gr=500, fotos=[foto()])
+        self.assertIn("Declara el contenido", str(ctx.exception))
+        with patch("apps.inventario.services.reservar", return_value=True):
+            services.declarar_contenido_kit(kit, [(self.te, 3)], "packer1")
+        with patch("apps.inventario.services.confirmar_pick") as confirmar:
+            services.empacar(pedido, "packer1", peso_real_gr=360, fotos=[foto()])
+        confirmar.assert_called_once_with(self.te, 3, pedido.folio)  # la hija, jamás el kit
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.EMPACADO)
+
+    def test_quitar_libera_y_borra_las_hijas(self):
+        pedido, kit = self._pedido_con_kit()
+        with patch("apps.inventario.services.reservar", return_value=True):
+            services.declarar_contenido_kit(kit, [(self.te, 3)], "packer1")
+        with patch("apps.inventario.services.liberar_reserva") as liberar, \
+             self.captureOnCommitCallbacks(execute=True):
+            services.quitar_contenido_kit(kit, "packer1")
+        liberar.assert_called_once_with(self.te, 3, pedido.folio)
+        self.assertEqual(kit.componentes.count(), 0)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.peso_esperado_gr, 0)
+
+    def test_recolectado_despacha_las_hijas_no_el_kit(self):
+        pedido, kit = self._pedido_con_kit(estado=Pedido.GUIA_GENERADA)
+        LineaPedido.objects.create(
+            pedido=pedido, sku=self.te, cantidad=3, cantidad_pickeada=3,
+            reservada=True, parte_de_kit=kit,
+        )
+        with patch("apps.inventario.services.despachar") as despachar, \
+             patch("apps.mensajeria.services.enviar_en_camino"), \
+             self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, "salida1")
+        despachar.assert_called_once_with(self.te, 3, pedido.folio)
+
+    def test_declarar_fuera_de_picking_truena(self):
+        _, kit = self._pedido_con_kit(estado=Pedido.EMPACADO)
+        with self.assertRaises(ValueError):
+            services.declarar_contenido_kit(kit, [(self.te, 3)], "packer1")
+
+    def test_kit_dentro_de_kit_truena(self):
+        _, kit = self._pedido_con_kit()
+        otro_kit = SKU.objects.create(
+            cliente=self.cliente, codigo="TEABOX-2", descripcion="Otro kit", es_kit=True,
+        )
+        with self.assertRaises(ValueError):
+            services.declarar_contenido_kit(kit, [(otro_kit, 1)], "packer1")
 
 
 class IngestaPorTicketTests(BaseServicios):

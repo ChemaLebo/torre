@@ -135,6 +135,70 @@
 </div>
 {% endif %}
 
+{% for kit in kits %}
+<div class="card mt">
+  <div class="titulo">
+    <h2>Contenido del kit · {{ kit.sku.descripcion }}</h2>
+    {% if kit.hijas %}<span class="pill ok">declarado</span>{% else %}<span class="pill crit">falta declarar</span>{% endif %}
+  </div>
+  {% if kit.nota_kit %}
+  <div class="banner accent"><span class="foco"></span>El comprador eligió: <b>{{ kit.nota_kit }}</b></div>
+  {% endif %}
+  {% if kit.hijas %}
+  <ul class="timeline">
+    {% for hija in kit.hijas %}
+    <li>{{ hija.cantidad }} × {{ hija.sku.descripcion }} <span class="mono small">({{ hija.sku.codigo }})</span></li>
+    {% endfor %}
+  </ul>
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="quitar_contenido_kit">
+    <input type="hidden" name="linea_kit" value="{{ kit.pk }}">
+    <button class="btn chico peligro" type="submit">Quitar y volver a declarar</button>
+  </form>
+  {% else %}
+  <p class="small">Declara qué lleva la caja: aparta el stock de cada té y queda registrado para este pedido. Sin esto el empaque no cierra.</p>
+  <form method="post" id="form-kit-{{ kit.pk }}">{% csrf_token %}
+    <input type="hidden" name="accion" value="contenido_kit">
+    <input type="hidden" name="linea_kit" value="{{ kit.pk }}">
+    <div id="renglones-kit-{{ kit.pk }}">
+      {% for i in "123" %}
+      <div class="fila mt renglon-kit">
+        <select name="sku_{{ forloop.counter }}" class="crece" aria-label="Producto {{ forloop.counter }} del kit">
+          <option value="">Elige un producto</option>
+          {% for grupo, opciones in opciones_kit %}
+          <optgroup label="{{ grupo }}">
+            {% for pk, texto in opciones %}<option value="{{ pk }}">{{ texto }}</option>{% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        <input type="number" name="cantidad_{{ forloop.counter }}" min="1" placeholder="Piezas" style="max-width:110px" aria-label="Piezas {{ forloop.counter }}">
+      </div>
+      {% endfor %}
+    </div>
+    <div class="fila mt">
+      <button class="btn chico" type="button" onclick="agregarRenglonKit({{ kit.pk }})">+ otro producto</button>
+      <button class="btn primario" type="submit">Declarar contenido ✓</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+{% if kits %}
+<script>
+function agregarRenglonKit(kitPk) {
+  var contenedor = document.getElementById("renglones-kit-" + kitPk);
+  var filas = contenedor.querySelectorAll(".renglon-kit");
+  var nueva = filas[filas.length - 1].cloneNode(true);
+  var n = filas.length + 1;
+  var select = nueva.querySelector("select");
+  var input = nueva.querySelector("input");
+  select.name = "sku_" + n; select.value = "";
+  input.name = "cantidad_" + n; input.value = "";
+  contenedor.appendChild(nueva);
+}
+</script>
+{% endif %}
+
 <details class="colapsable mt">
   <summary>Checklist de empaque de {{ pedido.cliente.nombre }}</summary>
   <div class="colapsable-cuerpo">

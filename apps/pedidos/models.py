@@ -245,6 +245,14 @@ class LineaPedido(models.Model):
     reservada = models.BooleanField(
         default=False, help_text="True si inventario.reservar apartó el stock de esta línea",
     )
+    parte_de_kit = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.CASCADE, related_name="componentes",
+        help_text="Línea kit a la que pertenece este componente (té dentro de la TeaBox)",
+    )
+    nota_kit = models.CharField(
+        max_length=300, blank=True, default="",
+        help_text="Lo que el comprador eligió (texto de Appstle), para el packer",
+    )
 
     class Meta:
         ordering = ["id"]
