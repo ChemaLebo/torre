@@ -294,17 +294,18 @@ function agregarRenglonKit(kitPk) {
     campo.addEventListener("change", revisar);
     campo.addEventListener("input", revisar);
   });
-  // Validación client-side ANTES de subir: peso fuera de rango → banda roja,
-  // NO se sube nada y el input de foto conserva su archivo.
-  form.addEventListener("submit", function (ev) {
-    var valor = Number(peso.value);
-    if (peso.value && pesoFuera(valor)) {
-      ev.preventDefault();
-      revisar();
-      if (window.Feedback) Feedback.error("Peso fuera de rango: revisa el contenido.");
-      peso.focus();
-    }
-  });
+  // Check de peso APAGADO (2026-08-28): el bloqueo del submit por rango se
+  // comenta junto con los raises del server (pesos de catálogo sin tara de
+  // caja). La banda roja informativa de revisar() se queda.
+  // form.addEventListener("submit", function (ev) {
+  //   var valor = Number(peso.value);
+  //   if (peso.value && pesoFuera(valor)) {
+  //     ev.preventDefault();
+  //     revisar();
+  //     if (window.Feedback) Feedback.error("Peso fuera de rango: revisa el contenido.");
+  //     peso.focus();
+  //   }
+  // });
   revisar();
 })();
 </script>

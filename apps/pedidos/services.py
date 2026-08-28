@@ -1040,16 +1040,20 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
             raise ValueError("Captura el peso de la báscula en gramos antes de empacar.")
         if peso_real <= 0:
             raise ValueError("Captura el peso de la báscula en gramos antes de empacar.")
-        tolerancia_pct = float(settings.TORRE["TOLERANCIA_PESO_PCT"])
-        esperado = fresco.peso_esperado_gr or 0
-        if esperado > 0 and not peso_ya_verificado:
-            diferencia_pct = abs(peso_real - esperado) * 100.0 / esperado
-            if diferencia_pct > tolerancia_pct:
-                raise ValueError(
-                    f"El peso no cuadra: se esperaban {esperado} g y la báscula marca {peso_real} g "
-                    f"({diferencia_pct:.1f}% de diferencia; la tolerancia es ±{tolerancia_pct:g}%). "
-                    "Revisa el contenido antes de cerrar la caja."
-                )
+        # Check de peso APAGADO (2026-08-28): el esperado suma solo productos —
+        # la tara de la caja no existe en el sistema — y bloqueaba empaques
+        # legítimos. Regresa con el catálogo de cajas. peso_real_gr se sigue
+        # capturando y guardando.
+        # tolerancia_pct = float(settings.TORRE["TOLERANCIA_PESO_PCT"])
+        # esperado = fresco.peso_esperado_gr or 0
+        # if esperado > 0 and not peso_ya_verificado:
+        #     diferencia_pct = abs(peso_real - esperado) * 100.0 / esperado
+        #     if diferencia_pct > tolerancia_pct:
+        #         raise ValueError(
+        #             f"El peso no cuadra: se esperaban {esperado} g y la báscula marca {peso_real} g "
+        #             f"({diferencia_pct:.1f}% de diferencia; la tolerancia es ±{tolerancia_pct:g}%). "
+        #             "Revisa el contenido antes de cerrar la caja."
+        #         )
 
         # Persistir las fotos que llegan (default: contenido) y validar la
         # evidencia de contenido ligada al pedido.
@@ -1149,17 +1153,20 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido):
         raise ValueError(
             f"Captura el peso de la báscula de la caja {fresco.numero}, en gramos."
         )
-    tolerancia_pct = float(settings.TORRE["TOLERANCIA_PESO_PCT"])
-    esperado = int(fresco.peso_kg * 1000) if fresco.peso_kg else 0
-    if esperado > 0:
-        diferencia_pct = abs(peso_real - esperado) * 100.0 / esperado
-        if diferencia_pct > tolerancia_pct:
-            raise ValueError(
-                f"El peso de la caja {fresco.numero} no cuadra: el plan marca {esperado} g "
-                f"y la báscula {peso_real} g ({diferencia_pct:.1f}% de diferencia; "
-                f"la tolerancia es ±{tolerancia_pct:g}%). "
-                "Revisa el contenido de ESA caja antes de cerrarla."
-            )
+    esperado = int(fresco.peso_kg * 1000) if fresco.peso_kg else 0  # lo usa el motivo del evento
+    # Check de peso APAGADO (2026-08-28): mismo motivo que en empacar() — el
+    # plan por caja hereda pesos de catálogo sin tara. Regresa con el catálogo
+    # de cajas.
+    # tolerancia_pct = float(settings.TORRE["TOLERANCIA_PESO_PCT"])
+    # if esperado > 0:
+    #     diferencia_pct = abs(peso_real - esperado) * 100.0 / esperado
+    #     if diferencia_pct > tolerancia_pct:
+    #         raise ValueError(
+    #             f"El peso de la caja {fresco.numero} no cuadra: el plan marca {esperado} g "
+    #             f"y la báscula {peso_real} g ({diferencia_pct:.1f}% de diferencia; "
+    #             f"la tolerancia es ±{tolerancia_pct:g}%). "
+    #             "Revisa el contenido de ESA caja antes de cerrarla."
+    #         )
     if foto_contenido is None:
         raise ValueError(
             f"Toma la foto del contenido de la caja {fresco.numero} antes de confirmarla."

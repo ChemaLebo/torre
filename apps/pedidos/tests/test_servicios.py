@@ -902,17 +902,19 @@ class EmpaqueTests(BaseServicios):
         # después vía cerrar_caja, con la etiqueta pegada.
         self.assertEqual(set(fotos.values_list("tipo", flat=True)), {"contenido"})
 
-    def test_empacar_peso_fuera_de_tolerancia_truena(self):
-        with patch("apps.inventario.services.confirmar_pick"):
-            with self.assertRaises(ValueError) as ctx:
-                services.empacar(
-                    self.pedido, actor=None, peso_real_gr=6000, fotos=[foto(), foto("caja.jpg")],
-                )
-        self.assertIn("peso", str(ctx.exception).lower())
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-        # El peso truena antes de persistir evidencia.
-        self.assertEqual(EvidenciaFoto.objects.count(), 0)
+    # Check de peso APAGADO (2026-08-28, ver empacar()): el test del bloqueo
+    # regresa cuando el catálogo de cajas aporte la tara.
+    # def test_empacar_peso_fuera_de_tolerancia_truena(self):
+    #     with patch("apps.inventario.services.confirmar_pick"):
+    #         with self.assertRaises(ValueError) as ctx:
+    #             services.empacar(
+    #                 self.pedido, actor=None, peso_real_gr=6000, fotos=[foto(), foto("caja.jpg")],
+    #             )
+    #     self.assertIn("peso", str(ctx.exception).lower())
+    #     self.pedido.refresh_from_db()
+    #     self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+    #     # El peso truena antes de persistir evidencia.
+    #     self.assertEqual(EvidenciaFoto.objects.count(), 0)
 
     def test_empacar_con_lineas_sin_pickear_truena(self):
         self.linea.cantidad_pickeada = 1

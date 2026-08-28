@@ -64,16 +64,18 @@ class EmpacarCajaTests(BaseEmpaqueCaja):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
 
-    def test_peso_de_caja_fuera_de_plan_no_toca_nada(self):
-        with self.assertRaises(ValueError) as ctx:
-            services.empacar_caja(self.caja1, actor=None, peso_real_gr=2600, foto_contenido=foto())
-        self.assertIn("caja 1", str(ctx.exception))
-        self.caja1.refresh_from_db()
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.caja1.estado, Paquete.PLANEADO)
-        self.assertIsNone(self.caja1.peso_real_gr)
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-        self.assertEqual(EvidenciaFoto.objects.count(), 0)
+    # Check de peso APAGADO (2026-08-28, ver empacar_caja()): regresa con el
+    # catálogo de cajas.
+    # def test_peso_de_caja_fuera_de_plan_no_toca_nada(self):
+    #     with self.assertRaises(ValueError) as ctx:
+    #         services.empacar_caja(self.caja1, actor=None, peso_real_gr=2600, foto_contenido=foto())
+    #     self.assertIn("caja 1", str(ctx.exception))
+    #     self.caja1.refresh_from_db()
+    #     self.pedido.refresh_from_db()
+    #     self.assertEqual(self.caja1.estado, Paquete.PLANEADO)
+    #     self.assertIsNone(self.caja1.peso_real_gr)
+    #     self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+    #     self.assertEqual(EvidenciaFoto.objects.count(), 0)
 
     def test_sin_foto_de_contenido_truena(self):
         with self.assertRaises(ValueError) as ctx:
@@ -127,16 +129,18 @@ class EmpacarCajaTests(BaseEmpaqueCaja):
         self.assertEqual(pedido.peso_real_gr, 5040)
         confirmar.assert_called_once()
 
-    def test_caja_fuera_de_su_plan_si_revierte(self):
-        # La validación por caja sigue viva: la báscula contra el plan de ESA
-        # caja (±3%) es el único candado de peso — y sí truena.
-        pedido = self.pedido_en_picking()
-        caja1, _ = self.plan_de_cajas(pedido, ["2.50", "2.50"])
-        with self.assertRaises(ValueError) as ctx:
-            services.empacar_caja(caja1, actor=None, peso_real_gr=2650, foto_contenido=foto())
-        self.assertIn("peso", str(ctx.exception).lower())
-        caja1.refresh_from_db()
-        self.assertEqual(caja1.estado, Paquete.PLANEADO)
+    # Check de peso APAGADO (2026-08-28, ver empacar_caja()): regresa con el
+    # catálogo de cajas.
+    # def test_caja_fuera_de_su_plan_si_revierte(self):
+    #     # La validación por caja sigue viva: la báscula contra el plan de ESA
+    #     # caja (±3%) es el único candado de peso — y sí truena.
+    #     pedido = self.pedido_en_picking()
+    #     caja1, _ = self.plan_de_cajas(pedido, ["2.50", "2.50"])
+    #     with self.assertRaises(ValueError) as ctx:
+    #         services.empacar_caja(caja1, actor=None, peso_real_gr=2650, foto_contenido=foto())
+    #     self.assertIn("peso", str(ctx.exception).lower())
+    #     caja1.refresh_from_db()
+    #     self.assertEqual(caja1.estado, Paquete.PLANEADO)
 
     def test_doble_post_de_la_misma_caja_no_empaca_dos_veces(self):
         # Regresión del crítico #2 (carrera): el segundo POST llega con una

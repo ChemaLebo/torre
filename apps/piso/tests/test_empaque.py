@@ -112,17 +112,19 @@ class EmpaquePisoTests(PisoTestCase):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
 
-    def test_peso_fuera_de_tolerancia_muestra_esperado_vs_real(self):
-        respuesta = self.client.post(self.url, {
-            "peso_real_gr": "7000",  # 16.7% arriba: fuera de ±3%
-            "foto_contenido": self.foto("contenido.jpg"),
-        }, follow=True)
-        self.assertContains(respuesta, "El peso no cuadra")
-        self.assertContains(respuesta, "6000")
-        self.assertContains(respuesta, "7000")
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-        self.assertIsNone(self.pedido.peso_real_gr)
+    # Check de peso APAGADO (2026-08-28, ver empacar()): regresa con el
+    # catálogo de cajas.
+    # def test_peso_fuera_de_tolerancia_muestra_esperado_vs_real(self):
+    #     respuesta = self.client.post(self.url, {
+    #         "peso_real_gr": "7000",  # 16.7% arriba: fuera de ±3%
+    #         "foto_contenido": self.foto("contenido.jpg"),
+    #     }, follow=True)
+    #     self.assertContains(respuesta, "El peso no cuadra")
+    #     self.assertContains(respuesta, "6000")
+    #     self.assertContains(respuesta, "7000")
+    #     self.pedido.refresh_from_db()
+    #     self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+    #     self.assertIsNone(self.pedido.peso_real_gr)
 
     def test_empacado_feliz_encadena_guia_e_impresion(self):
         with patch(

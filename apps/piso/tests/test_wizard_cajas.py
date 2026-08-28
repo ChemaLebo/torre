@@ -48,23 +48,25 @@ class WizardCajasTests(PisoTestCase):
         # Contenido de ESA caja (texto_para_piso).
         self.assertContains(respuesta, "6 ×")
 
-    def test_peso_fuera_de_rango_no_toca_nada(self):
-        respuesta = self.client.post(self.url, {
-            "accion": "empacar_caja", "paquete_id": self.caja1.pk,
-            "peso_real_gr": "20000", "foto_contenido": self.foto("c1.jpg"),
-        }, follow=True)
-        self.assertContains(respuesta, "no cuadra")
-        self.caja1.refresh_from_db()
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.caja1.estado, Paquete.PLANEADO)
-        self.assertIsNone(self.caja1.peso_real_gr)
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-        self.assertEqual(
-            EvidenciaFoto.objects.filter(
-                entidad="pedido", entidad_id=str(self.pedido.pk),
-            ).count(),
-            0,
-        )
+    # Check de peso APAGADO (2026-08-28, ver empacar_caja()): regresa con el
+    # catálogo de cajas.
+    # def test_peso_fuera_de_rango_no_toca_nada(self):
+    #     respuesta = self.client.post(self.url, {
+    #         "accion": "empacar_caja", "paquete_id": self.caja1.pk,
+    #         "peso_real_gr": "20000", "foto_contenido": self.foto("c1.jpg"),
+    #     }, follow=True)
+    #     self.assertContains(respuesta, "no cuadra")
+    #     self.caja1.refresh_from_db()
+    #     self.pedido.refresh_from_db()
+    #     self.assertEqual(self.caja1.estado, Paquete.PLANEADO)
+    #     self.assertIsNone(self.caja1.peso_real_gr)
+    #     self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+    #     self.assertEqual(
+    #         EvidenciaFoto.objects.filter(
+    #             entidad="pedido", entidad_id=str(self.pedido.pk),
+    #         ).count(),
+    #         0,
+    #     )
 
     def test_flujo_completo_caja_por_caja_hasta_exito(self):
         # Caja 1: foto + peso contra SU plan; el pedido sigue en picking.
