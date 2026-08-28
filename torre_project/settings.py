@@ -199,7 +199,6 @@ TORRE = {
         "estafeta",
         "paquetexpress",
         "fedex",
-        "noventa9Minutos",
     ],
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
