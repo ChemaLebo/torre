@@ -247,11 +247,16 @@ class EnviaAdapter(CarrierAdapter):
                 f"{pl.cantidad}x {(pl.linea_pedido.sku.descripcion or pl.linea_pedido.sku.codigo)}"
                 for pl in lineas
             )[:120] or "Mercancía"
+            # El peso real de báscula manda; el plan solo si la caja no se pesó.
+            peso_kg = (
+                round(paquete.peso_real_gr / 1000.0, 2)
+                if paquete.peso_real_gr else float(paquete.peso_kg)
+            )
             return [{
                 "content": contenido,
                 "amount": 1,
                 "type": "box",
-                "weight": float(paquete.peso_kg),
+                "weight": peso_kg,
                 "weightUnit": "KG",
                 "lengthUnit": "CM",
                 "dimensions": {"length": paquete.largo_cm, "width": paquete.ancho_cm,
@@ -589,7 +594,9 @@ class Adapter99Minutos(CarrierAdapter):
                 f"{pl.cantidad}x {(pl.linea_pedido.sku.descripcion or pl.linea_pedido.sku.codigo)}"
                 for pl in lineas
             )[:120] or "Mercancía"
-            return (int(Decimal(str(paquete.peso_kg)) * 1000),
+            # El peso real de báscula manda; el plan solo si la caja no se pesó.
+            peso_gr = int(paquete.peso_real_gr or Decimal(str(paquete.peso_kg)) * 1000)
+            return (peso_gr,
                     paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm, contenido)
         peso_gr = int(pedido.peso_real_gr or pedido.peso_esperado_gr or 1000)
         return (peso_gr, 30, 25, 20, "Mercancía")
