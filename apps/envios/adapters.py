@@ -36,7 +36,7 @@ ORIGEN_DEFAULT = {
     "district": "Olivar de los Padres",
     "city": "Ciudad de Mexico",
     "state": "DF",
-    "country": "MX",
+    "country": "CX",
     "postalCode": "01780",
 }
 
