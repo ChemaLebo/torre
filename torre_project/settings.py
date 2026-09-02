@@ -203,6 +203,12 @@ TORRE = {
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
     "PROVEEDOR_POR_CARRIER": {},
+    # Estado del ORIGEN por carrier (envia): cada conector traduce el estado
+    # con su propia tabla. Probado en vivo 2026-08-29: estafeta SOLO genera
+    # con el 2-letras "CX" (DF → 1129 "State code not founded"); fedex y
+    # 99min-vía-envia aceptan el code_shopify "DF" (default). Candidato
+    # pendiente de probe: paquetexpress (sus 424 huelen a este mismo bug).
+    "ORIGEN_ESTADO_POR_CARRIER": {"estafeta": "CX"},
     # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
     # ventana (acuerdo con el founder). El sync recurrente no se acota.
     "BACKFILL_DIAS": 90,

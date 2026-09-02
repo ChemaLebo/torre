@@ -36,7 +36,7 @@ ORIGEN_DEFAULT = {
     "number": "380",
     "district": "Olivar de los Padres",
     "city": "Ciudad de Mexico",
-    "state": "CX",
+    "state": "DF",  # code_shopify de CDMX; overrides por carrier en el mapa TORRE
     "country": "MX",
     "postalCode": "01780",
 }
@@ -231,8 +231,19 @@ class EnviaAdapter(CarrierAdapter):
 
     # ── Payloads ──
     @staticmethod
-    def _origen():
-        return dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
+    def _origen(carrier=None):
+        """Origen del envío; el state se traduce POR CARRIER si el mapa lo pide.
+
+        TORRE["ORIGEN_ESTADO_POR_CARRIER"]: el conector de estafeta dentro de
+        envia valida el estado del origen en el vocabulario de 2 letras (CX)
+        mientras generate valida el destino en code_shopify — probado en vivo
+        (PED-00015). Sin entrada en el mapa, el default (DF) pasa derecho.
+        """
+        origen = dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
+        mapa = settings.TORRE.get("ORIGEN_ESTADO_POR_CARRIER") or {}
+        if carrier and carrier in mapa:
+            origen["state"] = mapa[carrier]
+        return origen
 
     @staticmethod
     def _destino(pedido):
@@ -347,7 +358,7 @@ class EnviaAdapter(CarrierAdapter):
     def _payload(self, pedido, carrier, servicio, paquete=None):
         return self._sanear(
             {
-                "origin": self._origen(),
+                "origin": self._origen(carrier),
                 "destination": self._destino(pedido),
                 "packages": self._paquetes(pedido, paquete=paquete),
                 "shipment": {"carrier": carrier, "service": servicio, "type": 1},
@@ -368,7 +379,7 @@ class EnviaAdapter(CarrierAdapter):
 
         largo, ancho, alto = dims or (30, 25, 20)
         payload = {
-            "origin": self._origen(),
+            "origin": self._origen(carrier),
             "destination": {
                 "name": "Cotizacion",
                 "email": "alonso@wop.partners",

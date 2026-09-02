@@ -47,6 +47,24 @@ class DestinoEnviaTests(TestCase):
         self.assertEqual(destino["state"], "JAL")  # la tabla vieja decía JA
 
 
+class OrigenPorCarrierTests(TestCase):
+    """El state del ORIGEN se traduce por carrier: estafeta exige "CX" (2
+    letras) y el resto viaja con el code_shopify "DF" — hallazgo en vivo de
+    PED-00015 (mismo payload: DF → 1129 con estafeta, CX generó)."""
+
+    def test_estafeta_manda_cx(self):
+        from apps.envios.adapters import EnviaAdapter
+        self.assertEqual(EnviaAdapter._origen("estafeta")["state"], "CX")
+
+    def test_fedex_conserva_el_default_df(self):
+        from apps.envios.adapters import EnviaAdapter
+        self.assertEqual(EnviaAdapter._origen("fedex")["state"], "DF")
+
+    def test_sin_carrier_es_df(self):
+        from apps.envios.adapters import EnviaAdapter
+        self.assertEqual(EnviaAdapter._origen()["state"], "DF")
+
+
 TORRE_99MIN_DIRECTO = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}
 
 
