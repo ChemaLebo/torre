@@ -244,8 +244,12 @@ class SeedEscenariosLoteATests(TestCase):
 
         kit = SKU.objects.get(codigo="COL-MYSTERY3")
         self.assertTrue(kit.es_kit)
-        linea_kit = LineaPedido.objects.get(sku=kit)
-        self.assertTrue(linea_kit.reservada)  # virtual: pasa el gate de picking
+        self.assertEqual(kit.productos_por_kit, 3)
+        self.assertTrue(kit.codigo_barras)
+        lineas_kit = LineaPedido.objects.filter(sku=kit)
+        self.assertGreaterEqual(lineas_kit.count(), 2)  # 88001 + stepper 88004
+        for linea_kit in lineas_kit:
+            self.assertTrue(linea_kit.reservada)  # virtual: pasa el gate de picking
         self.assertTrue(
             LineaPedido.objects.filter(sku__codigo="COL-AGOTADO", reservada=False).exists()
         )

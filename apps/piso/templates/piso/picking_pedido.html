@@ -56,7 +56,11 @@
     {% endif %}
   </div>
   {% else %}
+  {% if linea.sku.es_kit %}
+  <div class="banner accent"><span class="foco"></span>Kit: toma la caja brandeada de {{ linea.sku.codigo }} (empaques del cliente) — no lleva stock propio; el contenido se declara en empaque.</div>
+  {% else %}
   <div class="banner crit"><span class="foco"></span>Sin stock vendible a la vista para {{ linea.sku.codigo }} — avisa a Mesa.</div>
+  {% endif %}
   {% endif %}
   <p class="pick-producto mt">{{ linea.sku.descripcion }}<br><span class="small mono">{{ linea.sku.codigo }} · {{ linea.sku.codigo_barras|default:"sin barras" }}</span></p>
   <div class="pick-avance">{{ linea.cantidad_pickeada }} de {{ linea.cantidad }}</div>

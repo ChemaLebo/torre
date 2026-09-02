@@ -796,8 +796,17 @@ class Command(BaseCommand):
             cliente=colima, codigo="COL-MYSTERY3",
             defaults={"descripcion": "Mystery box 3 cervezas", "peso_gr": 350,
                       "requiere_lote": False, "unidad": "caja",
-                      "precio_declarado": Decimal("399"), "es_kit": True},
+                      "precio_declarado": Decimal("399"), "es_kit": True,
+                      "productos_por_kit": 3, "usa_caja_propia": True,
+                      "codigo_barras": "7500465099999"},
         )
+        # Re-corridas del seed: los campos del Lote B se aseguran aunque el
+        # SKU ya existiera de una corrida vieja.
+        if kit.productos_por_kit != 3 or not kit.codigo_barras:
+            kit.productos_por_kit = 3
+            kit.usa_caja_propia = True
+            kit.codigo_barras = kit.codigo_barras or "7500465099999"
+            kit.save(update_fields=["productos_por_kit", "usa_caja_propia", "codigo_barras"])
         p1, creado = self._crear_pedido(t_mx, self._payload(
             88001, "Renata Kits", "+525511122233", "06700", "CDMX", "Ciudad de México",
             [(kit, 1)], note="Escenario Lote A: mystery box — declara el contenido en empaque",
@@ -828,8 +837,33 @@ class Command(BaseCommand):
                 pedido=p3, numero=1, peso_kg=Decimal("2.60"),
                 carrier="noventa9Minutos", servicio="local_next_day",
             )
+        # Lote B: stepper (2 cajas del mismo kit) + catálogo de cajas con stock.
+        p4, creado = self._crear_pedido(t_mx, self._payload(
+            88004, "Berta Stepper", "+525599887766", "03100", "CDMX", "Ciudad de México",
+            [(kit, 2)], note="Escenario Lote B: 2 mystery boxes — stepper caja 1 de 2",
+        ))
+        if creado:
+            self._fechar_pedido(p4, creado=self._dt(0, 10))
+
+        from apps.catalogo.models import Caja, CajaStock
+        for nombre, largo, ancho, alto, tara, posicion in (
+            ("Chica", 25, 20, 15, 150, "RES-6-4"),
+            ("Mediana", 35, 25, 20, 220, "RES-6-4"),
+        ):
+            caja_emp, _ = Caja.objects.get_or_create(
+                cliente=colima, nombre=nombre,
+                defaults={"largo_cm": largo, "ancho_cm": ancho, "alto_cm": alto,
+                          "peso_gr": tara, "posicion_rack": posicion},
+            )
+            CajaStock.objects.get_or_create(
+                caja=caja_emp, zona=CajaStock.RACK, defaults={"cantidad": 40},
+            )
+            CajaStock.objects.get_or_create(
+                caja=caja_emp, zona=CajaStock.PACKING, defaults={"cantidad": 10},
+            )
+
         self._folios_lote_a = {"mystery": p1.folio, "sin_stock": p2.folio,
-                               "replan": p3.folio}
+                               "replan": p3.folio, "stepper": p4.folio}
 
     def _incidencias(self, colima, pedidos, usuarios):
         from apps.core.models import EvidenciaFoto
@@ -1042,8 +1076,9 @@ class Command(BaseCommand):
             w(self.style.MIGRATE_HEADING("Escenarios Lote A (sep-2026)"))
             f = self._folios_lote_a
             w(f"  Mystery box: {f['mystery']} · Sin existencias: {f['sin_stock']} · "
-              f"Replan al generar: {f['replan']}")
+              f"Replan al generar: {f['replan']} · Stepper 2 cajas: {f['stepper']}")
             w("  Mezcal Nocturno viaja por 99minutos DIRECTO (integración por cliente)")
+            w("  Cajas de empaque de Colima: Chica y Mediana (rack 40 · packing 10 c/u)")
             w("")
         # División de envíos + tokens de rastreo para los pedidos del demo
         try:
