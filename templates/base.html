@@ -184,5 +184,17 @@ window.addEventListener("load", function () {
 </script>
 {% endif %}
 {% endblock %}
+<script>
+// Inputs numéricos: el scroll del trackpad/rueda NO cambia el valor (pedido
+// del piso: básculas y cantidades se alteraban sin querer al desplazarse).
+// blur() en wheel sobre el input enfocado: la página se desplaza, el número
+// se queda. Listener pasivo: cero costo en el scroll normal.
+document.addEventListener("wheel", function (ev) {
+  var activo = document.activeElement;
+  if (activo && activo.type === "number" && activo === ev.target) {
+    activo.blur();
+  }
+}, { passive: true });
+</script>
 </body>
 </html>
