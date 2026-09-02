@@ -210,6 +210,38 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         )
         self.assertEqual(respuesta.status_code, 404)
 
+    def _pedido_con_linea(self, reservada):
+        from apps.catalogo.models import SKU
+        from apps.pedidos.models import LineaPedido, Pedido
+        pedido = Pedido.objects.create(
+            cliente=self.colima, origen="manual", estado=Pedido.PENDIENTE,
+            comprador_nombre="Nivel Prueba", cp="01780",
+        )
+        sku, _ = SKU.objects.get_or_create(
+            cliente=self.colima, codigo="SKU-NIVEL", defaults={"descripcion": "Nivel"},
+        )
+        LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, reservada=reservada)
+        return pedido
+
+    def test_reintento_parcial_avisa_en_warning_y_completo_en_success(self):
+        # El color del flash refleja el resultado: quedan líneas sin reservar
+        # → warning (amarillo); todo reservado → success (verde).
+        from unittest.mock import patch
+
+        parcial = self._pedido_con_linea(reservada=False)
+        with patch("apps.pedidos.services.reintentar_reservas_pedido", return_value="parcial"):
+            respuesta = self.client.post(
+                self.url, {"accion": "reintentar_reservas", "folio": parcial.folio}, follow=True,
+            )
+        self.assertIn("warning", [m.level_tag for m in respuesta.context["messages"]])
+
+        completo = self._pedido_con_linea(reservada=True)
+        with patch("apps.pedidos.services.reintentar_reservas_pedido", return_value="completo"):
+            respuesta = self.client.post(
+                self.url, {"accion": "reintentar_reservas", "folio": completo.folio}, follow=True,
+            )
+        self.assertIn("success", [m.level_tag for m in respuesta.context["messages"]])
+
 
 class CancelarDesdeMesaTests(BasePedidoManualVista):
     def setUp(self):

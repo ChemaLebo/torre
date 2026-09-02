@@ -564,7 +564,9 @@ def _pedidos_reintentar_reservas(request):
 
     folio = (request.POST.get("folio") or "").strip()
     pedido = get_object_or_404(Pedido, folio=folio)
-    return reintentar_reservas_pedido(pedido, request.user)
+    resultado = reintentar_reservas_pedido(pedido, request.user)
+    completo = not pedido.lineas.filter(reservada=False).exists()
+    return resultado, completo
 
 
 @rol_requerido("mesa")
@@ -582,11 +584,13 @@ def pedidos(request):
                 messages.success(request, exito)
         elif accion == "reintentar_reservas":
             try:
-                exito = _pedidos_reintentar_reservas(request)
+                exito, completo = _pedidos_reintentar_reservas(request)
             except ValueError as exc:
                 messages.error(request, str(exc))
             else:
-                messages.success(request, exito)
+                # Verde solo si el pedido quedó completo; parcial = warning
+                # (amarillo): sigue faltando stock y Mesa debe verlo como tal.
+                (messages.success if completo else messages.warning)(request, exito)
         else:
             messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
         # PRG conservando los filtros activos (patrón _redirect_inventario):
