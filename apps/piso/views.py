@@ -1095,11 +1095,17 @@ def _empaque_caja(request, pedido):
             dims = tuple(valores) if all(v > 0 for v in valores) else None
         except (TypeError, ValueError):
             dims = None
+    tara_gr = None
+    if (request.POST.get("tara_gr") or "").strip():
+        try:
+            tara_gr = max(int(request.POST["tara_gr"]), 0)
+        except (TypeError, ValueError):
+            tara_gr = None
     try:
         empacar_caja(
             paquete, request.user,
             request.POST.get("peso_real_gr"), request.FILES.get("foto_contenido"),
-            caja=caja, dims=dims,
+            caja=caja, dims=dims, tara_gr=tara_gr,
         )
     except ValueError as exc:
         _recordar_peso_empaque(request, pedido)

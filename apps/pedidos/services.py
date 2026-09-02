@@ -1194,7 +1194,7 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
 
 
 @transaction.atomic
-def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=None):
+def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=None, tara_gr=None):
     """Empaque POR CAJA (wizard del carril único): peso contra SU plan + foto contenido.
 
     Valida el peso de la báscula contra el plan de la caja
@@ -1257,7 +1257,12 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
         neto = sum(
             (pl.linea_pedido.sku.peso_gr or 0) * pl.cantidad for pl in lineas_caja
         )
-    tara = fresco.caja.peso_gr if fresco.caja_id else 0
+    # Tara: la manual (bulto especial / caja propia) manda; si no, la de la
+    # caja elegida del catálogo; sin ninguna, 0 y el esperado es solo neto.
+    if tara_gr is not None:
+        tara = tara_gr
+    else:
+        tara = fresco.caja.peso_gr if fresco.caja_id else 0
     esperado = (neto + tara) if neto else (int(fresco.peso_kg * 1000) if fresco.peso_kg else 0)
     _verificar_peso(pedido, peso_real, esperado, caja=fresco.numero)
     if foto_contenido is None:

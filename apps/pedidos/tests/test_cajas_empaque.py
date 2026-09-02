@@ -78,3 +78,21 @@ class TaraCajaTests(TestCase):
         self.paquete.refresh_from_db()
         self.assertEqual(self.paquete.caja, self.caja)
         self.assertEqual(self.paquete.largo_cm, 60)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(), TORRE_PESO_MODO="bloquear")
+class TaraManualTests(TaraCajaTests):
+    def test_tara_manual_sin_caja_del_catalogo(self):
+        # Bulto especial: sin caja elegida, la tara tecleada entra al esperado.
+        with patch("apps.inventario.services.confirmar_pick"):
+            services.empacar_caja(self.paquete, None, 2350, foto(), tara_gr=350)
+        self.paquete.refresh_from_db()
+        self.assertEqual(self.paquete.peso_real_gr, 2350)  # 2000 neto + 350 manual
+
+    def test_tara_manual_le_gana_a_la_de_la_caja(self):
+        with patch("apps.inventario.services.confirmar_pick"):
+            services.empacar_caja(
+                self.paquete, None, 2500, foto(), caja=self.caja, tara_gr=500,
+            )
+        self.paquete.refresh_from_db()
+        self.assertEqual(self.paquete.caja, self.caja)  # la caja se guarda igual
