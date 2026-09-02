@@ -96,6 +96,31 @@
         FIRMÓ EL CHOFER DE {{ grupo.carrier|upper }} · SALE LO PALOMEADO
       </button>
     </form>
+    {% if grupo.puede_recolectar %}
+    {% if grupo.recoleccion %}
+    <p class="small mt"><span class="pill ok">recolección</span>
+      {{ grupo.carrier }} pasa el {{ grupo.recoleccion.fecha }} ({{ grupo.recoleccion.hora_desde }}-{{ grupo.recoleccion.hora_hasta }} h){% if grupo.recoleccion.folio_carrier %} · folio <span class="mono">{{ grupo.recoleccion.folio_carrier }}</span>{% endif %}</p>
+    {% else %}
+    <details class="colapsable mt">
+      <summary>Programar recolección de {{ grupo.carrier }}</summary>
+      <form method="post" class="colapsable-cuerpo">{% csrf_token %}
+        <input type="hidden" name="accion" value="recoleccion">
+        <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
+        <label for="rec-fecha-{{ grupo.carrier }}">Fecha</label>
+        <input type="date" name="fecha" id="rec-fecha-{{ grupo.carrier }}" value="{{ hoy_iso }}" required>
+        <div class="fila mt">
+          <label>De</label><input type="number" name="desde" value="10" min="0" max="23" style="max-width:80px" aria-label="Hora desde">
+          <label>a</label><input type="number" name="hasta" value="18" min="1" max="23" style="max-width:80px" aria-label="Hora hasta">
+          <span class="muted">h</span>
+        </div>
+        <label class="mt">Instrucciones</label>
+        <input type="text" name="instrucciones" maxlength="200" placeholder="Local 380 E — preguntar por almacén">
+        <p class="small muted">Se agenda UNA visita con TODAS las guías vivas de {{ grupo.carrier }}. El fee se cobra al balance de envia. Jamás doble booking el mismo día.</p>
+        <button class="btn primario" type="submit">Agendar recolección</button>
+      </form>
+    </details>
+    {% endif %}
+    {% endif %}
     {% endfor %}
     <p class="small muted">Firma del chofer en mano ANTES de tocar el botón. Lo palomeado se marca RECOLECTADO y se avisa al comprador; lo demás se queda para la siguiente recolección.</p>
     {% elif not corral.sin_guia %}

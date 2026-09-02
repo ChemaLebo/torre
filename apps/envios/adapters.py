@@ -374,6 +374,53 @@ class EnviaAdapter(CarrierAdapter):
         )
 
     # ── Operaciones ──
+    def agendar_recoleccion(self, carrier, fecha, hora_desde, hora_hasta,
+                            guias, instrucciones=""):
+        """POST /ship/pickup/: una visita del carrier por TODAS las guías.
+
+        El fee se cobra al balance. OJO vocabulario: el origen usa el mismo
+        mapa por carrier que generate (estafeta = CX); el ejemplo de la doc
+        de envia usa 2 dígitos — si un carrier rechaza el pickup por estado,
+        es una entrada más en ORIGEN_ESTADO_POR_CARRIER.
+        """
+        peso_total = 0.0
+        for g in guias:
+            paquete = getattr(g, "paquete", None)
+            if paquete is not None and paquete.peso_real_gr:
+                peso_total += paquete.peso_real_gr / 1000.0
+            elif paquete is not None and paquete.peso_kg:
+                peso_total += float(paquete.peso_kg)
+            else:
+                peso_total += (g.pedido.peso_real_gr or g.pedido.peso_esperado_gr or 1000) / 1000.0
+        payload = self._sanear({
+            "origin": self._origen(carrier),
+            "shipment": {
+                "carrier": carrier,
+                "type": 1,
+                "pickup": {
+                    "timeFrom": int(hora_desde),
+                    "timeTo": int(hora_hasta),
+                    "date": fecha.isoformat(),
+                    "instructions": instrucciones or "Recoleccion Local 380 E",
+                    "totalPackages": len(guias),
+                    "totalWeight": round(peso_total, 2),
+                    "weightUnit": "KG",
+                    "carrier": carrier,
+                    "trackingNumbers": [g.numero for g in guias],
+                },
+            },
+        })
+        cuerpo = self._post("/ship/pickup/", payload)
+        data = cuerpo.get("data") if isinstance(cuerpo, dict) else None
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if not isinstance(data, dict):
+            data = cuerpo if isinstance(cuerpo, dict) else {}
+        folio = (data.get("pickupNumber") or data.get("pickup_number")
+                 or data.get("confirmationNumber") or data.get("id") or "")
+        costo = data.get("totalPrice") or data.get("price")
+        return {"folio": str(folio), "costo": costo, "raw": cuerpo}
+
     def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
         """Una cotización real por lane. 'No cotiza' es resultado (ok=False), no error."""
         from .cotizador import CP_ESTADO  # lazy: mesa también importa esa tabla de ahí
@@ -1086,6 +1133,11 @@ class MockAdapter(CarrierAdapter):
             if getattr(pedido, "es_local", False)
             else Decimal("118.00")
         )
+
+    def agendar_recoleccion(self, carrier, fecha, hora_desde, hora_hasta,
+                            guias, instrucciones=""):
+        folio = f"PU-MOCK-{next(self._consecutivo):04d}"
+        return {"folio": folio, "costo": Decimal("85.00"), "raw": {"mock": True}}
 
     def generar(self, pedido, carrier, servicio, paquete=None):
         numero = f"MOCK-{next(self._consecutivo):04d}"

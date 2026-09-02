@@ -209,6 +209,11 @@ TORRE = {
     # 99min-vía-envia aceptan el code_shopify "DF" (default). Candidato
     # pendiente de probe: paquetexpress (sus 424 huelen a este mismo bug).
     "ORIGEN_ESTADO_POR_CARRIER": {"estafeta": "CX"},
+    # Carriers de envia que aceptan recolección PROGRAMADA (POST /ship/pickup/).
+    # El botón de Salida solo aparece para estos; noventa9Minutos no va aquí
+    # (su pickup es nativo: pickUpAfter en el create). Descubrimiento fino vía
+    # API de envia: pendiente (mapa manual mientras).
+    "CARRIERS_PICKUP": {"fedex": True, "estafeta": True, "paquetexpress": True, "dhl": True},
     # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
     # ventana (acuerdo con el founder). El sync recurrente no se acota.
     "BACKFILL_DIAS": 90,

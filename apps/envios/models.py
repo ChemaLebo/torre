@@ -229,6 +229,34 @@ class Paquete(models.Model):
         return self
 
 
+class Recoleccion(models.Model):
+    """Recolección agendada con un carrier vía envia (POST /ship/pickup/).
+
+    UNA visita por carrier por día (dedup por unique_together): el chofer se
+    lleva TODAS las guías listadas. El fee se cobra al balance de envia — el
+    costo se guarda para finanzas.
+    """
+
+    carrier = models.CharField(max_length=40)
+    fecha = models.DateField()
+    hora_desde = models.PositiveIntegerField(help_text="Hora entera 0-23 (timeFrom)")
+    hora_hasta = models.PositiveIntegerField(help_text="Hora entera 1-23 (timeTo)")
+    instrucciones = models.CharField(max_length=200, blank=True, default="")
+    folio_carrier = models.CharField(max_length=60, blank=True, default="")
+    costo = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    guias = models.ManyToManyField(Guia, related_name="recolecciones", blank=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("carrier", "fecha")]
+        ordering = ["-fecha", "carrier"]
+        verbose_name = "recolección"
+        verbose_name_plural = "recolecciones"
+
+    def __str__(self):
+        return f"{self.carrier} · {self.fecha} ({self.hora_desde}-{self.hora_hasta} h)"
+
+
 class PaqueteLinea(models.Model):
     """Qué unidades de qué línea del pedido van dentro de cada paquete."""
 

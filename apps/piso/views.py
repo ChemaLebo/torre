@@ -1248,6 +1248,8 @@ def salida(request):
             return _salida_generar_guia(request)
         if accion == "manifiesto":
             return _salida_manifiesto(request)
+        if accion == "recoleccion":
+            return _salida_recoleccion(request)
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:salida")
 
@@ -1299,8 +1301,22 @@ def salida(request):
             for clave, pedidos in sorted(por_carrier.items())
         ]
 
+    # Recolecciones programadas (Lote E): botón solo para carriers que
+    # aceptan pickup vía envia; una ya agendada se muestra en vez del form.
+    from django.utils import timezone as _tz
+
+    from apps.envios.models import Recoleccion
+    hoy = _tz.localdate()
+    pickup_map = settings.TORRE.get("CARRIERS_PICKUP") or {}
+    agendadas = {r.carrier: r for r in Recoleccion.objects.filter(fecha__gte=hoy)}
+    for grupo in grupos.values():
+        for gc in grupo["carriers"]:
+            gc["puede_recolectar"] = bool(pickup_map.get(gc["carrier"]))
+            gc["recoleccion"] = agendadas.get(gc["carrier"])
+
     contexto = {
         "seccion": "salida",
+        "hoy_iso": hoy.isoformat(),
         "corrales": [grupos[codigo] for codigo, _ in orden_corrales],
         "corral_local": CORRAL_LOCAL,
         "flota_propia": _flota_propia(),
@@ -1337,6 +1353,48 @@ def _salida_generar_guia(request):
             request,
             f"Guía {guia.numero} lista para {pedido.folio}. Imprime la etiqueta y pégala en la caja.",
         )
+    return redirect("piso:salida")
+
+
+def _salida_recoleccion(request):
+    """Agenda la recolección del carrier con TODAS sus guías vivas del corral."""
+    from datetime import date as _date
+
+    from apps.envios import services as envios_services
+    from apps.envios.models import Guia
+
+    carrier = (request.POST.get("carrier") or "").strip()
+    try:
+        fecha = _date.fromisoformat(request.POST.get("fecha") or "")
+        desde = int(request.POST.get("desde") or 10)
+        hasta = int(request.POST.get("hasta") or 18)
+    except (TypeError, ValueError):
+        messages.error(request, "Revisa la fecha y la ventana de la recolección.")
+        return redirect("piso:salida")
+    guias = [
+        g for g in Guia.objects.filter(carrier=carrier, estado=Guia.GUIA_CREADA)
+        .select_related("pedido")
+        if g.pedido.estado == "GUIA_GENERADA"
+    ]
+    try:
+        rec = envios_services.agendar_recoleccion(
+            carrier, fecha, desde, hasta, guias, request.user,
+            (request.POST.get("instrucciones") or "").strip(),
+        )
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("piso:salida")
+    except Exception as exc:  # ErrorCarrier: el piso debe saberlo
+        messages.error(
+            request,
+            f"El carrier no confirmó la recolección: {exc}. Reintenta o avisa a Mesa.",
+        )
+        return redirect("piso:salida")
+    messages.success(
+        request,
+        f"Recolección de {carrier} agendada: {rec.fecha} ({desde}-{hasta} h) · "
+        f"folio {rec.folio_carrier or 's/n'} · {len(guias)} guía(s).",
+    )
     return redirect("piso:salida")
 
 

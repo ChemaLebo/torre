@@ -19,7 +19,7 @@ from django.utils import timezone
 from apps.core.services import registrar_evento
 
 from .adapters import Adapter99Minutos, EnviaAdapter, ErrorCarrier, MockAdapter
-from .models import Guia, Paquete, ReglaEnvio
+from .models import Guia, Paquete, Recoleccion, ReglaEnvio
 
 CARRIER_LOCAL = "local"
 SERVICIO_LOCAL = "entrega_local"
@@ -367,6 +367,55 @@ def generar_guias(pedido):
 def generar_guia(pedido):
     """Compatibilidad: genera todas las guías del pedido y regresa la primera."""
     return generar_guias(pedido)[0]
+
+
+def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
+                        instrucciones=""):
+    """Agenda UNA recolección del carrier para todas las guías dadas.
+
+    Dedup duro: jamás doble booking del mismo carrier el mismo día (el fee se
+    cobra al balance). Solo carriers en TORRE["CARRIERS_PICKUP"] — 99minutos
+    no entra: su pickup es nativo (pickUpAfter en el create).
+    """
+    if not (settings.TORRE.get("CARRIERS_PICKUP") or {}).get(carrier):
+        raise ValueError(
+            f"{carrier} no acepta recolección programada por este medio: "
+            "entrega en sucursal (drop-off) o revisa la config."
+        )
+    if not guias:
+        raise ValueError("No hay guías listas de ese carrier para recolectar.")
+    if int(hora_hasta) <= int(hora_desde):
+        raise ValueError("La ventana de recolección está volteada: revisa las horas.")
+    existente = Recoleccion.objects.filter(carrier=carrier, fecha=fecha).first()
+    if existente is not None:
+        raise ValueError(
+            f"Ya hay recolección de {carrier} para el {fecha} "
+            f"(folio {existente.folio_carrier or 's/n'}); jamás doble booking — el fee se cobra."
+        )
+    adapter = _adapter_envia_generar()
+    resultado = adapter.agendar_recoleccion(
+        carrier, fecha, hora_desde, hora_hasta, guias, instrucciones,
+    )
+    recoleccion = Recoleccion.objects.create(
+        carrier=carrier, fecha=fecha,
+        hora_desde=int(hora_desde), hora_hasta=int(hora_hasta),
+        instrucciones=instrucciones or "",
+        folio_carrier=resultado.get("folio") or "",
+        costo=resultado.get("costo"),
+    )
+    recoleccion.guias.set(guias)
+    registrar_evento(
+        "recoleccion", recoleccion.pk, "recoleccion_agendada", actor=actor,
+        delta={
+            "carrier": carrier, "fecha": str(fecha),
+            "ventana": [int(hora_desde), int(hora_hasta)],
+            "folio": recoleccion.folio_carrier,
+            "costo": float(resultado["costo"]) if resultado.get("costo") else None,
+            "guias": [g.numero for g in guias],
+        },
+        motivo=f"Recolección {carrier} agendada con {len(guias)} guía(s).",
+    )
+    return recoleccion
 
 
 def poll_tracking():
