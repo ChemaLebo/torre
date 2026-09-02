@@ -208,7 +208,7 @@ class Command(BaseCommand):
                 "contacto_whatsapp": "+525522334455",
                 "buffer_stock": 0,
                 "carrier_preferente": "paquetexpress",
-                "integracion_envios": "envia",
+                "integracion_envios": "99minutos",
                 "naked_packing_local": False,
                 "guia_de_voz": "Voz sobria y artesanal. Nada de emojis; el mezcal se respeta.",
             },
@@ -216,6 +216,11 @@ class Command(BaseCommand):
         if creado:
             registrar_evento("cliente", nocturno.slug, "alta", cliente=nocturno,
                              motivo="Alta de segundo tenant (prueba de aislamiento)")
+        if nocturno.integracion_envios != "99minutos":
+            # Espejo del plan comercial (Lote A): el ancla viaja por envia,
+            # los demás clientes por 99minutos DIRECTO — flip por cliente.
+            nocturno.integracion_envios = "99minutos"
+            nocturno.save(update_fields=["integracion_envios"])
         return colima, nocturno
 
     def _tiendas(self, colima, nocturno):
@@ -772,6 +777,60 @@ class Command(BaseCommand):
     # Incidencias (DAN abierta con timeline · RET resuelta · FAL cerrada)
     # ────────────────────────────────────────────────────────────────────
 
+    def _escenarios_lote_a(self, colima, tiendas, skus):
+        """Escenarios de prueba del Lote A (sep-2026), idempotentes:
+
+        1) Mystery box (SKU es_kit virtual): el contenido se declara en
+           empaque; el gate de picking la deja pasar (nace reservada).
+        2) Pedido sin existencias: FAL + línea sin reservar — el gate de
+           picking lo rechaza hasta que Mesa reintente con stock nuevo.
+        3) Replan: plan viejo con carrier ya no permitido (noventa9Minutos en
+           cliente envia) — generar desde Salida re-cotiza + evento replan.
+        """
+        from apps.catalogo.models import SKU
+        from apps.envios.models import Paquete
+
+        t_mx = tiendas["colima-mx.myshopify.com"]
+
+        kit, _ = SKU.objects.get_or_create(
+            cliente=colima, codigo="COL-MYSTERY3",
+            defaults={"descripcion": "Mystery box 3 cervezas", "peso_gr": 350,
+                      "requiere_lote": False, "unidad": "caja",
+                      "precio_declarado": Decimal("399"), "es_kit": True},
+        )
+        p1, creado = self._crear_pedido(t_mx, self._payload(
+            88001, "Renata Kits", "+525511122233", "06700", "CDMX", "Ciudad de México",
+            [(kit, 1)], note="Escenario Lote A: mystery box — declara el contenido en empaque",
+        ))
+        if creado:
+            self._fechar_pedido(p1, creado=self._dt(0, 9))
+
+        agotado, _ = SKU.objects.get_or_create(
+            cliente=colima, codigo="COL-AGOTADO",
+            defaults={"descripcion": "Edición agotada (sin stock)", "peso_gr": 1200,
+                      "requiere_lote": False, "unidad": "pieza",
+                      "precio_declarado": Decimal("259")},
+        )
+        p2, creado = self._crear_pedido(t_mx, self._payload(
+            88002, "Saúl Faltante", "+525544455566", "44100", "Guadalajara", "Jalisco",
+            [(agotado, 2)], note="Escenario Lote A: sin existencias — gate de picking + reintento",
+        ))
+        if creado:
+            self._fechar_pedido(p2, creado=self._dt(0, 9, 30))
+
+        p3, creado = self._crear_pedido(t_mx, self._payload(
+            88003, "Irene Replan", "+525577788899", "72000", "Puebla", "Puebla",
+            [(skus["COLIMITA-SIX"], 1)], note="Escenario Lote A: replan al generar la guía",
+        ))
+        if creado:
+            self._avanzar(p3, "EMPACADO")
+            Paquete.objects.create(
+                pedido=p3, numero=1, peso_kg=Decimal("2.60"),
+                carrier="noventa9Minutos", servicio="local_next_day",
+            )
+        self._folios_lote_a = {"mystery": p1.folio, "sin_stock": p2.folio,
+                               "replan": p3.folio}
+
     def _incidencias(self, colima, pedidos, usuarios):
         from apps.core.models import EvidenciaFoto
         from apps.core.services import registrar_evento
@@ -943,6 +1002,7 @@ class Command(BaseCommand):
         self._stock_inicial(nocturno, skus, lotes, STOCK_NOCTURNO, dias_atras=7)
         self._asn_anunciada(colima, skus)
         pedidos = self._pedidos(colima, nocturno, tiendas, skus, usuarios)
+        self._escenarios_lote_a(colima, tiendas, skus)
         self._incidencias(colima, pedidos, usuarios)
         self._conteos(skus)
         self._sync(tiendas)
@@ -978,6 +1038,13 @@ class Command(BaseCommand):
         for username, password, _rol, _cliente, _pin, _nombre, _super in USUARIOS:
             w(f"  {username:<9} {password:<14} {etiquetas[username]}")
         w("")
+        if getattr(self, "_folios_lote_a", None):
+            w(self.style.MIGRATE_HEADING("Escenarios Lote A (sep-2026)"))
+            f = self._folios_lote_a
+            w(f"  Mystery box: {f['mystery']} · Sin existencias: {f['sin_stock']} · "
+              f"Replan al generar: {f['replan']}")
+            w("  Mezcal Nocturno viaja por 99minutos DIRECTO (integración por cliente)")
+            w("")
         # División de envíos + tokens de rastreo para los pedidos del demo
         try:
             from apps.envios.cotizador import planificar_envio

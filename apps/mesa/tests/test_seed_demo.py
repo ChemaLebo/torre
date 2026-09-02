@@ -124,7 +124,9 @@ class SeedDemoTests(TestCase):
         self.assertEqual(ret.estado, Incidencia.RESUELTA)
         self.assertIsNotNone(ret.ts_resolucion)
 
-        fal = Incidencia.objects.get(tipo="FAL")
+        # El escenario Lote A (sin existencias) agrega una FAL ABIERTA: esta
+        # aserción apunta a la FAL histórica cerrada del demo.
+        fal = Incidencia.objects.get(tipo="FAL", estado=Incidencia.CERRADA)
         self.assertEqual(fal.estado, Incidencia.CERRADA)
         self.assertIsNotNone(fal.ts_cierre)
         # Al cerrar la única incidencia del pedido, el flag se libera.
@@ -228,3 +230,27 @@ class SeedDemoTests(TestCase):
         correr_seed()
         despues = {m.__name__: m.objects.count() for m in modelos}
         self.assertEqual(antes, despues, "el seed duplicó entidades al correr dos veces")
+
+
+class SeedEscenariosLoteATests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        call_command("seed_demo", verbosity=0)
+
+    def test_escenarios_lote_a_sembrados(self):
+        from apps.catalogo.models import SKU
+        from apps.core.models import Cliente
+        from apps.pedidos.models import LineaPedido, Pedido
+
+        kit = SKU.objects.get(codigo="COL-MYSTERY3")
+        self.assertTrue(kit.es_kit)
+        linea_kit = LineaPedido.objects.get(sku=kit)
+        self.assertTrue(linea_kit.reservada)  # virtual: pasa el gate de picking
+        self.assertTrue(
+            LineaPedido.objects.filter(sku__codigo="COL-AGOTADO", reservada=False).exists()
+        )
+        replan = Pedido.objects.get(shopify_order_id="88003")
+        self.assertEqual(replan.paquetes.get().carrier, "noventa9Minutos")
+        self.assertEqual(
+            Cliente.objects.get(slug="mezcal-nocturno").integracion_envios, "99minutos",
+        )
