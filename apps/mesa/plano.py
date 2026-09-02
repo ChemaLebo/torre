@@ -22,42 +22,52 @@ from django.utils import timezone
 # Zona del almacén en el plano: x 660-1300, y 680-1980.
 RACK_X = 690
 RACK_ANCHO = 580
-RACK_ALTO = 56
 RACK_Y0 = 760
-RACK_PASO_FILA = 174  # dos racks pegados (espalda con espalda) + pasillo
-RACK_FILAS = 7
+RACK_Y_FIN = 1960
 
 
 def racks_bodega():
-    """Los 14 racks del plano con su ubicación real asignada (o vacía).
+    """Racks REALES agrupados desde las Ubicaciones (picking/reserva).
 
-    Regresa dicts listos para el SVG: x, y, w, h, cx/cy (centro del texto)
-    y codigo ("" si el rack no tiene ubicación asignada → se pinta tenue).
+    Un código PIC-3-2 = rack 3, piso 2: cada rack se dibuja como un bloque
+    con UNA fila por piso (los 4 pisos se ven, no solo 2 — pedido de Chema,
+    sep-2026). Códigos sin patrón rack-piso van como bloque de un piso.
+    Regresa [{etiqueta, filas: [{x, y, w, h, cx, cy, codigo}]}].
     """
+    import re
+
     from apps.catalogo.models import Ubicacion  # lazy por contrato
 
-    codigos = list(
+    patron = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
+    grupos = {}
+    for codigo in (
         Ubicacion.objects.filter(
             tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA], activo=True,
-        )
-        .order_by("codigo")
-        .values_list("codigo", flat=True)
-    )
+        ).order_by("codigo").values_list("codigo", flat=True)
+    ):
+        m = patron.match(codigo)
+        clave = f"{m.group(1)}-{m.group(2)}" if m else codigo
+        piso = int(m.group(3)) if m else 1
+        grupos.setdefault(clave, []).append((piso, codigo))
+
+    if not grupos:
+        return []
+    pitch = (RACK_Y_FIN - RACK_Y0) // max(len(grupos), 1)
     racks = []
-    for fila in range(RACK_FILAS):
-        y_fila = RACK_Y0 + fila * RACK_PASO_FILA
-        for nivel in (0, 1):
-            indice = len(racks)
-            y = y_fila + nivel * RACK_ALTO
-            racks.append({
-                "x": RACK_X,
-                "y": y,
-                "w": RACK_ANCHO,
-                "h": RACK_ALTO,
+    for indice, (clave, pisos) in enumerate(sorted(grupos.items())):
+        pisos.sort()
+        y_rack = RACK_Y0 + indice * pitch
+        alto_fila = max(24, min(52, (pitch - 26) // max(len(pisos), 1)))
+        filas = []
+        for j, (_, codigo) in enumerate(pisos):
+            y = y_rack + j * alto_fila
+            filas.append({
+                "x": RACK_X, "y": y, "w": RACK_ANCHO, "h": alto_fila,
                 "cx": RACK_X + RACK_ANCHO // 2,
-                "cy": y + RACK_ALTO // 2 + 9,  # baseline del texto centrado
-                "codigo": codigos[indice] if indice < len(codigos) else "",
+                "cy": y + alto_fila // 2 + 8,
+                "codigo": codigo,
             })
+        racks.append({"etiqueta": clave, "filas": filas})
     return racks
 
 
@@ -175,7 +185,19 @@ def zonas_bodega(cliente=None):
         grupo["pedidos"].append(pedido)
         grupo["paquetes"] += pedido.n_paquetes
 
+    # Corrales del PLANO: subs posicionados dinámicamente (zona x 85..616).
+    corrales_svg = []
+    n_corr = len(orden_corrales) or 1
+    ancho = max(80, (531 - (n_corr - 1) * 18) // n_corr)
+    for i, (codigo, _nombre) in enumerate(orden_corrales):
+        x = 85 + i * (ancho + 18)
+        corrales_svg.append({
+            "x": x, "y": 290, "w": ancho, "h": 235,
+            "cx": x + ancho // 2, "cy": 415, "codigo": codigo,
+        })
+
     zonas = {
+        "corrales_svg": corrales_svg,
         "ordenes": ordenes,
         "putaway": putaway,
         "almacen": almacen,

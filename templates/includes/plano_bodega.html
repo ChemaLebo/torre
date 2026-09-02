@@ -47,12 +47,10 @@ visibilidad. Sin JS, todos los paneles quedan visibles apilados.
   <g class="plano-zona zona-paquetes_listos" data-zona="paquetes_listos" aria-label="Paquetes listos, corrales de salida">
     <rect class="zona-fondo" x="60" y="180" width="580" height="380" rx="10"/>
     <text class="plano-etiqueta" x="85" y="240">Paquetes listos</text>
-    <rect class="plano-sub" x="85" y="290" width="165" height="235" rx="6"/>
-    <text class="chica" x="167" y="415" text-anchor="middle">SAL-PQX</text>
-    <rect class="plano-sub" x="268" y="290" width="165" height="235" rx="6"/>
-    <text class="chica" x="350" y="415" text-anchor="middle">SAL-LOCAL</text>
-    <rect class="plano-sub" x="451" y="290" width="165" height="235" rx="6"/>
-    <text class="chica" x="533" y="415" text-anchor="middle">SAL-OTRO</text>
+    {% for c in corrales_svg %}
+    <rect class="plano-sub" x="{{ c.x }}" y="{{ c.y }}" width="{{ c.w }}" height="{{ c.h }}" rx="6"/>
+    <text class="chica" x="{{ c.cx }}" y="{{ c.cy }}" text-anchor="middle">{{ c.codigo }}</text>
+    {% endfor %}
     <g class="plano-badge"><circle cx="592" cy="230" r="36"/><text x="592" y="242" text-anchor="middle">{{ badges.paquetes_listos }}</text></g>
   </g>
 
@@ -83,8 +81,10 @@ visibilidad. Sin JS, todos los paneles quedan visibles apilados.
     <rect class="zona-fondo" x="660" y="680" width="640" height="1300" rx="10"/>
     <text class="plano-etiqueta" x="690" y="735">Almacén</text>
     {% for rack in racks %}
-    <rect class="plano-rack{% if not rack.codigo %} vacio{% endif %}" x="{{ rack.x }}" y="{{ rack.y }}" width="{{ rack.w }}" height="{{ rack.h }}"/>
-    {% if rack.codigo %}<text class="plano-rack-codigo" x="{{ rack.cx }}" y="{{ rack.cy }}" text-anchor="middle">{{ rack.codigo }}</text>{% endif %}
+    {% for fila in rack.filas %}
+    <rect class="plano-rack" x="{{ fila.x }}" y="{{ fila.y }}" width="{{ fila.w }}" height="{{ fila.h }}"/>
+    <text class="plano-rack-codigo" x="{{ fila.cx }}" y="{{ fila.cy }}" text-anchor="middle">{{ fila.codigo }}</text>
+    {% endfor %}
     {% endfor %}
     <g class="plano-badge"><circle cx="1252" cy="732" r="36"/><text x="1252" y="744" text-anchor="middle">{{ badges.almacen }}</text></g>
   </g>
