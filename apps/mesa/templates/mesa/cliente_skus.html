@@ -45,6 +45,7 @@
             <th class="derecha">Reorden</th>
             <th class="derecha">Disponible</th>
             <th>Estado</th>
+            <th>Shopify</th>
             <th></th>
           </tr>
         </thead>
@@ -68,6 +69,7 @@
             <td class="derecha mono">{{ sku.punto_reorden }}</td>
             <td class="derecha mono">{{ sku.disponible }}</td>
             <td>{% if sku.activo %}<span class="pill ok">activo</span>{% else %}<span class="pill crit">inactivo</span>{% endif %}</td>
+            <td>{% if tienda_principal %}<a class="small" href="https://{{ tienda_principal.dominio }}/admin/products?query={{ sku.codigo|urlencode }}" target="_blank" rel="noopener" title="Buscar el producto por SKU en el admin de Shopify">abrir ↗</a>{% else %}<span class="small muted">—</span>{% endif %}</td>
             <td class="derecha"><a class="btn chico" href="?editar={{ sku.pk }}#form-sku">editar</a></td>
           </tr>
           {% empty %}

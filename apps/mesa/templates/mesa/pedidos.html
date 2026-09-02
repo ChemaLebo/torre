@@ -52,7 +52,13 @@
       <tr>
         <td class="mono">{{ pedido.folio }}</td>
         <td>{{ pedido.cliente.nombre }}</td>
-        <td class="small">{% if pedido.tienda %}{{ pedido.tienda.dominio }}{% else %}manual{% endif %}</td>
+        <td class="small">
+          {% if pedido.tienda %}{{ pedido.tienda.dominio }}
+            {% if pedido.shopify_order_id %}
+            <br><a class="mono" href="https://{{ pedido.tienda.dominio }}/admin/orders/{{ pedido.shopify_order_id }}" target="_blank" rel="noopener" title="Abrir la orden en el admin de Shopify">#{{ pedido.shopify_order_id }} ↗</a>
+            {% endif %}
+          {% else %}manual{% endif %}
+        </td>
         <td>{{ pedido.comprador_nombre|default:"—" }}</td>
         <td>{% if pedido.es_local %}<span class="pill accent">local</span>{% else %}<span class="small">CP {{ pedido.cp|default:"—" }}</span>{% endif %}</td>
         <td>

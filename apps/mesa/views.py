@@ -1637,6 +1637,9 @@ def cliente_skus(request, pk):
             messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
             return redirect("mesa:cliente_skus", pk=cliente.pk)
 
+    # Link al admin de Shopify (por SKU): con la primera tienda activa basta —
+    # la búsqueda por query encuentra el producto sin guardar product_id.
+    tienda_principal = cliente.tiendas.filter(activo=True).first()
     sku_editar = None
     if form is None:
         editar_id = request.GET.get("editar", "").strip()
@@ -1680,6 +1683,7 @@ def cliente_skus(request, pk):
         "skus": skus,
         "form": form,
         "sku_editar": sku_editar,
+        "tienda_principal": tienda_principal,
         "categorias": list(Categoria.objects.filter(cliente=cliente)),
     })
 
