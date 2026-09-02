@@ -262,6 +262,12 @@ if "test" in sys.argv:
 # Fallback runtime: si el directo de 99minutos falla, re-cotizar/re-generar ese
 # carrier por envia (tarifa de envia, auditado con evento). Default apagado.
 NOVENTA9_FALLBACK_ENVIA = os.environ.get("NOVENTA9_FALLBACK_ENVIA", "0") == "1"
+# Check de báscula en empaque: "bloquear" | "avisar" | "off". Off por default:
+# el peso esperado suma solo productos (la tara de la caja aún no existe en el
+# sistema) y bloquear/avisar gritaría en cada empaque legítimo. La escalera:
+# off hoy → avisar cuando el catálogo de cajas aporte la tara → bloquear
+# cuando los pesos del catálogo sean reales. Cada salto es un flip de .env.
+TORRE_PESO_MODO = os.environ.get("TORRE_PESO_MODO", "off")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")  # sin token → consola
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-01")

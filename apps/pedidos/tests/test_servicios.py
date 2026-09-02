@@ -902,19 +902,41 @@ class EmpaqueTests(BaseServicios):
         # después vía cerrar_caja, con la etiqueta pegada.
         self.assertEqual(set(fotos.values_list("tipo", flat=True)), {"contenido"})
 
-    # Check de peso APAGADO (2026-08-28, ver empacar()): el test del bloqueo
-    # regresa cuando el catálogo de cajas aporte la tara.
-    # def test_empacar_peso_fuera_de_tolerancia_truena(self):
-    #     with patch("apps.inventario.services.confirmar_pick"):
-    #         with self.assertRaises(ValueError) as ctx:
-    #             services.empacar(
-    #                 self.pedido, actor=None, peso_real_gr=6000, fotos=[foto(), foto("caja.jpg")],
-    #             )
-    #     self.assertIn("peso", str(ctx.exception).lower())
-    #     self.pedido.refresh_from_db()
-    #     self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-    #     # El peso truena antes de persistir evidencia.
-    #     self.assertEqual(EvidenciaFoto.objects.count(), 0)
+    # TORRE_PESO_MODO: bloquear = conducta contractual; avisar = evento y
+    # pasa; off (default actual, sin tara de cajas) = ni check ni evento.
+    @override_settings(TORRE_PESO_MODO="bloquear")
+    def test_empacar_peso_fuera_de_tolerancia_truena(self):
+        with patch("apps.inventario.services.confirmar_pick"):
+            with self.assertRaises(ValueError) as ctx:
+                services.empacar(
+                    self.pedido, actor=None, peso_real_gr=6000, fotos=[foto(), foto("caja.jpg")],
+                )
+        self.assertIn("peso", str(ctx.exception).lower())
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+        # El peso truena antes de persistir evidencia.
+        self.assertEqual(EvidenciaFoto.objects.count(), 0)
+
+    @override_settings(TORRE_PESO_MODO="avisar")
+    def test_empacar_peso_fuera_con_modo_avisar_pasa_y_audita(self):
+        from apps.core.models import EventoAuditoria
+        with patch("apps.inventario.services.confirmar_pick"):
+            services.empacar(self.pedido, actor=None, peso_real_gr=6000, fotos=[foto()])
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(self.pedido.pk), accion="peso_discrepante",
+        )
+        self.assertEqual(evento.delta["esperado_gr"], 4800)
+        self.assertEqual(evento.delta["bascula_gr"], 6000)
+
+    def test_empacar_peso_fuera_con_modo_off_pasa_sin_evento(self):
+        from apps.core.models import EventoAuditoria
+        with patch("apps.inventario.services.confirmar_pick"):
+            services.empacar(self.pedido, actor=None, peso_real_gr=6000, fotos=[foto()])
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)
+        self.assertFalse(EventoAuditoria.objects.filter(accion="peso_discrepante").exists())
 
     def test_empacar_con_lineas_sin_pickear_truena(self):
         self.linea.cantidad_pickeada = 1

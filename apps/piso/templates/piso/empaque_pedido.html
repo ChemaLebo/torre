@@ -214,7 +214,7 @@ function agregarRenglonKit(kitPk) {
 </details>
 
 <div class="card mt">
-  <div class="titulo"><h2>Foto y báscula</h2><span class="pill accent">±{{ tolerancia }}%</span></div>
+  <div class="titulo"><h2>Foto y báscula</h2>{% if peso_modo != "off" %}<span class="pill accent">±{{ tolerancia }}%</span>{% endif %}</div>
   {% if hubo_error_post %}
   <div class="banner warn"><span class="foco"></span>
     El intento anterior no pasó: el navegador no conserva la foto —
@@ -222,9 +222,18 @@ function agregarRenglonKit(kitPk) {
   </div>
   {% endif %}
   <p class="small">
+    {% if peso_modo == "off" %}
+    Pesa la caja y captura lo que marque la báscula.
+    {% else %}
     {% if paso == "caja" %}El plan de esta caja marca <b class="mono">{{ peso_esperado }} g</b>.{% else %}Peso esperado: <b class="mono">{{ peso_esperado }} g</b>.{% endif %}
+    {% if peso_modo == "bloquear" %}
     La báscula debe marcar entre <b class="mono">{{ peso_min }} g</b> y <b class="mono">{{ peso_max }} g</b>.
     Si no cuadra, abre la caja y revisa el contenido: NO fuerces el número.
+    {% else %}
+    Si la báscula se sale de <b class="mono">{{ peso_min }}–{{ peso_max }} g</b> se registra
+    un aviso para Mesa y el empaque continúa.
+    {% endif %}
+    {% endif %}
   </p>
   <form method="post" enctype="multipart/form-data" id="form-empaque">{% csrf_token %}
     {% if paso == "caja" %}
@@ -242,7 +251,8 @@ function agregarRenglonKit(kitPk) {
     <input type="number" name="peso_real_gr" id="peso_real_gr" min="1" inputmode="numeric"
            placeholder="{{ peso_esperado }}" autocomplete="off" required
            {% if peso_previo %}value="{{ peso_previo }}"{% endif %}
-           data-min="{{ peso_min }}" data-max="{{ peso_max }}" data-esperado="{{ peso_esperado }}">
+           data-min="{{ peso_min }}" data-max="{{ peso_max }}" data-esperado="{{ peso_esperado }}"
+           data-modo="{{ peso_modo }}">
     <div class="banner crit mt" id="peso-fuera" hidden><span class="foco"></span>
       <span id="peso-fuera-texto"></span>
     </div>
@@ -272,9 +282,10 @@ function agregarRenglonKit(kitPk) {
   var existentes = {% if paso == "legacy" %}{{ fotos_existentes }}{% else %}0{% endif %};
   var minimo = Number(peso.dataset.min), maximo = Number(peso.dataset.max);
   var esperado = Number(peso.dataset.esperado);
+  var modo = peso.dataset.modo || "off";
 
   function pesoFuera(valor) {
-    return esperado > 0 && (valor < minimo || valor > maximo);
+    return modo !== "off" && esperado > 0 && (valor < minimo || valor > maximo);
   }
   function revisar() {
     var fotos = existentes + (foto.files.length ? 1 : 0);
@@ -294,18 +305,19 @@ function agregarRenglonKit(kitPk) {
     campo.addEventListener("change", revisar);
     campo.addEventListener("input", revisar);
   });
-  // Check de peso APAGADO (2026-08-28): el bloqueo del submit por rango se
-  // comenta junto con los raises del server (pesos de catálogo sin tara de
-  // caja). La banda roja informativa de revisar() se queda.
-  // form.addEventListener("submit", function (ev) {
-  //   var valor = Number(peso.value);
-  //   if (peso.value && pesoFuera(valor)) {
-  //     ev.preventDefault();
-  //     revisar();
-  //     if (window.Feedback) Feedback.error("Peso fuera de rango: revisa el contenido.");
-  //     peso.focus();
-  //   }
-  // });
+  // Validación client-side ANTES de subir — SOLO en modo bloquear: peso fuera
+  // de rango → banda roja, NO se sube nada y el input de foto conserva su
+  // archivo. En avisar la banda se muestra pero el submit pasa (el server
+  // registra el evento); en off ni banda ni bloqueo.
+  form.addEventListener("submit", function (ev) {
+    var valor = Number(peso.value);
+    if (modo === "bloquear" && peso.value && pesoFuera(valor)) {
+      ev.preventDefault();
+      revisar();
+      if (window.Feedback) Feedback.error("Peso fuera de rango: revisa el contenido.");
+      peso.focus();
+    }
+  });
   revisar();
 })();
 </script>
