@@ -48,3 +48,24 @@ class CajasMesaTests(TestCase):
         self.client.force_login(piso)
         r = self.client.get(self.url)
         self.assertNotEqual(r.status_code, 200)
+
+
+class CajaStockTests(CajasMesaTests):
+    def test_entrada_y_restock_a_packing(self):
+        from apps.catalogo.models import CajaStock
+        self.client.post(self.url, self._datos())
+        caja = Caja.objects.get(cliente=self.cliente, nombre="Mediana")
+
+        self.client.post(self.url, {"accion": "entrada_rack", "caja_id": caja.pk, "cantidad": 50})
+        self.client.post(self.url, {"accion": "mover_packing", "caja_id": caja.pk, "cantidad": 10})
+        rack = CajaStock.objects.get(caja=caja, zona="rack")
+        packing = CajaStock.objects.get(caja=caja, zona="packing")
+        self.assertEqual((rack.cantidad, packing.cantidad), (40, 10))
+
+        # Mover más de lo que hay en rack: error y nada se mueve.
+        r = self.client.post(
+            self.url, {"accion": "mover_packing", "caja_id": caja.pk, "cantidad": 99}, follow=True,
+        )
+        self.assertContains(r, "no alcanza")
+        rack.refresh_from_db()
+        self.assertEqual(rack.cantidad, 40)

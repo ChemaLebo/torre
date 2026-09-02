@@ -1489,6 +1489,50 @@ def _guardar_tienda(request, cliente):
     )
 
 
+def _cajas_mover(request, cliente):
+    """Ledger de cajas: entrada al rack o restock rack → packing, con evento."""
+    from apps.catalogo.models import Caja, CajaStock
+    from apps.core.services import registrar_evento
+
+    caja = get_object_or_404(Caja, pk=request.POST.get("caja_id"), cliente=cliente)
+    try:
+        cantidad = int(request.POST.get("cantidad") or 0)
+    except (TypeError, ValueError):
+        cantidad = 0
+    destino = redirect("mesa:cliente_cajas", pk=cliente.pk)
+    if cantidad <= 0:
+        messages.error(request, "Captura cuántas cajas mueves (entero mayor a cero).")
+        return destino
+    rack, _ = CajaStock.objects.get_or_create(caja=caja, zona=CajaStock.RACK)
+    packing, _ = CajaStock.objects.get_or_create(caja=caja, zona=CajaStock.PACKING)
+    if request.POST["accion"] == "entrada_rack":
+        rack.cantidad += cantidad
+        rack.save(update_fields=["cantidad"])
+        accion = "cajas_entrada"
+        motivo = f"Entraron {cantidad} caja(s) {caja.nombre} al rack."
+    else:
+        if rack.cantidad < cantidad:
+            messages.error(
+                request,
+                f"Solo hay {rack.cantidad} caja(s) {caja.nombre} en rack; "
+                f"no alcanza para mover {cantidad}.",
+            )
+            return destino
+        rack.cantidad -= cantidad
+        packing.cantidad += cantidad
+        rack.save(update_fields=["cantidad"])
+        packing.save(update_fields=["cantidad"])
+        accion = "cajas_restock_packing"
+        motivo = f"Restock: {cantidad} caja(s) {caja.nombre} del rack a packing."
+    messages.success(request, motivo)
+    registrar_evento(
+        "caja", caja.pk, accion, actor=request.user, cliente=cliente,
+        delta={"cantidad": cantidad, "rack": rack.cantidad, "packing": packing.cantidad},
+        motivo=motivo,
+    )
+    return destino
+
+
 @rol_requerido("mesa")
 def cliente_cajas(request, pk):
     """Catálogo de cajas de empaque del cliente: lista + alta/edición."""
@@ -1496,6 +1540,8 @@ def cliente_cajas(request, pk):
     from .forms import FormCaja
 
     cliente = get_object_or_404(Cliente, pk=pk)
+    if request.method == "POST" and request.POST.get("accion") in ("entrada_rack", "mover_packing"):
+        return _cajas_mover(request, cliente)
     if request.method == "POST":
         form = FormCaja(request.POST)
         if form.is_valid():
@@ -1523,11 +1569,16 @@ def cliente_cajas(request, pk):
                 "caja_id": editar.pk, "nombre": editar.nombre,
                 "largo_cm": editar.largo_cm, "ancho_cm": editar.ancho_cm,
                 "alto_cm": editar.alto_cm, "peso_gr": editar.peso_gr,
+                "posicion_rack": editar.posicion_rack,
                 "activo": editar.activo,
             })
+    cajas = list(Caja.objects.filter(cliente=cliente).prefetch_related("stock"))
+    for c in cajas:
+        c.en_rack = next((x.cantidad for x in c.stock.all() if x.zona == "rack"), 0)
+        c.en_packing = next((x.cantidad for x in c.stock.all() if x.zona == "packing"), 0)
     return render(request, "mesa/cliente_cajas.html", {
         "cliente": cliente,
-        "cajas": Caja.objects.filter(cliente=cliente),
+        "cajas": cajas,
         "form": form,
         "editar": editar,
     })

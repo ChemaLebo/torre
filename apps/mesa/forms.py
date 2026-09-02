@@ -365,6 +365,10 @@ class FormCaja(forms.Form):
         label="Tara (g)", min_value=0, initial=0,
         help_text="Peso de la caja vacía con su relleno estándar — vuelve honesto el check de báscula.",
     )
+    posicion_rack = forms.CharField(
+        label="Posición en rack", max_length=40, required=False,
+        help_text="Dónde se almacena el fajo (ej. RES-6-4).",
+    )
     activo = forms.BooleanField(label="Activa", required=False, initial=True)
 
     def datos_caja(self):
@@ -373,6 +377,7 @@ class FormCaja(forms.Form):
             "nombre": d["nombre"].strip(),
             "largo_cm": d["largo_cm"], "ancho_cm": d["ancho_cm"], "alto_cm": d["alto_cm"],
             "peso_gr": d["peso_gr"], "activo": d.get("activo", False),
+            "posicion_rack": (d.get("posicion_rack") or "").strip(),
         }
 
 

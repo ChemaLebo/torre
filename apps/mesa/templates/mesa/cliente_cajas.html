@@ -16,8 +16,16 @@
     <div class="corral-fila">
       <div class="crece">
         <b>{{ c.nombre }}</b> <span class="mono small">{{ c.largo_cm }}×{{ c.ancho_cm }}×{{ c.alto_cm }} cm · tara {{ c.peso_gr }} g</span>
+        {% if c.posicion_rack %}<span class="mono small">· {{ c.posicion_rack }}</span>{% endif %}
         {% if not c.activo %}<span class="pill crit">inactiva</span>{% endif %}
+        <div class="small">Rack: <b class="mono">{{ c.en_rack }}</b> · Packing: <b class="mono">{{ c.en_packing }}</b></div>
       </div>
+      <form method="post" class="fila">{% csrf_token %}
+        <input type="hidden" name="caja_id" value="{{ c.pk }}">
+        <input type="number" name="cantidad" min="1" placeholder="N" style="max-width:70px" aria-label="Cantidad de cajas a mover">
+        <button class="btn chico" name="accion" value="entrada_rack" type="submit" title="Entrada de cajas nuevas al rack">+ rack</button>
+        <button class="btn chico" name="accion" value="mover_packing" type="submit" title="Restock del rack a las mesas de packing">→ packing</button>
+      </form>
       <a class="btn chico" href="?editar={{ c.pk }}">editar</a>
     </div>
     {% empty %}
@@ -38,6 +46,9 @@
         <div><label for="{{ form.alto_cm.id_for_label }}">{{ form.alto_cm.label }}</label>{{ form.alto_cm }}</div>
       </div>
       {{ form.largo_cm.errors }}{{ form.ancho_cm.errors }}{{ form.alto_cm.errors }}
+      <label class="mt" for="{{ form.posicion_rack.id_for_label }}">{{ form.posicion_rack.label }}</label>
+      {{ form.posicion_rack }}
+      <p class="small muted">{{ form.posicion_rack.help_text }}</p>
       <label class="mt" for="{{ form.peso_gr.id_for_label }}">{{ form.peso_gr.label }}</label>
       {{ form.peso_gr }}{{ form.peso_gr.errors }}
       <p class="small muted">{{ form.peso_gr.help_text }}</p>

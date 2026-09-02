@@ -125,6 +125,10 @@ class Caja(models.Model):
     peso_gr = models.PositiveIntegerField(
         default=0, help_text="Tara: peso de la caja vacía con relleno estándar",
     )
+    posicion_rack = models.CharField(
+        max_length=40, blank=True, default="",
+        help_text="Dónde se almacena el fajo de cajas (ej. RES-6-4)",
+    )
     activo = models.BooleanField(default=True)
     creado = models.DateTimeField(auto_now_add=True)
 
@@ -136,6 +140,31 @@ class Caja(models.Model):
 
     def __str__(self):
         return f"{self.nombre} ({self.largo_cm}×{self.ancho_cm}×{self.alto_cm} cm) · {self.cliente.nombre}"
+
+
+class CajaStock(models.Model):
+    """Existencias de cajas de empaque por zona: rack (almacén) y packing.
+
+    'Restock a packing' mueve del rack a las mesas; la entrada de cajas
+    nuevas suma al rack. Ledger simple con evento — las cajas no son SKUs
+    y no tocan el kardex de producto.
+    """
+
+    RACK = "rack"
+    PACKING = "packing"
+    ZONAS = [(RACK, "Rack / almacén"), (PACKING, "Packing")]
+
+    caja = models.ForeignKey(Caja, on_delete=models.CASCADE, related_name="stock")
+    zona = models.CharField(max_length=10, choices=ZONAS)
+    cantidad = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = [("caja", "zona")]
+        verbose_name = "stock de caja"
+        verbose_name_plural = "stock de cajas"
+
+    def __str__(self):
+        return f"{self.caja.nombre} · {self.zona}: {self.cantidad}"
 
 
 class Ubicacion(models.Model):
