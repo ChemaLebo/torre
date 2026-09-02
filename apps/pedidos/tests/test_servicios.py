@@ -1099,3 +1099,29 @@ class EntregaPresuntaTests(BaseServicios):
         segunda = services.cerrar_entregas_presuntas()
         self.assertEqual(len(primera), 1)
         self.assertEqual(len(segunda), 0)
+
+
+class IniciarPickingGateTests(BaseServicios):
+    """Gate de reservas (sep-2026): sin reserva no hay picking — la reserva
+    es la garantía de existencias; los kits (virtuales) pasan."""
+
+    def test_linea_sin_reservar_bloquea_el_picking(self):
+        pedido = self.pedido_directo()
+        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=1, reservada=False)
+        with self.assertRaises(ValueError) as ctx:
+            services.iniciar_picking(pedido, actor=None)
+        self.assertIn("COL-SIX", str(ctx.exception))
+        self.assertIn("reintentar", str(ctx.exception))
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+
+    def test_kit_virtual_reservado_si_arranca(self):
+        kit = SKU.objects.create(
+            cliente=self.cliente, codigo="KIT-1", descripcion="Mystery", es_kit=True,
+        )
+        pedido = self.pedido_directo()
+        LineaPedido.objects.create(pedido=pedido, sku=kit, cantidad=1, reservada=True)
+        services.iniciar_picking(pedido, actor=None)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.EN_PICKING)
+

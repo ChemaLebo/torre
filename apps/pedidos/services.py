@@ -839,7 +839,23 @@ def crear_pedido_manual(cliente, *, comprador_nombre, comprador_tel="",
 # ── Picking ──
 
 def iniciar_picking(pedido, actor):
-    """PENDIENTE → EN_PICKING. La ola del piso empieza aquí."""
+    """PENDIENTE → EN_PICKING. La ola del piso empieza aquí.
+
+    GATE de reservas (sep-2026): no se arranca picking con líneas sin
+    reservar — la reserva ES la garantía de existencias, y pickear sin ella
+    produce las inconsistencias bandera-vs-kardex que se arreglaban por
+    shell (PED-00002, PED-00009). Los kits pasan (nacen reservada=True,
+    virtuales); sus hijas sí se exigen. El reintento vive en Mesa.
+    """
+    sin_reserva = sorted({
+        l.sku.codigo
+        for l in pedido.lineas.select_related("sku").filter(reservada=False)
+    })
+    if sin_reserva:
+        raise ValueError(
+            f"{pedido.folio} tiene líneas sin reservar ({', '.join(sin_reserva)}): "
+            "no se puede iniciar picking. Pide a Mesa reintentar las reservas."
+        )
     pedido.transicionar(Pedido.EN_PICKING, actor=actor, motivo="Inicio de picking")
     return pedido
 
