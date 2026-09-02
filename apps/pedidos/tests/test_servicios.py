@@ -1125,3 +1125,24 @@ class IniciarPickingGateTests(BaseServicios):
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.EN_PICKING)
 
+class KitEnAltaManualTests(BaseServicios):
+    """A7: el alta manual trata al kit como la ingesta — reservada=True sin
+    tocar inventario, jamás FAL falsa por un SKU virtual."""
+
+    def test_kit_manual_nace_reservado_sin_tocar_inventario(self):
+        kit = SKU.objects.create(
+            cliente=self.cliente, codigo="KIT-M", descripcion="Mystery box",
+            es_kit=True, peso_gr=400,
+        )
+        with patch("apps.inventario.services.reservar") as reservar,              patch("apps.mensajeria.services.enviar_confirmacion"),              patch("apps.incidencias.services.abrir_incidencia") as abrir:
+            pedido = services.crear_pedido_manual(
+                self.cliente, comprador_nombre="Ana Prueba",
+                direccion={"address1": "Calle 1", "city": "CDMX"}, cp="01780",
+                lineas=[(kit, 1)], actor=None,
+            )
+        linea = pedido.lineas.get()
+        self.assertTrue(linea.reservada)
+        reservar.assert_not_called()
+        abrir.assert_not_called()
+        self.assertFalse(pedido.incidencia_activa)
+        self.assertEqual(pedido.peso_esperado_gr, 400)

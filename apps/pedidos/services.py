@@ -802,6 +802,15 @@ def crear_pedido_manual(cliente, *, comprador_nombre, comprador_tel="",
     faltantes = []
     peso_esperado = 0
     for sku, cantidad in lineas_limpias:
+        if sku.es_kit:
+            # Kit: espejo de la ingesta — se arma al empacar. La línea nace
+            # reservada SIN tocar inventario (SKU virtual, sin stock propio);
+            # pedirle stock abría FALes falsas (PED-00002).
+            LineaPedido.objects.create(
+                pedido=pedido, sku=sku, cantidad=cantidad, reservada=True,
+            )
+            peso_esperado += (sku.peso_gr or 0) * cantidad
+            continue
         linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
         peso_esperado += (sku.peso_gr or 0) * cantidad
         if not _reservar_linea(linea):
