@@ -186,9 +186,9 @@ class IndiceGeneradoTests(TestCase):
     def test_indice_trae_los_14_manuales(self):
         from apps.core.manuales import cargar_indice, manuales_publicados, portada
 
-        self.assertEqual(len(cargar_indice()), 14)
+        self.assertEqual(len(cargar_indice()), 15)
         publicados = manuales_publicados()
-        self.assertEqual(len(publicados), 13)
+        self.assertEqual(len(publicados), 14)
         self.assertEqual(publicados[0]["codigo"], "SOP-01")
         self.assertEqual(portada()["codigo"], "README")
         for manual in publicados:
@@ -202,5 +202,6 @@ class IndiceGeneradoTests(TestCase):
         grupos = agrupar(manuales_publicados())
         self.assertEqual(
             [(g["nombre"], len(g["manuales"])) for g in grupos],
-            [("Operación diaria", 8), ("Control", 2), ("Seguridad", 3)],
+            [("Operación diaria", 8), ("Control", 2), ("Seguridad", 3),
+             ("Mesa de Control", 1)],
         )

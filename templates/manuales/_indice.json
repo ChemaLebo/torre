@@ -847,6 +847,57 @@
   ]
  },
  {
+  "slug": "sop-14-sustituciones-shopify",
+  "codigo": "SOP-14",
+  "titulo": "Sustituir un producto sin stock (vía Shopify)",
+  "emoji": "🔁",
+  "resumen": "La sustitución se hace editando la orden en Shopify — Torre la aplica sola. No se toca el admin de Django ni el shell: el flujo oficial ya existe y deja el kardex y el evento edicion_orden alineados.",
+  "palabras": 314,
+  "minutos": 2,
+  "grupo": "Mesa de Control",
+  "version": "v1.0 · Septiembre 2026",
+  "propiedades": [
+   [
+    "Dueño",
+    "Mesa de Control"
+   ],
+   [
+    "Frecuencia",
+    "Pedido PENDIENTE con incidencia FAL y repuesto autorizado por el cliente (la marca)"
+   ],
+   [
+    "Tiempo estándar",
+    "5–10 min por pedido"
+   ],
+   [
+    "EPP",
+    "No aplica (trabajo de escritorio)"
+   ],
+   [
+    "Pantallas de Torre",
+    "Shopify Admin → Orders → <strong>Edit order</strong> · Mesa → <strong>Pedidos</strong> (verificación) · Mesa → <strong>Incidencias</strong> (cerrar la FAL)"
+   ]
+  ],
+  "toc": [
+   {
+    "id": "la-regla-de-oro",
+    "titulo": "La regla de oro"
+   },
+   {
+    "id": "pasos",
+    "titulo": "Pasos"
+   },
+   {
+    "id": "que-no-hacer",
+    "titulo": "Qué NO hacer"
+   },
+   {
+    "id": "por-que-funciona",
+    "titulo": "Por qué funciona"
+   }
+  ]
+ },
+ {
   "slug": "readme",
   "codigo": "README",
   "titulo": "Manuales de operación — Centro de fulfillment Local 380 E",

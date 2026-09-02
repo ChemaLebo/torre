@@ -26,6 +26,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 # Emoji fijo por SOP (spec del módulo): identidad visual estable de cada manual.
 EMOJIS = {
+    "SOP-14": "🔁",
     "SOP-01": "🌅", "SOP-02": "🚚", "SOP-03": "📦", "SOP-04": "🗄️",
     "SOP-05": "🛒", "SOP-06": "📸", "SOP-07": "🚀", "SOP-08": "🏠",
     "SOP-09": "🔢", "SOP-10": "🚧", "SOP-11": "🦺", "SOP-12": "🚨",
@@ -33,7 +34,9 @@ EMOJIS = {
 }
 
 # Agrupación del índice por número de SOP (inclusive).
-GRUPOS = [("Operación diaria", 1, 8), ("Control", 9, 10), ("Seguridad", 11, 13)]
+GRUPOS = [("Operación diaria", 1, 8), ("Control", 9, 10), ("Seguridad", 11, 13),
+    ("Mesa de Control", 14, 19),
+]
 
 # Encabezado consistente de los .md: fila |Campo|Valor| → etiqueta de la pill.
 # El orden de esta lista es el orden de la fila de propiedades estilo Notion.
