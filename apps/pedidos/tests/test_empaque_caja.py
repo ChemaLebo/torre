@@ -215,7 +215,8 @@ class DespacharACorralTests(BaseServicios):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
         self.assertGreaterEqual(len(resultado["guias"]), 1)
-        self.assertEqual(imprimir.call_count, len(resultado["guias"]))
+        # Doble etiqueta por guía: carrier + interna (identidad de la caja).
+        self.assertEqual(imprimir.call_count, 2 * len(resultado["guias"]))
         self.assertIn("Etiqueta enviada a la impresora (mock).", resultado["mensajes"])
         self.assertTrue(
             EventoAuditoria.objects.filter(

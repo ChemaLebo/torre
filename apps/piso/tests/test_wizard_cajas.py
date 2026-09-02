@@ -95,7 +95,7 @@ class WizardCajasTests(PisoTestCase):
         self.assertEqual(self.pedido.peso_real_gr, 12100 + 8100)
         guias = list(Guia.objects.filter(pedido=self.pedido))
         self.assertEqual(len(guias), 2)  # una guía por caja
-        self.assertEqual(imprimir.call_count, 2)
+        self.assertEqual(imprimir.call_count, 4)  # (carrier + interna) × 2 cajas
         # Paso de cierre: etiquetas impresas + foto de caja cerrada por caja.
         self.assertContains(r2, "Etiquetas imprimiéndose")
         self.assertContains(r2, 'value="cerrar_caja"')

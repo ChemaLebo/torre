@@ -148,7 +148,9 @@ class EmpaquePisoTests(PisoTestCase):
 
         guias = list(Guia.objects.filter(pedido=self.pedido))
         self.assertGreaterEqual(len(guias), 1)
-        self.assertEqual(imprimir.call_count, len(guias))
+        # Doble etiqueta por guía: la del carrier + la interna (identidad).
+        self.assertEqual(imprimir.call_count, 2 * len(guias))
+        self.assertTrue(any(c.kwargs.get("interna") for c in imprimir.call_args_list))
 
         fotos = EvidenciaFoto.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk))
         self.assertEqual(fotos.count(), 1)

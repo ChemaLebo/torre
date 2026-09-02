@@ -1315,6 +1315,12 @@ def despachar_a_corral(pedido, actor):
             mensajes.append(imprimir_etiqueta(guia))
         except Exception as exc:  # best-effort: la guía ya existe y NUNCA se revierte
             mensajes.append(f"No se imprimió la etiqueta de la guía {guia.numero}: {exc}")
+        # La etiqueta INTERNA (folio + QR) sale JUNTO con la del carrier:
+        # identidad de la caja en una cara, ruteo en la otra. Mismo best-effort.
+        try:
+            mensajes.append(imprimir_etiqueta(guia, interna=True))
+        except Exception as exc:
+            mensajes.append(f"No se imprimió la etiqueta interna de {guia.numero}: {exc}")
     registrar_evento(
         "pedido", pedido.pk, "despachado_a_corral", actor=actor, cliente=pedido.cliente,
         delta={"guias": [g.numero for g in guias], "mensajes_impresion": mensajes},
