@@ -18,6 +18,9 @@ def crear_cliente(**kwargs):
         "nombre": f"Cervecería Colima {n}",
         "slug": f"colima-{n}",
         "carrier_preferente": "paquetexpress",
+        # La realidad post-migración 0005: los clientes existentes viajan por
+        # envia; el flip a 99minutos directo se pide explícito en cada test.
+        "integracion_envios": "envia",
     }
     defaults.update(kwargs)
     return Cliente.objects.create(**defaults)

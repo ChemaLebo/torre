@@ -30,6 +30,7 @@
     <p class="mono" style="margin:8px 0 0">
       Buffer de stock: {{ cliente.buffer_stock }} unidad(es)<br>
       Carrier preferente: {{ cliente.carrier_preferente }}<br>
+      Integración de envíos: {{ cliente.get_integracion_envios_display }}<br>
       Naked packing local: {% if cliente.naked_packing_local %}sí{% else %}no{% endif %}<br>
       Visto bueno desde: ${{ cliente.umbral_visto_bueno_mxn }} MXN
     </p>

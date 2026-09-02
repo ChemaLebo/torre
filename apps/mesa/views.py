@@ -1248,6 +1248,7 @@ def cliente_editar(request, pk):
         "contacto_whatsapp": cliente.contacto_whatsapp,
         "buffer_stock": cliente.buffer_stock,
         "carrier_preferente": cliente.carrier_preferente,
+        "integracion_envios": cliente.integracion_envios,
         "naked_packing_local": cliente.naked_packing_local,
         "umbral_visto_bueno_mxn": cliente.umbral_visto_bueno_mxn,
         "guia_de_voz": cliente.guia_de_voz,

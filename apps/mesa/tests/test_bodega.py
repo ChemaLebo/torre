@@ -26,7 +26,7 @@ class BaseBodegaMesa(TestCase):
     @classmethod
     def setUpTestData(cls):
         User = get_user_model()
-        cls.colima = Cliente.objects.create(
+        cls.colima = Cliente.objects.create(integracion_envios="envia", 
             nombre="Cervecería Colima", slug="colima", buffer_stock=0,
         )
         cls.usuario_mesa = User.objects.create_user("mesa1", password="x12345678")

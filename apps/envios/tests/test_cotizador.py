@@ -204,3 +204,17 @@ class TestReempaque(BaseCotizador):
         pedido = self.pedido_con("06600", [(caja24, 1)])
         paquetes = cotizador.planificar_envio(pedido)
         self.assertEqual(len(paquetes), 1)
+
+
+class CotizadorIntegracionClienteTests(TestCase):
+    """Cliente en 99minutos directo: un solo carrier, sin CotizacionCache."""
+
+    def test_cliente_directo_cotiza_un_carrier_sin_cache(self):
+        cliente = crear_cliente(integracion_envios="99minutos")
+        fila = {"carrier": "noventa9Minutos", "servicio": "NAL",
+                "precio": Decimal("99"), "estimado": "2-4 días", "ok": True}
+        with patch("apps.envios.services.cotizar_lane_carrier", return_value=fila) as clc:
+            filas = cotizador.cotizar_lane("44100", 3, cliente=cliente)
+        self.assertEqual(filas, [fila])
+        clc.assert_called_once()
+        self.assertEqual(CotizacionCache.objects.count(), 0)

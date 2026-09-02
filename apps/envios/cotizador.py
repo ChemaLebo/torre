@@ -64,13 +64,19 @@ def _redondear_peso(peso_kg):
     return max(medio, Decimal("0.5"))
 
 
-def cotizar_lane(cp_destino, peso_kg, dims=None):
+def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None):
     """Tarifas por carrier para un (CP, peso). Caché primero; incluye negativos.
 
     Cada carrier faltante se cotiza a través del adapter de su proveedor
-    (services.get_adapter_cotizacion): el planificador no sabe quién responde."""
+    (services.get_adapter_cotizacion): el planificador no sabe quién responde.
+    Cliente con integración 99minutos → UN solo carrier directo y SIN
+    CotizacionCache: el caché no distingue proveedor y mezclaría tarifas de
+    envia con las directas."""
     peso = _redondear_peso(peso_kg)
     dims = dims or dims_para(peso)
+    if cliente is not None and getattr(cliente, "integracion_envios", "") == "99minutos":
+        from .services import cotizar_lane_carrier  # lazy: evita ciclo en carga
+        return [cotizar_lane_carrier("noventa9Minutos", cp_destino, peso, dims, cliente=cliente)]
     carriers = settings.TORRE["CARRIERS_COTIZAR"]
     vigencia = timezone.now() - timedelta(days=settings.TORRE["COTIZACION_CACHE_DIAS"])
     # Un "no cotiza" puede ser falla transitoria de la API: caduca en horas,
@@ -106,9 +112,9 @@ def cotizar_lane(cp_destino, peso_kg, dims=None):
     ]
 
 
-def mejor_opcion(cp_destino, peso_kg, dims=None):
+def mejor_opcion(cp_destino, peso_kg, dims=None, cliente=None):
     """La tarifa más barata que sí cotiza, o None si nadie cubre el lane."""
-    opciones = [f for f in cotizar_lane(cp_destino, peso_kg, dims) if f["ok"] and f["precio"] is not None]
+    opciones = [f for f in cotizar_lane(cp_destino, peso_kg, dims, cliente=cliente) if f["ok"] and f["precio"] is not None]
     return min(opciones, key=lambda f: f["precio"]) if opciones else None
 
 
@@ -190,7 +196,7 @@ def _particiones_candidatas(unidades, max_kg):
     return unicas
 
 
-def _costo_particion(cp_destino, bins):
+def _costo_particion(cp_destino, bins, cliente=None):
     """(costo_total, [opcion por bin]) con UN SOLO carrier para todo el plan.
 
     Regla operativa: todas las cajas de un pedido viajan con el MISMO carrier.
@@ -204,7 +210,7 @@ def _costo_particion(cp_destino, bins):
     for unidades_bin in bins:
         filas = {
             f["carrier"]: f
-            for f in cotizar_lane(cp_destino, _peso_bin(unidades_bin))
+            for f in cotizar_lane(cp_destino, _peso_bin(unidades_bin), cliente=cliente)
             if f["ok"] and f["precio"] is not None
         }
         if not filas:
@@ -276,7 +282,7 @@ def planificar_envio(pedido, force=False):
     candidatas = _particiones_candidatas(unidades, max_kg)
     evaluadas, viables = [], []
     for bins in candidatas:
-        costo, opciones = _costo_particion(pedido.cp, bins)
+        costo, opciones = _costo_particion(pedido.cp, bins, cliente=pedido.cliente)
         evaluadas.append({"bins": [float(_peso_bin(b)) for b in bins],
                           "costo": float(costo) if costo is not None else None})
         if costo is not None:
@@ -291,7 +297,7 @@ def planificar_envio(pedido, force=False):
     costo_elegido, _, bins_elegidos, opciones = min(viables, key=lambda v: (v[0], v[1]))
 
     # Ahorro vs mandarlo entero (aunque entero viole el tope, solo para el dato).
-    entero = mejor_opcion(pedido.cp, _peso_bin(unidades))
+    entero = mejor_opcion(pedido.cp, _peso_bin(unidades), cliente=pedido.cliente)
     ahorro = max(Decimal(entero["precio"]) - costo_elegido, Decimal(0)) if entero else Decimal(0)
 
     paquetes = []

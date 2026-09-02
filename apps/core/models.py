@@ -14,6 +14,19 @@ class Cliente(models.Model):
     # Config por tenant
     buffer_stock = models.PositiveIntegerField(default=0, help_text="Buffer restado del disponible publicado")
     carrier_preferente = models.CharField(max_length=40, default="paquetexpress")
+    # Integración de envíos: por dónde viajan las guías de ESTE cliente.
+    # "envia" = el planner cotiza CARRIERS_COTIZAR vía envia.com;
+    # "99minutos" = directo (Adapter99Minutos, pickUpAfter) — el flip de
+    # 99min es POR CLIENTE, no global. Default 99minutos para clientes
+    # nuevos; los existentes migraron a "envia" (0005, cero cambio de
+    # conducta al desplegar). Sin NOVENTA9_API_KEY/MODO=full el directo
+    # cae a envia (fail-safe de configuración).
+    INTEGRACION_ENVIA = "envia"
+    INTEGRACION_99MIN = "99minutos"
+    INTEGRACIONES = [(INTEGRACION_ENVIA, "envia.com"), (INTEGRACION_99MIN, "99minutos directo")]
+    integracion_envios = models.CharField(
+        max_length=12, choices=INTEGRACIONES, default=INTEGRACION_99MIN,
+    )
     naked_packing_local = models.BooleanField(default=True)
     guia_de_voz = models.TextField(blank=True, help_text="Reglas de tono para mensajes al comprador final")
     umbral_visto_bueno_mxn = models.DecimalField(max_digits=8, decimal_places=2, default=2000)

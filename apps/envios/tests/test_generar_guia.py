@@ -217,3 +217,32 @@ class GenerarGuiaTests(TestCase):
         guia.transicionar(Guia.EN_TRANSITO)
         misma = services.generar_guia(pedido)
         self.assertEqual(guia.pk, misma.pk)
+
+
+@override_settings(ENVIA_API_KEY="", NOVENTA9_API_KEY="cid:sec", NOVENTA9_MODO="full")
+class IntegracionClienteRoutingTests(TestCase):
+    """integracion_envios del cliente manda el proveedor sin mapa global."""
+
+    def test_cliente_99minutos_rutea_al_adapter_directo(self):
+        from apps.envios.adapters import Adapter99Minutos
+        cliente = crear_cliente(integracion_envios="99minutos")
+        self.assertIsInstance(
+            services.get_adapter(carrier="noventa9Minutos", cliente=cliente),
+            Adapter99Minutos,
+        )
+
+    def test_cliente_envia_ignora_el_directo(self):
+        cliente = crear_cliente(integracion_envios="envia")
+        # envia sin key en tests = mock: lo importante es que NO es el directo.
+        self.assertIsInstance(
+            services.get_adapter(carrier="noventa9Minutos", cliente=cliente), MockAdapter,
+        )
+
+    @override_settings(NOVENTA9_API_KEY="")
+    def test_sin_key_el_flip_no_explota(self):
+        # Fail-safe de configuración: cliente flipeado sin credenciales cae a
+        # envia (mock en tests) en vez de tronar.
+        cliente = crear_cliente(integracion_envios="99minutos")
+        self.assertIsInstance(
+            services.get_adapter(carrier="noventa9Minutos", cliente=cliente), MockAdapter,
+        )

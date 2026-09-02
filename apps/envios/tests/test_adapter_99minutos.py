@@ -102,6 +102,7 @@ class Adapter99MinutosTests(TestCase):
         self.assertEqual(datos["etiqueta_url"], "")
         envio = req.call_args_list[0].kwargs["json"]["shipments"][0]
         self.assertEqual(envio["internalKey"], f"{pedido.folio}-1")
+        self.assertIn("pickUpAfter", envio)  # empacado = listo para recolección
         self.assertEqual(envio["deliveryType"], "NAL")
         self.assertEqual(envio["items"][0]["weight"], 1200)  # GRAMOS, no KG
         etiqueta = req.call_args_list[1].kwargs["json"]

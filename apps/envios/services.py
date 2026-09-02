@@ -30,19 +30,24 @@ PROVEEDOR_99MIN = "99minutos"
 PROVEEDOR_MOCK = "mock"
 
 
-def _proveedor_para(carrier):
-    """Proveedor configurado para el carrier (TORRE['PROVEEDOR_POR_CARRIER']; default envia)."""
+def _proveedor_para(carrier, cliente=None):
+    """Proveedor para el carrier. La integración del CLIENTE manda primero
+    (flip por cliente, sep-2026); sin cliente aplica el mapa global
+    TORRE['PROVEEDOR_POR_CARRIER'] (default envia)."""
+    if (cliente is not None and carrier == "noventa9Minutos"
+            and getattr(cliente, "integracion_envios", "") == "99minutos"):
+        return PROVEEDOR_99MIN
     mapa = settings.TORRE.get("PROVEEDOR_POR_CARRIER") or {}
     return mapa.get(carrier or "", PROVEEDOR_ENVIA)
 
 
-def get_adapter(carrier=None, proveedor=None):
+def get_adapter(carrier=None, proveedor=None, cliente=None):
     """Adapter por proveedor: el de la guía manda (cancelar/rastrear van con
     quien la EMITIÓ); si no, el mapa por carrier decide. Cada proveedor gatea
     con su key+modo — generar guías reales cuesta dinero, así que solo "full"
     habla con la API real; sin configuración → Mock. El slug de 99minutos sin
     adapter directo configurado viaja por envia (fallback de configuración)."""
-    elegido = proveedor or _proveedor_para(carrier)
+    elegido = proveedor or _proveedor_para(carrier, cliente)
     if elegido == PROVEEDOR_MOCK:
         return MockAdapter()
     if elegido == PROVEEDOR_99MIN and _99min_habilitado("full"):
@@ -68,18 +73,18 @@ def _adapter_envia_cotizacion():
     return MockAdapter()
 
 
-def get_adapter_cotizacion(carrier):
+def get_adapter_cotizacion(carrier, cliente=None):
     """Adapter para COTIZAR ese carrier. Mismo routing que get_adapter pero el
     gating es modo != "off": cotizar no cuesta dinero, generar sí exige "full"."""
-    if _proveedor_para(carrier) == PROVEEDOR_99MIN and _99min_habilitado("cotizar"):
+    if _proveedor_para(carrier, cliente) == PROVEEDOR_99MIN and _99min_habilitado("cotizar"):
         return Adapter99Minutos()
     return _adapter_envia_cotizacion()
 
 
-def cotizar_lane_carrier(carrier, cp_destino, peso_kg, dims=None):
+def cotizar_lane_carrier(carrier, cp_destino, peso_kg, dims=None, cliente=None):
     """Fila de UN carrier vía su proveedor. Con NOVENTA9_FALLBACK_ENVIA, un
     fallo del directo de 99minutos re-cotiza ese carrier por envia."""
-    adapter = get_adapter_cotizacion(carrier)
+    adapter = get_adapter_cotizacion(carrier, cliente)
     fila = adapter.cotizar_lane(carrier, cp_destino, peso_kg, dims)
     if fila.get("ok") or getattr(adapter, "PROVEEDOR", "") != PROVEEDOR_99MIN:
         return fila
@@ -114,6 +119,10 @@ def elegir_carrier(pedido):
             return (regla.carrier, regla.servicio)
     if pedido.es_local and flota:
         return (CARRIER_LOCAL, SERVICIO_LOCAL)
+    if getattr(pedido.cliente, "integracion_envios", "") == "99minutos":
+        # Flip por cliente: sus envíos viajan por 99minutos directo. Las
+        # ReglaEnvio siguen mandando arriba (excepciones explícitas ganan).
+        return ("noventa9Minutos", SERVICIO_DEFAULT)
     return (pedido.cliente.carrier_preferente or "paquetexpress", SERVICIO_DEFAULT)
 
 
@@ -161,7 +170,7 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
             ts_ultimo_movimiento=ahora,
         )
     else:
-        adapter = get_adapter(carrier=carrier)
+        adapter = get_adapter(carrier=carrier, cliente=pedido.cliente)
         costo_plan = paquete.precio_cotizado if paquete is not None else None
         try:
             datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)

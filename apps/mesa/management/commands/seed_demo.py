@@ -178,6 +178,7 @@ class Command(BaseCommand):
                 "contacto_whatsapp": "+523121112233",
                 "buffer_stock": 2,
                 "carrier_preferente": "paquetexpress",
+                "integracion_envios": "envia",
                 "naked_packing_local": True,
                 "guia_de_voz": (
                     "Voz cálida y directa, orgullosamente colimense. Hablamos de "
@@ -207,6 +208,7 @@ class Command(BaseCommand):
                 "contacto_whatsapp": "+525522334455",
                 "buffer_stock": 0,
                 "carrier_preferente": "paquetexpress",
+                "integracion_envios": "envia",
                 "naked_packing_local": False,
                 "guia_de_voz": "Voz sobria y artesanal. Nada de emojis; el mezcal se respeta.",
             },

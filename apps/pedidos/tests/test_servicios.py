@@ -52,7 +52,9 @@ def foto(nombre="evidencia.jpg"):
 class BaseServicios(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        cls.cliente = Cliente.objects.create(
+            nombre="Cervecería Colima", slug="colima", integracion_envios="envia",
+        )
         # location_id vacío: la suite ejercita el camino legado (orden completa,
         # sin consulta de fulfillment orders). El camino acotado a nuestro
         # ticket tiene su propia clase (IngestaPorTicketTests) con el seam

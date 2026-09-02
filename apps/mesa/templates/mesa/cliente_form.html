@@ -60,6 +60,11 @@
         {{ form.carrier_preferente }}{{ form.carrier_preferente.errors }}
       </div>
       <div>
+        <label for="{{ form.integracion_envios.id_for_label }}">{{ form.integracion_envios.label }}</label>
+        {{ form.integracion_envios }}{{ form.integracion_envios.errors }}
+        <p class="small muted">{{ form.integracion_envios.help_text }}</p>
+      </div>
+      <div>
         <label for="{{ form.umbral_visto_bueno_mxn.id_for_label }}">{{ form.umbral_visto_bueno_mxn.label }}</label>
         {{ form.umbral_visto_bueno_mxn }}{{ form.umbral_visto_bueno_mxn.errors }}
       </div>

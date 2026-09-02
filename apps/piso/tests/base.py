@@ -29,6 +29,7 @@ class PisoTestCase(TestCase):
     def setUpTestData(cls):
         User = get_user_model()
         cls.cliente = Cliente.objects.create(
+            integracion_envios="envia",  # realidad post-migración 0005
             nombre="Cervecería Colima", slug="colima", buffer_stock=0,
         )
         cls.operador = User.objects.create_user("piso1", password="pin-piso")

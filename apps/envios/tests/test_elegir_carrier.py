@@ -96,3 +96,26 @@ class ElegirCarrierTests(TestCase):
         ReglaEnvio.objects.create(cliente=otro, prioridad=1, condicion={}, carrier="dhl", servicio="express")
         pedido = self._pedido()
         self.assertEqual(services.elegir_carrier(pedido), ("paquetexpress", services.SERVICIO_DEFAULT))
+
+
+class IntegracionPorClienteTests(TestCase):
+    """El flip de 99minutos es POR CLIENTE: integracion_envios corto-circuita
+    el default (tras reglas y flota), jamás a las ReglaEnvio explícitas."""
+
+    def test_cliente_99minutos_va_directo_a_noventa9(self):
+        cliente = crear_cliente(integracion_envios="99minutos")
+        tienda = crear_tienda(cliente)
+        pedido = crear_pedido(cliente, tienda, es_local=False)
+        self.assertEqual(
+            services.elegir_carrier(pedido),
+            ("noventa9Minutos", services.SERVICIO_DEFAULT),
+        )
+
+    def test_regla_envio_le_gana_a_la_integracion(self):
+        cliente = crear_cliente(integracion_envios="99minutos")
+        tienda = crear_tienda(cliente)
+        ReglaEnvio.objects.create(
+            cliente=cliente, prioridad=1, condicion={}, carrier="fedex", servicio="ground",
+        )
+        pedido = crear_pedido(cliente, tienda)
+        self.assertEqual(services.elegir_carrier(pedido), ("fedex", "ground"))

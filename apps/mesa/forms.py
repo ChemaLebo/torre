@@ -88,6 +88,13 @@ class FormCliente(forms.Form):
         label="Carrier preferente",
         error_messages={"required": "Elige el carrier preferente."},
     )
+    integracion_envios = forms.ChoiceField(
+        label="Integración de envíos",
+        choices=Cliente.INTEGRACIONES,
+        initial=Cliente.INTEGRACION_99MIN,
+        help_text="Por dónde viajan sus guías: envia.com (multi-carrier) o 99minutos directo.",
+        error_messages={"required": "Elige la integración de envíos."},
+    )
     naked_packing_local = forms.BooleanField(
         label="Naked packing en entrega local", required=False, initial=True,
     )
@@ -180,6 +187,7 @@ class FormCliente(forms.Form):
             "contacto_whatsapp": (d.get("contacto_whatsapp") or "").strip(),
             "buffer_stock": d["buffer_stock"],
             "carrier_preferente": d["carrier_preferente"],
+            "integracion_envios": d["integracion_envios"],
             "naked_packing_local": d.get("naked_packing_local", False),
             "umbral_visto_bueno_mxn": d["umbral_visto_bueno_mxn"],
             "guia_de_voz": (d.get("guia_de_voz") or "").strip(),

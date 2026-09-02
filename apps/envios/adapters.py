@@ -7,6 +7,7 @@ La selección vive en `services.get_adapter()`.
 """
 
 import base64
+from datetime import timedelta
 import itertools
 import re
 import time
@@ -793,6 +794,10 @@ class Adapter99Minutos(CarrierAdapter):
             {
                 "internalKey": interno,
                 "deliveryType": delivery_type_99min(servicio),
+                # Empacado = listo: disponible para recolección desde YA
+                # (+5 min de colchón por relojes de servidor). No hay form de
+                # programación — la regla ES el valor.
+                "pickUpAfter": (timezone.now() + timedelta(minutes=5)).isoformat(),
                 "sender": {
                     "firstName": bodega.get("company")
                     or bodega.get("name")

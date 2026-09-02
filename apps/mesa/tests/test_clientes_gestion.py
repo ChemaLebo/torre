@@ -32,6 +32,7 @@ def datos_form_cliente(**extra):
         "contacto_whatsapp": "",
         "buffer_stock": "0",
         "carrier_preferente": "paquetexpress",
+        "integracion_envios": "envia",
         "naked_packing_local": "on",
         "umbral_visto_bueno_mxn": "2000",
         "guia_de_voz": "",
@@ -44,7 +45,9 @@ def datos_form_cliente(**extra):
 class BaseGestionClientes(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.colima = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        cls.colima = Cliente.objects.create(
+            nombre="Cervecería Colima", slug="colima", integracion_envios="envia",
+        )
         cls.usuario_mesa = crear_usuario("mesa1", "mesa", pin="3333")
         cls.usuario_portal = crear_usuario("karina", "portal", cliente=cls.colima)
         cls.usuario_piso = crear_usuario("piso1", "piso", pin="1111")
@@ -255,7 +258,9 @@ class UsuariosPortalTests(BaseGestionClientes):
         )
 
     def test_usuario_reset_de_usuario_ajeno_es_error(self):
-        nocturno = Cliente.objects.create(nombre="Mezcal Nocturno", slug="mezcal-nocturno")
+        nocturno = Cliente.objects.create(
+            nombre="Mezcal Nocturno", slug="mezcal-nocturno", integracion_envios="envia",
+        )
         ajeno = crear_usuario("aurelio", "portal", cliente=nocturno)
         respuesta = self.client.post(self.url, {
             "accion": "usuario_reset", "usuario_id": ajeno.pk,
@@ -353,7 +358,9 @@ class SkusTests(BaseGestionClientes):
     def test_editar_sku_ajeno_es_404(self):
         from apps.catalogo.models import SKU
 
-        nocturno = Cliente.objects.create(nombre="Mezcal Nocturno", slug="mezcal-nocturno")
+        nocturno = Cliente.objects.create(
+            nombre="Mezcal Nocturno", slug="mezcal-nocturno", integracion_envios="envia",
+        )
         ajeno = SKU.objects.create(cliente=nocturno, codigo="MEZCAL-750", descripcion="Botella", peso_gr=1300)
         respuesta = self.client.get(self.url, {"editar": ajeno.pk})
         self.assertEqual(respuesta.status_code, 404)
@@ -428,7 +435,9 @@ class SkusTests(BaseGestionClientes):
     def test_categorias_bulk_ignora_categoria_ajena(self):
         from apps.catalogo.models import SKU, Categoria
 
-        nocturno = Cliente.objects.create(nombre="Mezcal Nocturno", slug="mezcal-nocturno")
+        nocturno = Cliente.objects.create(
+            nombre="Mezcal Nocturno", slug="mezcal-nocturno", integracion_envios="envia",
+        )
         ajena = Categoria.objects.create(cliente=nocturno, nombre="Mezcales")
         sku = SKU.objects.create(cliente=self.colima, codigo="TICUS-SIX", descripcion="Ticús", peso_gr=1)
         self.client.post(self.url, {"accion": "categorias_bulk", f"cat_{sku.pk}": str(ajena.pk)})
