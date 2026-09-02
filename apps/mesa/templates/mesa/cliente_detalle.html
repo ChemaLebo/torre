@@ -34,6 +34,7 @@
       Naked packing local: {% if cliente.naked_packing_local %}sí{% else %}no{% endif %}<br>
       Visto bueno desde: ${{ cliente.umbral_visto_bueno_mxn }} MXN
     </p>
+    <p class="small mt"><a href="{% url 'mesa:cliente_cajas' cliente.pk %}">Cajas de empaque →</a></p>
   </div>
   <div class="card">
     <div class="eyebrow">Guía de voz</div>

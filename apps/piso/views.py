@@ -787,6 +787,12 @@ def _caja_cerrada(paquete):
     ).exists()
 
 
+def _cajas_cliente(pedido):
+    """Cajas de empaque activas del cliente (selector del wizard)."""
+    from apps.catalogo.models import Caja  # lazy por contrato
+    return list(Caja.objects.filter(cliente=pedido.cliente, activo=True))
+
+
 def _rango_peso(gramos):
     """(min, max) en gramos con la tolerancia contractual de báscula."""
     tolerancia = float(settings.TORRE["TOLERANCIA_PESO_PCT"])
@@ -943,6 +949,7 @@ def _render_paso_empacar(request, pedido):
             "caja": caja,
             "total_cajas": len(cajas),
             "cajas_listas": len(cajas) - len(pendientes),
+            "cajas_cliente": _cajas_cliente(pedido),
             "tolerancia": tolerancia,
             "peso_modo": settings.TORRE_PESO_MODO,
             "peso_esperado": plan_gr,
@@ -1041,10 +1048,25 @@ def _empaque_caja(request, pedido):
     destino = redirect("piso:empaque_pedido", pk=pedido.pk)
     paquete = get_object_or_404(Paquete, pk=request.POST.get("paquete_id"), pedido=pedido)
     from apps.pedidos.services import empacar_caja  # lazy por contrato
+    caja = None
+    if request.POST.get("caja_id"):
+        from apps.catalogo.models import Caja  # lazy por contrato
+        caja = Caja.objects.filter(
+            pk=request.POST["caja_id"], cliente=pedido.cliente, activo=True,
+        ).first()
+    dims = None
+    crudos = [request.POST.get(c) for c in ("largo_cm", "ancho_cm", "alto_cm")]
+    if all(crudos):
+        try:
+            valores = [int(v) for v in crudos]
+            dims = tuple(valores) if all(v > 0 for v in valores) else None
+        except (TypeError, ValueError):
+            dims = None
     try:
         empacar_caja(
             paquete, request.user,
             request.POST.get("peso_real_gr"), request.FILES.get("foto_contenido"),
+            caja=caja, dims=dims,
         )
     except ValueError as exc:
         _recordar_peso_empaque(request, pedido)

@@ -1490,6 +1490,50 @@ def _guardar_tienda(request, cliente):
 
 
 @rol_requerido("mesa")
+def cliente_cajas(request, pk):
+    """Catálogo de cajas de empaque del cliente: lista + alta/edición."""
+    from apps.catalogo.models import Caja
+    from .forms import FormCaja
+
+    cliente = get_object_or_404(Cliente, pk=pk)
+    if request.method == "POST":
+        form = FormCaja(request.POST)
+        if form.is_valid():
+            datos = form.datos_caja()
+            caja_id = form.cleaned_data.get("caja_id")
+            existente = Caja.objects.filter(cliente=cliente, nombre=datos["nombre"])
+            if caja_id:
+                existente = existente.exclude(pk=caja_id)
+            if existente.exists():
+                messages.error(request, f"Ya hay una caja llamada {datos['nombre']}.")
+            elif caja_id:
+                Caja.objects.filter(pk=caja_id, cliente=cliente).update(**datos)
+                messages.success(request, f"Caja {datos['nombre']} actualizada.")
+            else:
+                Caja.objects.create(cliente=cliente, **datos)
+                messages.success(request, f"Caja {datos['nombre']} registrada.")
+            return redirect("mesa:cliente_cajas", pk=cliente.pk)
+        messages.error(request, "Revisa los campos de la caja: nombre, medidas y tara.")
+    form = FormCaja()
+    editar = None
+    if request.GET.get("editar"):
+        editar = Caja.objects.filter(pk=request.GET["editar"], cliente=cliente).first()
+        if editar is not None:
+            form = FormCaja(initial={
+                "caja_id": editar.pk, "nombre": editar.nombre,
+                "largo_cm": editar.largo_cm, "ancho_cm": editar.ancho_cm,
+                "alto_cm": editar.alto_cm, "peso_gr": editar.peso_gr,
+                "activo": editar.activo,
+            })
+    return render(request, "mesa/cliente_cajas.html", {
+        "cliente": cliente,
+        "cajas": Caja.objects.filter(cliente=cliente),
+        "form": form,
+        "editar": editar,
+    })
+
+
+@rol_requerido("mesa")
 def cliente_skus(request, pk):
     from apps.catalogo.models import SKU
     from apps.inventario.services import resumen_sku  # lazy por contrato

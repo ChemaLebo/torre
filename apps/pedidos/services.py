@@ -1159,7 +1159,7 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
 
 
 @transaction.atomic
-def empacar_caja(paquete, actor, peso_real_gr, foto_contenido):
+def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=None):
     """Empaque POR CAJA (wizard del carril único): peso contra SU plan + foto contenido.
 
     Valida el peso de la báscula contra el plan de la caja
@@ -1209,8 +1209,21 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido):
         raise ValueError(
             f"Captura el peso de la báscula de la caja {fresco.numero}, en gramos."
         )
-    esperado = int(fresco.peso_kg * 1000) if fresco.peso_kg else 0
-    # Verificación de báscula contra el plan de ESA caja, según TORRE_PESO_MODO.
+    if caja is not None:
+        fresco.caja = caja
+    if dims:
+        fresco.largo_cm, fresco.ancho_cm, fresco.alto_cm = dims
+    # Esperado HONESTO cuando hay desglose: productos de ESTA caja + tara de
+    # la caja elegida. Sin desglose o con fracciones (medias cajas) cae al
+    # plan (peso_kg, que trae el margen de empaque como proxy).
+    lineas_caja = list(fresco.lineas.select_related("linea_pedido__sku"))
+    neto = 0
+    if lineas_caja and not any(pl.fraccion_de > 1 for pl in lineas_caja):
+        neto = sum(
+            (pl.linea_pedido.sku.peso_gr or 0) * pl.cantidad for pl in lineas_caja
+        )
+    tara = fresco.caja.peso_gr if fresco.caja_id else 0
+    esperado = (neto + tara) if neto else (int(fresco.peso_kg * 1000) if fresco.peso_kg else 0)
     _verificar_peso(pedido, peso_real, esperado, caja=fresco.numero)
     if foto_contenido is None:
         raise ValueError(
@@ -1222,7 +1235,7 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido):
         archivo=foto_contenido, tomada_por=_actor_nombre(actor),
     )
     fresco.peso_real_gr = peso_real
-    fresco.save(update_fields=["peso_real_gr"])
+    fresco.save(update_fields=["peso_real_gr", "caja", "largo_cm", "ancho_cm", "alto_cm"])
     fresco.transicionar(
         Paquete.EMPACADO, actor=actor,
         motivo=f"Caja {fresco.numero}: báscula {peso_real} g contra plan de {esperado} g.",

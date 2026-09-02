@@ -63,6 +63,12 @@ class SKU(models.Model):
         help_text="Se arma al empacar (TeaBox): no reserva stock propio ni publica "
                   "inventario; su contenido se declara en empaque o llega en la orden",
     )
+    usa_caja_propia = models.BooleanField(
+        default=False,
+        help_text="El producto viaja en SU propio empaque (kit brandeado, caja del "
+                  "producto): sus dims/peso de catálogo son los del bulto y no se "
+                  "elige caja al empacar",
+    )
     backorder_habilitado = models.BooleanField(default=False)
     fecha_resurtido = models.DateField(null=True, blank=True)
     activo = models.BooleanField(default=True)
@@ -96,6 +102,35 @@ def opciones_sku_agrupadas(cliente, excluir_kits=False):
         grupos.setdefault(nombre, []).append((sku.pk, f"{etiqueta} — {sku.codigo}"))
     orden = sorted(grupos, key=lambda n: (n == Categoria.OTROS, n.lower()))
     return [(nombre, grupos[nombre]) for nombre in orden]
+
+
+class Caja(models.Model):
+    """Caja de empaque de UN cliente: dimensiones y tara reales.
+
+    Al empacar, la caja elegida prellena las medidas del Paquete (siempre
+    editables — 3 cajas encintadas = un bulto con medidas propias) y su tara
+    vuelve honesto el peso esperado (productos + caja) para TORRE_PESO_MODO.
+    """
+
+    cliente = models.ForeignKey("core.Cliente", on_delete=models.CASCADE, related_name="cajas")
+    nombre = models.CharField(max_length=60)
+    largo_cm = models.PositiveIntegerField()
+    ancho_cm = models.PositiveIntegerField()
+    alto_cm = models.PositiveIntegerField()
+    peso_gr = models.PositiveIntegerField(
+        default=0, help_text="Tara: peso de la caja vacía con relleno estándar",
+    )
+    activo = models.BooleanField(default=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = [("cliente", "nombre")]
+        ordering = ["cliente", "nombre"]
+        verbose_name = "caja de empaque"
+        verbose_name_plural = "cajas de empaque"
+
+    def __str__(self):
+        return f"{self.nombre} ({self.largo_cm}×{self.ancho_cm}×{self.alto_cm} cm) · {self.cliente.nombre}"
 
 
 class Ubicacion(models.Model):

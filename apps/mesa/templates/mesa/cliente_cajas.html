@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Cajas de {{ cliente.nombre }}{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control · Cajas de empaque</div>
+    <h1>{{ cliente.nombre }}</h1>
+  </div>
+  <a class="btn chico" href="{% url 'mesa:cliente_detalle' cliente.pk %}">← Volver al cliente</a>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h2>Cajas registradas</h2><span class="pill">{{ cajas|length }}</span></div>
+    {% for c in cajas %}
+    <div class="corral-fila">
+      <div class="crece">
+        <b>{{ c.nombre }}</b> <span class="mono small">{{ c.largo_cm }}×{{ c.ancho_cm }}×{{ c.alto_cm }} cm · tara {{ c.peso_gr }} g</span>
+        {% if not c.activo %}<span class="pill crit">inactiva</span>{% endif %}
+      </div>
+      <a class="btn chico" href="?editar={{ c.pk }}">editar</a>
+    </div>
+    {% empty %}
+    <p class="muted">Sin cajas todavía. Registra las de {{ cliente.nombre }} para que el
+    empaque prellene medidas y el check de báscula conozca la tara.</p>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h2>{% if editar %}Editar {{ editar.nombre }}{% else %}Nueva caja{% endif %}</h2></div>
+    <form method="post">{% csrf_token %}
+      {{ form.caja_id }}
+      <label for="{{ form.nombre.id_for_label }}">{{ form.nombre.label }}</label>
+      {{ form.nombre }}{{ form.nombre.errors }}
+      <div class="fila mt">
+        <div><label for="{{ form.largo_cm.id_for_label }}">{{ form.largo_cm.label }}</label>{{ form.largo_cm }}</div>
+        <div><label for="{{ form.ancho_cm.id_for_label }}">{{ form.ancho_cm.label }}</label>{{ form.ancho_cm }}</div>
+        <div><label for="{{ form.alto_cm.id_for_label }}">{{ form.alto_cm.label }}</label>{{ form.alto_cm }}</div>
+      </div>
+      {{ form.largo_cm.errors }}{{ form.ancho_cm.errors }}{{ form.alto_cm.errors }}
+      <label class="mt" for="{{ form.peso_gr.id_for_label }}">{{ form.peso_gr.label }}</label>
+      {{ form.peso_gr }}{{ form.peso_gr.errors }}
+      <p class="small muted">{{ form.peso_gr.help_text }}</p>
+      <label for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>
+      {{ form.activo }}
+      <div class="mt"><button class="btn primario" type="submit">Guardar caja</button>
+      {% if editar %}<a class="btn chico" href="{% url 'mesa:cliente_cajas' cliente.pk %}">cancelar edición</a>{% endif %}</div>
+    </form>
+  </div>
+</div>
+{% endblock %}

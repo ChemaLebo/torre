@@ -340,6 +340,32 @@ class FormSKU(forms.Form):
         }
 
 
+class FormCaja(forms.Form):
+    """Alta/edición de una caja de empaque del cliente (catálogo de cajas)."""
+
+    caja_id = forms.IntegerField(required=False, widget=forms.HiddenInput())
+    nombre = forms.CharField(
+        label="Nombre", max_length=60,
+        error_messages={"required": "Ponle nombre a la caja (ej. Mediana, TeaBox 3)."},
+    )
+    largo_cm = forms.IntegerField(label="Largo (cm)", min_value=1)
+    ancho_cm = forms.IntegerField(label="Ancho (cm)", min_value=1)
+    alto_cm = forms.IntegerField(label="Alto (cm)", min_value=1)
+    peso_gr = forms.IntegerField(
+        label="Tara (g)", min_value=0, initial=0,
+        help_text="Peso de la caja vacía con su relleno estándar — vuelve honesto el check de báscula.",
+    )
+    activo = forms.BooleanField(label="Activa", required=False, initial=True)
+
+    def datos_caja(self):
+        d = self.cleaned_data
+        return {
+            "nombre": d["nombre"].strip(),
+            "largo_cm": d["largo_cm"], "ancho_cm": d["ancho_cm"], "alto_cm": d["alto_cm"],
+            "peso_gr": d["peso_gr"], "activo": d.get("activo", False),
+        }
+
+
 class FormPedidoManual(ConRenglonesSKU, forms.Form):
     """Captura de un pedido manual: clientes sin Shopify (mayoreo, B2B).
 

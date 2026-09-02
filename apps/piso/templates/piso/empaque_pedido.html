@@ -257,6 +257,25 @@ function agregarRenglonKit(kitPk) {
       <span id="peso-fuera-texto"></span>
     </div>
 
+    {% if paso == "caja" %}
+    <label class="mt" for="caja_id">3 · Caja usada (opcional — prellena las medidas)</label>
+    <select name="caja_id" id="caja_id">
+      <option value="">Sin caja del catálogo (caja propia del producto / bulto especial)</option>
+      {% for c in cajas_cliente %}
+      <option value="{{ c.pk }}" data-l="{{ c.largo_cm }}" data-a="{{ c.ancho_cm }}" data-h="{{ c.alto_cm }}">{{ c.nombre }} · {{ c.largo_cm }}×{{ c.ancho_cm }}×{{ c.alto_cm }} cm · tara {{ c.peso_gr }} g</option>
+      {% endfor %}
+    </select>
+    <div class="fila mt">
+      <input type="number" name="largo_cm" id="dim-largo" min="1" value="{{ caja.largo_cm }}" aria-label="Largo en centímetros" style="max-width:100px">
+      <span class="muted">×</span>
+      <input type="number" name="ancho_cm" id="dim-ancho" min="1" value="{{ caja.ancho_cm }}" aria-label="Ancho en centímetros" style="max-width:100px">
+      <span class="muted">×</span>
+      <input type="number" name="alto_cm" id="dim-alto" min="1" value="{{ caja.alto_cm }}" aria-label="Alto en centímetros" style="max-width:100px">
+      <span class="muted">cm</span>
+    </div>
+    <p class="small muted">Medidas SIEMPRE editables (3 cajas encintadas = un bulto con sus medidas). Van tal cual a la guía.</p>
+    {% endif %}
+
     <p class="small muted mt">
       La foto de la caja cerrada se toma AL FINAL, con la etiqueta ya pegada:
       al confirmar, Torre genera la guía e imprime las etiquetas solas.
@@ -318,6 +337,16 @@ function agregarRenglonKit(kitPk) {
       peso.focus();
     }
   });
+  var cajaSel = document.getElementById("caja_id");
+  if (cajaSel) {
+    cajaSel.addEventListener("change", function () {
+      var op = cajaSel.selectedOptions[0];
+      if (!op || !op.dataset.l) { return; }
+      document.getElementById("dim-largo").value = op.dataset.l;
+      document.getElementById("dim-ancho").value = op.dataset.a;
+      document.getElementById("dim-alto").value = op.dataset.h;
+    });
+  }
   revisar();
 })();
 </script>

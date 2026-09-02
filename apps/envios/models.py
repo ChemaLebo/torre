@@ -193,6 +193,10 @@ class Paquete(models.Model):
         max_digits=10, decimal_places=2, default=0,
         help_text="Ahorro del plan completo vs enviar todo en un solo bulto (mismo valor en cada paquete del plan)",
     )
+    caja = models.ForeignKey(
+        "catalogo.Caja", null=True, blank=True, on_delete=models.PROTECT, related_name="+",
+        help_text="Caja de empaque usada; su tara vuelve honesto el peso esperado",
+    )
     estado = models.CharField(max_length=12, choices=ESTADOS, default=PLANEADO, db_index=True)
     peso_real_gr = models.PositiveIntegerField(null=True, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
