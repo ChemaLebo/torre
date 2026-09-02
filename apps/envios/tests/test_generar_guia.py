@@ -246,3 +246,46 @@ class IntegracionClienteRoutingTests(TestCase):
         self.assertIsInstance(
             services.get_adapter(carrier="noventa9Minutos", cliente=cliente), MockAdapter,
         )
+
+
+@override_settings(ENVIA_API_KEY="")
+class ReplanAlGenerarTests(TestCase):
+    """Un plan viejo con un carrier que la config vigente ya no permite se
+    re-cotiza AL GENERAR (fix #10, sep-2026): el plan no ata — quitar un
+    carrier de CARRIERS_COTIZAR o flipear la integración surte efecto de
+    inmediato, sin importar cuándo se planeó el pedido."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.cliente = crear_cliente()
+        self.tienda = crear_tienda(self.cliente)
+
+    def _paquete(self, pedido, carrier, servicio="local_next_day"):
+        from apps.envios.models import Paquete
+        return Paquete.objects.create(
+            pedido=pedido, numero=1, peso_kg=Decimal("3"),
+            carrier=carrier, servicio=servicio,
+        )
+
+    def test_carrier_ya_no_permitido_se_replanea_y_audita(self):
+        pedido = crear_pedido(self.cliente, self.tienda)
+        paquete = self._paquete(pedido, "noventa9Minutos")  # fuera de la lista
+        guia = services.generar_guia(pedido)
+        self.assertNotEqual(guia.carrier, "noventa9Minutos")
+        self.assertIn(guia.carrier, settings.TORRE["CARRIERS_COTIZAR"])
+        paquete.refresh_from_db()
+        self.assertEqual(paquete.carrier, guia.carrier)
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="replan_paquete",
+        )
+        self.assertEqual(evento.delta["antes"], "noventa9Minutos")
+        self.assertEqual(evento.delta["ahora"], guia.carrier)
+
+    def test_carrier_permitido_no_se_toca(self):
+        pedido = crear_pedido(self.cliente, self.tienda)
+        self._paquete(pedido, "fedex", servicio="ground")
+        guia = services.generar_guia(pedido)
+        self.assertEqual(guia.carrier, "fedex")
+        self.assertFalse(
+            EventoAuditoria.objects.filter(accion="replan_paquete").exists()
+        )

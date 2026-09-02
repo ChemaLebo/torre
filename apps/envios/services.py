@@ -220,6 +220,47 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
     return guia
 
 
+def _carriers_permitidos(cliente):
+    """Carriers que la config VIGENTE permite para este cliente."""
+    if getattr(cliente, "integracion_envios", "") == "99minutos":
+        return {"noventa9Minutos"}
+    return set(settings.TORRE["CARRIERS_COTIZAR"])
+
+
+def _replan_paquete(pedido, paquete, carrier_viejo):
+    """El plan guardó un carrier que la config vigente ya no permite (lista
+    recortada o cliente flipeado de integración): se re-cotiza el lane AL
+    GENERAR y el paquete se reasigna a la mejor opción permitida. El plan se
+    conserva como plan (división, corral, precio de referencia); la config
+    manda a la hora de comprar la guía."""
+    from .cotizador import cotizar_lane  # lazy: evita ciclo en carga
+
+    dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
+    filas = [
+        f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente)
+        if f["ok"] and f["precio"] is not None
+    ]
+    if not filas:
+        raise ErrorCarrier(
+            f"El plan del paquete {paquete.numero} traía {carrier_viejo} (ya no "
+            f"permitido) y ningún carrier vigente cotiza CP {pedido.cp}. "
+            "Revisar con Mesa de Control."
+        )
+    mejor = min(filas, key=lambda f: f["precio"])
+    paquete.carrier = mejor["carrier"]
+    paquete.servicio = mejor["servicio"]
+    paquete.precio_cotizado = mejor["precio"]
+    paquete.save(update_fields=["carrier", "servicio", "precio_cotizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "replan_paquete", cliente=pedido.cliente,
+        delta={"paquete": paquete.numero, "antes": carrier_viejo,
+               "ahora": mejor["carrier"], "precio": float(mejor["precio"])},
+        motivo="El carrier del plan ya no está permitido por la config vigente; "
+               "el paquete se re-cotizó al generar la guía.",
+    )
+    return mejor["carrier"], mejor["servicio"]
+
+
 def _carrier_de_paquete(pedido, paquete):
     """(carrier, servicio) reales para la guía de un paquete.
 
@@ -232,6 +273,9 @@ def _carrier_de_paquete(pedido, paquete):
     servicio = paquete.servicio or ""
     if not carrier or (carrier == CARRIER_LOCAL and not _flota_propia()):
         carrier, servicio = elegir_carrier(pedido)
+    elif carrier != CARRIER_LOCAL and carrier not in _carriers_permitidos(pedido.cliente):
+        # Plan viejo vs config nueva (#10): la config vigente manda al generar.
+        carrier, servicio = _replan_paquete(pedido, paquete, carrier)
     return carrier, servicio
 
 
