@@ -201,3 +201,21 @@ class AccesoBodegaMesaTests(BaseBodegaMesa):
     def test_anonimo_va_a_login(self):
         respuesta = self.client.get(reverse("mesa:bodega"))
         self.assertEqual(respuesta.status_code, 302)
+
+
+class RacksPorNumeroTests(TestCase):
+    """El rack físico agrupa por el NÚMERO de en medio, ignorando la letra:
+    PIC-1-1/2/3 + RES-1-4 = un solo rack de 4 pisos."""
+
+    def test_pic_y_res_del_mismo_numero_van_juntos(self):
+        from apps.catalogo.models import Ubicacion
+        from apps.mesa.plano import racks_bodega
+        for codigo, tipo in (
+            ("PIC-1-1", Ubicacion.PICKING), ("PIC-1-2", Ubicacion.PICKING),
+            ("PIC-1-3", Ubicacion.PICKING), ("RES-1-4", Ubicacion.RESERVA),
+            ("PIC-2-1", Ubicacion.PICKING), ("RES-2-4", Ubicacion.RESERVA),
+        ):
+            Ubicacion.objects.get_or_create(codigo=codigo, defaults={"tipo": tipo})
+        racks = {r["etiqueta"]: [f["codigo"] for f in r["filas"]] for r in racks_bodega()}
+        self.assertEqual(racks["Rack 1"], ["PIC-1-1", "PIC-1-2", "PIC-1-3", "RES-1-4"])
+        self.assertEqual(racks["Rack 2"], ["PIC-2-1", "RES-2-4"])

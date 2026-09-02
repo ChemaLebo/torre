@@ -38,6 +38,10 @@ def racks_bodega():
 
     from apps.catalogo.models import Ubicacion  # lazy por contrato
 
+    # Agrupación POR NÚMERO DE RACK, ignorando la letra (decisión de Chema,
+    # sep-2026): el rack físico 1 junta PIC-1-1/2/3 y RES-1-4 — la letra es
+    # el tipo del piso, no el rack. Códigos sin patrón letra-num-num van como
+    # bloque propio de un piso.
     patron = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
     grupos = {}
     for codigo in (
@@ -46,15 +50,21 @@ def racks_bodega():
         ).order_by("codigo").values_list("codigo", flat=True)
     ):
         m = patron.match(codigo)
-        clave = f"{m.group(1)}-{m.group(2)}" if m else codigo
+        clave = f"Rack {m.group(2)}" if m else codigo
         piso = int(m.group(3)) if m else 1
         grupos.setdefault(clave, []).append((piso, codigo))
 
     if not grupos:
         return []
+
+    def _orden(item):
+        clave = item[0]
+        num = clave.split(" ")[-1]
+        return (0, int(num)) if num.isdigit() else (1, 0)
+
     pitch = (RACK_Y_FIN - RACK_Y0) // max(len(grupos), 1)
     racks = []
-    for indice, (clave, pisos) in enumerate(sorted(grupos.items())):
+    for indice, (clave, pisos) in enumerate(sorted(grupos.items(), key=_orden)):
         pisos.sort()
         y_rack = RACK_Y0 + indice * pitch
         alto_fila = max(24, min(52, (pitch - 26) // max(len(pisos), 1)))
