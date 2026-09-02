@@ -63,6 +63,11 @@ class SKU(models.Model):
         help_text="Se arma al empacar (TeaBox): no reserva stock propio ni publica "
                   "inventario; su contenido se declara en empaque o llega en la orden",
     )
+    productos_por_kit = models.PositiveIntegerField(
+        default=0,
+        help_text="Solo kits: cuántos productos EXACTOS lleva una caja (TeaBox de 3 "
+                  "→ 3). 0 = libre. El total del pedido se deriva: cajas × cupo.",
+    )
     usa_caja_propia = models.BooleanField(
         default=False,
         help_text="El producto viaja en SU propio empaque (kit brandeado, caja del "

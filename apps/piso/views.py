@@ -876,12 +876,24 @@ def _empaque_contenido_kit(request, pedido):
             messages.error(request, "Completa producto y piezas en cada renglón del kit.")
             return redirect("piso:empaque_pedido", pk=pedido.pk)
         items.append((sku, piezas))
+    caja = None
+    if request.POST.get("kit_caja"):
+        try:
+            caja = int(request.POST["kit_caja"])
+        except (TypeError, ValueError):
+            caja = None
     try:
-        declarar_contenido_kit(linea, items, request.user)
+        declarar_contenido_kit(linea, items, request.user, caja=caja)
     except ValueError as exc:
         messages.error(request, str(exc))
     else:
-        messages.success(request, f"Contenido del kit {linea.sku.codigo} declarado.")
+        if caja is not None:
+            messages.success(
+                request,
+                f"Caja {caja} de {linea.cantidad} del kit {linea.sku.codigo} declarada.",
+            )
+        else:
+            messages.success(request, f"Contenido del kit {linea.sku.codigo} declarado.")
     return redirect("piso:empaque_pedido", pk=pedido.pk)
 
 
@@ -935,10 +947,31 @@ def _render_paso_empacar(request, pedido):
     if kits:
         for linea in kits:
             linea.hijas = list(linea.componentes.select_related("sku"))
+            cupo = linea.sku.productos_por_kit or 0
+            linea.cupo = cupo
+            linea.piezas_declaradas = sum(h.cantidad for h in linea.hijas)
+            linea.objetivo_total = cupo * linea.cantidad if cupo else None
+            hechas = {h.kit_caja for h in linea.hijas if h.kit_caja}
+            linea.proxima_caja = next(
+                (n for n in range(1, linea.cantidad + 1) if n not in hechas), None,
+            )
+            if linea.objetivo_total is not None:
+                linea.completo = linea.piezas_declaradas == linea.objetivo_total
+            else:
+                linea.completo = linea.piezas_declaradas > 0
+            linea.renglones = list(range(1, (cupo or 3) + 1))
         contexto["kits"] = kits
-        if any(not l.hijas for l in kits):
+        if any(not l.completo for l in kits):
+            import json
             from apps.catalogo.models import opciones_sku_agrupadas
             contexto["opciones_kit"] = opciones_sku_agrupadas(pedido.cliente, excluir_kits=True)
+            # Scan-to-fill: mapa barras→pk para llenar renglones escaneando.
+            contexto["kit_barras_json"] = json.dumps({
+                s.codigo_barras: s.pk
+                for s in SKU.objects.filter(
+                    cliente=pedido.cliente, activo=True, es_kit=False,
+                ).exclude(codigo_barras="")
+            })
 
     if cajas and pendientes:
         caja = pendientes[0]

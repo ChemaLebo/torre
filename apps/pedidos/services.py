@@ -923,7 +923,7 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
 
 # ── Kits (contenido declarado en empaque — mystery box) ──
 
-def declarar_contenido_kit(linea_kit, items, actor):
+def declarar_contenido_kit(linea_kit, items, actor, caja=None):
     """El packer declara los tés del kit en empaque (registro por pedido).
 
     items = [(SKU, piezas)]. Atómico y completo-o-nada: cada componente
@@ -940,7 +940,17 @@ def declarar_contenido_kit(linea_kit, items, actor):
             f"El contenido del kit se declara durante el empaque; {pedido.folio} "
             f"está {pedido.get_estado_display()}."
         )
-    if linea_kit.componentes.exists():
+    if caja is not None:
+        if not (1 <= int(caja) <= linea_kit.cantidad):
+            raise ValueError(
+                f"Caja {caja} fuera de rango: el pedido lleva {linea_kit.cantidad} "
+                "caja(s) de este kit."
+            )
+        if linea_kit.componentes.filter(kit_caja=caja).exists():
+            raise ValueError(
+                f"La caja {caja} del kit ya tiene contenido; quítalo antes de re-declararla."
+            )
+    elif linea_kit.componentes.exists():
         raise ValueError(
             f"El kit de {pedido.folio} ya tiene contenido; quítalo antes de re-declararlo."
         )
@@ -951,6 +961,19 @@ def declarar_contenido_kit(linea_kit, items, actor):
         consolidadas[sku] = consolidadas.get(sku, 0) + int(piezas)
     if not consolidadas:
         raise ValueError("Declara al menos un producto dentro del kit.")
+    # Cupo exacto (productos_por_kit > 0): la caja lleva N productos, ni más
+    # ni menos. Declaración por caja valida N; declaración completa (sin
+    # caja) valida N × cantidad de cajas. Cupo 0 = libre (compat).
+    cupo = linea_kit.sku.productos_por_kit or 0
+    if cupo:
+        total = sum(consolidadas.values())
+        objetivo = cupo if caja is not None else cupo * linea_kit.cantidad
+        donde = f"la caja {caja}" if caja is not None else "el kit completo"
+        if total != objetivo:
+            raise ValueError(
+                f"{linea_kit.sku.codigo} lleva {objetivo} producto(s) en {donde} "
+                f"y declaraste {total}. Ajusta los renglones al cupo exacto."
+            )
 
     from apps.inventario.services import reservar  # lazy por contrato
     with transaction.atomic():
@@ -963,6 +986,7 @@ def declarar_contenido_kit(linea_kit, items, actor):
             LineaPedido.objects.create(
                 pedido=pedido, sku=sku, cantidad=piezas,
                 cantidad_pickeada=piezas, reservada=True, parte_de_kit=linea_kit,
+                kit_caja=caja,
             )
         pedido.peso_esperado_gr = (pedido.peso_esperado_gr or 0) + sum(
             (s.peso_gr or 0) * c for s, c in consolidadas.items()
@@ -972,6 +996,7 @@ def declarar_contenido_kit(linea_kit, items, actor):
             "pedido", pedido.pk, "kit_contenido", actor=actor, cliente=pedido.cliente,
             delta={
                 "kit": linea_kit.sku.codigo,
+                "caja": caja,
                 "componentes": [
                     {"sku": s.codigo, "cantidad": c} for s, c in consolidadas.items()
                 ],
@@ -1091,14 +1116,24 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
             )
         # GATE de kits: la caja no se cierra sin su contenido declarado (7B lo
         # pre-declara desde la orden; el mystery se declara aquí en empaque).
-        kits_vacios = [
-            l for l in fresco.lineas.select_related("sku").filter(sku__es_kit=True)
-            if not l.componentes.exists()
-        ]
-        if kits_vacios:
+        # GATE de kits con cupo: cada kit debe tener su contenido COMPLETO —
+        # cupo × cajas piezas exactas si productos_por_kit > 0; al menos una
+        # pieza si el cupo es libre (0).
+        kits_incompletos = []
+        for l in fresco.lineas.select_related("sku").filter(
+            sku__es_kit=True, parte_de_kit__isnull=True,
+        ):
+            piezas = sum(h.cantidad for h in l.componentes.all())
+            cupo = l.sku.productos_por_kit or 0
+            objetivo = cupo * l.cantidad
+            if cupo and piezas != objetivo:
+                kits_incompletos.append(f"{l.sku.codigo} ({piezas}/{objetivo})")
+            elif not cupo and piezas == 0:
+                kits_incompletos.append(l.sku.codigo)
+        if kits_incompletos:
             raise ValueError(
                 "Declara el contenido del kit antes de empacar: "
-                + ", ".join(l.sku.codigo for l in kits_vacios)
+                + ", ".join(kits_incompletos)
             )
 
         try:

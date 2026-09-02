@@ -1609,6 +1609,8 @@ def cliente_skus(request, pk):
                 "empaques_divisibles": sku_editar.empaques_divisibles,
                 "backorder_habilitado": sku_editar.backorder_habilitado,
                 "es_kit": sku_editar.es_kit,
+                "productos_por_kit": sku_editar.productos_por_kit,
+                "usa_caja_propia": sku_editar.usa_caja_propia,
                 "activo": sku_editar.activo,
             })
         else:

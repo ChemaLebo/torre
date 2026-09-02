@@ -171,6 +171,12 @@
         <div>
           <label for="{{ form.es_kit.id_for_label }}">{{ form.es_kit.label }}</label>
           {{ form.es_kit }}{{ form.es_kit.errors }}
+          <label for="{{ form.productos_por_kit.id_for_label }}">{{ form.productos_por_kit.label }}</label>
+          {{ form.productos_por_kit }}
+          <div class="small muted">{{ form.productos_por_kit.help_text }}</div>
+          {{ form.productos_por_kit.errors }}
+          <label for="{{ form.usa_caja_propia.id_for_label }}">{{ form.usa_caja_propia.label }}</label>
+          {{ form.usa_caja_propia }}{{ form.usa_caja_propia.errors }}
         </div>
         <div>
           <label for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>

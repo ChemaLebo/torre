@@ -298,6 +298,14 @@ class FormSKU(forms.Form):
         label="Es kit (se arma al empacar)", required=False, initial=False,
         help_text="TeaBox y similares: no reserva stock propio ni publica inventario.",
     )
+    productos_por_kit = forms.IntegerField(
+        label="Productos por kit", required=False, min_value=0, initial=0,
+        help_text="Solo kits: cupo EXACTO de productos por caja (TeaBox de 3 → 3). 0 = libre.",
+    )
+    usa_caja_propia = forms.BooleanField(
+        label="Usa caja propia", required=False, initial=False,
+        help_text="Viaja en su propio empaque: sus medidas/peso de catálogo son las del bulto.",
+    )
     activo = forms.BooleanField(label="Activo", required=False, initial=True)
 
     def __init__(self, cliente, *args, **kwargs):
@@ -336,6 +344,8 @@ class FormSKU(forms.Form):
             "empaques_divisibles": d["empaques_divisibles"],
             "backorder_habilitado": d.get("backorder_habilitado", False),
             "es_kit": d.get("es_kit", False),
+            "productos_por_kit": d.get("productos_por_kit") or 0,
+            "usa_caja_propia": d.get("usa_caja_propia", False),
             "activo": d.get("activo", False),
         }
 

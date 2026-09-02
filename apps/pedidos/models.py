@@ -249,6 +249,11 @@ class LineaPedido(models.Model):
         "self", null=True, blank=True, on_delete=models.CASCADE, related_name="componentes",
         help_text="Línea kit a la que pertenece este componente (té dentro de la TeaBox)",
     )
+    kit_caja = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Nº de caja del kit (1..cantidad) a la que pertenece esta hija — "
+                  "el stepper 'TeaBox 1 de N' declara caja por caja",
+    )
     nota_kit = models.CharField(
         max_length=300, blank=True, default="",
         help_text="Lo que el comprador eligió (texto de Appstle), para el packer",
