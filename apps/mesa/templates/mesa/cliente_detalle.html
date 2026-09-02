@@ -12,6 +12,7 @@
     <a class="btn chico" href="{% url 'mesa:cliente_editar' cliente.pk %}">Editar</a>
     <a class="btn chico" href="{% url 'mesa:cliente_tarifario' cliente.pk %}">Editar tarifario</a>
     <a class="btn chico" href="{% url 'mesa:cliente_skus' cliente.pk %}">Catálogo ({{ n_skus }} SKUs)</a>
+    <a class="btn chico" href="{% url 'mesa:cliente_cajas' cliente.pk %}">Cajas de empaque</a>
   </div>
 </div>
 
@@ -34,7 +35,6 @@
       Naked packing local: {% if cliente.naked_packing_local %}sí{% else %}no{% endif %}<br>
       Visto bueno desde: ${{ cliente.umbral_visto_bueno_mxn }} MXN
     </p>
-    <p class="small mt"><a href="{% url 'mesa:cliente_cajas' cliente.pk %}">Cajas de empaque →</a></p>
   </div>
   <div class="card">
     <div class="eyebrow">Guía de voz</div>

@@ -13,6 +13,7 @@
   <div class="fila">
     <span class="pill accent">{{ skus|length }} SKU(s)</span>
     <a class="btn" href="{% url 'mesa:cliente_skus_exportar' cliente.pk %}">Exportar CSV</a>
+    <button class="btn primario" type="button" onclick="document.getElementById('modal-sku').showModal()">+ Nuevo SKU</button>
   </div>
 </div>
 
@@ -84,11 +85,16 @@
   </form>
 </div>
 
-<div class="grid g2">
-  <div class="card" id="form-sku">
+{# Alta/edición en MODAL (pedido de Chema, sep-2026): el form ya no vive al #}
+{# fondo de la página — los "editar" recargan con ?editar=N y el modal abre solo. #}
+<dialog id="modal-sku" style="max-width:760px;width:92%;border:none;border-radius:12px;padding:0;background:transparent">
+  <div class="card" id="form-sku" style="margin:0">
     <div class="titulo">
       <h3>{% if sku_editar %}Editar {{ sku_editar.codigo }}{% else %}Nuevo SKU{% endif %}</h3>
-      {% if sku_editar %}<a class="small" href="{% url 'mesa:cliente_skus' cliente.pk %}">cancelar edición →</a>{% endif %}
+      <div class="fila">
+        {% if sku_editar %}<a class="small" href="{% url 'mesa:cliente_skus' cliente.pk %}">cancelar edición →</a>{% endif %}
+        <button type="button" class="btn chico" onclick="document.getElementById('modal-sku').close()">cerrar ✕</button>
+      </div>
     </div>
     <form method="post">
       {% csrf_token %}
@@ -188,7 +194,16 @@
       </div>
     </form>
   </div>
+</dialog>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  {% if sku_editar or form.errors %}
+  document.getElementById("modal-sku").showModal();
+  {% endif %}
+});
+</script>
 
+<div class="grid g2">
   <div class="card">
     <div class="titulo"><h3>Importar catálogo por CSV</h3></div>
     <form method="post" enctype="multipart/form-data">
