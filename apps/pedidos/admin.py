@@ -13,7 +13,8 @@ class LineaPedidoInline(admin.TabularInline):
 class PedidoAdmin(admin.ModelAdmin):
     list_display = (
         "folio", "cliente", "tienda", "estado", "es_local", "cp",
-        "comprador_nombre", "valor_declarado", "incidencia_activa", "creado",
+        "comprador_nombre", "valor_declarado", "incidencia_activa",
+        "asignado_a", "transferencia_a", "creado",
     )
     list_filter = ("estado", "es_local", "incidencia_activa", "origen", "cliente")
     search_fields = ("folio", "shopify_order_id", "comprador_nombre", "comprador_email", "comprador_tel")
@@ -23,7 +24,9 @@ class PedidoAdmin(admin.ModelAdmin):
         "folio", "creado", "actualizado",
         "ts_picking", "ts_empacado", "ts_guia", "ts_recolectado", "ts_en_transito", "ts_entregado",
     )
-    raw_id_fields = ("tienda", "cliente")
+    # asignado_a/transferencia_a como raw_id: el RESCATE de un pedido cuyo
+    # dueño no está se hace aquí (reasignar o dejar en blanco = liberarlo).
+    raw_id_fields = ("tienda", "cliente", "asignado_a", "transferencia_a")
 
 
 @admin.register(LineaPedido)
