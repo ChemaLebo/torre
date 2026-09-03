@@ -865,7 +865,71 @@ def iniciar_picking(pedido, actor):
             f"{pedido.folio} tiene líneas sin reservar ({', '.join(sin_reserva)}): "
             "no se puede iniciar picking. Pide a Mesa reintentar las reservas."
         )
+    if hasattr(actor, "pk"):
+        # El que lo inicia se vuelve DUEÑO: el pedido desaparece para los
+        # demás operadores hasta la última foto de cierre (o transferencia).
+        pedido.asignado_a = actor
+        pedido.save(update_fields=["asignado_a", "actualizado"])
     pedido.transicionar(Pedido.EN_PICKING, actor=actor, motivo="Inicio de picking")
+    return pedido
+
+
+def _nombre_usuario(u):
+    return getattr(u, "username", str(u) or "?")
+
+
+def transferir_pedido(pedido, de, a):
+    """El DUEÑO envía su pedido a otro operador; queda pendiente de ACEPTAR."""
+    if pedido.asignado_a_id != getattr(de, "pk", None):
+        raise ValueError(f"{pedido.folio} no es tuyo: solo su dueño puede enviarlo.")
+    if getattr(a, "pk", None) == de.pk:
+        raise ValueError("Elegiste tu propio usuario: no hay nada que enviar.")
+    if pedido.cajas_cerradas_completas or pedido.estado not in (
+        Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA,
+    ):
+        raise ValueError(
+            f"{pedido.folio} ya está liberado (cierre completo o fuera del carril): "
+            "no hay dueño que transferir."
+        )
+    pedido.transferencia_a = a
+    pedido.save(update_fields=["transferencia_a", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "transferencia_enviada", actor=de, cliente=pedido.cliente,
+        delta={"de": _nombre_usuario(de), "a": _nombre_usuario(a)},
+        motivo=f"{_nombre_usuario(de)} envió el pedido a {_nombre_usuario(a)}; falta que acepte.",
+    )
+    return pedido
+
+
+def aceptar_transferencia(pedido, usuario):
+    """El destinatario acepta: cambia de manos con el avance INTACTO."""
+    if pedido.transferencia_a_id != usuario.pk:
+        raise ValueError(f"{pedido.folio} no tiene una transferencia para ti.")
+    anterior = pedido.asignado_a
+    pedido.asignado_a = usuario
+    pedido.transferencia_a = None
+    pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "pedido_transferido", actor=usuario, cliente=pedido.cliente,
+        delta={"de": _nombre_usuario(anterior), "a": usuario.username},
+        motivo=f"Transferencia aceptada: ahora lo trabaja {usuario.username}.",
+    )
+    return pedido
+
+
+def rechazar_transferencia(pedido, usuario):
+    """El destinatario la rechaza — o el dueño cancela su propio envío."""
+    if usuario.pk not in (pedido.transferencia_a_id, pedido.asignado_a_id):
+        raise ValueError(f"{pedido.folio}: esa transferencia no es tuya.")
+    destinatario = pedido.transferencia_a
+    pedido.transferencia_a = None
+    pedido.save(update_fields=["transferencia_a", "actualizado"])
+    accion = "cancelada por el dueño" if usuario.pk == pedido.asignado_a_id else "rechazada"
+    registrar_evento(
+        "pedido", pedido.pk, "transferencia_rechazada", actor=usuario, cliente=pedido.cliente,
+        delta={"destinatario": _nombre_usuario(destinatario)},
+        motivo=f"Transferencia {accion}.",
+    )
     return pedido
 
 

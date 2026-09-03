@@ -95,6 +95,23 @@
   </div>
   <a class="btn chico" href="{% url 'piso:empaque' %}">Volver</a>
 </div>
+{% if operadores %}
+<details class="colapsable mt">
+  <summary>Enviar este pedido a otro operador</summary>
+  <form method="post" class="colapsable-cuerpo fila">{% csrf_token %}
+    <input type="hidden" name="accion" value="transferir">
+    <select name="operador_id" class="crece" aria-label="Operador destino">
+      <option value="">¿A quién se lo mandas?</option>
+      {% for u in operadores %}<option value="{{ u.pk }}">{{ u.username }}</option>{% endfor %}
+    </select>
+    <button class="btn chico" type="submit">Enviar →</button>
+  </form>
+  {% if pedido.transferencia_a %}
+  <p class="small muted">Enviado a <b>{{ pedido.transferencia_a.username }}</b> — sigue siendo tuyo hasta que acepte.</p>
+  {% endif %}
+</details>
+{% endif %}
+
 
 {% if naked %}
 <div class="banner crit"><span class="foco"></span>

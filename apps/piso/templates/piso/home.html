@@ -17,6 +17,25 @@
   </div>
 </div>
 
+{% if transferencias %}
+<div class="card mb">
+  <div class="titulo"><h2>Te mandaron pedidos</h2><span class="pill accent">{{ transferencias|length }}</span></div>
+  {% for p in transferencias %}
+  <div class="corral-fila">
+    <div class="crece">
+      <span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}
+      <div class="small muted">te lo envía {{ p.asignado_a.username|default:"—" }} · está {{ p.get_estado_display|lower }}</div>
+    </div>
+    <form method="post" class="fila">{% csrf_token %}
+      <input type="hidden" name="pedido_id" value="{{ p.pk }}">
+      <button class="btn primario chico" name="accion" value="aceptar_transferencia" type="submit">Aceptar ✓</button>
+      <button class="btn chico" name="accion" value="rechazar_transferencia" type="submit">Rechazar</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if siguiente %}
 <div class="card">
   <div class="titulo">

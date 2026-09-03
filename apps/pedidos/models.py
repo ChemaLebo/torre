@@ -5,6 +5,7 @@ transiciones explícitas. Cada transición estampa su timestamp y queda en el
 event log (core.EventoAuditoria): nada cambia de estado en silencio y está
 prohibido el estado genérico "en proceso".
 """
+from django.conf import settings
 from django.db import IntegrityError, models, transaction
 
 from apps.core.services import registrar_evento
@@ -111,6 +112,19 @@ class Pedido(models.Model):
     ts_entregado = models.DateTimeField(null=True, blank=True)
     # Flag ortogonal: un pedido EN_TRANSITO puede tener incidencia; no es estado terminal.
     incidencia_activa = models.BooleanField(default=False)
+    # Dueño del pedido en piso (sep-2026): se asigna al iniciar picking y el
+    # pedido DESAPARECE para los demás operadores hasta la última foto de
+    # cierre. Cambio de manos = transferencia con ACEPTACIÓN del receptor.
+    asignado_a = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="pedidos_asignados",
+        help_text="Operador de piso dueño: de iniciar picking a la última foto de cierre",
+    )
+    transferencia_a = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="pedidos_por_aceptar",
+        help_text="Transferencia pendiente: el destinatario debe ACEPTAR para volverse dueño",
+    )
     peso_esperado_gr = models.PositiveIntegerField(default=0)
     peso_real_gr = models.PositiveIntegerField(null=True, blank=True)
     creado = models.DateTimeField(auto_now_add=True, db_index=True)

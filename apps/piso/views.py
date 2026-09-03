@@ -181,6 +181,57 @@ def _reloj_corte():
     return hora, texto, "warn" if minutos < 60 else "ok"
 
 
+def _es_mesa(request):
+    return getattr(request, "rol", None) == "mesa" or request.user.is_superuser
+
+
+def _pedido_libre_o_mio(pedido, user):
+    """Visible/trabajable en piso: sin dueño, mío, o ya liberado (cierre completo)."""
+    if pedido.asignado_a_id in (None, user.pk):
+        return True
+    return pedido.cajas_cerradas_completas
+
+
+def _acceso_pedido(request, pedido):
+    return _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
+
+
+def _reclamar_si_libre(pedido, request):
+    """Trabajar un pedido libre = volverse su dueño (adopción implícita)."""
+    if pedido.asignado_a_id is None and not _es_mesa(request):
+        pedido.asignado_a = request.user
+        pedido.save(update_fields=["asignado_a", "actualizado"])
+
+
+def _operadores_piso(request):
+    from django.contrib.auth.models import User
+    return list(
+        User.objects.filter(perfil__rol="piso", is_active=True)
+        .exclude(pk=request.user.pk).order_by("username")
+    )
+
+
+def _pedido_transferir(request, pedido):
+    from django.contrib.auth.models import User
+
+    from apps.pedidos.services import transferir_pedido
+    destino = User.objects.filter(
+        pk=request.POST.get("operador_id"), perfil__rol="piso", is_active=True,
+    ).first()
+    if destino is None:
+        messages.error(request, "Elige a qué operador se lo mandas.")
+        return
+    try:
+        transferir_pedido(pedido, request.user, destino)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(
+            request,
+            f"{pedido.folio} enviado a {destino.username} — sigue siendo tuyo hasta que acepte.",
+        )
+
+
 def _pendientes_por_prioridad():
     """PENDIENTES en orden de cola: primero los que rebasan el corte de hoy
     (entraron antes del corte → salen HOY), luego por creado ascendente."""
@@ -192,23 +243,25 @@ def _pendientes_por_prioridad():
     )
 
 
-def _abierto_mas_viejo():
-    """El EN_PICKING más viejo (para reanudar trabajo abierto), o None."""
+def _abierto_mas_viejo(user):
+    """El EN_PICKING más viejo MÍO o libre (para reanudar), o None."""
+    from django.db.models import Q
     en_picking = sorted(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
+        .filter(Q(asignado_a__isnull=True) | Q(asignado_a=user))
         .select_related("cliente").prefetch_related("lineas"),
         key=lambda p: p.ts_picking or p.creado,
     )
     return en_picking[0] if en_picking else None
 
 
-def _siguiente_en_cola():
+def _siguiente_en_cola(user):
     """El pedido de LA card según prioridad del SERVIDOR (el empleado no decide).
 
     1º EN_PICKING ya empezados (terminar lo abierto, el más viejo primero);
     2º PENDIENTE por prioridad de cola.
     """
-    abierto = _abierto_mas_viejo()
+    abierto = _abierto_mas_viejo(user)
     if abierto is not None:
         return abierto
     pendientes = _pendientes_por_prioridad()
@@ -237,13 +290,13 @@ def _home_siguiente(request):
         abierto = Pedido.objects.filter(
             pk=request.POST.get("pedido_id"), estado=Pedido.EN_PICKING,
         ).first()
-        if abierto is not None:
+        if abierto is not None and _acceso_pedido(request, abierto):
             return _destino_pedido(abierto)
 
     for _ in range(8):
         pendientes = _pendientes_por_prioridad()
         if not pendientes:
-            abierto = _abierto_mas_viejo()
+            abierto = _abierto_mas_viejo(request.user)
             if abierto is not None:
                 return _destino_pedido(abierto)
             messages.success(request, "Todo al día: no hay pedidos en la cola.")
@@ -270,6 +323,19 @@ def home(request):
             return _home_confirmar_restock(request)
         if accion == "siguiente":
             return _home_siguiente(request)
+        if accion in ("aceptar_transferencia", "rechazar_transferencia"):
+            from apps.pedidos.services import aceptar_transferencia, rechazar_transferencia
+            pedido = get_object_or_404(Pedido, pk=request.POST.get("pedido_id"))
+            try:
+                if accion == "aceptar_transferencia":
+                    aceptar_transferencia(pedido, request.user)
+                    messages.success(request, f"{pedido.folio} ahora es tuyo — continúalo desde su pantalla.")
+                else:
+                    rechazar_transferencia(pedido, request.user)
+                    messages.success(request, f"Transferencia de {pedido.folio} rechazada.")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect("piso:home")
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:home")
 
@@ -282,6 +348,9 @@ def home(request):
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
         .select_related("cliente").prefetch_related("lineas")
     )
+    if not _es_mesa(request):
+        # Los pedidos con dueño desaparecen para los demás operadores.
+        en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
     por_pickear = [p for p in en_picking if not p.lineas_completas]
     por_empacar = [p for p in en_picking if p.lineas_completas]
     staging = list(
@@ -306,7 +375,12 @@ def home(request):
     )
     conteos_pendientes = [t for t in tareas_conteo if t.estado == TareaConteo.PENDIENTE]
 
-    siguiente = _siguiente_en_cola()
+    transferencias = list(
+        Pedido.objects.filter(transferencia_a=request.user)
+        .select_related("cliente", "asignado_a")
+    )
+
+    siguiente = _siguiente_en_cola(request.user)
     if siguiente is not None:
         siguiente.total_piezas = _piezas(siguiente)
         siguiente.num_lineas = siguiente.lineas.count()
@@ -323,6 +397,7 @@ def home(request):
         "seccion": "home",
         "todo_al_dia": todo_al_dia,
         "siguiente": siguiente,
+        "transferencias": transferencias,
         "recepciones_abiertas": recepciones_abiertas,
         "num_por_pickear": total_picking,
         "por_empacar": por_empacar,
@@ -598,6 +673,8 @@ def picking(request):
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
         .select_related("cliente").prefetch_related("lineas__sku")
     )
+    if not _es_mesa(request):
+        en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
     for pedido in en_picking:
         pedido.pickeadas, pedido.total_piezas, pedido.avance_pct = _avance(pedido)
     contexto = {"seccion": "picking", "pendientes": pendientes, "en_picking": en_picking}
@@ -649,12 +726,27 @@ def picking_pedido(request, pk):
         )
         return redirect("piso:picking")
 
+    if not _acceso_pedido(request, pedido):
+        duenio = pedido.asignado_a.username if pedido.asignado_a else "otro operador"
+        if _quiere_json(request):
+            return JsonResponse({"ok": False, "error": f"Lo tiene {duenio}."}, status=403)
+        messages.error(
+            request,
+            f"{pedido.folio} lo tiene {duenio}: pídele que te lo envíe desde su pantalla.",
+        )
+        return redirect("piso:picking")
+
     if request.method == "POST":
+        if request.POST.get("accion") == "transferir":
+            _pedido_transferir(request, pedido)
+            return redirect("piso:picking_pedido", pk=pedido.pk)
+        _reclamar_si_libre(pedido, request)
         return _picking_escanear(request, pedido)
 
     lineas = _lineas_en_ruta(pedido)
     pickeadas, total, _ = _avance(pedido)
     contexto = {
+        "operadores": _operadores_piso(request),
         "paquetes": _paquetes_con_lineas(pedido),
         "ahorro_division": _ahorro_division(pedido),
         "seccion": "picking",
@@ -750,6 +842,8 @@ def empaque(request):
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
         .select_related("cliente").prefetch_related("lineas__sku")
     )
+    if not _es_mesa(request):
+        en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
     listos = [p for p in en_picking if p.lineas_completas]
     incompletos = [p for p in en_picking if not p.lineas_completas]
     for pedido in listos:
@@ -815,8 +909,20 @@ def empaque_pedido(request, pk):
     """
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
 
+    if not _acceso_pedido(request, pedido):
+        duenio = pedido.asignado_a.username if pedido.asignado_a else "otro operador"
+        messages.error(
+            request,
+            f"{pedido.folio} lo tiene {duenio}: pídele que te lo envíe desde su pantalla.",
+        )
+        return redirect("piso:empaque")
+
     if request.method == "POST":
         accion = request.POST.get("accion") or "empacar"
+        if accion == "transferir":
+            _pedido_transferir(request, pedido)
+            return redirect("piso:empaque_pedido", pk=pedido.pk)
+        _reclamar_si_libre(pedido, request)
         if accion == "empacar_caja":
             return _empaque_caja(request, pedido)
         if accion == "cerrar_caja":
@@ -973,6 +1079,8 @@ def _render_paso_empacar(request, pedido):
                 ).exclude(codigo_barras="")
             })
 
+    contexto["operadores"] = _operadores_piso(request)
+    contexto["duenio"] = pedido.asignado_a
     if cajas and pendientes:
         caja = pendientes[0]
         plan_gr = int(caja.peso_kg * 1000) if caja.peso_kg else 0

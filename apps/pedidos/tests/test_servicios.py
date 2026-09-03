@@ -932,6 +932,7 @@ class EmpaqueTests(BaseServicios):
         self.assertEqual(evento.delta["esperado_gr"], 4800)
         self.assertEqual(evento.delta["bascula_gr"], 6000)
 
+    @override_settings(TORRE_PESO_MODO="off")  # blindado del .env local del dev
     def test_empacar_peso_fuera_con_modo_off_pasa_sin_evento(self):
         from apps.core.models import EventoAuditoria
         with patch("apps.inventario.services.confirmar_pick"):
