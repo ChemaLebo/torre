@@ -324,16 +324,18 @@ class ReplanAlGenerarTests(TestCase):
 
     def test_carrier_ya_no_permitido_se_replanea_y_audita(self):
         pedido = crear_pedido(self.cliente, self.tienda)
-        paquete = self._paquete(pedido, "noventa9Minutos")  # fuera de la lista
+        # puntopost: en la tabla mock, fuera de CARRIERS_COTIZAR (noventa9Minutos
+        # regresó a la lista el 2026-09-07 y ya no sirve de ejemplo).
+        paquete = self._paquete(pedido, "puntopost")
         guia = services.generar_guia(pedido)
-        self.assertNotEqual(guia.carrier, "noventa9Minutos")
+        self.assertNotEqual(guia.carrier, "puntopost")
         self.assertIn(guia.carrier, settings.TORRE["CARRIERS_COTIZAR"])
         paquete.refresh_from_db()
         self.assertEqual(paquete.carrier, guia.carrier)
         evento = EventoAuditoria.objects.get(
             entidad="pedido", entidad_id=str(pedido.pk), accion="replan_paquete",
         )
-        self.assertEqual(evento.delta["antes"], "noventa9Minutos")
+        self.assertEqual(evento.delta["antes"], "puntopost")
         self.assertEqual(evento.delta["ahora"], guia.carrier)
 
     def test_carrier_permitido_no_se_toca(self):

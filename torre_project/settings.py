@@ -193,12 +193,19 @@ TORRE = {
     # ── Envíos: división y meta de tarifa (regla Colima, ago 2026) ──
     "MAX_PESO_ENVIO_KG": 20,  # tope duro por paquete; arriba de esto SIEMPRE se divide
     "TARIFA_OBJETIVO_MXN": 115,  # meta nacional por envío; si la mejor opción la excede, se marca fuera de meta
-    # Lista blanca Y exclusión (2026-08-19: fuera iMile/AmPm/puntopost); gana el más barato.
-    # noventa9Minutos no tiene "ground": jamás usarlo de carrier_preferente.
+    # Lista blanca: solo lo que está aquí se cotiza y se elige; gana el más barato
+    # por lane. Los códigos son los de envia (GET queries.envia.com/available-carrier/
+    # MX/0/1, campo `name`): amPm lleva la M mayúscula. 2026-09-07: regresan
+    # noventa9Minutos, amPm e imile (excluidos el 19-ago); puntopost sigue fuera.
+    # noventa9Minutos no tiene "ground" en envia (local_next_day / next_day):
+    # jamás usarlo de carrier_preferente en un cliente envia.
     "CARRIERS_COTIZAR": [
         "estafeta",
         "paquetexpress",
         "fedex",
+        "noventa9Minutos",
+        "amPm",
+        "imile",
     ],
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
