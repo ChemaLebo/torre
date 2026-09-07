@@ -418,7 +418,16 @@ class FormPedidoManual(ConRenglonesSKU, forms.Form):
         max_length=120,
         error_messages={"required": "Captura la ciudad de la entrega."},
     )
-    estado = forms.CharField(label="Estado", max_length=120, required=False)
+    # Dropdown del catálogo de estados de envia (valor = code_shopify, el
+    # mismo vocabulario que manda Shopify; las choices se cargan en __init__).
+    estado = forms.ChoiceField(
+        label="Estado",
+        choices=(),
+        error_messages={
+            "required": "Elige el estado de la entrega.",
+            "invalid_choice": "Ese estado no está en el catálogo; elígelo de la lista.",
+        },
+    )
     cp = forms.CharField(
         label="Código postal",
         max_length=5,
@@ -447,6 +456,8 @@ class FormPedidoManual(ConRenglonesSKU, forms.Form):
 
     def __init__(self, cliente, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        from apps.envios.cotizador import OPCIONES_ESTADO  # lazy por contrato
+        self.fields["estado"].choices = [("", "Elige el estado")] + list(OPCIONES_ESTADO)
         self._armar_renglones(cliente)
 
     def clean_cp(self):
@@ -467,7 +478,7 @@ class FormPedidoManual(ConRenglonesSKU, forms.Form):
 
     def direccion(self):
         """Dict de dirección con el mismo shape que el shipping_address de Shopify."""
-        from apps.envios.cotizador import CP_ESTADO  # lazy por contrato
+        from apps.envios.cotizador import NOMBRE_ESTADO_MX  # lazy por contrato
 
         d = self.cleaned_data
         cp = d["cp"]
@@ -476,10 +487,11 @@ class FormPedidoManual(ConRenglonesSKU, forms.Form):
             "address1": d["calle"].strip(),
             "address2": (d.get("colonia") or "").strip(),
             "city": d["ciudad"].strip(),
-            "province": (d.get("estado") or "").strip(),
-            # Shopify manda province_code y es la clave que el adapter de
-            # envia.com lee para el estado destino: derivarla del CP.
-            "province_code": CP_ESTADO.get(cp[:2], ""),
+            # El estado sale del dropdown (catálogo de envia): province_code es
+            # el code_shopify — la clave que el adapter traduce a 2 letras —
+            # y province el nombre, mismo shape que manda Shopify.
+            "province": NOMBRE_ESTADO_MX.get(d.get("estado", ""), ""),
+            "province_code": d.get("estado", ""),
             "zip": cp,
             "country": "México",
             "phone": (d.get("comprador_tel") or "").strip(),

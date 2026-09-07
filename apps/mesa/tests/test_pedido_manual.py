@@ -58,7 +58,7 @@ class PedidoNuevoVistaTests(BasePedidoManualVista):
             "calle": "Av. Constitución 380",
             "colonia": "Centro",
             "ciudad": "Ciudad de México",
-            "estado": "CDMX",
+            "estado": "DF",  # dropdown: valor = code_shopify
             "cp": "01780",
             "valor_declarado": "",
             "nota_regalo": "",
@@ -151,10 +151,11 @@ class PedidoNuevoVistaTests(BasePedidoManualVista):
 
 
 class DireccionPedidoManualTests(BasePedidoManualVista):
-    """direccion() emite province_code (shape Shopify) derivado del CP: es la
-    clave que el adapter de envia.com lee para el estado destino."""
+    """direccion() emite province (nombre) y province_code (code_shopify) desde
+    el dropdown de estados del catálogo de envia: es la clave que el adapter
+    traduce a 2 letras para el estado destino."""
 
-    def _form_valido(self, cp, estado="Jalisco"):
+    def _form_valido(self, cp, estado="JAL"):
         from apps.mesa.forms import FormPedidoManual
 
         form = FormPedidoManual(self.colima, {
@@ -174,15 +175,39 @@ class DireccionPedidoManualTests(BasePedidoManualVista):
         self.assertTrue(form.is_valid(), form.errors)
         return form
 
-    def test_cp_de_guadalajara_trae_province_code_jal(self):
+    def test_estado_elegido_da_province_code_y_nombre(self):
         direccion = self._form_valido("44100").direccion()
-        # Vocabulario code_shopify de envia (JAL, no el JA de la tabla vieja).
-        self.assertEqual(direccion["province_code"], "JAL")
-        self.assertEqual(direccion["province"], "Jalisco")  # el texto capturado se conserva
+        self.assertEqual(direccion["province_code"], "JAL")  # lo que manda Shopify
+        self.assertEqual(direccion["province"], "Jalisco")
 
-    def test_cp_sin_mapa_deja_province_code_vacio(self):
+    def test_el_dropdown_manda_sobre_el_cp(self):
+        # CP sin mapa (17000): antes dejaba province_code vacío; ahora el
+        # estado elegido es la fuente, igual que el province_code de Shopify.
         direccion = self._form_valido("17000").direccion()
-        self.assertEqual(direccion["province_code"], "")
+        self.assertEqual(direccion["province_code"], "JAL")
+
+    def test_estado_es_obligatorio_y_del_catalogo(self):
+        from apps.mesa.forms import FormPedidoManual
+
+        base = {
+            "comprador_nombre": "Lupita Ramírez", "calle": "Av. Vallarta 1500",
+            "ciudad": "Guadalajara", "cp": "44100", "sku_1": self.sku.pk, "cantidad_1": 1,
+        }
+        sin_estado = FormPedidoManual(self.colima, {**base, "estado": ""})
+        self.assertFalse(sin_estado.is_valid())
+        self.assertIn("estado", sin_estado.errors)
+        fuera_de_catalogo = FormPedidoManual(self.colima, {**base, "estado": "Jalisco"})
+        self.assertFalse(fuera_de_catalogo.is_valid())
+        self.assertIn("estado", fuera_de_catalogo.errors)
+
+    def test_el_dropdown_lista_los_32_estados(self):
+        from apps.mesa.forms import FormPedidoManual
+
+        form = FormPedidoManual(self.colima)
+        valores = [v for v, _ in form.fields["estado"].choices if v]
+        self.assertEqual(len(valores), 32)
+        self.assertIn("DF", valores)
+        self.assertIn("Q ROO", valores)
 
 
 class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
