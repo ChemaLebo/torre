@@ -42,6 +42,10 @@ ORIGEN_DEFAULT = {
     "postalCode": "01780",
 }
 
+# Tope general del `content` del bulto; los conectores mas estrictos van en
+# TORRE["CONTENIDO_MAX_POR_CARRIER"] (ver _recortar_contenido).
+CONTENIDO_MAX_DEFAULT = 120
+
 ESTADOS_CANONICOS = {
     "GUIA_CREADA",
     "RECOLECTADO",
@@ -276,7 +280,28 @@ class EnviaAdapter(CarrierAdapter):
         }
 
     @staticmethod
-    def _paquetes(pedido, paquete=None):
+    def _recortar_contenido(texto, carrier=None):
+        """Descripcion del bulto (`content`) con el tope del conector del carrier.
+
+        TORRE["CONTENIDO_MAX_POR_CARRIER"]: el conector de Estafeta rechaza
+        mas de 25 caracteres (400 "size must be between: 1 and 25 chars",
+        PED-00018, 2026-09-07); los demas aceptan el tope general de 120. El
+        corte respeta el limite de palabra para que la guia no termine a media
+        palabra (salvo una sola palabra mas larga que el tope). Nunca vacio:
+        sin texto viaja "Mercancia".
+        """
+        texto = " ".join(str(texto or "").split())
+        topes = settings.TORRE.get("CONTENIDO_MAX_POR_CARRIER") or {}
+        tope = int(topes.get(carrier or "", CONTENIDO_MAX_DEFAULT))
+        if len(texto) > tope:
+            corte = texto[:tope]
+            if texto[tope] != " " and " " in corte:
+                corte = corte.rsplit(" ", 1)[0]
+            texto = corte.rstrip(" ,;:")
+        return texto or "Mercancía"
+
+    @staticmethod
+    def _paquetes(pedido, paquete=None, carrier=None):
         if paquete is not None:
             lineas = list(paquete.lineas.select_related("linea_pedido__sku"))
             contenido = (
@@ -286,6 +311,7 @@ class EnviaAdapter(CarrierAdapter):
                 )[:120]
                 or "Mercancía"
             )
+            contenido = EnviaAdapter._recortar_contenido(contenido, carrier)
             # El peso real de báscula manda; el plan solo si la caja no se pesó.
             peso_kg = (
                 round(paquete.peso_real_gr / 1000.0, 2)
@@ -329,6 +355,7 @@ class EnviaAdapter(CarrierAdapter):
                 )
         except (AttributeError, TypeError):
             pass  # pedido sin líneas cargables: se envía con dimensiones default
+        contenido = EnviaAdapter._recortar_contenido(contenido, carrier)
         return [
             {
                 "content": contenido,
@@ -361,7 +388,7 @@ class EnviaAdapter(CarrierAdapter):
             {
                 "origin": self._origen(carrier),
                 "destination": self._destino(pedido),
-                "packages": self._paquetes(pedido, paquete=paquete),
+                "packages": self._paquetes(pedido, paquete=paquete, carrier=carrier),
                 "shipment": {"carrier": carrier, "service": servicio, "type": 1},
                 # /ship/generate/ exige settings con printFormat y printSize (enum de
                 # envia.com); STOCK_4X6 = etiqueta térmica 10×15. El rate tolera extras.

@@ -209,6 +209,11 @@ TORRE = {
     # 99min-vía-envia aceptan el code_shopify "DF" (default). Candidato
     # pendiente de probe: paquetexpress (sus 424 huelen a este mismo bug).
     "ORIGEN_ESTADO_POR_CARRIER": {"estafeta": "CX"},
+    # Tope de caracteres del `content` (descripción del bulto) por carrier de
+    # envia: el conector de Estafeta rechaza más de 25 (400 "size must be
+    # between: 1 and 25 chars", PED-00018, 2026-09-07). Sin entrada: 120, el
+    # texto completo de las líneas de la caja.
+    "CONTENIDO_MAX_POR_CARRIER": {"estafeta": 25},
     # Carriers de envia que aceptan recolección PROGRAMADA (POST /ship/pickup/).
     # El botón de Salida solo aparece para estos; noventa9Minutos no va aquí
     # (su pickup es nativo: pickUpAfter en el create). Descubrimiento fino vía

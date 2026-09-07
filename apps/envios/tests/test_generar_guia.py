@@ -65,6 +65,61 @@ class OrigenPorCarrierTests(TestCase):
         self.assertEqual(EnviaAdapter._origen()["state"], "DF")
 
 
+class ContenidoPorCarrierTests(TestCase):
+    """El `content` del bulto respeta el tope del conector: estafeta rechaza
+    más de 25 caracteres (PED-00018); los demás conservan la descripción
+    completa. El corte cae en límite de palabra y jamás viaja vacío."""
+
+    TEXTO = "2x Black Tea Punch: Tisana Ponche Navideño, 2x Tropical Bloom: Tisana de Melocotón"
+
+    def test_estafeta_corta_en_limite_de_palabra(self):
+        from apps.envios.adapters import EnviaAdapter
+        corte = EnviaAdapter._recortar_contenido(self.TEXTO, "estafeta")
+        self.assertLessEqual(len(corte), 25)
+        self.assertEqual(corte, "2x Black Tea Punch")  # ni a media palabra ni con ':' colgando
+
+    def test_otros_carriers_conservan_el_texto_completo(self):
+        from apps.envios.adapters import EnviaAdapter
+        self.assertEqual(EnviaAdapter._recortar_contenido(self.TEXTO, "fedex"), self.TEXTO)
+        self.assertEqual(EnviaAdapter._recortar_contenido(self.TEXTO, "paquetexpress"), self.TEXTO)
+        largo = ", ".join(["1x Producto de prueba"] * 10)  # 228 chars → tope general 120
+        self.assertLessEqual(len(EnviaAdapter._recortar_contenido(largo, "fedex")), 120)
+
+    def test_palabra_mas_larga_que_el_tope_se_corta_seca(self):
+        from apps.envios.adapters import EnviaAdapter
+        corte = EnviaAdapter._recortar_contenido("Supercalifragilisticoespialidoso", "estafeta")
+        self.assertEqual(len(corte), 25)
+
+    def test_vacio_viaja_como_mercancia(self):
+        from apps.envios.adapters import EnviaAdapter
+        self.assertEqual(EnviaAdapter._recortar_contenido("", "estafeta"), "Mercancía")
+        self.assertEqual(EnviaAdapter._recortar_contenido("   ", "fedex"), "Mercancía")
+
+    def test_payload_por_caja_aplica_el_tope_del_carrier(self):
+        from apps.catalogo.models import SKU
+        from apps.envios.adapters import EnviaAdapter
+        from apps.envios.models import Paquete, PaqueteLinea
+        from apps.pedidos.models import LineaPedido
+        cliente = crear_cliente()
+        pedido = crear_pedido(cliente, crear_tienda(cliente))
+        paquete = Paquete.objects.create(
+            pedido=pedido, numero=1, peso_kg=Decimal("1.2"), carrier="estafeta",
+        )
+        for codigo, descripcion in (
+            ("TE-1", "Black Tea Punch: Tisana Ponche Navideño"),
+            ("TE-2", "Tropical Bloom: Tisana de Melocotón"),
+        ):
+            sku = SKU.objects.create(cliente=cliente, codigo=codigo, descripcion=descripcion, peso_gr=100)
+            linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=2)
+            PaqueteLinea.objects.create(paquete=paquete, linea_pedido=linea, cantidad=2)
+        adapter = EnviaAdapter()
+        estafeta = adapter._payload(pedido, "estafeta", "ground", paquete=paquete)["packages"][0]["content"]
+        fedex = adapter._payload(pedido, "fedex", "ground", paquete=paquete)["packages"][0]["content"]
+        self.assertLessEqual(len(estafeta), 25)
+        self.assertGreater(len(fedex), 25)
+        self.assertTrue(fedex.startswith("2x Black Tea Punch: Tisana Ponche Navideño, 2x Tropical"))
+
+
 TORRE_99MIN_DIRECTO = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}
 
 
