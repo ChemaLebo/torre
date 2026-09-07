@@ -37,7 +37,7 @@ ORIGEN_DEFAULT = {
     "number": "380",
     "district": "Olivar de los Padres",
     "city": "Ciudad de Mexico",
-    "state": "DF",  # code_shopify de CDMX; overrides por carrier en el mapa TORRE
+    "state": "CX",  # code_2_digits de CDMX: el vocabulario de envia, para todo carrier
     "country": "MX",
     "postalCode": "01780",
 }
@@ -237,35 +237,33 @@ class EnviaAdapter(CarrierAdapter):
     # ── Payloads ──
     @staticmethod
     def _origen(carrier=None):
-        """Origen del envío; el state se traduce POR CARRIER si el mapa lo pide.
+        """Origen del envío. `carrier` se conserva por compatibilidad de firma.
 
-        TORRE["ORIGEN_ESTADO_POR_CARRIER"]: el conector de estafeta dentro de
-        envia valida el estado del origen en el vocabulario de 2 letras (CX)
-        mientras generate valida el destino en code_shopify — probado en vivo
-        (PED-00015). Sin entrada en el mapa, el default (DF) pasa derecho.
+        El state va en code_2_digits ("CX"), el vocabulario propio de envia
+        (FAQ, 2026-09) para todos los carriers. Antes viajaba el code_shopify
+        "DF" con un override solo para estafeta, que lo rechazaba (1129,
+        PED-00015): era el síntoma de este mismo problema.
         """
-        origen = dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
-        mapa = settings.TORRE.get("ORIGEN_ESTADO_POR_CARRIER") or {}
-        if carrier and carrier in mapa:
-            origen["state"] = mapa[carrier]
-        return origen
+        return dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
 
     @staticmethod
     def _destino(pedido):
-        from .cotizador import CP_ESTADO  # lazy: la misma tabla que usa el cotizador
+        from .cotizador import CP_ESTADO, estado_envia  # lazy: la misma tabla que usa el cotizador
 
         d = pedido.direccion or {}
         cp = str(pedido.cp or d.get("zip") or d.get("postalCode") or "").strip()
-        # /ship/generate/ valida contra la columna code_shopify de su catálogo
-        # (FAQ de envia) — que es EXACTAMENTE el province_code de Shopify: se
-        # pasa derecho, y el CP (tabla en ese mismo vocabulario) cubre los
-        # pedidos manuales sin province_code.
+        # El province_code de Shopify (o CP_ESTADO para pedidos sin él) está en
+        # el vocabulario code_shopify; envia valida con SUS códigos de 2 letras
+        # (FAQ), así que se traduce con estado_envia. Los code_shopify de 4-5
+        # letras (CHIH, TAMPS...) ni siquiera pasan el esquema de envia
+        # ("String is too long", PED-00021) y estafeta rechaza DF (PED-00019/20).
         estado = (
             d.get("province_code")
             or CP_ESTADO.get(cp[:2])
             or d.get("state")
             or d.get("estado", "")
         )
+        estado = estado_envia(estado)
         return {
             "name": pedido.comprador_nombre or d.get("name", ""),
             "street": d.get("address1") or d.get("street") or d.get("calle", ""),
@@ -405,10 +403,8 @@ class EnviaAdapter(CarrierAdapter):
                             guias, instrucciones=""):
         """POST /ship/pickup/: una visita del carrier por TODAS las guías.
 
-        El fee se cobra al balance. OJO vocabulario: el origen usa el mismo
-        mapa por carrier que generate (estafeta = CX); el ejemplo de la doc
-        de envia usa 2 dígitos — si un carrier rechaza el pickup por estado,
-        es una entrada más en ORIGEN_ESTADO_POR_CARRIER.
+        El fee se cobra al balance. El origen va en el code_2_digits de envia
+        (CX), el mismo vocabulario que generate y que el ejemplo de su doc.
         """
         peso_total = 0.0
         for g in guias:
@@ -450,7 +446,7 @@ class EnviaAdapter(CarrierAdapter):
 
     def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
         """Una cotización real por lane. 'No cotiza' es resultado (ok=False), no error."""
-        from .cotizador import CP_ESTADO  # lazy: mesa también importa esa tabla de ahí
+        from .cotizador import CP_ESTADO, estado_envia  # lazy: mesa también importa esa tabla de ahí
 
         largo, ancho, alto = dims or (30, 25, 20)
         payload = {
@@ -463,7 +459,9 @@ class EnviaAdapter(CarrierAdapter):
                 "number": "1",
                 "district": "Centro",
                 "city": "Ciudad",
-                "state": CP_ESTADO.get(str(cp_destino)[:2], "DF"),
+                # 2 letras de envia: con code_shopify de 4-5 letras el rate
+                # regresaba "String is too long" y el lane quedaba sin cotizar.
+                "state": estado_envia(CP_ESTADO.get(str(cp_destino)[:2], "DF")),
                 "country": "MX",
                 "postalCode": str(cp_destino),
             },

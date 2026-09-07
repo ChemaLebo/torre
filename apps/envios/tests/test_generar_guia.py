@@ -13,8 +13,9 @@ from .base import crear_cliente, crear_pedido, crear_tienda
 
 
 class DestinoEnviaTests(TestCase):
-    """El state va en el vocabulario code_shopify de envia (FAQ: /ship/generate/
-    lo valida; el province_code de Shopify ES ese vocabulario y pasa derecho)."""
+    """El state del destino viaja en los códigos de 2 letras de envia (su FAQ:
+    no reusar los de Shopify). Entra el province_code de Shopify (o CP_ESTADO
+    para manuales) y estado_envia lo traduce; lo desconocido pasa derecho."""
 
     def _pedido(self, cp, province_code):
         from types import SimpleNamespace
@@ -26,43 +27,70 @@ class DestinoEnviaTests(TestCase):
             comprador_nombre="Prueba", comprador_tel="", comprador_email="",
         )
 
-    def test_province_code_de_shopify_pasa_derecho(self):
+    def test_province_code_de_shopify_se_traduce_a_2_letras(self):
         from apps.envios.adapters import EnviaAdapter
         destino = EnviaAdapter._destino(self._pedido("28048", "COL"))
-        self.assertEqual(destino["state"], "COL")  # jamás CL: el 2-dígitos da 1129
+        self.assertEqual(destino["state"], "CL")
 
     def test_pedido_manual_sin_province_code_deriva_del_cp(self):
         from apps.envios.adapters import EnviaAdapter
         destino = EnviaAdapter._destino(self._pedido("28048", None))
-        self.assertEqual(destino["state"], "COL")
+        self.assertEqual(destino["state"], "CL")
 
-    def test_cdmx_manual_es_df(self):
+    def test_cdmx_es_cx(self):
         from apps.envios.adapters import EnviaAdapter
-        destino = EnviaAdapter._destino(self._pedido("01780", None))
-        self.assertEqual(destino["state"], "DF")
+        # DF (code_shopify) daba 1129 con estafeta: PED-00019/00020.
+        destino = EnviaAdapter._destino(self._pedido("01780", "DF"))
+        self.assertEqual(destino["state"], "CX")
 
-    def test_guadalajara_manual_es_jal(self):
+    def test_chihuahua_cabe_en_el_esquema(self):
         from apps.envios.adapters import EnviaAdapter
-        destino = EnviaAdapter._destino(self._pedido("44100", None))
-        self.assertEqual(destino["state"], "JAL")  # la tabla vieja decía JA
+        # CHIH (4 letras) daba "String is too long": PED-00021.
+        destino = EnviaAdapter._destino(self._pedido("31416", "CHIH"))
+        self.assertEqual(destino["state"], "CH")
+
+    def test_valor_desconocido_pasa_derecho(self):
+        from apps.envios.adapters import EnviaAdapter
+        # Dirección corregida a mano ya en 2 letras: no se toca.
+        destino = EnviaAdapter._destino(self._pedido("97000", "YU"))
+        self.assertEqual(destino["state"], "YU")
+
+    def test_diccionario_cubre_los_32_estados(self):
+        from apps.envios.cotizador import ESTADO_ENVIA, ESTADOS_MX, estado_envia
+        self.assertEqual(len(ESTADOS_MX), 32)
+        self.assertTrue(all(len(v) == 2 for v in ESTADO_ENVIA.values()))
+        self.assertEqual(estado_envia("Q ROO"), "QR")
+        self.assertEqual(estado_envia("TAMPS"), "TM")
+        self.assertEqual(estado_envia(""), "")
+
+    def test_cotizacion_manda_el_destino_en_2_letras(self):
+        from unittest.mock import MagicMock, patch
+
+        from apps.envios.adapters import EnviaAdapter
+        respuesta = MagicMock()
+        respuesta.json.return_value = {"meta": "rate", "data": []}
+        with patch("apps.envios.adapters.requests.post", return_value=respuesta) as post:
+            EnviaAdapter().cotizar_lane("fedex", "31416", 1.5)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["destination"]["state"], "CH")
+        self.assertEqual(payload["origin"]["state"], "CX")
 
 
-class OrigenPorCarrierTests(TestCase):
-    """El state del ORIGEN se traduce por carrier: estafeta exige "CX" (2
-    letras) y el resto viaja con el code_shopify "DF" — hallazgo en vivo de
-    PED-00015 (mismo payload: DF → 1129 con estafeta, CX generó)."""
+class OrigenEnviaTests(TestCase):
+    """El state del ORIGEN va en el code_2_digits de envia ("CX") para todo
+    carrier — el override solo-estafeta de agosto era el síntoma (PED-00015)."""
 
     def test_estafeta_manda_cx(self):
         from apps.envios.adapters import EnviaAdapter
         self.assertEqual(EnviaAdapter._origen("estafeta")["state"], "CX")
 
-    def test_fedex_conserva_el_default_df(self):
+    def test_fedex_tambien_cx(self):
         from apps.envios.adapters import EnviaAdapter
-        self.assertEqual(EnviaAdapter._origen("fedex")["state"], "DF")
+        self.assertEqual(EnviaAdapter._origen("fedex")["state"], "CX")
 
-    def test_sin_carrier_es_df(self):
+    def test_sin_carrier_es_cx(self):
         from apps.envios.adapters import EnviaAdapter
-        self.assertEqual(EnviaAdapter._origen()["state"], "DF")
+        self.assertEqual(EnviaAdapter._origen()["state"], "CX")
 
 
 class ContenidoPorCarrierTests(TestCase):

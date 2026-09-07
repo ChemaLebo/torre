@@ -210,12 +210,11 @@ TORRE = {
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
     "PROVEEDOR_POR_CARRIER": {},
-    # Estado del ORIGEN por carrier (envia): cada conector traduce el estado
-    # con su propia tabla. Probado en vivo 2026-08-29: estafeta SOLO genera
-    # con el 2-letras "CX" (DF → 1129 "State code not founded"); fedex y
-    # 99min-vía-envia aceptan el code_shopify "DF" (default). Candidato
-    # pendiente de probe: paquetexpress (sus 424 huelen a este mismo bug).
-    "ORIGEN_ESTADO_POR_CARRIER": {"estafeta": "CX"},
+    # Estados: envia valida direcciones con SUS códigos de 2 letras (FAQ de
+    # envia, 2026-09: "do not reuse codes from other platforms"). Origen "CX"
+    # fijo (ORIGEN_DEFAULT) y destino traducido con envios.cotizador.estado_envia
+    # a partir del province_code de Shopify. Ya no hay mapa por carrier: el
+    # de estafeta (CX) era el síntoma de este mismo problema.
     # Tope de caracteres del `content` (descripción del bulto) por carrier de
     # envia: el conector de Estafeta rechaza más de 25 (400 "size must be
     # between: 1 and 25 chars", PED-00018, 2026-09-07). Sin entrada: 120, el

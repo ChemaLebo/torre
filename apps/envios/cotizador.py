@@ -45,6 +45,68 @@ CP_ESTADO = {
     "97": "YUC", "98": "ZAC", "99": "ZAC",
 }
 
+# Catálogo de estados de envia — GET queries.envia.com/state?country_code=MX
+# (2026-09-07): (nombre, code_2_digits, code_3_digits, code_shopify). Envia
+# valida direcciones con SUS códigos de 2 letras (FAQ: "Envia uses its own
+# 2-letter state codes... do not reuse codes from other platforms"). El
+# code_shopify — lo que manda Shopify y lo que guarda CP_ESTADO — se traduce
+# con estado_envia() en el destino de cotización y guía; el origen ya va en
+# 2 letras (ORIGEN_DEFAULT). Lección de PED-00015 (estafeta 1129 con DF/YUC)
+# y PED-00019/20/21 (1129 con DF; CHIH no pasa ni el esquema: "String is too
+# long"). Los code_shopify de 4-5 letras (CAMP, CHIS, CHIH, COAH, MICH,
+# Q ROO, TAMPS, TLAX) jamás generaron.
+ESTADOS_MX = [
+    ("Aguascalientes", "AG", "AGS", "AGS"),
+    ("Baja California", "BC", "BCN", "BC"),
+    ("Baja California Sur", "BS", "BCS", "BCS"),
+    ("Campeche", "CM", "CAM", "CAMP"),
+    ("Chiapas", "CS", "CHP", "CHIS"),
+    ("Chihuahua", "CH", "CHH", "CHIH"),
+    ("Ciudad de México", "CX", "CMX", "DF"),
+    ("Coahuila", "CO", "COA", "COAH"),
+    ("Colima", "CL", "COL", "COL"),
+    ("Durango", "DG", "DGO", "DGO"),
+    ("Guanajuato", "GT", "GTO", "GTO"),
+    ("Guerrero", "GR", "GRO", "GRO"),
+    ("Hidalgo", "HG", "HGO", "HGO"),
+    ("Jalisco", "JA", "JAL", "JAL"),
+    ("México", "EM", "MEX", "MEX"),
+    ("Michoacán", "MI", "MIC", "MICH"),
+    ("Morelos", "MO", "MOR", "MOR"),
+    ("Nayarit", "NA", "NAY", "NAY"),
+    ("Nuevo León", "NL", "NLE", "NL"),
+    ("Oaxaca", "OA", "OAX", "OAX"),
+    ("Puebla", "PU", "PUE", "PUE"),
+    ("Querétaro", "QT", "QRO", "QRO"),
+    ("Quintana Roo", "QR", "ROO", "Q ROO"),
+    ("San Luis Potosí", "SL", "SLP", "SLP"),
+    ("Sinaloa", "SI", "SIN", "SIN"),
+    ("Sonora", "SO", "SON", "SON"),
+    ("Tabasco", "TB", "TAB", "TAB"),
+    ("Tamaulipas", "TM", "TAM", "TAMPS"),
+    ("Tlaxcala", "TL", "TLA", "TLAX"),
+    ("Veracruz", "VE", "VER", "VER"),
+    ("Yucatán", "YU", "YUC", "YUC"),
+    ("Zacatecas", "ZA", "ZAC", "ZAC"),
+]
+# code_shopify → code_2_digits (lo que envia acepta en origin/destination.state).
+ESTADO_ENVIA = {shopify: dos for _, dos, _, shopify in ESTADOS_MX}
+# code_shopify → nombre (dropdown del pedido manual; `province` con shape Shopify).
+NOMBRE_ESTADO_MX = {shopify: nombre for nombre, _, _, shopify in ESTADOS_MX}
+# Choices del dropdown de estado: valor = code_shopify, etiqueta = nombre.
+OPCIONES_ESTADO = [(shopify, nombre) for nombre, _, _, shopify in ESTADOS_MX]
+
+
+def estado_envia(code_shopify):
+    """Código de estado como lo quiere envia (2 letras) a partir del code_shopify.
+
+    Un valor que no esté en la tabla (vacío, o ya en 2 letras porque la
+    dirección se corrigió a mano) pasa derecho: jamás se inventa un estado.
+    """
+    clave = str(code_shopify or "").strip().upper()
+    return ESTADO_ENVIA.get(clave, code_shopify)
+
+
 def sanear_texto(texto):
     """La API de Envia truena con em-dashes y símbolos raros: a ASCII seguro."""
     reemplazos = {"—": "-", "–": "-", "\u2019": "'", "\u201c": '"', "\u201d": '"', "º": "", "ª": ""}
