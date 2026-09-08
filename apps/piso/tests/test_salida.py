@@ -13,8 +13,9 @@ from django.urls import reverse
 from apps.core.models import EventoAuditoria
 from apps.envios.adapters import MockAdapter
 from apps.envios.models import Guia
+from apps.catalogo.models import SKU
 from apps.inventario.models import Movimiento, Saldo
-from apps.pedidos.models import Pedido
+from apps.pedidos.models import LineaPedido, Pedido
 
 from .base import PisoTestCase
 
@@ -189,6 +190,53 @@ class SalidaPisoTests(PisoTestCase):
         de_estafeta.refresh_from_db()
         self.assertEqual(de_puntopost.estado, Pedido.RECOLECTADO)
         self.assertEqual(de_estafeta.estado, Pedido.GUIA_GENERADA)  # intacto
+
+
+class ContenidoEnSalidaTests(PisoTestCase):
+    """Salida muestra el contenido de cada pedido (todas las líneas, hijas de
+    kit debajo de su kit) para resolver confusiones sin salir de la pantalla."""
+
+    def setUp(self):
+        self.login_piso()
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=50)
+        self.url = reverse("piso:salida")
+
+    def test_empacado_sin_guia_muestra_sus_lineas(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, "ver contenido")
+        self.assertContains(respuesta, "2 × Colimita six pack")
+        self.assertContains(respuesta, "COLIMITA-SIX")
+
+    def test_con_guia_generada_tambien(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=3))
+        self.client.post(self.url, {"accion": "generar_guia", "pedido_id": pedido.pk})
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "3 × Colimita six pack")
+        self.assertContains(respuesta, "3 piezas")
+
+    def test_kit_muestra_sus_hijas_debajo(self):
+        kit = SKU.objects.create(
+            cliente=self.cliente, codigo="BOX3", descripcion="Mystery box", es_kit=True, peso_gr=350,
+        )
+        te = SKU.objects.create(cliente=self.cliente, codigo="TE-1", descripcion="Té verde", peso_gr=100)
+        pedido = self.crear_pedido(cantidad=1, estado=Pedido.EMPACADO, reservar_stock=False)
+        linea_kit = LineaPedido.objects.create(
+            pedido=pedido, sku=kit, cantidad=1, cantidad_pickeada=1, reservada=True,
+        )
+        LineaPedido.objects.create(
+            pedido=pedido, sku=te, cantidad=2, cantidad_pickeada=2, reservada=True,
+            parte_de_kit=linea_kit, kit_caja=1,
+        )
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "1 × Mystery box")
+        self.assertContains(respuesta, "↳ 2 × Té verde")
+        # Las hijas no se cuentan aparte: 1 six pack + 1 kit = 2 piezas.
+        self.assertContains(respuesta, "2 piezas")
 
 
 class SalidaCorralesFlotaTests(PisoTestCase):

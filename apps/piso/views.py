@@ -1354,6 +1354,35 @@ def _empacar(request, pedido):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _contenido_salida(pedido):
+    """Contenido del pedido para Salida (pedido de Chema 2026-09-08): TODAS las
+    líneas del pedido con las hijas de kit debajo de su kit (ahí suele estar
+    la confusión); con más de una caja, además el desglose por caja del plan.
+    Solo lectura; sin consultas extra si el queryset trae el prefetch de
+    lineas__sku y paquetes__lineas__linea_pedido__sku."""
+    lineas = list(pedido.lineas.all())
+    hijas = {}
+    for linea in lineas:
+        if linea.parte_de_kit_id:
+            hijas.setdefault(linea.parte_de_kit_id, []).append(linea)
+    renglones = [
+        {"linea": linea, "hijas": hijas.get(linea.pk, [])}
+        for linea in lineas if not linea.parte_de_kit_id
+    ]
+    paquetes = list(pedido.paquetes.all())
+    cajas = []
+    if len(paquetes) > 1:
+        cajas = [
+            {"numero": p.numero, "textos": [pl.texto_para_piso for pl in p.lineas.all()]}
+            for p in sorted(paquetes, key=lambda p: p.numero)
+        ]
+    return {
+        "renglones": renglones,
+        "piezas": sum(r["linea"].cantidad for r in renglones),
+        "cajas": cajas,
+    }
+
+
 @rol_requerido("piso", "mesa")
 def salida(request):
     if request.method == "POST":
@@ -1381,9 +1410,18 @@ def salida(request):
             orden_corrales.append((corral, corral))
         return grupos[corral]
 
-    for pedido in Pedido.objects.filter(estado=Pedido.EMPACADO).select_related("cliente"):
+    prefetch_contenido = ("lineas__sku", "paquetes__lineas__linea_pedido__sku")
+    for pedido in (
+        Pedido.objects.filter(estado=Pedido.EMPACADO)
+        .select_related("cliente").prefetch_related(*prefetch_contenido)
+    ):
+        pedido.contenido = _contenido_salida(pedido)
         _grupo(_carrier_probable(pedido))["sin_guia"].append(pedido)
-    for pedido in Pedido.objects.filter(estado=Pedido.GUIA_GENERADA).select_related("cliente"):
+    for pedido in (
+        Pedido.objects.filter(estado=Pedido.GUIA_GENERADA)
+        .select_related("cliente").prefetch_related(*prefetch_contenido)
+    ):
+        pedido.contenido = _contenido_salida(pedido)
         # Todas las guías vigentes: multi-paquete = una etiqueta por guía.
         pedido.guias_activas = list(
             pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")

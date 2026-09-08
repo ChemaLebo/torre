@@ -40,6 +40,7 @@
         <button class="btn" type="submit">Generar guía</button>
       </form>
     </div>
+    {% include "piso/_contenido_salida.html" with contenido=p.contenido %}
     {% endfor %}
     {% endif %}
 
@@ -79,6 +80,8 @@
         {% endfor %}
       </div>
     </div>
+    {# Fuera del <label>: un <details> adentro togglearía el checkbox del manifiesto. #}
+    {% include "piso/_contenido_salida.html" with contenido=p.contenido %}
     {% endfor %}
 
     {% for p in grupo.sin_cierre %}

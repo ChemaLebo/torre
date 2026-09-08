@@ -1,0 +1,20 @@
+{# Contenido del pedido en Salida: <details> nativo, abre sin recargar (pedido de Chema 2026-09-08). #}
+{# Todas las líneas, hijas de kit debajo de su kit; desglose por caja solo si hay más de una. #}
+<details class="colapsable contenido-salida mb">
+  <summary class="small">{{ contenido.piezas }} pieza{{ contenido.piezas|pluralize }} · ver contenido</summary>
+  <div class="colapsable-cuerpo small">
+    <ul style="list-style:none;margin:0;padding:0">
+      {% for r in contenido.renglones %}
+      <li>
+        {{ r.linea.cantidad }} × {{ r.linea.sku.descripcion }} <span class="mono muted">{{ r.linea.sku.codigo }}</span>
+        {% for h in r.hijas %}
+        <div class="muted">↳ {{ h.cantidad }} × {{ h.sku.descripcion }} <span class="mono">{{ h.sku.codigo }}</span></div>
+        {% endfor %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% for c in contenido.cajas %}
+    <div><b>Caja {{ c.numero }}:</b> {% for t in c.textos %}{{ t }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+    {% endfor %}
+  </div>
+</details>
