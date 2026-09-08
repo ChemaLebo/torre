@@ -196,7 +196,11 @@ TORRE = {
     # Lista blanca: solo lo que está aquí se cotiza y se elige; gana el más barato
     # por lane. Los códigos son los de envia (GET queries.envia.com/available-carrier/
     # MX/0/1, campo `name`): amPm lleva la M mayúscula. 2026-09-07: regresan
-    # noventa9Minutos, amPm e imile (excluidos el 19-ago); puntopost sigue fuera.
+    # noventa9Minutos y amPm (excluidos el 19-ago); puntopost sigue fuera.
+    # imile FUERA otra vez el mismo día: no cubre CDMX como origen (lo dice el
+    # dashboard de envia) pero su conector SÍ regresa tarifa en /ship/rate/ y
+    # gana el plan; al generar, envia falla con 1300 (PED-00021). Volverlo a
+    # meter solo cuando cubra el origen.
     # noventa9Minutos no tiene "ground" en envia (local_next_day / next_day):
     # jamás usarlo de carrier_preferente en un cliente envia.
     "CARRIERS_COTIZAR": [
@@ -205,7 +209,6 @@ TORRE = {
         "fedex",
         "noventa9Minutos",
         "amPm",
-        "imile",
     ],
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
