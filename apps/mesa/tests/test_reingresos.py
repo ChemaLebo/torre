@@ -40,6 +40,17 @@ class ReingresosMesaTests(TestCase):
         self.assertContains(respuesta, "Inventario no recuperado")
         self.assertContains(respuesta, 'Recepciones <span class="pill warn">1</span>')
 
+    def test_cancelacion_tardia_enlaza_su_incidencia(self):
+        from apps.incidencias.models import Incidencia
+
+        tardia = Pedido.objects.create(
+            cliente=self.colima, tienda=None, origen="manual", comprador_nombre="Eva", estado=Pedido.EN_TRANSITO,
+        )
+        inc = Incidencia.objects.create(cliente=self.colima, pedido=tardia, tipo="CAN", origen="auto")
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, reverse("mesa:incidencia_detalle", args=[inc.pk]))
+        self.assertContains(respuesta, inc.folio)
+
     def test_registrar_reingreso_crea_la_orden_y_el_piso_la_ve(self):
         respuesta = self.client.post(self.url, {"accion": "reingreso", "pedido_id": self.pedido.pk}, follow=True)
         self.assertContains(respuesta, "creado para")

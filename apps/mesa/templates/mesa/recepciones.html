@@ -16,13 +16,14 @@
   <p class="small">Pedidos que ya salieron y se cancelaron o el carrier regresó. Cuando la mercancía esté físicamente aquí, regístrala: nace una orden de reingreso que el piso recibe y ubica. Si no va a volver, dala por no recuperada (queda en el expediente, sin mover stock).</p>
   <div class="tabla-wrap">
     <table>
-      <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Desde</th><th class="derecha"></th></tr></thead>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Incidencia</th><th>Desde</th><th class="derecha"></th></tr></thead>
       <tbody>
         {% for p in reingresos %}
         <tr>
           <td class="mono">{{ p.folio }}</td>
           <td>{{ p.cliente.nombre }}</td>
           <td><span class="pill {% if p.estado == 'RETORNADO' %}crit{% else %}warn{% endif %}">{{ p.get_estado_display }}</span></td>
+          <td>{% if p.incidencia %}<a class="mono" href="{% url 'mesa:incidencia_detalle' p.incidencia.pk %}">{{ p.incidencia.folio }}</a> <span class="small muted">{{ p.incidencia.get_tipo_display }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
           <td class="small muted">{{ p.actualizado|date:"d/M H:i" }}</td>
           <td class="derecha">
             <form method="post" class="fila">{% csrf_token %}
