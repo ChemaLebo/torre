@@ -305,11 +305,16 @@ dialog.modal.ancho { width: min(1080px, calc(100vw - 32px)); }
 #asn-formato > summary { cursor: pointer; font-size: 16px; font-weight: 600; color: var(--ink); padding: 4px 0; }
 #asn-formato > summary:hover { color: var(--accent-hot); }
 #asn-formato[open] > summary { margin-bottom: 8px; }
-.asn-formato-lista { max-height: 32vh; overflow: auto; margin-top: 8px; }
-.asn-formato-lista label, #asn-formato label {
-  display: flex; align-items: center; gap: 8px; margin: 4px 0;
-  font-family: var(--body); font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--ink);
+.asn-formato-lista { max-height: 36vh; overflow: auto; margin-top: 8px; gap: 6px 14px; }
+/* Todo el renglón es el control: label envuelve al checkbox, así el nombre también marca. */
+.asn-formato-item {
+  display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 10px; min-height: 40px;
+  border: 1px solid var(--hair); border-radius: var(--r); cursor: pointer; user-select: none;
+  font-family: var(--body); font-size: 14px; letter-spacing: 0; text-transform: none; color: var(--ink);
 }
+.asn-formato-item:hover { border-color: var(--ink-50); background: var(--panel); }
+.asn-formato-item input[type="checkbox"] { width: 20px; height: 20px; flex: none; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.asn-formato-item:has(input:checked) { border-color: var(--accent); }
 dialog.modal .modal-lista { max-height: 40vh; overflow: auto; }
 
 /* ── Formularios ── */

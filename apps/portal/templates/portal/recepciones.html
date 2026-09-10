@@ -63,10 +63,10 @@
           descripción; tú llenas la cantidad (y lote y caducidad si aplican; la caducidad va como
           <span class="mono">AAAA-MM-DD</span> o <span class="mono">DD/MM/AAAA</span>). Sin marcar nada baja solo el encabezado.
         </p>
-        <label class="small"><input type="checkbox" id="asn-formato-todos"> Marcar todos</label>
+        <label class="asn-formato-item" for="asn-formato-todos"><input type="checkbox" id="asn-formato-todos"> <b>Marcar todos</b></label>
         <div class="grid g3 asn-formato-lista">
           {% for sku in skus_plantilla %}
-          <label class="small"><input type="checkbox" name="sku" value="{{ sku.pk }}"> <span class="mono">{{ sku.codigo }}</span> {{ sku.descripcion }}</label>
+          <label class="asn-formato-item" for="asn-sku-{{ sku.pk }}"><input type="checkbox" name="sku" value="{{ sku.pk }}" id="asn-sku-{{ sku.pk }}"> <span><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }}</span></label>
           {% empty %}
           <span class="muted small">Todavía no tienes productos dados de alta.</span>
           {% endfor %}
