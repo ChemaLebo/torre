@@ -301,6 +301,10 @@ dialog.modal {
 }
 dialog.modal::backdrop { background: rgba(0, 0, 0, .62); }
 dialog.modal.ancho { width: min(1080px, calc(100vw - 32px)); }
+#asn-formato { border: 1px solid var(--hair-2); border-radius: var(--r); background: var(--panel-2); padding: 12px 16px; margin: 14px 0 18px; }
+#asn-formato > summary { cursor: pointer; font-size: 16px; font-weight: 600; color: var(--ink); padding: 4px 0; }
+#asn-formato > summary:hover { color: var(--accent-hot); }
+#asn-formato[open] > summary { margin-bottom: 8px; }
 .asn-formato-lista { max-height: 32vh; overflow: auto; margin-top: 8px; }
 .asn-formato-lista label, #asn-formato label {
   display: flex; align-items: center; gap: 8px; margin: 4px 0;

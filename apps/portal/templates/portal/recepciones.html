@@ -54,6 +54,26 @@
     <button class="btn chico" type="button" id="asn-cerrar">Cerrar</button>
   </div>
   <p class="small">Dinos qué llega y cuándo. Con el anuncio agendamos la descarga y tu producto queda listo para vender en un máximo de {{ TORRE.SLA_RECEPCION_HORAS_CONTRACTUAL }} horas desde que termina la descarga.</p>
+    {# Formato del CSV, arriba y visible: GET aparte (un form no puede anidar otro). #}
+    <details id="asn-formato">
+      <summary>Descargar el formato del CSV <span class="small muted">· marca los productos que llegan para prellenarlos</span></summary>
+      <form method="get" action="{% url 'portal:recepciones_plantilla' %}" id="asn-formato-form">
+        <p class="small muted">
+          Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y
+          descripción; tú llenas la cantidad (y lote y caducidad si aplican). Sin marcar nada baja solo el encabezado.
+        </p>
+        <label class="small"><input type="checkbox" id="asn-formato-todos"> Marcar todos</label>
+        <div class="grid g3 asn-formato-lista">
+          {% for sku in skus_plantilla %}
+          <label class="small"><input type="checkbox" name="sku" value="{{ sku.pk }}"> <span class="mono">{{ sku.codigo }}</span> {{ sku.descripcion }}</label>
+          {% empty %}
+          <span class="muted small">Todavía no tienes productos dados de alta.</span>
+          {% endfor %}
+        </div>
+        <div class="mt"><button class="btn chico" type="submit">Descargar formato (CSV)</button></div>
+      </form>
+    </details>
+
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
       {{ form.non_field_errors }}
@@ -109,26 +129,6 @@
         <button class="btn primario" type="submit">Anunciar entrega</button>
       </div>
     </form>
-
-    {# Formato del CSV: GET aparte (un form no puede anidar otro); marca productos para prellenarlos. #}
-    <details class="mt" id="asn-formato">
-      <summary class="small"><b>Descargar el formato del CSV</b> · marca los productos que llegan para prellenarlos</summary>
-      <form method="get" action="{% url 'portal:recepciones_plantilla' %}" id="asn-formato-form">
-        <p class="small muted">
-          Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y
-          descripción; tú llenas la cantidad (y lote y caducidad si aplican). Sin marcar nada baja solo el encabezado.
-        </p>
-        <label class="small"><input type="checkbox" id="asn-formato-todos"> Marcar todos</label>
-        <div class="grid g3 asn-formato-lista">
-          {% for sku in skus_plantilla %}
-          <label class="small"><input type="checkbox" name="sku" value="{{ sku.pk }}"> <span class="mono">{{ sku.codigo }}</span> {{ sku.descripcion }}</label>
-          {% empty %}
-          <span class="muted small">Todavía no tienes productos dados de alta.</span>
-          {% endfor %}
-        </div>
-        <div class="mt"><button class="btn chico" type="submit">Descargar formato (CSV)</button></div>
-      </form>
-    </details>
     <script>
     (function () {
       var boton = document.getElementById("btn-mas-renglon");
