@@ -86,3 +86,19 @@ class LimpiarEnEmpaqueTests(InventarioTestCase):
         call_command("limpiar_en_empaque", "--aplicar", stdout=salida)
         self.assertIn("nada que limpiar", salida.getvalue())
         self.assertEqual(self.suma(Saldo.EN_EMPAQUE), 3)
+
+    def test_parcialmente_despachado_respalda_lo_que_sigue_en_empaque(self):
+        from django.utils import timezone
+
+        from apps.pedidos.models import LineaPedido, Pedido
+
+        pedido = Pedido.objects.create(
+            cliente=self.cliente, tienda=None, origen="manual",
+            estado=Pedido.PARCIALMENTE_DESPACHADO, ts_empacado=timezone.now(),
+        )
+        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2)
+        Saldo.objects.create(sku=self.sku, ubicacion=self.ubic_picking, estado=Saldo.EN_EMPAQUE, cantidad=2)
+        salida = StringIO()
+        call_command("limpiar_en_empaque", "--aplicar", stdout=salida)
+        self.assertIn("nada que limpiar", salida.getvalue())
+        self.assertEqual(self.suma(Saldo.EN_EMPAQUE), 2)

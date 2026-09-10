@@ -4,8 +4,10 @@ Hasta 2026-09-09 la cancelación de un pedido ya empacado reingresaba lo
 pickeado a cuarentena sin sacarlo de EN_EMPAQUE, así que cada cancelación
 post-empaque dejaba unidades contadas dos veces. Este comando compara, por
 SKU, el EN_EMPAQUE real contra lo que respalda: Σ cantidad_pickeada de las
-líneas (no kit) de pedidos EMPACADO / GUIA_GENERADA (y CANCELACION_PENDIENTE
-ya empacados), y retira el excedente con un movimiento AJUSTE auditado.
+líneas (no kit) de pedidos EMPACADO / GUIA_GENERADA / PARCIALMENTE_DESPACHADO
+(y CANCELACION_PENDIENTE ya empacados), y retira el excedente con un movimiento
+AJUSTE auditado. En el parcial cuenta también la línea que ya salió: respaldo
+de más es seguro (retira menos), nunca de menos.
 
 Sin --aplicar solo imprime el diagnóstico. Idempotente: tras aplicar, el
 excedente es cero. Correr una vez después de desplegar el flujo de reingreso.
@@ -26,7 +28,10 @@ def excedentes_en_empaque():
     respaldo = dict(
         LineaPedido.objects.filter(
             sku__es_kit=False,
-            pedido__estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.CANCELACION_PENDIENTE],
+            pedido__estado__in=[
+                Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO,
+                Pedido.CANCELACION_PENDIENTE,
+            ],
             pedido__ts_empacado__isnull=False,
         )
         .values_list("sku_id")
