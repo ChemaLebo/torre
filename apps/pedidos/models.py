@@ -44,14 +44,18 @@ class Pedido(models.Model):
     ]
 
     # Tabla explícita de transiciones permitidas. Todo lo demás truena con ValueError.
+    # Cancelar con mercancía en proceso (EN_PICKING/EMPACADO/GUIA_GENERADA) va
+    # directo a CANCELADO: lo pickeado entra como reingreso (OrdenEntrada tipo
+    # reingreso) y el piso lo ubica por recepción. CANCELACION_PENDIENTE se
+    # conserva para pedidos viejos que quedaron ahí antes de ese cambio.
     TRANSICIONES = {
         PENDIENTE: {EN_PICKING, CANCELADO},
-        EN_PICKING: {EMPACADO, CANCELACION_PENDIENTE},
-        EMPACADO: {GUIA_GENERADA, CANCELACION_PENDIENTE},
+        EN_PICKING: {EMPACADO, CANCELACION_PENDIENTE, CANCELADO},
+        EMPACADO: {GUIA_GENERADA, CANCELACION_PENDIENTE, CANCELADO},
         # GUIA_GENERADA → EN_TRANSITO cubre el caso raro de guía indexada por el
         # carrier antes de nuestro escaneo de salida; RECOLECTADO sigue siendo el
         # paso autoritativo del flujo normal (escaneo + manifiesto).
-        GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE},
+        GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO},
         RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO},
         EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO},
         ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO},
@@ -127,6 +131,20 @@ class Pedido(models.Model):
     )
     peso_esperado_gr = models.PositiveIntegerField(default=0)
     peso_real_gr = models.PositiveIntegerField(null=True, blank=True)
+    # Cierre del inventario de un pedido que ya salió y se canceló o retornó:
+    # vacío = Mesa no ha decidido; "reingresado" = hay OrdenEntrada tipo reingreso;
+    # "no_recuperado" = la mercancía no volverá (queda en el expediente).
+    REINGRESO_PENDIENTE = ""
+    REINGRESADO = "reingresado"
+    NO_RECUPERADO = "no_recuperado"
+    REINGRESO_ESTADOS = [
+        (REINGRESO_PENDIENTE, "Sin decidir"),
+        (REINGRESADO, "Reingresado"),
+        (NO_RECUPERADO, "Inventario no recuperado"),
+    ]
+    reingreso_estado = models.CharField(
+        max_length=15, choices=REINGRESO_ESTADOS, default=REINGRESO_PENDIENTE, blank=True,
+    )
     creado = models.DateTimeField(auto_now_add=True, db_index=True)
     actualizado = models.DateTimeField(auto_now=True)
 

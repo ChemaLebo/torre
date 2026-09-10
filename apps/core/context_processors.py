@@ -16,8 +16,20 @@ _CLAVES_TORRE_TEMPLATES = (
 )
 
 
+def _reingresos_pendientes(request):
+    """Pedidos que ya salieron con mercancía por decidir (Mesa): badge de Recepciones."""
+    if getattr(request, "rol", None) != "mesa" and not getattr(getattr(request, "user", None), "is_superuser", False):
+        return 0
+    try:
+        from apps.pedidos.services import reingresos_por_decidir  # lazy por contrato
+    except ImportError:
+        return 0
+    return reingresos_por_decidir().count()
+
+
 def torre(request):
     return {
+        "reingresos_pendientes": _reingresos_pendientes(request),
         "TORRE": {
             clave: settings.TORRE[clave]
             for clave in _CLAVES_TORRE_TEMPLATES

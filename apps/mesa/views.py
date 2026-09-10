@@ -546,14 +546,16 @@ def _pedidos_cancelar(request):
         actor=request.user, cliente=pedido.cliente, motivo=motivo,
     )
     if pedido.estado == Pedido.CANCELADO:
+        reingreso = pedido.reingresos.order_by("-creado").first()
+        if reingreso is not None:
+            return (
+                f"{pedido.folio} cancelado: la mercancía pickeada entra como reingreso "
+                f"{reingreso.folio} para que el piso la ubique; el resto liberó su reserva."
+            )
         return f"{pedido.folio} cancelado y stock liberado."
-    if pedido.estado == Pedido.CANCELACION_PENDIENTE:
-        return (
-            f"{pedido.folio} con cancelación pendiente: piso tiene que confirmar "
-            "el restock para que quede cancelado."
-        )
     return (
-        f"{pedido.folio} ya está en la calle: se abrió incidencia CAN para gestionarlo."
+        f"{pedido.folio} ya está en la calle: se abrió incidencia CAN. Cuando vuelva, "
+        "decide en Recepciones si se reingresa o se da por no recuperado."
     )
 
 
@@ -1102,6 +1104,9 @@ def recepciones(request):
     from apps.inventario.models import OrdenEntrada  # lazy: modelo de otra app
     from apps.inventario.services import anunciar_asn  # lazy por contrato
 
+    if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
+        return _recepciones_decidir_reingreso(request)
+
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
     cliente = None
     if slug:
@@ -1134,7 +1139,7 @@ def recepciones(request):
     abiertas = [
         _decorar_asn(orden)
         for orden in OrdenEntrada.objects.filter(estado__in=estados_abiertos)
-        .select_related("cliente").prefetch_related("lineas__sku")
+        .select_related("cliente", "pedido").prefetch_related("lineas__sku")
     ]
     cerradas = [
         _decorar_asn(orden)
@@ -1142,8 +1147,11 @@ def recepciones(request):
         .select_related("cliente").prefetch_related("lineas__sku")[:10]
     ]
 
+    from apps.pedidos.services import reingresos_por_decidir  # lazy por contrato
+
     return render(request, "mesa/recepciones.html", {
         "seccion": "recepciones",
+        "reingresos": list(reingresos_por_decidir()),
         "abiertas": abiertas,
         "cerradas": cerradas,
         "cliente_captura": cliente,
@@ -1151,6 +1159,32 @@ def recepciones(request):
         "lotes_recientes": lotes_recientes,
         "clientes_activos": Cliente.objects.filter(activo=True).order_by("nombre"),
     })
+
+
+def _recepciones_decidir_reingreso(request):
+    """Mesa decide qué pasa con la mercancía de un pedido que ya salió y se
+    canceló o retornó: registrar_reingreso (nace la orden de reingreso para el
+    piso) o marcar_no_recuperado (queda en el expediente, sin stock)."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import marcar_no_recuperado, registrar_reingreso  # lazy
+
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=request.POST.get("pedido_id"))
+    motivo = (request.POST.get("motivo") or "").strip()
+    try:
+        if request.POST.get("accion") == "reingreso":
+            orden = registrar_reingreso(pedido, request.user, motivo=motivo)
+            messages.success(
+                request,
+                f"Reingreso {orden.folio} creado para {pedido.folio}: el piso lo recibe y lo ubica.",
+            )
+        else:
+            if not motivo:
+                raise ValueError("Escribe el motivo: queda en el expediente del pedido.")
+            marcar_no_recuperado(pedido, request.user, motivo=motivo)
+            messages.success(request, f"{pedido.folio}: inventario dado por no recuperado.")
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    return redirect("mesa:recepciones")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -698,20 +698,21 @@ class Command(BaseCommand):
             self._fechar_pedido(pedido, creado=ahora - timedelta(minutes=40))
         resultado["pendiente_hoy"] = (pedido, creado)
 
-        # ── C12 · CANCELACION_PENDIENTE hoy (tarea de restock) ──
+        # ── C12 · CANCELADO a medio picking hoy: lo pickeado vuelve como reingreso ──
         pedido, creado = self._crear_pedido(t_mx, self._payload(
             5012, "Brenda Ríos", "+523121234612", "28060", "Colima", "Colima",
             [(skus["COLIMITA-C24"], 1)],
         ))
         if creado:
             iniciar_picking(pedido, "piso1")
+            confirmar_linea_pick(pedido.lineas.first(), 1, usuarios["piso1"])
             cancelar(pedido, usuarios["mesa1"],
                      "La compradora se equivocó de dirección y canceló en Shopify.")
             self._fechar_pedido(
                 pedido, creado=ahora - timedelta(hours=4),
                 ts_picking=ahora - timedelta(hours=3, minutes=30),
             )
-        resultado["cancelacion_pendiente"] = (pedido, creado)
+        resultado["cancelado_reingreso"] = (pedido, creado)
 
         # ── C13 · CANCELADO (pre-picking: libera reserva) ──
         pedido, creado = self._crear_pedido(t_mx, self._payload(

@@ -6,6 +6,7 @@
     <div class="eyebrow">Piso · Recepción</div>
     <h1>{{ orden.folio }}</h1>
     <div class="small">{{ orden.cliente.nombre }} · cita {{ orden.fecha_compromiso|date:"D d/M"|default:"sin cita" }}</div>
+    {% if orden.tipo == 'reingreso' %}<div class="small"><span class="pill accent">reingreso{% if orden.pedido %} · {{ orden.pedido.folio }}{% endif %}</span> Mercancía que vuelve de un pedido: recíbela y ubícala como cualquier entrada; lo dañado va a cuarentena.</div>{% endif %}
   </div>
   <div class="fila">
     <span class="pill {% if orden.estado == 'CERRADA' %}ok{% elif orden.estado == 'RECIBIDA' %}warn{% else %}accent{% endif %}">{{ orden.get_estado_display }}</span>

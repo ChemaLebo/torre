@@ -1019,39 +1019,61 @@ class CancelacionTests(BaseServicios):
         self.assertEqual(pedido.estado, Pedido.CANCELADO)
         liberar.assert_called_once_with(self.sku, 2, pedido.folio)
 
-    def test_cancelar_post_picking_pasa_por_cancelacion_pendiente(self):
+    def test_cancelar_en_picking_reingresa_lo_pickeado_y_libera_el_resto(self):
         pedido = self.pedido_directo(estado=Pedido.EN_PICKING)
         LineaPedido.objects.create(
             pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=1, reservada=True,
         )
-        services.cancelar(pedido, actor=None, motivo="Cancelación en pleno picking")
-        pedido.refresh_from_db()
-        self.assertEqual(pedido.estado, Pedido.CANCELACION_PENDIENTE)
-        # El restock del piso cierra la cancelación.
         with patch("apps.inventario.services.liberar_reserva") as liberar, \
-             patch("apps.inventario.services.retornar") as retornar:
-            services.confirmar_restock(pedido, actor=None)
+             patch("apps.inventario.services.reingresar_desde_pedido") as reingresar:
+            services.cancelar(pedido, actor=None, motivo="Cancelación en pleno picking")
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.CANCELADO)
-        # Sin empaque confirmado, todo seguía reservado: se libera completo.
-        liberar.assert_called_once_with(self.sku, 2, pedido.folio)
-        retornar.assert_not_called()
+        self.assertEqual(pedido.reingreso_estado, Pedido.REINGRESADO)
+        reingresar.assert_called_once_with(self.sku, 1, pedido.folio, None, desde_empaque=False)
+        liberar.assert_called_once_with(self.sku, 1, pedido.folio)
+        orden = pedido.reingresos.get()
+        self.assertEqual((orden.tipo, orden.estado), ("reingreso", "RECIBIDA"))
+        self.assertEqual(orden.lineas.get().cantidad_recibida, 1)
+        self.assertFalse(pedido.lineas.get().reservada)
 
-    def test_restock_de_pedido_empacado_reingresa_lo_pickeado(self):
+    def test_cancelar_empacado_reingresa_desde_empaque(self):
         pedido = self.pedido_directo(estado=Pedido.EMPACADO, ts_empacado=timezone.now())
         LineaPedido.objects.create(
             pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2, reservada=True,
         )
-        services.cancelar(pedido, actor=None, motivo="Cancelación tras empaque")
-        pedido.refresh_from_db()
-        self.assertEqual(pedido.estado, Pedido.CANCELACION_PENDIENTE)
         with patch("apps.inventario.services.liberar_reserva") as liberar, \
-             patch("apps.inventario.services.retornar") as retornar:
+             patch("apps.inventario.services.reingresar_desde_pedido") as reingresar:
+            services.cancelar(pedido, actor=None, motivo="Cancelación tras empaque")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.CANCELADO)
+        reingresar.assert_called_once_with(self.sku, 2, pedido.folio, None, desde_empaque=True)
+        liberar.assert_not_called()
+        self.assertTrue(EventoAuditoria.objects.filter(accion="reingreso_creado").exists())
+
+    def test_cancelar_en_picking_sin_pickear_no_crea_reingreso(self):
+        pedido = self.pedido_directo(estado=Pedido.EN_PICKING)
+        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=2, reservada=True)
+        with patch("apps.inventario.services.liberar_reserva") as liberar, \
+             patch("apps.inventario.services.reingresar_desde_pedido") as reingresar:
+            services.cancelar(pedido, actor=None, motivo="Nada pickeado")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.CANCELADO)
+        self.assertEqual(pedido.reingreso_estado, Pedido.REINGRESO_PENDIENTE)
+        reingresar.assert_not_called()
+        liberar.assert_called_once_with(self.sku, 2, pedido.folio)
+        self.assertFalse(pedido.reingresos.exists())
+
+    def test_confirmar_restock_legacy_cierra_con_reingreso(self):
+        pedido = self.pedido_directo(estado=Pedido.CANCELACION_PENDIENTE, ts_empacado=timezone.now())
+        LineaPedido.objects.create(
+            pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2, reservada=True,
+        )
+        with patch("apps.inventario.services.reingresar_desde_pedido") as reingresar:
             services.confirmar_restock(pedido, actor=None)
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.CANCELADO)
-        retornar.assert_called_once_with(self.sku, 2, pedido.folio, None)
-        liberar.assert_not_called()
+        reingresar.assert_called_once_with(self.sku, 2, pedido.folio, None, desde_empaque=True)
 
     def test_cancelar_despachado_abre_incidencia_can(self):
         pedido = self.pedido_directo(estado=Pedido.RECOLECTADO)

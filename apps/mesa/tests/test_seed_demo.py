@@ -82,10 +82,18 @@ class SeedDemoTests(TestCase):
         esperados = {
             Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA,
             Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.ENTREGADO, Pedido.ENTREGA_PRESUNTA,
-            Pedido.PARCIALMENTE_DESPACHADO, Pedido.CANCELACION_PENDIENTE,
-            Pedido.CANCELADO, Pedido.RETORNADO,
+            Pedido.PARCIALMENTE_DESPACHADO, Pedido.CANCELADO, Pedido.RETORNADO,
         }
         self.assertTrue(esperados.issubset(estados), f"faltan estados: {esperados - estados}")
+
+    def test_cancelado_a_medio_picking_deja_reingreso_para_el_piso(self):
+        from apps.inventario.models import OrdenEntrada
+        from apps.pedidos.models import Pedido
+
+        reingreso = OrdenEntrada.objects.get(tipo=OrdenEntrada.TIPO_REINGRESO)
+        self.assertEqual(reingreso.pedido.estado, Pedido.CANCELADO)
+        self.assertEqual(reingreso.pedido.reingreso_estado, Pedido.REINGRESADO)
+        self.assertEqual(reingreso.lineas.get().cantidad_recibida, 1)
 
     def test_timestamps_escalonados_y_coherentes(self):
         from apps.pedidos.models import Pedido

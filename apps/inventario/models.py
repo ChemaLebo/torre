@@ -119,7 +119,16 @@ class Movimiento(models.Model):
 
 class OrdenEntrada(models.Model):
     """ASN: anuncio de mercancía entrante. El reloj SLA de recepción corre de
-    fin de descarga (ts_descarga_fin) a todo ubicado y vendible (ts_vendible)."""
+    fin de descarga (ts_descarga_fin) a todo ubicado y vendible (ts_vendible).
+
+    `tipo` reingreso = mercancía de un pedido que vuelve (cancelación con
+    mercancía en proceso, retorno del carrier): misma recepción del piso, sin
+    aviso al cliente ni cita; `pedido` apunta al pedido que la originó.
+    """
+
+    TIPO_ASN = "asn"
+    TIPO_REINGRESO = "reingreso"
+    TIPOS = [(TIPO_ASN, "ASN del cliente"), (TIPO_REINGRESO, "Reingreso de pedido")]
 
     ANUNCIADA = "ANUNCIADA"
     EN_RECEPCION = "EN_RECEPCION"
@@ -140,6 +149,10 @@ class OrdenEntrada(models.Model):
 
     cliente = models.ForeignKey("core.Cliente", on_delete=models.PROTECT, related_name="ordenes_entrada")
     folio = models.CharField(max_length=20, unique=True, blank=True)
+    tipo = models.CharField(max_length=10, choices=TIPOS, default=TIPO_ASN)
+    pedido = models.ForeignKey(
+        "pedidos.Pedido", null=True, blank=True, on_delete=models.SET_NULL, related_name="reingresos",
+    )
     estado = models.CharField(max_length=15, choices=ESTADOS, default=ANUNCIADA)
     fecha_compromiso = models.DateField(null=True, blank=True, help_text="Cita de llegada (mar/jue)")
     tarimas = models.PositiveSmallIntegerField(default=0, help_text="Tarimas anunciadas por el cliente")

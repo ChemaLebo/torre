@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.models import EventoAuditoria, EvidenciaFoto
@@ -1521,10 +1522,13 @@ def cancelar(pedido, actor, motivo=""):
     """Matriz de cancelación por estado (BLUEPRINT §2.3).
 
     - PENDIENTE: libera reservas y cancela directo.
-    - EN_PICKING / EMPACADO / GUIA_GENERADA: → CANCELACION_PENDIENTE con
-      tarea de restock para el piso (se cierra con confirmar_restock).
+    - EN_PICKING / EMPACADO / GUIA_GENERADA: cancela directo; lo pickeado entra
+      como OrdenEntrada tipo reingreso (RECIBIDA, stock en put-away) para que
+      el piso lo ubique por recepción; el resto libera su reserva; las guías
+      activas se cancelan con el carrier best-effort.
     - Ya despachado (RECOLECTADO / EN_TRANSITO / ...): el paquete ya salió →
-      se abre incidencia CAN (cancelación tardía), el estado no cambia.
+      se abre incidencia CAN (cancelación tardía); Mesa decide después entre
+      registrar_reingreso y marcar_no_recuperado.
     - Terminales: ValueError.
     """
     estado = pedido.estado
@@ -1532,15 +1536,7 @@ def cancelar(pedido, actor, motivo=""):
         _liberar_reservas(pedido)
         pedido.transicionar(Pedido.CANCELADO, actor=actor, motivo=motivo or "Cancelación directa")
     elif estado in (Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
-        pedido.transicionar(
-            Pedido.CANCELACION_PENDIENTE, actor=actor,
-            motivo=motivo or "Cancelación con mercancía en proceso",
-        )
-        registrar_evento(
-            "pedido", pedido.pk, "restock_pendiente", actor=actor, cliente=pedido.cliente,
-            delta={"lineas": pedido.lineas.count()},
-            motivo="Tarea de restock: regresar la mercancía a su ubicación y confirmar en piso.",
-        )
+        _devolver_stock_y_cancelar(pedido, actor, motivo or "Cancelación con mercancía en proceso")
     elif estado in (
         Pedido.RECOLECTADO, Pedido.EN_TRANSITO,
         Pedido.PARCIALMENTE_DESPACHADO, Pedido.ENTREGA_PRESUNTA,
@@ -1569,39 +1565,193 @@ def cancelar(pedido, actor, motivo=""):
 
 
 def confirmar_restock(pedido, actor, motivo=""):
-    """Cierra la tarea de restock: CANCELACION_PENDIENTE → CANCELADO.
-
-    Regresa el stock según hasta dónde llegó el pedido: si ya se había
-    empacado (picks confirmados en inventario), lo pickeado reingresa vía
-    retornar; lo aún reservado se libera.
-    """
+    """Cierra un pedido que quedó en CANCELACION_PENDIENTE (flujo anterior al
+    reingreso): misma devolución de stock que la cancelación en bodega."""
     if pedido.estado != Pedido.CANCELACION_PENDIENTE:
         raise ValueError(
             f"El pedido {pedido.folio} no tiene cancelación pendiente "
             f"(está {pedido.get_estado_display()})."
         )
-    from apps.inventario.services import liberar_reserva, retornar  # lazy
-    empacado = pedido.ts_empacado is not None
-    for linea in pedido.lineas.select_related("sku"):
-        if linea.sku.es_kit:
-            continue  # el kit no tiene stock propio; sus componentes son líneas normales
-        pickeada = linea.cantidad_pickeada
-        if empacado and pickeada:
-            # confirmar_pick ya movió esto a en_empaque: reingresa como retorno.
-            retornar(linea.sku, pickeada, pedido.folio, actor)
-            resto = linea.cantidad - pickeada
-        else:
-            # Nada confirmado en inventario: todo sigue reservado.
-            resto = linea.cantidad
-        if resto > 0 and linea.reservada:
-            liberar_reserva(linea.sku, resto, pedido.folio)
-        if linea.reservada:
-            linea.reservada = False
-            linea.save(update_fields=["reservada"])
-    pedido.transicionar(
-        Pedido.CANCELADO, actor=actor,
-        motivo=motivo or "Restock confirmado en piso; cancelación cerrada.",
+    return _devolver_stock_y_cancelar(
+        pedido, actor, motivo or "Restock confirmado en piso; cancelación cerrada.",
     )
+
+
+def _devolver_stock_y_cancelar(pedido, actor, motivo):
+    """Núcleo de la cancelación con mercancía en proceso, en UNA transacción:
+    por línea (kits fuera), lo pickeado → reingreso (put-away en recepción,
+    desde empaque si ya se empacó, desde vendible si sigue en carrito) y el
+    resto libera su reserva; si hubo reingreso nace una OrdenEntrada tipo
+    reingreso ya RECIBIDA; el pedido pasa a CANCELADO. Las guías activas se
+    cancelan con el carrier fuera de la transacción, best-effort.
+    """
+    from apps.inventario.models import LineaASN, OrdenEntrada  # lazy: modelo de otra app
+    from apps.inventario.services import liberar_reserva, reingresar_desde_pedido  # lazy
+
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        pedido.estado = fresco.estado
+        if pedido.estado not in (
+            Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.CANCELACION_PENDIENTE,
+        ):
+            raise ValueError(
+                f"No se puede cancelar el pedido {pedido.folio}: está {pedido.get_estado_display()}."
+            )
+        empacado = pedido.ts_empacado is not None
+        reingreso = []
+        for linea in pedido.lineas.select_related("sku"):
+            if linea.sku.es_kit:
+                continue
+            pickeada = linea.cantidad_pickeada
+            if pickeada:
+                reingresar_desde_pedido(linea.sku, pickeada, pedido.folio, actor, desde_empaque=empacado)
+                reingreso.append((linea.sku, pickeada))
+            resto = linea.cantidad - pickeada
+            if resto > 0 and linea.reservada:
+                liberar_reserva(linea.sku, resto, pedido.folio)
+            if linea.reservada:
+                linea.reservada = False
+                linea.save(update_fields=["reservada"])
+        orden = None
+        if reingreso:
+            ahora = timezone.now()
+            orden = OrdenEntrada.objects.create(
+                cliente=pedido.cliente, tipo=OrdenEntrada.TIPO_REINGRESO, pedido=pedido,
+                estado=OrdenEntrada.RECIBIDA, fecha_compromiso=timezone.localdate(),
+                ts_descarga_fin=ahora,
+            )
+            for sku, piezas in reingreso:
+                LineaASN.objects.create(
+                    orden=orden, sku=sku, cantidad_anunciada=piezas, cantidad_recibida=piezas,
+                )
+            registrar_evento(
+                "asn", orden.folio, "reingreso_creado", actor=actor, cliente=pedido.cliente,
+                delta={"pedido": pedido.folio, "desde": "empaque" if empacado else "carrito",
+                       "lineas": [{"sku": s.codigo, "cantidad": n} for s, n in reingreso]},
+                motivo=f"Mercancía de {pedido.folio} de vuelta a recepción; el piso la ubica.",
+            )
+            pedido.reingreso_estado = Pedido.REINGRESADO
+            pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        pedido.transicionar(Pedido.CANCELADO, actor=actor, motivo=motivo)
+    _cancelar_guias_best_effort(pedido, actor)
+    return pedido
+
+
+def _cancelar_guias_best_effort(pedido, actor):
+    """Avisa al carrier de cada guía activa (adapter.cancelar); un fallo del
+    carrier no revierte la cancelación: queda auditado para que Mesa lo persiga."""
+    try:
+        from apps.envios.models import Guia
+        from apps.envios.services import get_adapter  # lazy por contrato
+    except ImportError:
+        return
+    for guia in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)):
+        try:
+            adapter = get_adapter(guia.carrier, proveedor=guia.proveedor, cliente=pedido.cliente)
+            ok = bool(adapter.cancelar(guia))
+            detalle = ""
+        except Exception as exc:  # noqa: BLE001 — best-effort: el carrier no bloquea la cancelación
+            ok, detalle = False, str(exc)[:200]
+        registrar_evento(
+            "guia", guia.pk, "cancelada_carrier" if ok else "cancelacion_carrier_fallida",
+            actor=actor, cliente=pedido.cliente,
+            delta={"numero": guia.numero, "carrier": guia.carrier, "proveedor": guia.proveedor, "detalle": detalle},
+            motivo=f"Pedido {pedido.folio} cancelado con guía activa.",
+        )
+
+
+ESTADOS_CON_MERCANCIA_FUERA = (
+    Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.PARCIALMENTE_DESPACHADO,
+    Pedido.ENTREGA_PRESUNTA, Pedido.ENTREGADO, Pedido.RETORNADO,
+)
+
+
+def reingresos_por_decidir():
+    """Pedidos que ya salieron y cuya mercancía puede volver, sin decisión de Mesa:
+    RETORNADO por el carrier, o con incidencia CAN abierta (cancelación tardía)."""
+    from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+
+    con_can = Incidencia.objects.filter(
+        tipo="CAN", estado__in=Incidencia.ESTADOS_ABIERTOS, pedido__isnull=False,
+    ).values_list("pedido_id", flat=True)
+    return (
+        Pedido.objects.filter(reingreso_estado=Pedido.REINGRESO_PENDIENTE)
+        .filter(Q(estado=Pedido.RETORNADO) | Q(pk__in=con_can))
+        .filter(estado__in=ESTADOS_CON_MERCANCIA_FUERA)
+        .select_related("cliente").order_by("actualizado")
+    )
+
+
+def _validar_decision_reingreso(pedido):
+    if pedido.estado not in ESTADOS_CON_MERCANCIA_FUERA:
+        raise ValueError(
+            f"El pedido {pedido.folio} no ha salido de bodega ({pedido.get_estado_display()}): "
+            "no hay reingreso que decidir."
+        )
+    if pedido.reingreso_estado != Pedido.REINGRESO_PENDIENTE:
+        raise ValueError(
+            f"El pedido {pedido.folio} ya tiene decisión: {pedido.get_reingreso_estado_display()}."
+        )
+
+
+def registrar_reingreso(pedido, actor, motivo=""):
+    """Mesa: la mercancía de un pedido que salió está de vuelta físicamente.
+    Crea la OrdenEntrada tipo reingreso ANUNCIADA con lo despachado por línea;
+    el piso la recibe (ok → put-away, dañado → cuarentena) y la ubica. El
+    pedido no cambia de estado."""
+    from apps.inventario.models import LineaASN, OrdenEntrada  # lazy: modelo de otra app
+
+    with transaction.atomic():
+        pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        _validar_decision_reingreso(pedido)
+        lineas = [
+            (l.sku, l.cantidad_pickeada or l.cantidad)
+            for l in pedido.lineas.select_related("sku") if not l.sku.es_kit
+        ]
+        lineas = [(sku, n) for sku, n in lineas if n > 0]
+        if not lineas:
+            raise ValueError(f"El pedido {pedido.folio} no tiene mercancía que reingresar.")
+        orden = OrdenEntrada.objects.create(
+            cliente=pedido.cliente, tipo=OrdenEntrada.TIPO_REINGRESO, pedido=pedido,
+            fecha_compromiso=timezone.localdate(),
+        )
+        for sku, piezas in lineas:
+            LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=piezas)
+        pedido.reingreso_estado = Pedido.REINGRESADO
+        pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        registrar_evento(
+            "asn", orden.folio, "reingreso_creado", actor=actor, cliente=pedido.cliente,
+            delta={"pedido": pedido.folio, "desde": "retorno",
+                   "lineas": [{"sku": s.codigo, "cantidad": n} for s, n in lineas]},
+            motivo=motivo or f"Mercancía de {pedido.folio} de vuelta; el piso la recibe y ubica.",
+        )
+    return orden
+
+
+def marcar_no_recuperado(pedido, actor, motivo=""):
+    """Mesa: la mercancía de un pedido que salió no volverá. Sin movimiento de
+    stock (ya salió del kardex en el manifiesto); queda el evento y se
+    resuelven las incidencias CAN/RF abiertas del pedido."""
+    with transaction.atomic():
+        pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        _validar_decision_reingreso(pedido)
+        pedido.reingreso_estado = Pedido.NO_RECUPERADO
+        pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        registrar_evento(
+            "pedido", pedido.pk, "inventario_no_recuperado", actor=actor, cliente=pedido.cliente,
+            motivo=motivo or "Mesa dio por perdida la mercancía del pedido.",
+        )
+        try:
+            from apps.incidencias.models import Incidencia
+            from apps.incidencias.services import resolver  # lazy por contrato
+        except ImportError:
+            return pedido
+        for incidencia in Incidencia.objects.filter(
+            pedido=pedido, tipo__in=["CAN", "RF"], estado__in=Incidencia.ESTADOS_ABIERTOS,
+        ):
+            resolver(
+                incidencia, f"Inventario no recuperado: {motivo or 'la mercancía no volvió a bodega'}.", actor,
+            )
     return pedido
 
 

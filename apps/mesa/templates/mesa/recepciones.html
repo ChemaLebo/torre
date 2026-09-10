@@ -10,6 +10,36 @@
   <div class="quien">El aviso que llega por WhatsApp se captura aquí, en menos de 15 minutos.</div>
 </div>
 
+{% if reingresos %}
+<div class="card mb">
+  <div class="titulo"><h2>Reingresos por decidir</h2><span class="pill warn">{{ reingresos|length }}</span></div>
+  <p class="small">Pedidos que ya salieron y se cancelaron o el carrier regresó. Cuando la mercancía esté físicamente aquí, regístrala: nace una orden de reingreso que el piso recibe y ubica. Si no va a volver, dala por no recuperada (queda en el expediente, sin mover stock).</p>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Desde</th><th class="derecha"></th></tr></thead>
+      <tbody>
+        {% for p in reingresos %}
+        <tr>
+          <td class="mono">{{ p.folio }}</td>
+          <td>{{ p.cliente.nombre }}</td>
+          <td><span class="pill {% if p.estado == 'RETORNADO' %}crit{% else %}warn{% endif %}">{{ p.get_estado_display }}</span></td>
+          <td class="small muted">{{ p.actualizado|date:"d/M H:i" }}</td>
+          <td class="derecha">
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="pedido_id" value="{{ p.pk }}">
+              <input type="text" name="motivo" placeholder="Motivo (obligatorio si no se recupera)" autocomplete="off" aria-label="Motivo para {{ p.folio }}">
+              <button class="btn chico primario" type="submit" name="accion" value="reingreso">Registrar reingreso</button>
+              <button class="btn chico" type="submit" name="accion" value="no_recuperado">Inventario no recuperado</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <div class="card mb">
   {% if cliente_captura %}
     <div class="titulo"><h2>Capturar ASN de {{ cliente_captura.nombre }}</h2><a class="btn chico" href="{% url 'mesa:recepciones' %}">Cambiar de cliente</a></div>
@@ -132,7 +162,7 @@
       <tbody>
         {% for orden in abiertas %}
         <tr>
-          <td class="mono">{{ orden.folio }}</td>
+          <td class="mono">{{ orden.folio }}{% if orden.tipo == 'reingreso' %} <span class="pill accent">reingreso{% if orden.pedido %} · {{ orden.pedido.folio }}{% endif %}</span>{% endif %}</td>
           <td>{{ orden.cliente.nombre }}</td>
           <td><span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span></td>
           <td class="mono">{{ orden.fecha_compromiso|date:"D d/M"|default:"—" }}</td>

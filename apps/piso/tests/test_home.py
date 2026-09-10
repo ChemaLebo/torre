@@ -24,7 +24,7 @@ class HomePisoTests(PisoTestCase):
         self.assertContains(respuesta, "por pickear")
         self.assertContains(respuesta, "COLIMITA-SIX")
 
-    def test_confirmar_restock_cierra_la_cancelacion(self):
+    def test_cancelar_en_picking_libera_al_instante_sin_tarea_de_restock(self):
         from apps.inventario.services import disponible
         from apps.pedidos.services import cancelar, iniciar_picking
 
@@ -33,17 +33,26 @@ class HomePisoTests(PisoTestCase):
         iniciar_picking(pedido, self.operador)
         cancelar(pedido, self.operador, motivo="Cambio de opinión del comprador")
         pedido.refresh_from_db()
-        self.assertEqual(pedido.estado, Pedido.CANCELACION_PENDIENTE)
-        self.assertEqual(disponible(self.sku), 46)  # la reserva sigue viva
+        self.assertEqual(pedido.estado, Pedido.CANCELADO)
+        self.assertEqual(disponible(self.sku), 50)
+        self.assertNotContains(self.client.get(self.url), "restock pendiente")
 
+    def test_confirmar_restock_legacy_cierra_la_cancelacion(self):
+        from apps.inventario.services import disponible
+        from apps.pedidos.services import iniciar_picking
+
+        self.crear_stock(cantidad=50)
+        pedido = self.crear_pedido(cantidad=4)
+        iniciar_picking(pedido, self.operador)
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.CANCELACION_PENDIENTE)
+        self.assertContains(self.client.get(self.url), pedido.folio)
         respuesta = self.client.post(self.url, {
             "accion": "confirmar_restock", "pedido_id": pedido.pk,
         }, follow=True)
         self.assertEqual(respuesta.status_code, 200)
-
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.CANCELADO)
-        self.assertEqual(disponible(self.sku), 50)  # todo de vuelta al anaquel
+        self.assertEqual(disponible(self.sku), 50)
 
     def test_confirmar_restock_de_pedido_sin_cancelacion_avisa(self):
         self.crear_stock(cantidad=50)

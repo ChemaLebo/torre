@@ -15,6 +15,7 @@
   <div class="card">
     <div class="titulo">
       <h2 class="mono">{{ orden.folio }}</h2>
+      {% if orden.tipo == 'reingreso' %}<span class="pill accent">reingreso{% if orden.pedido %} · {{ orden.pedido.folio }}{% endif %}</span>{% endif %}
       <span class="pill {% if orden.estado == 'RECIBIDA' %}warn{% elif orden.estado == 'EN_RECEPCION' %}accent{% endif %}">{{ orden.get_estado_display }}</span>
     </div>
     <p>{{ orden.cliente.nombre }}

@@ -88,7 +88,7 @@ window.addEventListener("load", function () {
       <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'mesa:incidencias' %}">Incidencias</a>
       <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'mesa:pedidos' %}">Pedidos</a>
       <a class="nav-link {% if seccion == 'inventario' %}activo{% endif %}" href="{% url 'mesa:inventario' %}">Inventario</a>
-      <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones</a>
+      <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones{% if reingresos_pendientes %} <span class="pill warn">{{ reingresos_pendientes }}</span>{% endif %}</a>
       <a class="nav-link {% if seccion == 'sync' %}activo{% endif %}" href="{% url 'mesa:sync' %}">Salud de sync</a>
       <a class="nav-link {% if seccion == 'clientes' %}activo{% endif %}" href="{% url 'mesa:clientes' %}">Clientes</a>
       <a class="nav-link {% if seccion == 'finanzas' %}activo{% endif %}" href="{% url 'mesa:finanzas' %}">Finanzas</a>

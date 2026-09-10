@@ -600,7 +600,8 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
             )
             _abrir_incidencia_discrepancia_recepcion(orden, discrepancias)
 
-        _notificar_recepcion_cerrada(orden)
+        if orden.tipo == OrdenEntrada.TIPO_ASN:
+            _notificar_recepcion_cerrada(orden)
     return orden
 
 
@@ -825,6 +826,54 @@ def retornar(sku, cantidad, referencia, actor):
         registrar_evento(
             "sku", sku.codigo, "retorno", actor=actor, cliente=sku.cliente,
             delta={"cantidad": cantidad, "referencia": str(referencia), "ubicacion": ubic.codigo},
+        )
+    _notificar_cambio_disponible(sku)
+
+
+def reingresar_desde_pedido(sku, cantidad, referencia, actor, desde_empaque):
+    """Mercancía de un pedido cancelado en bodega vuelve a put-away (zona de
+    recepción) para que el piso la ubique por recepción, sin ubicación automática.
+
+    desde_empaque=True: sale de EN_EMPAQUE (el pick ya se confirmó al empacar).
+    desde_empaque=False: sale de UBICADO_VENDIBLE (pickeado en carrito, aún
+    reservado): se libera la reserva y se resta el vendible FEFO. Kardex RETORNO
+    con origen real → en_putaway; el lote se vuelve a declarar al ubicar.
+    """
+    cantidad = _validar_cantidad(cantidad, "reingresar")
+    ubic = _ubicacion_tipo(Ubicacion.RECEPCION)
+    if ubic is None:
+        raise ValueError("No hay ubicación de recepción activa para el reingreso.")
+    with transaction.atomic():
+        if desde_empaque:
+            origen = Saldo.EN_EMPAQUE
+            filas = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_EMPAQUE))
+            total = sum(f.cantidad for f in filas)
+            if total < cantidad:
+                raise ValueError(
+                    f"Inconsistencia de saldo: hay {total} de {sku.codigo} en empaque y el "
+                    f"reingreso pide {cantidad}. Levanta un conteo."
+                )
+            _restar(sorted(filas, key=lambda f: f.pk), cantidad)
+        else:
+            origen = Saldo.UBICADO_VENDIBLE
+            liberar_reserva(sku, cantidad, referencia)
+            filas = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE))
+            total = sum(f.cantidad for f in filas)
+            if total < cantidad:
+                raise ValueError(
+                    f"Inconsistencia de saldo: hay {total} vendibles de {sku.codigo} y el "
+                    f"reingreso pide {cantidad}. Levanta un conteo."
+                )
+            caducidades = _caducidades(filas)
+            _restar(sorted(filas, key=lambda f: _clave_fefo(f, caducidades)), cantidad)
+        _incrementar(sku, ubic.pk, None, Saldo.EN_PUTAWAY, cantidad)
+        _mov(
+            sku, Movimiento.RETORNO, cantidad,
+            origen=origen, destino=Saldo.EN_PUTAWAY, referencia=referencia, actor=actor,
+        )
+        registrar_evento(
+            "sku", sku.codigo, "reingreso_pedido", actor=actor, cliente=sku.cliente,
+            delta={"cantidad": cantidad, "referencia": str(referencia), "origen": origen, "ubicacion": ubic.codigo},
         )
     _notificar_cambio_disponible(sku)
 

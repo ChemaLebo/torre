@@ -438,7 +438,7 @@ def _home_confirmar_restock(request):
 def recepciones(request):
     abiertas = list(
         OrdenEntrada.objects.filter(estado__in=ESTADOS_ASN_ABIERTOS)
-        .select_related("cliente").prefetch_related("lineas__sku")
+        .select_related("cliente", "pedido").prefetch_related("lineas__sku")
     )
     for orden in abiertas:
         orden.sla_texto, orden.sla_tono = _sla_recepcion(orden)
@@ -453,7 +453,7 @@ def recepciones(request):
 
 @rol_requerido("piso", "mesa")
 def recepcion_detalle(request, pk):
-    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
+    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente", "pedido"), pk=pk)
 
     if request.method == "POST":
         accion = request.POST.get("accion")

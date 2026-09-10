@@ -292,7 +292,7 @@ class CancelarDesdeMesaTests(BasePedidoManualVista):
         self.assertIsNotNone(evento)
         self.assertEqual(evento.motivo, "El cliente ya no lo quiere")
 
-    def test_empacado_queda_pendiente_y_es_restock_en_piso(self):
+    def test_empacado_se_cancela_directo(self):
         from apps.pedidos.models import Pedido
 
         pedido = crear_pedido(
@@ -300,11 +300,8 @@ class CancelarDesdeMesaTests(BasePedidoManualVista):
         )
         respuesta = self._cancelar(pedido)
         pedido.refresh_from_db()
-        self.assertEqual(pedido.estado, Pedido.CANCELACION_PENDIENTE)
-        self.assertContains(respuesta, "confirmar el restock")
-        # La tarea aparece en el tablero del piso (mesa también lo puede ver).
-        home_piso = self.client.get(reverse("piso:home"))
-        self.assertContains(home_piso, pedido.folio)
+        self.assertEqual(pedido.estado, Pedido.CANCELADO)
+        self.assertContains(respuesta, "cancelado")
 
     def test_despachado_abre_incidencia_can(self):
         from apps.incidencias.models import Incidencia
