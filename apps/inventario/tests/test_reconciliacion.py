@@ -117,6 +117,23 @@ class PreviaTests(BaseReconciliacion):
         self.assertIn("no existe", textos)
         self.assertEqual(previa["aplicables"], [])
 
+
+    def test_sin_lote_pasa_si_no_hay_diferencia(self):
+        # La exportación saca fila vacía para un SKU con lotes registrados pero
+        # sin stock: contado 0 sin lote no es error, es "sin cambio".
+        Saldo.objects.filter(sku=self.sku_lote).delete()
+        previa = previa_reconciliacion(self.cliente, leer_csv_conteo(csv_texto("PARAMO-SIX,,,,,0,0"))[0])
+        self.assertEqual(previa["errores"], [])
+        self.assertEqual((previa["omitidos"], previa["aplicables"]), (1, []))
+        # Con diferencia sí exige el lote.
+        previa = previa_reconciliacion(self.cliente, leer_csv_conteo(csv_texto("PARAMO-SIX,,,,,0,3"))[0])
+        self.assertEqual(len(previa["errores"]), 1)
+        self.assertIn("maneja lotes", previa["errores"][0])
+        # Con stock en lotes y sin lote en la fila, contado igual al total también pasa.
+        self.poner_vendible(7, sku=self.sku_lote, lote=self.lote_a)
+        previa = previa_reconciliacion(self.cliente, leer_csv_conteo(csv_texto("PARAMO-SIX,,,,,7,7"))[0])
+        self.assertEqual((previa["errores"], previa["omitidos"]), ([], 1))
+
     def test_renglon_repetido_es_error(self):
         filas, _ = leer_csv_conteo(csv_texto("COLIMITA-SIX,,,,,,18", "COLIMITA-SIX,,,,,,19"))
         previa = previa_reconciliacion(self.cliente, filas)

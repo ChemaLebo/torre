@@ -1246,11 +1246,10 @@ def _parsear_fila_conteo(fila, cliente, skus, lotes, ubicaciones):
     if fila["lote"]:
         renglon["lote_obj"] = lotes_del_sku.get(fila["lote"])
     elif lotes_del_sku:
-        renglon["error"] = (
-            f"{sku.codigo} maneja lotes ({', '.join(sorted(lotes_del_sku))}): "
-            "captura el lote en cada renglón."
-        )
-        return renglon
+        # Sin lote en un SKU que maneja lotes: la previa lo deja pasar solo si
+        # el renglón no cambia nada (p. ej. la fila vacía que exporta un SKU
+        # con lotes pero sin stock); con diferencia, exige el lote.
+        renglon["lote_requerido"] = ", ".join(sorted(lotes_del_sku))
 
     if fila["contado"] == "":
         renglon["omitir"] = True
@@ -1323,6 +1322,21 @@ def previa_reconciliacion(cliente, filas):
                     c for (sid, lid, _u), c in vendible_por_clave.items()
                     if sid == r["sku"].pk and lid == lote_id
                 )
+            if r.get("lote_requerido") and not r["omitir"]:
+                # Sin lote: se compara contra el vendible de TODOS los lotes del SKU
+                # (en ese anaquel, si lo trae). Solo pasa si no hay diferencia.
+                r["vendible_actual"] = sum(
+                    c for (sid, _l, u), c in vendible_por_clave.items()
+                    if sid == r["sku"].pk and (ubic_id is None or u == ubic_id)
+                )
+                if r["contado"] == r["vendible_actual"]:
+                    r["omitir"] = True
+                    r["avisos"].append(f"Sin cambio. Maneja lotes ({r['lote_requerido']}): con diferencia, captura el lote.")
+                else:
+                    r["error"] = (
+                        f"{r['sku'].codigo} maneja lotes ({r['lote_requerido']}): "
+                        "captura el lote en cada renglón."
+                    )
         if r["error"]:
             errores.append(f"fila {r['numero']}: {r['error']}")
         elif not r["omitir"]:
