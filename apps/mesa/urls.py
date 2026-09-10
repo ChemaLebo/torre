@@ -15,6 +15,7 @@ urlpatterns = [
     path("inventario/reconciliar/", views.inventario_reconciliar, name="inventario_reconciliar"),
     path("inventario/conteo.csv", views.inventario_exportar_conteo, name="inventario_exportar_conteo"),
     path("recepciones/", views.recepciones, name="recepciones"),
+    path("recepciones/plantilla.csv", views.recepciones_plantilla, name="recepciones_plantilla"),
     path("sync/", views.sync, name="sync"),
     path("clientes/", views.clientes, name="clientes"),
     path("clientes/nuevo/", views.cliente_nuevo, name="cliente_nuevo"),

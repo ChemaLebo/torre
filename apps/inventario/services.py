@@ -480,6 +480,29 @@ def _notificar_recepcion_cerrada(orden):
     return enviar_recepcion_cerrada(orden)
 
 
+def skus_recibibles(cliente):
+    """SKUs que pueden venir en una ASN: activos y no kit (un kit se arma al empacar)."""
+    from apps.catalogo.models import SKU
+
+    return SKU.objects.filter(cliente=cliente, activo=True, es_kit=False).order_by("codigo")
+
+
+COLUMNAS_PLANTILLA_ASN = ("codigo", "descripcion", "cantidad", "lote", "caducidad")
+
+
+def filas_plantilla_asn(cliente, sku_pks):
+    """Renglones del formato CSV del anuncio (portal y Mesa): las columnas que lee
+    FormAnuncioASN más `descripcion` para que la hoja se entienda; un renglón por
+    SKU pedido con codigo y descripcion prellenados, cantidad y lote en blanco y
+    la caducidad con el placeholder AAAA-MM-DD (enseña el formato; sin tocar
+    cuenta como vacío). SKUs de otro cliente o kits se ignoran."""
+    from apps.core.fechas import PLACEHOLDER_FECHA
+
+    pks = [v for v in sku_pks if str(v).isdigit()]
+    skus = skus_recibibles(cliente).filter(pk__in=pks) if pks else []
+    return [[sku.codigo, sku.descripcion, "", "", PLACEHOLDER_FECHA] for sku in skus]
+
+
 def anunciar_asn(cliente, fecha_compromiso, tarimas, lineas, actor, origen, motivo=""):
     """Alta de una ASN (Mesa o portal): OrdenEntrada + una LineaASN por
     (SKU, lote anunciado) + evento `anunciada_<origen>`. `lineas` viene del form

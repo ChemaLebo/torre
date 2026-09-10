@@ -1107,7 +1107,7 @@ def recepciones(request):
     """
     from apps.catalogo.services import lotes_recientes_cliente  # lazy por contrato
     from apps.inventario.models import OrdenEntrada  # lazy: modelo de otra app
-    from apps.inventario.services import anunciar_asn  # lazy por contrato
+    from apps.inventario.services import anunciar_asn, skus_recibibles  # lazy por contrato
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
@@ -1119,9 +1119,11 @@ def recepciones(request):
 
     form = None
     lotes_recientes = []
+    skus_plantilla = []
     if cliente is not None:
         form = FormAnuncioASNMesa(cliente, request.POST or None, request.FILES or None)
         lotes_recientes = lotes_recientes_cliente(cliente)
+        skus_plantilla = list(skus_recibibles(cliente))
         if request.method == "POST" and form.is_valid():
             fecha = form.cleaned_data["fecha_compromiso"]
             tarimas = form.cleaned_data.get("tarimas") or 0
@@ -1169,6 +1171,9 @@ def recepciones(request):
     return render(request, "mesa/recepciones.html", {
         "seccion": "recepciones",
         "reingresos": reingresos,
+        "skus_plantilla": skus_plantilla,
+        # codigo → pk para que el navegador vuelque un CSV elegido en los renglones
+        "codigos_sku": {s.codigo: s.pk for s in skus_plantilla},
         "abiertas": abiertas,
         "cerradas": cerradas,
         "cliente_captura": cliente,
@@ -1176,6 +1181,23 @@ def recepciones(request):
         "lotes_recientes": lotes_recientes,
         "clientes_activos": Cliente.objects.filter(activo=True).order_by("nombre"),
     })
+
+
+@rol_requerido("mesa")
+def recepciones_plantilla(request):
+    """Formato CSV del anuncio de ASN de un cliente (?cliente=slug&sku=<pk>&sku=…);
+    sin SKUs marcados baja solo el encabezado. Lógica en inventario.services."""
+    from apps.inventario.services import COLUMNAS_PLANTILLA_ASN, filas_plantilla_asn  # lazy por contrato
+
+    cliente = get_object_or_404(Cliente, slug=(request.GET.get("cliente") or "").strip(), activo=True)
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    hoy = timezone.localdate().strftime("%Y%m%d")
+    respuesta["Content-Disposition"] = f'attachment; filename="asn_{cliente.slug}_{hoy}.csv"'
+    respuesta.write("\ufeff")
+    escritor = csv.writer(respuesta)
+    escritor.writerow(COLUMNAS_PLANTILLA_ASN)
+    escritor.writerows(filas_plantilla_asn(cliente, request.GET.getlist("sku")))
+    return respuesta
 
 
 def _recepciones_decidir_reingreso(request):

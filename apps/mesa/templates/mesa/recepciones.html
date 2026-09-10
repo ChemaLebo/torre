@@ -44,6 +44,28 @@
 <div class="card mb">
   {% if cliente_captura %}
     <div class="titulo"><h2>Capturar ASN de {{ cliente_captura.nombre }}</h2><a class="btn chico" href="{% url 'mesa:recepciones' %}">Cambiar de cliente</a></div>
+    {# Formato del CSV, arriba y visible: GET aparte (un form no puede anidar otro). #}
+    <details id="asn-formato">
+      <summary>Descargar el formato del CSV <span class="small muted">· marca los productos que llegan para prellenarlos</span></summary>
+      <form method="get" action="{% url 'mesa:recepciones_plantilla' %}" id="asn-formato-form">
+        <input type="hidden" name="cliente" value="{{ cliente_captura.slug }}">
+        <p class="small muted">
+          Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y
+          descripción; tú llenas la cantidad (y lote y caducidad si aplican; la caducidad va como
+          <span class="mono">AAAA-MM-DD</span> o <span class="mono">DD/MM/AAAA</span>). Sin marcar nada baja solo el encabezado.
+        </p>
+        <label class="asn-formato-item" for="asn-formato-todos"><input type="checkbox" id="asn-formato-todos"> <b>Marcar todos</b></label>
+        <div class="grid g3 asn-formato-lista">
+          {% for sku in skus_plantilla %}
+          <label class="asn-formato-item" for="asn-sku-{{ sku.pk }}"><input type="checkbox" name="sku" value="{{ sku.pk }}" id="asn-sku-{{ sku.pk }}"> <span><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }}</span></label>
+          {% empty %}
+          <span class="muted small">El cliente no tiene productos recibibles dados de alta.</span>
+          {% endfor %}
+        </div>
+        <div class="mt"><button class="btn chico" type="submit">Descargar formato (CSV)</button></div>
+      </form>
+    </details>
+
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <input type="hidden" name="cliente" value="{{ cliente_captura.slug }}">
@@ -97,9 +119,11 @@
       <div class="mt">
         <label for="{{ form.renglones_csv.id_for_label }}">{{ form.renglones_csv.label }}</label>
         {{ form.renglones_csv }}
-        <div class="small muted">{{ form.renglones_csv.help_text }}</div>
+        <div class="small muted">Al elegir el archivo, sus renglones se cargan arriba para revisarlos y corregirlos antes de anunciar. {{ form.renglones_csv.help_text }}</div>
+        <div class="banner" id="asn-csv-aviso" hidden><span class="foco"></span><div id="asn-csv-aviso-texto"></div></div>
         {{ form.renglones_csv.errors }}
       </div>
+      {{ codigos_sku|json_script:"asn-codigos" }}
 
       <div class="mt"><button class="btn primario" type="submit">Registrar ASN</button></div>
     </form>
@@ -108,7 +132,7 @@
       var boton = document.getElementById("btn-mas-renglon");
       var caja = document.getElementById("renglones-asn");
       if (!boton || !caja) return;
-      boton.addEventListener("click", function () {
+      function agregarRenglon() {
         var filas = caja.querySelectorAll(".renglon-asn");
         var nueva = filas[filas.length - 1].cloneNode(true);
         var indice = filas.length + 1;
@@ -123,6 +147,89 @@
         });
         nueva.querySelectorAll("ul.errorlist").forEach(function (e) { e.remove(); });
         caja.appendChild(nueva);
+        return nueva;
+      }
+      boton.addEventListener("click", agregarRenglon);
+
+      /* CSV → renglones: al elegir el archivo se vuelca en el formulario (con el
+         autollenado de lotes) para revisarlo antes de anunciar; el archivo se
+         suelta del input para que el servidor use los renglones editados. Sin JS
+         el archivo viaja tal cual y el servidor lo procesa como siempre. */
+      var archivo = document.getElementById("{{ form.renglones_csv.id_for_label }}");
+      var codigos = JSON.parse(document.getElementById("asn-codigos").textContent);
+      var aviso = document.getElementById("asn-csv-aviso");
+      function parsearCsv(texto) {
+        var filas = [], fila = [], celda = "", comillas = false;
+        texto = texto.replace(/^\uFEFF/, "");
+        for (var i = 0; i < texto.length; i++) {
+          var c = texto[i];
+          if (comillas) {
+            if (c === '"' && texto[i + 1] === '"') { celda += '"'; i++; }
+            else if (c === '"') { comillas = false; }
+            else { celda += c; }
+          } else if (c === '"') { comillas = true; }
+          else if (c === ",") { fila.push(celda); celda = ""; }
+          else if (c === "\n" || c === "\r") {
+            if (c === "\r" && texto[i + 1] === "\n") i++;
+            fila.push(celda); filas.push(fila); fila = []; celda = "";
+          } else { celda += c; }
+        }
+        if (celda !== "" || fila.length) { fila.push(celda); filas.push(fila); }
+        return filas;
+      }
+      function fechaIso(crudo) {
+        crudo = crudo.trim();
+        if (!crudo || crudo.toUpperCase() === "AAAA-MM-DD") return "";
+        var dma = crudo.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+        if (dma) return dma[3] + "-" + ("0" + dma[2]).slice(-2) + "-" + ("0" + dma[1]).slice(-2);
+        return crudo;
+      }
+      function avisar(texto, clase) {
+        aviso.className = "banner " + clase;
+        document.getElementById("asn-csv-aviso-texto").textContent = texto;
+        aviso.hidden = false;
+      }
+      function volcarCsv(texto, nombre) {
+        var filas = parsearCsv(texto).filter(function (f) { return f.some(function (c) { return c.trim(); }); });
+        if (!filas.length) { avisar("El archivo está vacío.", "crit"); return; }
+        var cabecera = filas[0].map(function (c) { return c.trim().toLowerCase(); });
+        var col = { codigo: cabecera.indexOf("codigo"), cantidad: cabecera.indexOf("cantidad"),
+                    lote: cabecera.indexOf("lote"), caducidad: cabecera.indexOf("caducidad") };
+        if (col.codigo < 0 || col.cantidad < 0) { avisar("El CSV lleva encabezados codigo,cantidad.", "crit"); return; }
+        var desconocidos = [], cargados = 0, renglones = caja.querySelectorAll(".renglon-asn");
+        renglones.forEach(function (r) {
+          r.querySelectorAll("select,input").forEach(function (campo) {
+            if (campo.tagName === "SELECT") campo.selectedIndex = 0; else campo.value = "";
+          });
+        });
+        filas.slice(1).forEach(function (f) {
+          var codigo = (f[col.codigo] || "").trim();
+          var cantidad = (f[col.cantidad] || "").trim();
+          if (!codigo && !cantidad) return;
+          if (!(codigo in codigos)) { desconocidos.push(codigo || "(sin código)"); return; }
+          var renglon = cargados < renglones.length ? renglones[cargados] : agregarRenglon();
+          cargados++;
+          renglon.querySelector("select").value = String(codigos[codigo]);
+          renglon.querySelector("input[name^='cantidad_']").value = cantidad;
+          var lote = renglon.querySelector("input[name^='lote_']");
+          var caducidad = renglon.querySelector("input[name^='caducidad_']");
+          lote.value = col.lote >= 0 ? (f[col.lote] || "").trim() : "";
+          if (lote.value) lote.dispatchEvent(new Event("change", { bubbles: true }));
+          var iso = col.caducidad >= 0 ? fechaIso(f[col.caducidad] || "") : "";
+          if (iso) { caducidad.value = iso; caducidad.dispatchEvent(new Event("change", { bubbles: true })); }
+        });
+        archivo.value = "";
+        var texto = cargados + " renglón(es) cargados de " + nombre + ". Revísalos y anuncia la entrega.";
+        if (desconocidos.length) texto += " Sin cargar por SKU desconocido: " + desconocidos.join(", ") + ".";
+        avisar(texto, desconocidos.length ? "warn" : "ok");
+      }
+      archivo.addEventListener("change", function () {
+        var f = archivo.files && archivo.files[0];
+        if (!f) return;
+        var lector = new FileReader();
+        lector.onload = function () { volcarCsv(lector.result, f.name); };
+        lector.onerror = function () { avisar("No se pudo leer el archivo; se enviará tal cual al anunciar.", "warn"); };
+        lector.readAsText(f, "utf-8");
       });
       /* Lote ⇄ caducidad: elegir un lote sugerido autollena la caducidad que
          trae (data-caducidad); un lote tecleado en un renglón se suma a las
@@ -147,6 +254,10 @@
         }
         if (!opcion) { opcion = document.createElement("option"); opcion.value = codigo; lista.appendChild(opcion); }
         if (caducidad.value) opcion.dataset.caducidad = caducidad.value;
+      });
+      var todos = document.getElementById("asn-formato-todos");
+      todos.addEventListener("change", function () {
+        document.querySelectorAll("#asn-formato-form input[name=sku]").forEach(function (c) { c.checked = todos.checked; });
       });
     })();
     </script>

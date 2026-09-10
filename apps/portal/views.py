@@ -19,7 +19,6 @@ from django.utils import timezone
 
 from apps.catalogo.models import SKU
 from apps.core.decorators import portal_requerido
-from apps.core.fechas import PLACEHOLDER_FECHA
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 from apps.incidencias.models import Incidencia, MensajeIncidencia
@@ -616,7 +615,7 @@ def _avisar_piso_asn(orden):
 @portal_requerido
 def recepciones(request):
     from apps.catalogo.services import lotes_recientes_cliente  # lazy por contrato
-    from apps.inventario.services import anunciar_asn  # lazy por contrato
+    from apps.inventario.services import anunciar_asn, skus_recibibles  # lazy por contrato
 
     form = FormAnuncioASN(request.cliente, request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
@@ -645,36 +644,23 @@ def recepciones(request):
         "ordenes": ordenes,
         "form": form,
         "lotes_recientes": lotes_recientes_cliente(request.cliente),
-        "skus_plantilla": _skus_recibibles(request.cliente),
+        "skus_plantilla": skus_recibibles(request.cliente),
         # codigo → pk para que el navegador vuelque un CSV elegido en los renglones
-        "codigos_sku": {s.codigo: s.pk for s in _skus_recibibles(request.cliente)},
+        "codigos_sku": {s.codigo: s.pk for s in skus_recibibles(request.cliente)},
     })
-
-
-def _skus_recibibles(cliente):
-    """SKUs que pueden venir en una ASN: activos y no kit (un kit se arma al empacar)."""
-    return SKU.objects.filter(cliente=cliente, activo=True, es_kit=False).order_by("codigo")
-
-
-COLUMNAS_PLANTILLA_ASN = ("codigo", "descripcion", "cantidad", "lote", "caducidad")
 
 
 @portal_requerido
 def recepciones_plantilla(request):
-    """Formato CSV del anuncio de ASN (?sku=<pk>&sku=…): las columnas que lee
-    FormAnuncioASN más `descripcion` para que la hoja se entienda, y un renglón
-    por SKU marcado con codigo y descripcion prellenados, cantidad y lote en
-    blanco y la caducidad con el placeholder AAAA-MM-DD (enseña el formato;
-    sin tocar cuenta como vacío). Sin SKUs marcados baja solo el encabezado.
-    SKUs de otro cliente o kits se ignoran."""
-    pks = [v for v in request.GET.getlist("sku") if v.isdigit()]
-    skus = _skus_recibibles(request.cliente).filter(pk__in=pks) if pks else []
+    """Formato CSV del anuncio de ASN (?sku=<pk>&sku=…); sin SKUs marcados baja
+    solo el encabezado. Lógica en inventario.services.filas_plantilla_asn."""
+    from apps.inventario.services import COLUMNAS_PLANTILLA_ASN, filas_plantilla_asn  # lazy por contrato
+
     hoy = timezone.localdate().strftime("%Y%m%d")
     respuesta = _respuesta_csv(f"asn_{request.cliente.slug}_{hoy}.csv")
     w = csv.writer(respuesta)
     w.writerow(COLUMNAS_PLANTILLA_ASN)
-    for sku in skus:
-        w.writerow([sku.codigo, sku.descripcion, "", "", PLACEHOLDER_FECHA])
+    w.writerows(filas_plantilla_asn(request.cliente, request.GET.getlist("sku")))
     return respuesta
 
 

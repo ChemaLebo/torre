@@ -158,6 +158,23 @@ class AltaAsnConLoteTests(BaseRecepcionesMesa):
         evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=orden.folio, accion="anunciada_mesa")
         self.assertEqual(evento.delta["lineas"][0]["lote"], "L-2026-09")
 
+    def test_formato_csv_con_productos_marcados(self):
+        kit = SKU.objects.create(cliente=self.colima, codigo="KIT-3", descripcion="Kit", es_kit=True)
+        self.entrar_mesa()
+        respuesta = self.client.get(self.url + "?cliente=colima")
+        self.assertContains(respuesta, "Descargar formato (CSV)")
+        self.assertContains(respuesta, f'name="sku" value="{self.sku_colima.pk}"')
+        self.assertNotContains(respuesta, f'name="sku" value="{kit.pk}"')
+        self.assertContains(respuesta, 'id="asn-codigos"')
+        respuesta = self.client.get(reverse("mesa:recepciones_plantilla"), {
+            "cliente": "colima", "sku": [str(self.sku_colima.pk), str(kit.pk)],
+        })
+        lineas = respuesta.content.decode("utf-8-sig").splitlines()
+        self.assertEqual(lineas, [
+            "codigo,descripcion,cantidad,lote,caducidad",
+            f"{self.sku_colima.codigo},{self.sku_colima.descripcion},,,AAAA-MM-DD",
+        ])
+
     def test_form_muestra_columnas_de_lote_y_datalist(self):
         from apps.catalogo.models import Lote
 
