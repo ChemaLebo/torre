@@ -43,8 +43,7 @@ class BaseReconciliacion(InventarioTestCase):
         filas, errores = leer_csv_conteo(texto)
         self.assertEqual(errores, [])
         return reconciliar_conteo(
-            self.cliente, filas, Ajuste.MOTIVO_RECONCILIACION_INV,
-            "piso1", "1111", "mesa1", "3333", self.firma2, **extra,
+            self.cliente, filas, Ajuste.MOTIVO_RECONCILIACION_INV, self.firma2, **extra,
         )
 
 
@@ -187,20 +186,22 @@ class ReconciliarTests(BaseReconciliacion):
             self.aplicar(csv_texto("COLIMITA-SIX,,,,,,18", "NOEXISTE,,,,,,1"))
         self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE), 20)
 
-    def test_firma_invalida_no_aplica_nada(self):
+    def test_solo_mesa_o_superusuario_aplica(self):
         filas, _ = leer_csv_conteo(csv_texto("COLIMITA-SIX,,,,,,18"))
-        with self.assertRaises(ValueError):
-            reconciliar_conteo(
-                self.cliente, filas, Ajuste.MOTIVO_RECONCILIACION_INV,
-                "piso1", "0000", "mesa1", "3333", self.firma2,
-            )
-        with self.assertRaisesMessage(ValueError, "dos personas distintas"):
-            reconciliar_conteo(
-                self.cliente, filas, Ajuste.MOTIVO_RECONCILIACION_INV,
-                "piso1", "1111", "piso1", "1111", self.firma2,
-            )
+        with self.assertRaisesMessage(ValueError, "la aplica Mesa de Control"):
+            reconciliar_conteo(self.cliente, filas, Ajuste.MOTIVO_RECONCILIACION_INV, self.firma1)
+        with self.assertRaisesMessage(ValueError, "la aplica Mesa de Control"):
+            reconciliar_conteo(self.cliente, filas, Ajuste.MOTIVO_RECONCILIACION_INV, None)
         self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE), 20)
         self.assertEqual(Conteo.objects.count(), 0)
+
+    def test_la_firma_es_el_usuario_de_mesa_sin_doble_pin(self):
+        self.aplicar(csv_texto("COLIMITA-SIX,,,,,,18"))
+        ajuste = Ajuste.objects.get()
+        self.assertEqual((ajuste.autorizo_1, ajuste.autorizo_2), ("mesa1", "mesa1"))
+        self.assertEqual(Movimiento.objects.get(referencia=ajuste.folio).actor, "mesa1")
+        evento = EventoAuditoria.objects.get(accion="reconciliacion_csv")
+        self.assertEqual((evento.delta["firma"], evento.delta["doble_firma"]), ("mesa1", False))
 
     def test_todo_o_nada_cuando_un_renglon_falla_al_aplicar(self):
         self.poner_vendible(5, ubicacion=self.ubic_reserva)
@@ -214,7 +215,7 @@ class ReconciliarTests(BaseReconciliacion):
     def test_motivo_fuera_del_catalogo(self):
         filas, _ = leer_csv_conteo(csv_texto("COLIMITA-SIX,,,,,,18"))
         with self.assertRaisesMessage(ValueError, "fuera del catálogo"):
-            reconciliar_conteo(self.cliente, filas, "inventado", "piso1", "1111", "mesa1", "3333", self.firma2)
+            reconciliar_conteo(self.cliente, filas, "inventado", self.firma2)
 
     def test_por_ubicacion_agrega_y_quita_en_ese_anaquel(self):
         self.poner_vendible(5, ubicacion=self.ubic_reserva)

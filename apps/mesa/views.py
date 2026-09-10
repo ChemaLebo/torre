@@ -860,7 +860,8 @@ def inventario_exportar_conteo(request):
 @rol_requerido("mesa")
 def inventario_reconciliar(request):
     """Reconciliación de inventario por CSV (?cliente=slug), en dos pasos:
-    subir el archivo → previa con deltas y avisos → motivo + doble firma → aplicar.
+    subir el archivo → previa con deltas y avisos → motivo + modal de confirmación
+    con el resumen → aplicar firmado por el usuario de Mesa (sin doble PIN).
     El CSV viaja en un hidden entre la previa y el aplicar (sin estado en servidor).
     Toda la lógica vive en inventario.services (previa_reconciliacion, reconciliar_conteo)."""
     from apps.inventario.models import Ajuste
@@ -913,10 +914,8 @@ def inventario_reconciliar(request):
     if accion == "aplicar":
         try:
             resumen = reconciliar_conteo(
-                cliente, filas, request.POST.get("motivo") or "",
-                (request.POST.get("autorizo_1") or "").strip(), request.POST.get("pin_1") or "",
-                (request.POST.get("autorizo_2") or "").strip(), request.POST.get("pin_2") or "",
-                request.user, nota=(request.POST.get("nota") or "").strip(), archivo=nombre,
+                cliente, filas, request.POST.get("motivo") or "", request.user,
+                nota=(request.POST.get("nota") or "").strip(), archivo=nombre,
             )
         except ValueError as exc:
             messages.error(request, str(exc))
@@ -930,11 +929,17 @@ def inventario_reconciliar(request):
             return _redirect_inventario(cliente=cliente.slug)
 
     previa = previa_reconciliacion(cliente, filas)
+    deltas = [r["delta"] for r in previa["aplicables"]]
     contexto.update({
         "previa": previa,
         "csv_conteo": texto,
         "archivo_nombre": nombre,
         "total_filas": len(filas),
+        "resumen": {
+            "suben": sum(d for d in deltas if d > 0),
+            "bajan": -sum(d for d in deltas if d < 0),
+            "lotes_nuevos": sum(1 for r in previa["aplicables"] if r["lote"] and not r["lote_obj"]),
+        },
     })
     return render(request, "mesa/inventario_reconciliar.html", contexto)
 

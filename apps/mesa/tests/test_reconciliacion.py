@@ -1,5 +1,5 @@
 """Reconciliación de inventario desde Mesa: exportación del conteo, previa por
-CSV, aplicar con doble firma y accesos por rol."""
+CSV con modal de confirmación, aplicar firmado por Mesa y accesos por rol."""
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Sum
@@ -111,29 +111,36 @@ class PreviaYAplicarTests(BaseReconciliacionMesa):
         }, follow=True)
         self.assertContains(respuesta, "codigo y contado")
 
-    def test_aplicar_con_doble_firma_ajusta_y_regresa_al_inventario(self):
+    def test_previa_trae_el_modal_de_confirmacion_con_el_resumen(self):
+        respuesta = self.client.post(self.url, {
+            "accion": "previa", "cliente": "colima", "archivo": self.archivo(self.CSV),
+        })
+        self.assertContains(respuesta, "Confirmar y aplicar")
+        self.assertContains(respuesta, "<b>1</b> ajuste(s)")
+        self.assertContains(respuesta, "−3</span> bajan")
+        self.assertNotContains(respuesta, "pin_1")
+
+    def test_aplicar_firma_el_usuario_de_mesa_y_regresa_al_inventario(self):
         respuesta = self.client.post(self.url, {
             "accion": "aplicar", "cliente": "colima", "csv_conteo": self.CSV,
             "archivo_nombre": "conteo.csv", "motivo": Ajuste.MOTIVO_RECONCILIACION_INV,
-            "nota": "Prueba", "autorizo_1": "piso1", "pin_1": "1111",
-            "autorizo_2": "mesa1", "pin_2": "3333",
+            "nota": "Prueba",
         }, follow=True)
         self.assertRedirects(respuesta, reverse("mesa:inventario") + "?cliente=colima")
         self.assertContains(respuesta, "Reconciliación aplicada: 1 ajuste(s)")
         self.assertEqual(self.vendible(), 17)
         ajuste = Ajuste.objects.get()
         self.assertEqual((ajuste.delta, ajuste.motivo), (-3, Ajuste.MOTIVO_RECONCILIACION_INV))
+        self.assertEqual((ajuste.autorizo_1, ajuste.autorizo_2), ("mesa1", "mesa1"))
         self.assertTrue(EventoAuditoria.objects.filter(accion="reconciliacion_csv").exists())
 
-    def test_aplicar_con_pin_malo_no_mueve_y_vuelve_a_la_previa(self):
+    def test_aplicar_con_motivo_invalido_no_mueve_y_vuelve_a_la_previa(self):
         respuesta = self.client.post(self.url, {
-            "accion": "aplicar", "cliente": "colima", "csv_conteo": self.CSV,
-            "motivo": Ajuste.MOTIVO_RECONCILIACION_INV,
-            "autorizo_1": "piso1", "pin_1": "9999", "autorizo_2": "mesa1", "pin_2": "3333",
+            "accion": "aplicar", "cliente": "colima", "csv_conteo": self.CSV, "motivo": "inventado",
         })
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Firma inválida")
-        self.assertContains(respuesta, "Aplicar reconciliación")
+        self.assertContains(respuesta, "fuera del catálogo")
+        self.assertContains(respuesta, "Confirmar y aplicar")
         self.assertEqual(self.vendible(), 20)
         self.assertEqual(Ajuste.objects.count(), 0)
 

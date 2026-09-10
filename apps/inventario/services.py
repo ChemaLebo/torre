@@ -720,18 +720,19 @@ def aplicar_ajuste(
     """
     perfil_1, perfil_2 = _validar_doble_firma(pin1_usuario, pin1, pin2_usuario, pin2)
     return _aplicar_ajuste_firmado(
-        sku, delta, motivo, perfil_1, perfil_2,
+        sku, delta, motivo, perfil_1.usuario, perfil_2.usuario,
         lote=lote, conteo=conteo, incidencia_ref=incidencia_ref, ubicacion=ubicacion,
     )
 
 
 def _aplicar_ajuste_firmado(
-    sku, delta, motivo, perfil_1, perfil_2,
+    sku, delta, motivo, usuario_1, usuario_2,
     lote=None, conteo=None, incidencia_ref="", ubicacion=None,
 ):
-    """Núcleo del ajuste con las firmas YA validadas (la reconciliación por CSV
-    valida una vez y aplica N renglones; validar PINs por renglón sería
-    N×2 hashes lentos y ningún beneficio)."""
+    """Núcleo del ajuste con las firmas YA resueltas: `usuario_1`/`usuario_2`
+    son los User que quedan como autorizo_1/autorizo_2 (dos personas con PIN
+    en el ajuste individual; la misma persona de Mesa dos veces en la
+    reconciliación por CSV, que Mesa aplica como admin sin doble PIN)."""
     delta = int(delta)
     if delta == 0:
         raise ValueError("Un ajuste de cero unidades no ajusta nada.")
@@ -780,18 +781,19 @@ def _aplicar_ajuste_firmado(
 
         ajuste = Ajuste.objects.create(
             sku=sku, lote=lote, delta=delta, motivo=motivo,
-            autorizo_1=perfil_1.usuario.username, autorizo_2=perfil_2.usuario.username,
+            autorizo_1=usuario_1.username, autorizo_2=usuario_2.username,
             conteo=conteo, incidencia_ref=incidencia_ref,
         )
         _mov(
             sku, Movimiento.AJUSTE, delta, lote=lote,
             origen=Saldo.UBICADO_VENDIBLE, destino=Saldo.UBICADO_VENDIBLE,
             referencia=ajuste.folio,
-            actor=f"{ajuste.autorizo_1}+{ajuste.autorizo_2}",
+            actor=(ajuste.autorizo_1 if ajuste.autorizo_1 == ajuste.autorizo_2
+                   else f"{ajuste.autorizo_1}+{ajuste.autorizo_2}"),
         )
         registrar_evento(
             "ajuste", ajuste.folio, "ajuste_aplicado",
-            actor=perfil_1.usuario, cliente=sku.cliente,
+            actor=usuario_1, cliente=sku.cliente,
             delta={"sku": sku.codigo, "delta": delta,
                    "firmas": [ajuste.autorizo_1, ajuste.autorizo_2],
                    "conteo": conteo.folio if conteo else None,
@@ -1349,12 +1351,20 @@ def previa_reconciliacion(cliente, filas):
     }
 
 
-def reconciliar_conteo(
-    cliente, filas, motivo, pin1_usuario, pin1, pin2_usuario, pin2, actor,
-    nota="", archivo="",
-):
+def _validar_admin_mesa(actor):
+    """La reconciliación por CSV la firma Mesa de Control como admin (sin doble
+    PIN): el actor debe ser un usuario con rol mesa o superusuario."""
+    perfil = getattr(actor, "perfil", None)
+    es_mesa = perfil is not None and perfil.rol == "mesa"
+    if not getattr(actor, "username", "") or not (es_mesa or getattr(actor, "is_superuser", False)):
+        raise ValueError("La reconciliación por CSV la aplica Mesa de Control.")
+    return actor
+
+
+def reconciliar_conteo(cliente, filas, motivo, actor, nota="", archivo=""):
     """Aplica la reconciliación: un Ajuste (con Conteo ligado) por renglón con delta,
-    todo o nada. Las dos firmas se validan UNA vez para todo el lote.
+    todo o nada. La firma es el usuario de Mesa que aplica (`actor`), tras
+    confirmar el resumen en pantalla; no pide doble PIN (Mesa opera como admin).
 
     NO abre incidencias DES: una reconciliación es, por definición, una lista de
     descuadres ya asumidos. Regresa el resumen {"ajustes", "omitidos", "folios"}.
@@ -1371,7 +1381,7 @@ def reconciliar_conteo(
         )
     if not previa["aplicables"]:
         raise ValueError("Ningún renglón cambia el stock: no hay nada que aplicar.")
-    perfil_1, perfil_2 = _validar_doble_firma(pin1_usuario, pin1, pin2_usuario, pin2)
+    firmante = _validar_admin_mesa(actor)
 
     folios = []
     with transaction.atomic():
@@ -1390,7 +1400,7 @@ def reconciliar_conteo(
                 esperado=r["vendible_actual"], contado=r["contado"],
             )
             ajuste = _aplicar_ajuste_firmado(
-                sku, r["delta"], motivo, perfil_1, perfil_2,
+                sku, r["delta"], motivo, firmante, firmante,
                 lote=lote, conteo=conteo, ubicacion=r["ubicacion_obj"],
             )
             folios.append(ajuste.folio)
@@ -1400,7 +1410,7 @@ def reconciliar_conteo(
                 "archivo": archivo, "renglones": len(previa["renglones"]),
                 "ajustes": len(folios), "omitidos": previa["omitidos"],
                 "no_contados": len(previa["no_contados"]), "folios": folios,
-                "firmas": [perfil_1.usuario.username, perfil_2.usuario.username],
+                "firma": firmante.username, "doble_firma": False,
                 "avisos": previa["avisos"][:50],
             },
             motivo=(nota or f"Reconciliación de inventario por CSV ({archivo})")[:300],

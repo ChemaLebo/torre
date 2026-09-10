@@ -293,6 +293,15 @@ tr.fila-link:hover td { background: var(--panel-2); }
 .btn.chico { padding: 5px 14px; font-size: 13px; }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 
+/* ── Modal nativo (<dialog class="modal">) ── */
+dialog.modal {
+  width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+  padding: 22px 24px; border: 1px solid var(--hair-2); border-radius: 14px;
+  background: var(--panel); color: var(--ink);
+}
+dialog.modal::backdrop { background: rgba(0, 0, 0, .62); }
+dialog.modal .modal-lista { max-height: 40vh; overflow: auto; }
+
 /* ── Formularios ── */
 label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-50); margin: 14px 0 6px; }
 input[type="text"], input[type="password"], input[type="number"], input[type="email"],
