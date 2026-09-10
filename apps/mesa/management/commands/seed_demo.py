@@ -355,7 +355,9 @@ class Command(BaseCommand):
         from apps.inventario.models import LineaASN, OrdenEntrada
         from apps.inventario.services import recibir, ubicar
 
-        if OrdenEntrada.objects.filter(cliente=cliente, estado=OrdenEntrada.CERRADA).exists():
+        if OrdenEntrada.objects.filter(
+            cliente=cliente, tipo=OrdenEntrada.TIPO_ASN, estado=OrdenEntrada.CERRADA,
+        ).exists():
             return  # stock inicial ya sembrado
 
         orden = OrdenEntrada.objects.create(
@@ -383,22 +385,63 @@ class Command(BaseCommand):
         )
 
     def _asn_anunciada(self, colima, skus):
-        from apps.core.services import registrar_evento
-        from apps.inventario.models import LineaASN, OrdenEntrada
+        """ASN anunciada desde el portal para la próxima ventana mar/jue
+        (BLUEPRINT §1.8). Dos renglones traen lote y caducidad; el tercero va
+        sin lote para que el piso vea la sugerencia heredada de la orden.
+        Regresa la orden (la existente si ya estaba sembrada)."""
+        from apps.inventario.models import OrdenEntrada
+        from apps.inventario.services import anunciar_asn
 
-        if OrdenEntrada.objects.filter(cliente=colima, estado=OrdenEntrada.ANUNCIADA).exists():
-            return
-        # Próxima ventana de recepción: martes o jueves (BLUEPRINT §1.8).
+        existente = OrdenEntrada.objects.filter(
+            cliente=colima, tipo=OrdenEntrada.TIPO_ASN, estado=OrdenEntrada.ANUNCIADA,
+        ).first()
+        if existente is not None:
+            return existente
         fecha = timezone.localdate() + timedelta(days=1)
         while fecha.weekday() not in (1, 3):
             fecha += timedelta(days=1)
-        orden = OrdenEntrada.objects.create(cliente=colima, fecha_compromiso=fecha)
-        for codigo, cantidad in (("COLIMITA-SIX", 120), ("PARAMO-SIX", 60), ("CAYACO-SIX", 48)):
-            LineaASN.objects.create(orden=orden, sku=skus[codigo], cantidad_anunciada=cantidad)
-        registrar_evento(
-            "asn", orden.folio, "anunciada", actor="karina", cliente=colima,
-            delta={"lineas": 3, "fecha_compromiso": str(fecha)},
+        caducidad = timezone.localdate() + timedelta(days=300)
+        return anunciar_asn(
+            colima, fecha, 2,
+            [
+                (skus["COLIMITA-SIX"], 120, "LC-2609", caducidad),
+                (skus["PARAMO-SIX"], 60, "LP-2609", caducidad),
+                (skus["CAYACO-SIX"], 48, "", None),
+            ],
+            actor="karina", origen="portal",
             motivo="Resurtido anunciado desde el portal (cita en ventana mar/jue)",
+        )
+
+    def _lote_extra(self, colima, skus):
+        """Segundo lote de COLIMITA-SIX (LC-2512: caduca en 45 días, 12 piezas
+        en A-02-1) que entró por una recepción chica ya cerrada. El FEFO lo
+        pickea antes que LC-2601, la reconciliación por CSV muestra un renglón
+        por lote y la página de lotes de Mesa tiene dos lotes del mismo SKU."""
+        from apps.catalogo.models import Lote, Ubicacion
+        from apps.catalogo.services import obtener_o_crear_lote
+        from apps.inventario.models import LineaASN, OrdenEntrada
+        from apps.inventario.services import recibir, ubicar
+
+        sku = skus["COLIMITA-SIX"]
+        if Lote.objects.filter(sku=sku, codigo="LC-2512").exists():
+            return
+        caducidad = timezone.localdate() + timedelta(days=45)
+        orden = OrdenEntrada.objects.create(
+            cliente=colima, fecha_compromiso=timezone.localdate() - timedelta(days=3), tarimas=1,
+        )
+        linea = LineaASN.objects.create(
+            orden=orden, sku=sku, cantidad_anunciada=12,
+            lote_codigo="LC-2512", fecha_caducidad=caducidad,
+        )
+        recibir(linea, 12, 0, actor="jefe")
+        lote = obtener_o_crear_lote(sku, "LC-2512", caducidad)
+        ubicar(sku, 12, Ubicacion.objects.get(codigo="A-02-1"), lote, actor="jefe")
+        orden.transicionar(OrdenEntrada.CERRADA, actor="jefe",
+                           motivo="Resurtido chico: lote LC-2512 ubicado y vendible")
+        OrdenEntrada.objects.filter(pk=orden.pk).update(
+            creado=self._dt(3, 9, 30),
+            ts_descarga_fin=self._dt(3, 10, 0),
+            ts_vendible=self._dt(3, 10, 40),
         )
 
     # ────────────────────────────────────────────────────────────────────
@@ -499,7 +542,7 @@ class Command(BaseCommand):
         solo cuando el pedido acaba de sembrarse (idempotencia).
         """
         from apps.core.models import EvidenciaFoto
-        from apps.inventario.services import despachar, retornar
+        from apps.inventario.services import despachar
         from apps.pedidos.services import cancelar, confirmar_linea_pick, iniciar_picking
 
         t_mx = tiendas["colima-mx.myshopify.com"]
@@ -604,7 +647,7 @@ class Command(BaseCommand):
             self._fechar_guia(guia, creado=self._dt(6, 10, 40), ts_ultimo_movimiento=self._dt(6, 19, 0))
         resultado["presunta"] = (pedido, creado)
 
-        # ── C6 · RETORNADO Tijuana (reingreso a cuarentena) ──
+        # ── C6 · RETORNADO Tijuana (Mesa decide el reingreso en Recepciones) ──
         pedido, creado = self._crear_pedido(t_mx, self._payload(
             5006, "Óscar Valdez", "+526641234606", "22000", "Tijuana", "Baja California",
             [(skus["PARAMO-C12"], 1)],
@@ -615,11 +658,8 @@ class Command(BaseCommand):
             guia.transicionar("RETORNO", motivo="Retornado al remitente: rechazado en destino (mock)")
             pedido.transicionar(
                 "RETORNADO", actor="jefe",
-                motivo="Carrier marcó retorno; reingreso fotografiado a cuarentena para inspección.",
+                motivo="Carrier marcó retorno; el paquete viene de regreso a bodega.",
             )
-            for linea in pedido.lineas.all():
-                if linea.cantidad_pickeada:
-                    retornar(linea.sku, linea.cantidad_pickeada, pedido.folio, "jefe")
             self._fechar_pedido(
                 pedido, creado=self._dt(5, 10, 40), ts_picking=self._dt(5, 11, 10),
                 ts_empacado=self._dt(5, 12, 0), ts_guia=self._dt(5, 12, 5),
@@ -744,6 +784,24 @@ class Command(BaseCommand):
             )
             self._fechar_guia(guia, creado=self._dt(1, 11, 15), ts_ultimo_movimiento=self._dt(1, 14, 30))
         resultado["parcial"] = (pedido, creado)
+
+        # ── C15 · EN_TRANSITO con cancelación tardía (incidencia CAN; Mesa decide) ──
+        pedido, creado = self._crear_pedido(t_mx, self._payload(
+            5017, "Lucía Ferrer", "+524491234617", "20000", "Aguascalientes", "Aguascalientes",
+            [(skus["TICUS-C12"], 1)],
+        ))
+        if creado:
+            guia = self._avanzar(pedido, "RECOLECTADO")
+            self._en_transito(pedido, guia)
+            cancelar(pedido, usuarios["mesa1"],
+                     "La compradora canceló en Shopify con el paquete ya en ruta.")
+            self._fechar_pedido(
+                pedido, creado=self._dt(2, 9, 20), ts_picking=self._dt(2, 9, 45),
+                ts_empacado=self._dt(2, 10, 30), ts_guia=self._dt(2, 10, 35),
+                ts_recolectado=self._dt(2, 13, 0), ts_en_transito=self._dt(1, 8, 40),
+            )
+            self._fechar_guia(guia, creado=self._dt(2, 10, 35), ts_ultimo_movimiento=self._dt(1, 8, 40))
+        resultado["cancelacion_tardia"] = (pedido, creado)
 
         # ── N1 · Mezcal Nocturno ENTREGADO (aislamiento multi-tenant) ──
         pedido, creado = self._crear_pedido(t_noc, self._payload(
@@ -1021,6 +1079,24 @@ class Command(BaseCommand):
             lote=None, conteo=conteo, incidencia_ref="",
         )
 
+    def _en_empaque_huerfano(self, skus):
+        """Simula el saldo EN_EMPAQUE huérfano que dejaban las cancelaciones
+        post-empaque antes del reingreso (2 CAYACO-SIX sin pedido que las
+        respalde) para probar `manage.py limpiar_en_empaque` en local. El
+        kardex lleva la marca SEED-FANTASMA-EMPAQUE: tras limpiar, una nueva
+        corrida del seed no lo vuelve a sembrar."""
+        from apps.catalogo.models import Ubicacion
+        from apps.inventario.models import Movimiento, Saldo
+        from apps.inventario.services import _incrementar, _mov
+
+        if Movimiento.objects.filter(referencia="SEED-FANTASMA-EMPAQUE").exists():
+            return
+        sku = skus["CAYACO-SIX"]
+        ubic = Ubicacion.objects.get(codigo="A-02-2")
+        _incrementar(sku, ubic.pk, None, Saldo.EN_EMPAQUE, 2)
+        _mov(sku, Movimiento.AJUSTE, 2, destino=Saldo.EN_EMPAQUE,
+             referencia="SEED-FANTASMA-EMPAQUE", actor="seed_demo")
+
     # ────────────────────────────────────────────────────────────────────
     # Orquestación
     # ────────────────────────────────────────────────────────────────────
@@ -1035,13 +1111,23 @@ class Command(BaseCommand):
         self._reglas_envio(colima)
         self._stock_inicial(colima, skus, lotes, STOCK_COLIMA, dias_atras=7)
         self._stock_inicial(nocturno, skus, lotes, STOCK_NOCTURNO, dias_atras=7)
-        self._asn_anunciada(colima, skus)
+        self._lote_extra(colima, skus)
+        asn = self._asn_anunciada(colima, skus)
         pedidos = self._pedidos(colima, nocturno, tiendas, skus, usuarios)
         self._escenarios_lote_a(colima, tiendas, skus)
         self._incidencias(colima, pedidos, usuarios)
         self._conteos(skus)
         self._sync(tiendas)
         self._ajuste(skus)  # después del push: deja 1 SKU en la cola (se ve viva)
+        self._en_empaque_huerfano(skus)
+        cancelado = pedidos["cancelado_reingreso"][0]
+        self._folios_sep = {
+            "asn": asn.folio,
+            "cancelado": cancelado.folio,
+            "reingreso": getattr(cancelado.reingresos.first(), "folio", "—"),
+            "retornado": pedidos["retornado"][0].folio,
+            "tardia": pedidos["cancelacion_tardia"][0].folio,
+        }
         self._resumen()
 
     def _resumen(self):
@@ -1080,6 +1166,16 @@ class Command(BaseCommand):
               f"Replan al generar: {f['replan']} · Stepper 2 cajas: {f['stepper']}")
             w("  Mezcal Nocturno viaja por 99minutos DIRECTO (integración por cliente)")
             w("  Cajas de empaque de Colima: Chica y Mediana (rack 40 · packing 10 c/u)")
+            w("")
+        if getattr(self, "_folios_sep", None):
+            w(self.style.MIGRATE_HEADING("Escenarios sep-2026 (reconciliación · lotes · reingreso)"))
+            f = self._folios_sep
+            w(f"  ASN anunciada con lotes (piso → Recepciones): {f['asn']} · "
+              "lote extra COLIMITA-SIX LC-2512 en A-02-1 (caduca primero: FEFO)")
+            w(f"  Reingreso por ubicar en piso (cancelado a medio pick {f['cancelado']}): {f['reingreso']}")
+            w(f"  Reingresos por decidir (Mesa → Recepciones): {f['retornado']} retornado · "
+              f"{f['tardia']} cancelación tardía")
+            w("  EN_EMPAQUE huérfano (2 CAYACO-SIX): python manage.py limpiar_en_empaque [--aplicar]")
             w("")
         # División de envíos + tokens de rastreo para los pedidos del demo
         try:

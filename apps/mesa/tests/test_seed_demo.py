@@ -170,6 +170,49 @@ class SeedDemoTests(TestCase):
         anunciada = OrdenEntrada.objects.filter(cliente__slug="colima", estado=OrdenEntrada.ANUNCIADA)
         self.assertTrue(anunciada.exists())
         self.assertTrue(anunciada.first().lineas.exists())
+        # Lotes en la ASN: dos renglones anunciados con lote y caducidad, uno sin.
+        lineas = anunciada.first().lineas
+        self.assertEqual(lineas.filter(lote_codigo="LC-2609", fecha_caducidad__isnull=False).count(), 1)
+        self.assertEqual(lineas.filter(lote_codigo="").count(), 1)
+
+    def test_lote_extra_caduca_antes_y_tiene_stock(self):
+        from apps.catalogo.models import Lote
+        from apps.inventario.models import Saldo
+
+        extra = Lote.objects.get(sku__codigo="COLIMITA-SIX", codigo="LC-2512")
+        base = Lote.objects.get(sku__codigo="COLIMITA-SIX", codigo="LC-2601")
+        self.assertLess(extra.fecha_caducidad, base.fecha_caducidad)
+        self.assertTrue(
+            Saldo.objects.filter(lote=extra, ubicacion__codigo="A-02-1", cantidad__gt=0).exists()
+        )
+
+    def test_reingresos_por_decidir_sembrados(self):
+        from apps.incidencias.models import Incidencia
+        from apps.inventario.models import Saldo
+        from apps.pedidos.models import Pedido
+        from apps.pedidos.services import reingresos_por_decidir
+
+        por_decidir = list(reingresos_por_decidir())
+        retornado = Pedido.objects.get(estado=Pedido.RETORNADO)
+        tardia = Incidencia.objects.get(tipo="CAN").pedido
+        self.assertIn(retornado, por_decidir)
+        self.assertIn(tardia, por_decidir)
+        self.assertEqual(tardia.estado, Pedido.EN_TRANSITO)
+        # Nada entró a cuarentena por adelantado: la decisión es de Mesa.
+        self.assertFalse(Saldo.objects.filter(estado=Saldo.CUARENTENA, sku__codigo="PARAMO-C12").exists())
+
+    def test_en_empaque_huerfano_se_limpia_con_el_command(self):
+        from apps.inventario.management.commands.limpiar_en_empaque import (
+            excedentes_en_empaque,
+        )
+
+        excedentes = {sku.codigo: exceso for sku, _real, _resp, exceso in excedentes_en_empaque()}
+        self.assertEqual(excedentes, {"CAYACO-SIX": 2})
+        call_command("limpiar_en_empaque", "--aplicar", stdout=StringIO())
+        self.assertEqual(excedentes_en_empaque(), [])
+        # Re-correr el seed no vuelve a sembrar el fantasma ya limpiado.
+        correr_seed()
+        self.assertEqual(excedentes_en_empaque(), [])
 
     def test_ajuste_con_doble_firma(self):
         from apps.inventario.models import Ajuste
