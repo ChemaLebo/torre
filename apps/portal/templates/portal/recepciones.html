@@ -11,10 +11,49 @@
   <div class="quien">Anuncia tu mercancía y síguela hasta que quede a la venta</div>
 </div>
 
-<div class="grid g2">
-  <div class="card">
-    <div class="titulo"><h3>Anunciar una entrega</h3></div>
-    <p class="small">Dinos qué llega y cuándo. Con el anuncio agendamos la descarga y tu producto queda listo para vender en un máximo de {{ TORRE.SLA_RECEPCION_HORAS_CONTRACTUAL }} horas desde que termina la descarga.</p>
+<div class="card">
+  <div class="titulo">
+    <h3>Tus entregas</h3>
+    <button class="btn primario" type="button" id="asn-abrir">Anunciar entrega</button>
+  </div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Folio</th>
+          <th>Cita</th>
+          <th>Tarimas</th>
+          <th>Piezas</th>
+          <th>Estado</th>
+          <th>Avance</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for orden in ordenes %}
+          <tr>
+            <td class="mono">{{ orden.folio }}</td>
+            <td class="small">{% if orden.fecha_compromiso %}{{ orden.fecha_compromiso|date:"d/M/Y" }}{% else %}—{% endif %}</td>
+            <td class="mono">{% if orden.tarimas %}{{ orden.tarimas }}{% else %}—{% endif %}</td>
+            <td class="mono">{{ orden.total_recibido }}/{{ orden.total_anunciado }}{% if orden.total_danado %} <span class="pill crit">{{ orden.total_danado }} dañadas</span>{% endif %}</td>
+            <td><span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span></td>
+            <td><span class="pill {{ orden.reloj_clase }}">{{ orden.reloj_texto }}</span></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="muted">Todavía no anuncias entregas. Usa «Anunciar entrega» para la primera.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small mt">Si llega algo dañado o distinto a lo anunciado, lo documentamos con foto el mismo día y te avisamos con las diferencias.</p>
+</div>
+
+{# El formulario abre en un modal: con errores de validación se abre solo para no perder la captura. #}
+<dialog class="modal ancho" id="asn-modal" aria-labelledby="asn-titulo"{% if form.errors %} data-abrir="1"{% endif %}>
+  <div class="titulo">
+    <h3 id="asn-titulo">Anunciar una entrega</h3>
+    <button class="btn chico" type="button" id="asn-cerrar">Cerrar</button>
+  </div>
+  <p class="small">Dinos qué llega y cuándo. Con el anuncio agendamos la descarga y tu producto queda listo para vender en un máximo de {{ TORRE.SLA_RECEPCION_HORAS_CONTRACTUAL }} horas desde que termina la descarga.</p>
     <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
       {{ form.non_field_errors }}
@@ -101,41 +140,11 @@
         var existe = Array.prototype.some.call(lista.options, function (o) { return o.value === valor; });
         if (!existe) { var opcion = document.createElement("option"); opcion.value = valor; lista.appendChild(opcion); }
       });
+      var modal = document.getElementById("asn-modal");
+      document.getElementById("asn-abrir").addEventListener("click", function () { modal.showModal(); });
+      document.getElementById("asn-cerrar").addEventListener("click", function () { modal.close(); });
+      if (modal.dataset.abrir) modal.showModal();
     })();
     </script>
-  </div>
-
-  <div class="card">
-    <div class="titulo"><h3>Tus entregas</h3></div>
-    <div class="tabla-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Folio</th>
-            <th>Cita</th>
-            <th>Tarimas</th>
-            <th>Piezas</th>
-            <th>Estado</th>
-            <th>Avance</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for orden in ordenes %}
-            <tr>
-              <td class="mono">{{ orden.folio }}</td>
-              <td class="small">{% if orden.fecha_compromiso %}{{ orden.fecha_compromiso|date:"d/M/Y" }}{% else %}—{% endif %}</td>
-              <td class="mono">{% if orden.tarimas %}{{ orden.tarimas }}{% else %}—{% endif %}</td>
-              <td class="mono">{{ orden.total_recibido }}/{{ orden.total_anunciado }}{% if orden.total_danado %} <span class="pill crit">{{ orden.total_danado }} dañadas</span>{% endif %}</td>
-              <td><span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span></td>
-              <td><span class="pill {{ orden.reloj_clase }}">{{ orden.reloj_texto }}</span></td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="6" class="muted">Todavía no anuncias entregas. Usa el formulario de al lado para la primera.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="small mt">Si llega algo dañado o distinto a lo anunciado, lo documentamos con foto el mismo día y te avisamos con las diferencias.</p>
-  </div>
-</div>
+</dialog>
 {% endblock %}

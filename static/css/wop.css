@@ -300,6 +300,7 @@ dialog.modal {
   background: var(--panel); color: var(--ink);
 }
 dialog.modal::backdrop { background: rgba(0, 0, 0, .62); }
+dialog.modal.ancho { width: min(1080px, calc(100vw - 32px)); }
 dialog.modal .modal-lista { max-height: 40vh; overflow: auto; }
 
 /* ── Formularios ── */
