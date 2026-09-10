@@ -119,19 +119,50 @@ class DecisionesMesaTests(BaseReingreso):
         self.assertEqual(suma(self.sku, Saldo.EN_PUTAWAY), 2)
         self.assertEqual(suma(self.sku, Saldo.CUARENTENA), 1)
 
-    def test_no_recuperado_resuelve_la_can_y_sale_de_la_lista(self):
+    def test_no_recuperado_resuelve_la_can_cancela_y_sale_de_la_lista(self):
         pedido = self.pedido_fuera(Pedido.EN_TRANSITO)
         services.cancelar(pedido, self.operador, motivo="Cancelación tardía")
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.estado, pedido.cancelacion_tardia), (Pedido.EN_TRANSITO, True))
         incidencia = Incidencia.objects.get(pedido=pedido, tipo="CAN")
         self.assertIn(pedido, list(services.reingresos_por_decidir()))
         services.marcar_no_recuperado(pedido, self.operador, motivo="Perdido por el carrier")
         pedido.refresh_from_db()
         incidencia.refresh_from_db()
-        self.assertEqual(pedido.reingreso_estado, Pedido.NO_RECUPERADO)
+        self.assertEqual((pedido.reingreso_estado, pedido.estado), (Pedido.NO_RECUPERADO, Pedido.CANCELADO))
         self.assertEqual(incidencia.estado, "RESUELTA")
         self.assertTrue(EventoAuditoria.objects.filter(accion="inventario_no_recuperado", entidad_id=str(pedido.pk)).exists())
         self.assertNotIn(pedido, list(services.reingresos_por_decidir()))
         self.assertEqual(suma(self.sku, Saldo.EN_PUTAWAY), 0)
+
+    def test_registrar_reingreso_de_cancelacion_tardia_cancela_el_pedido(self):
+        pedido = self.pedido_fuera(Pedido.RECOLECTADO)
+        services.cancelar(pedido, self.operador, motivo="Cancelación tardía")
+        services.registrar_reingreso(pedido, self.operador)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.estado, pedido.reingreso_estado), (Pedido.CANCELADO, Pedido.REINGRESADO))
+        # La CAN sigue abierta hasta que la mercancía llegue y Mesa la resuelva.
+        self.assertEqual(Incidencia.objects.get(pedido=pedido, tipo="CAN").estado, Incidencia.ABIERTA)
+
+    def test_resolver_la_can_cancela_y_deja_el_reingreso_por_decidir(self):
+        from apps.incidencias.services import resolver
+
+        pedido = self.pedido_fuera(Pedido.EN_TRANSITO)
+        services.cancelar(pedido, self.operador, motivo="Cancelación tardía")
+        incidencia = Incidencia.objects.get(pedido=pedido, tipo="CAN")
+        resolver(incidencia, "Comprador confirmó que no lo quiere; el carrier lo trae de vuelta.", self.operador)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.CANCELADO)
+        self.assertIn(pedido, list(services.reingresos_por_decidir()))
+        orden = services.registrar_reingreso(pedido, self.operador)
+        self.assertEqual(orden.lineas.get().cantidad_anunciada, 3)
+        self.assertNotIn(pedido, list(services.reingresos_por_decidir()))
+
+    def test_retornado_se_queda_retornado_al_decidir(self):
+        pedido = self.pedido_fuera(Pedido.RETORNADO)
+        services.registrar_reingreso(pedido, self.operador)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.RETORNADO)
 
     def test_decision_sobre_pedido_en_bodega_es_error(self):
         pedido = self.pedido_con_linea(1)

@@ -46,10 +46,14 @@ class ReingresosMesaTests(TestCase):
         tardia = Pedido.objects.create(
             cliente=self.colima, tienda=None, origen="manual", comprador_nombre="Eva", estado=Pedido.EN_TRANSITO,
         )
+        Pedido.objects.filter(pk=tardia.pk).update(cancelacion_tardia=True)
         inc = Incidencia.objects.create(cliente=self.colima, pedido=tardia, tipo="CAN", origen="auto")
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, reverse("mesa:incidencia_detalle", args=[inc.pk]))
         self.assertContains(respuesta, inc.folio)
+        # Ya CANCELADO (la CAN se resolvió antes) sigue en la lista hasta decidir la mercancía.
+        Pedido.objects.filter(pk=tardia.pk).update(estado=Pedido.CANCELADO)
+        self.assertContains(self.client.get(self.url), tardia.folio)
 
     def test_registrar_reingreso_crea_la_orden_y_el_piso_la_ve(self):
         respuesta = self.client.post(self.url, {"accion": "reingreso", "pedido_id": self.pedido.pk}, follow=True)

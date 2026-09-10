@@ -200,6 +200,16 @@ def resolver(incidencia, resolucion_texto, actor):
             rol_autor=MensajeIncidencia.ROL_MESA,
             texto=resolucion_texto,
         )
+    if incidencia.tipo == Incidencia.TIPO_CAN and incidencia.pedido_id:
+        # Resolver la CAN de una cancelación tardía cierra el pedido como CANCELADO
+        # (si Mesa no lo cerró antes decidiendo el reingreso).
+        from apps.pedidos.services import cerrar_cancelacion_tardia  # lazy por contrato
+
+        incidencia.pedido.refresh_from_db(fields=["estado", "cancelacion_tardia"])
+        cerrar_cancelacion_tardia(
+            incidencia.pedido, actor,
+            f"Cancelación tardía cerrada al resolver {incidencia.folio}.",
+        )
     return incidencia
 
 

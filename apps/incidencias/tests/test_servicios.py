@@ -154,6 +154,24 @@ class IncidenciasConPedidoTests(TestCase):
         self.assertIsNotNone(incidencia.ts_primera_respuesta)
         self.assertTrue(incidencia.mensajes.filter(rol_autor=MensajeIncidencia.ROL_MESA).exists())
 
+    def test_resolver_can_de_cancelacion_tardia_cancela_el_pedido(self):
+        from apps.pedidos.models import Pedido
+
+        Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.EN_TRANSITO, cancelacion_tardia=True)
+        incidencia = abrir_incidencia(self.cliente, Incidencia.TIPO_CAN, Incidencia.ORIGEN_AUTO, pedido=self.pedido)
+        resolver(incidencia, "Cancelación confirmada con el comprador.", "mesa1")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.CANCELADO)
+
+    def test_resolver_can_de_edicion_no_toca_el_estado(self):
+        from apps.pedidos.models import Pedido
+
+        Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.EN_PICKING)
+        incidencia = abrir_incidencia(self.cliente, Incidencia.TIPO_CAN, Incidencia.ORIGEN_AUTO, pedido=self.pedido)
+        resolver(incidencia, "Se ajustaron las cantidades.", "mesa1")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+
     def test_cerrar_estampa_cierre(self):
         incidencia = abrir_incidencia(
             self.cliente, Incidencia.TIPO_DIR, Incidencia.ORIGEN_COMPRADOR, pedido=self.pedido

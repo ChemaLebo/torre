@@ -56,10 +56,12 @@ class Pedido(models.Model):
         # carrier antes de nuestro escaneo de salida; RECOLECTADO sigue siendo el
         # paso autoritativo del flujo normal (escaneo + manifiesto).
         GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO},
-        RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO},
-        EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO},
-        ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO},
-        PARCIALMENTE_DESPACHADO: {EN_TRANSITO, ENTREGADO, RETORNADO},
+        # → CANCELADO desde la calle solo lo hace el cierre de una cancelación
+        # tardía (Mesa decide el reingreso o resuelve la incidencia CAN).
+        RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO},
+        EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO, CANCELADO},
+        ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO, CANCELADO},
+        PARCIALMENTE_DESPACHADO: {EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO},
         CANCELACION_PENDIENTE: {CANCELADO},
         ENTREGADO: set(),
         CANCELADO: set(),
@@ -145,6 +147,10 @@ class Pedido(models.Model):
     reingreso_estado = models.CharField(
         max_length=15, choices=REINGRESO_ESTADOS, default=REINGRESO_PENDIENTE, blank=True,
     )
+    # Se canceló con el paquete ya en la calle: el estado sigue al paquete y la
+    # cancelación vive en la incidencia CAN hasta que Mesa decide el reingreso
+    # o resuelve la CAN; entonces el pedido pasa a CANCELADO.
+    cancelacion_tardia = models.BooleanField(default=False)
     creado = models.DateTimeField(auto_now_add=True, db_index=True)
     actualizado = models.DateTimeField(auto_now=True)
 

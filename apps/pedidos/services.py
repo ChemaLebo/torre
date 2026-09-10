@@ -1527,8 +1527,9 @@ def cancelar(pedido, actor, motivo=""):
       el piso lo ubique por recepción; el resto libera su reserva; las guías
       activas se cancelan con el carrier best-effort.
     - Ya despachado (RECOLECTADO / EN_TRANSITO / ...): el paquete ya salió →
-      se abre incidencia CAN (cancelación tardía); Mesa decide después entre
-      registrar_reingreso y marcar_no_recuperado.
+      se marca cancelacion_tardia y se abre incidencia CAN; el pedido pasa a
+      CANCELADO cuando Mesa decide el reingreso (registrar_reingreso /
+      marcar_no_recuperado) o resuelve la CAN, lo que ocurra primero.
     - Terminales: ValueError.
     """
     estado = pedido.estado
@@ -1542,7 +1543,8 @@ def cancelar(pedido, actor, motivo=""):
         Pedido.PARCIALMENTE_DESPACHADO, Pedido.ENTREGA_PRESUNTA,
     ):
         pedido.incidencia_activa = True
-        pedido.save(update_fields=["incidencia_activa", "actualizado"])
+        pedido.cancelacion_tardia = True
+        pedido.save(update_fields=["incidencia_activa", "cancelacion_tardia", "actualizado"])
         registrar_evento(
             "pedido", pedido.pk, "cancelacion_tardia", actor=actor, cliente=pedido.cliente,
             motivo=motivo or "Cancelación solicitada con el paquete ya despachado.",
@@ -1668,22 +1670,34 @@ ESTADOS_CON_MERCANCIA_FUERA = (
 
 def reingresos_por_decidir():
     """Pedidos que ya salieron y cuya mercancía puede volver, sin decisión de Mesa:
-    RETORNADO por el carrier, o con incidencia CAN abierta (cancelación tardía)."""
-    from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
-
-    con_can = Incidencia.objects.filter(
-        tipo="CAN", estado__in=Incidencia.ESTADOS_ABIERTOS, pedido__isnull=False,
-    ).values_list("pedido_id", flat=True)
+    RETORNADO por el carrier, o cancelación tardía (aunque la CAN ya se haya
+    resuelto y el pedido esté CANCELADO: la mercancía sigue por decidir)."""
     return (
         Pedido.objects.filter(reingreso_estado=Pedido.REINGRESO_PENDIENTE)
-        .filter(Q(estado=Pedido.RETORNADO) | Q(pk__in=con_can))
-        .filter(estado__in=ESTADOS_CON_MERCANCIA_FUERA)
+        .filter(Q(estado=Pedido.RETORNADO) | Q(cancelacion_tardia=True))
+        .filter(estado__in=ESTADOS_CON_MERCANCIA_FUERA + (Pedido.CANCELADO,))
         .select_related("cliente").order_by("actualizado")
     )
 
 
+def cerrar_cancelacion_tardia(pedido, actor, motivo=""):
+    """Pasa a CANCELADO un pedido cancelado con el paquete en la calle. Lo
+    dispara lo que ocurra primero: la decisión de Mesa sobre el reingreso o la
+    resolución de la incidencia CAN. Sin cancelación tardía, o ya terminal
+    (CANCELADO / RETORNADO / ENTREGADO), no hace nada."""
+    if not pedido.cancelacion_tardia or Pedido.CANCELADO not in Pedido.TRANSICIONES.get(pedido.estado, ()):
+        return pedido
+    return pedido.transicionar(
+        Pedido.CANCELADO, actor=actor,
+        motivo=motivo or "Cancelación tardía cerrada: Mesa decidió el reingreso o resolvió la incidencia.",
+    )
+
+
 def _validar_decision_reingreso(pedido):
-    if pedido.estado not in ESTADOS_CON_MERCANCIA_FUERA:
+    fuera = pedido.estado in ESTADOS_CON_MERCANCIA_FUERA or (
+        pedido.estado == Pedido.CANCELADO and pedido.cancelacion_tardia
+    )
+    if not fuera:
         raise ValueError(
             f"El pedido {pedido.folio} no ha salido de bodega ({pedido.get_estado_display()}): "
             "no hay reingreso que decidir."
@@ -1697,8 +1711,8 @@ def _validar_decision_reingreso(pedido):
 def registrar_reingreso(pedido, actor, motivo=""):
     """Mesa: la mercancía de un pedido que salió está de vuelta físicamente.
     Crea la OrdenEntrada tipo reingreso ANUNCIADA con lo despachado por línea;
-    el piso la recibe (ok → put-away, dañado → cuarentena) y la ubica. El
-    pedido no cambia de estado."""
+    el piso la recibe (ok → put-away, dañado → cuarentena) y la ubica. Una
+    cancelación tardía pasa a CANCELADO; un RETORNADO se queda así."""
     from apps.inventario.models import LineaASN, OrdenEntrada  # lazy: modelo de otra app
 
     with transaction.atomic():
@@ -1719,6 +1733,7 @@ def registrar_reingreso(pedido, actor, motivo=""):
             LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=piezas)
         pedido.reingreso_estado = Pedido.REINGRESADO
         pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        cerrar_cancelacion_tardia(pedido, actor, "Cancelación tardía: la mercancía regresa como reingreso.")
         registrar_evento(
             "asn", orden.folio, "reingreso_creado", actor=actor, cliente=pedido.cliente,
             delta={"pedido": pedido.folio, "desde": "retorno",
@@ -1730,8 +1745,9 @@ def registrar_reingreso(pedido, actor, motivo=""):
 
 def marcar_no_recuperado(pedido, actor, motivo=""):
     """Mesa: la mercancía de un pedido que salió no volverá. Sin movimiento de
-    stock (ya salió del kardex en el manifiesto); queda el evento y se
-    resuelven las incidencias CAN/RF abiertas del pedido."""
+    stock (ya salió del kardex en el manifiesto); queda el evento, se
+    resuelven las incidencias CAN/RF abiertas y una cancelación tardía pasa
+    a CANCELADO."""
     with transaction.atomic():
         pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
         _validar_decision_reingreso(pedido)
@@ -1741,6 +1757,7 @@ def marcar_no_recuperado(pedido, actor, motivo=""):
             "pedido", pedido.pk, "inventario_no_recuperado", actor=actor, cliente=pedido.cliente,
             motivo=motivo or "Mesa dio por perdida la mercancía del pedido.",
         )
+        cerrar_cancelacion_tardia(pedido, actor, "Cancelación tardía: inventario no recuperado.")
         try:
             from apps.incidencias.models import Incidencia
             from apps.incidencias.services import resolver  # lazy por contrato

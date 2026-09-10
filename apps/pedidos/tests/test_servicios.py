@@ -1080,8 +1080,9 @@ class CancelacionTests(BaseServicios):
         with patch("apps.incidencias.services.abrir_incidencia") as abrir:
             services.cancelar(pedido, actor=None, motivo="Ya no lo quiere")
         pedido.refresh_from_db()
-        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)  # el estado no cambia
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)  # el estado sigue al paquete
         self.assertTrue(pedido.incidencia_activa)
+        self.assertTrue(pedido.cancelacion_tardia)
         abrir.assert_called_once()
         self.assertEqual(abrir.call_args[0][1], "CAN")
 
