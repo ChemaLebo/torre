@@ -1,6 +1,6 @@
 """Recepciones desde Mesa: tablero global de ASNs y captura del aviso que
 llega por WhatsApp (alta en dos pasos: primero el cliente, luego el anuncio)."""
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -159,7 +159,12 @@ class AltaAsnConLoteTests(BaseRecepcionesMesa):
         self.assertEqual(evento.delta["lineas"][0]["lote"], "L-2026-09")
 
     def test_form_muestra_columnas_de_lote_y_datalist(self):
+        from apps.catalogo.models import Lote
+
+        Lote.objects.create(sku=self.sku_colima, codigo="L-PREVIO", fecha_caducidad=date(2027, 6, 1))
         self.entrar_mesa()
         respuesta = self.client.get(self.url + "?cliente=colima")
         self.assertContains(respuesta, 'name="lote_1"')
         self.assertContains(respuesta, 'id="lotes-recientes"')
+        # La sugerencia trae la caducidad para autollenarla al elegir el lote.
+        self.assertContains(respuesta, 'value="L-PREVIO" data-caducidad="2027-06-01"')

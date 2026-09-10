@@ -3,7 +3,7 @@
 Lo crítico aquí es el aislamiento: un usuario de portal JAMÁS ve, lista ni
 exporta datos de otro cliente — ni siquiera adivinando IDs.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -243,6 +243,14 @@ class TestRecepciones(BasePortal):
         })
         linea = OrdenEntrada.objects.filter(cliente=self.colima).latest("creado").lineas.get()
         self.assertEqual((linea.lote_codigo, linea.fecha_caducidad.isoformat()), ("L-PORTAL", "2027-04-01"))
+
+    def test_datalist_de_lotes_trae_la_caducidad(self):
+        from apps.catalogo.models import Lote
+
+        Lote.objects.create(sku=self.sku, codigo="L-PREVIO", fecha_caducidad=date(2027, 6, 1))
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:recepciones"))
+        self.assertContains(respuesta, 'value="L-PREVIO" data-caducidad="2027-06-01"')
 
     def test_anunciar_sin_lineas_no_crea_nada(self):
         self.entrar()

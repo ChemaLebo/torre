@@ -137,16 +137,24 @@ def lotes_sugeridos(sku, orden=None):
 
 
 def lotes_recientes_cliente(cliente):
-    """Códigos de lote del cliente con stock o creados en la ventana (para el
-    datalist del anuncio de ASN, donde el SKU cambia por renglón)."""
+    """Lotes del cliente con stock o creados en la ventana, para el datalist del
+    anuncio de ASN (donde el SKU cambia por renglón): [{"codigo", "caducidad"}]
+    sin repetir código, del más reciente al más viejo; la caducidad (ISO o "")
+    es la del lote más reciente con ese código y se autollena al elegirlo."""
     ventana = timezone.now() - timedelta(days=settings.TORRE["LOTES_SUGERENCIA_DIAS"])
     lotes = list(Lote.objects.filter(sku__cliente=cliente).select_related("sku"))
     stock = _con_stock({l.sku_id for l in lotes})
-    codigos = []
+    sugerencias = []
+    vistos = set()
     for lote in sorted(lotes, key=lambda l: -l.creado.timestamp()):
-        if (lote.creado >= ventana or (lote.sku_id, lote.pk) in stock) and lote.codigo not in codigos:
-            codigos.append(lote.codigo)
-    return codigos
+        if lote.codigo in vistos or not (lote.creado >= ventana or (lote.sku_id, lote.pk) in stock):
+            continue
+        vistos.add(lote.codigo)
+        sugerencias.append({
+            "codigo": lote.codigo,
+            "caducidad": lote.fecha_caducidad.isoformat() if lote.fecha_caducidad else "",
+        })
+    return sugerencias
 
 
 def lotes_cliente(cliente):

@@ -107,7 +107,9 @@ class SugerenciasTests(BaseLotes):
         Saldo.objects.create(sku=self.otro, ubicacion=self.ubic, lote=b, estado=Saldo.EN_PUTAWAY, cantidad=3)
         c = Lote.objects.create(sku=self.otro, codigo="L-C")
         self.envejecer(c, 400)
-        self.assertEqual(set(lotes_recientes_cliente(self.cliente)), {"L-A", "L-B"})
+        recientes = {l["codigo"]: l["caducidad"] for l in lotes_recientes_cliente(self.cliente)}
+        self.assertEqual(set(recientes), {"L-A", "L-B"})
+        self.assertEqual(recientes["L-A"], a.fecha_caducidad.isoformat() if a.fecha_caducidad else "")
         piezas = {(l.sku.codigo, l.codigo): l.piezas for l in lotes_cliente(self.cliente)}
         self.assertEqual(piezas, {("PARAMO-SIX", "L-A"): 0, ("TICUS-SIX", "L-B"): 3, ("TICUS-SIX", "L-C"): 0})
         self.assertIsNotNone(a.creado)

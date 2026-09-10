@@ -94,7 +94,7 @@
         {% endfor %}
       </div>
       <datalist id="lotes-recientes">
-        {% for codigo in lotes_recientes %}<option value="{{ codigo }}"></option>{% endfor %}
+        {% for l in lotes_recientes %}<option value="{{ l.codigo }}" data-caducidad="{{ l.caducidad }}"></option>{% endfor %}
       </datalist>
       <div class="mt"><button class="btn chico" type="button" id="btn-mas-renglon">+ Agregar renglón</button></div>
 
@@ -130,15 +130,29 @@
         nueva.querySelectorAll("ul.errorlist").forEach(function (e) { e.remove(); });
         caja.appendChild(nueva);
       });
-      /* Un lote tecleado en un renglón se sugiere en los demás de la misma ASN. */
+      /* Lote ⇄ caducidad: elegir un lote sugerido autollena la caducidad que
+         trae (data-caducidad); un lote tecleado en un renglón se suma a las
+         sugerencias con su caducidad, y corregir la caducidad la actualiza. */
       var lista = document.getElementById("lotes-recientes");
+      function opcionDe(codigo) {
+        return Array.prototype.find.call(lista.options, function (o) { return o.value === codigo; }) || null;
+      }
       caja.addEventListener("change", function (evento) {
         var campo = evento.target;
-        if (!lista || !campo.name || campo.name.indexOf("lote_") !== 0) return;
-        var valor = campo.value.trim();
-        if (!valor) return;
-        var existe = Array.prototype.some.call(lista.options, function (o) { return o.value === valor; });
-        if (!existe) { var opcion = document.createElement("option"); opcion.value = valor; lista.appendChild(opcion); }
+        if (!lista || !campo.name) return;
+        var renglon = campo.closest(".renglon-asn");
+        var lote = renglon.querySelector("input[name^='lote_']");
+        var caducidad = renglon.querySelector("input[name^='caducidad_']");
+        var codigo = lote.value.trim();
+        if (!codigo) return;
+        var opcion = opcionDe(codigo);
+        if (campo === lote) {
+          if (opcion && opcion.dataset.caducidad) caducidad.value = opcion.dataset.caducidad;
+        } else if (campo !== caducidad) {
+          return;
+        }
+        if (!opcion) { opcion = document.createElement("option"); opcion.value = codigo; lista.appendChild(opcion); }
+        if (caducidad.value) opcion.dataset.caducidad = caducidad.value;
       });
       var modal = document.getElementById("asn-modal");
       document.getElementById("asn-abrir").addEventListener("click", function () { modal.showModal(); });
