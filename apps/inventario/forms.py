@@ -6,13 +6,13 @@ la hoja vive fuera del navegador y un refresh no pierde nada.
 """
 import csv
 import io
-from datetime import date
 
 from django import forms
 from django.utils import timezone
 
 from apps.catalogo.forms import ConRenglonesSKU
 from apps.catalogo.models import SKU
+from apps.core.fechas import FORMATOS_LEGIBLES, parsear_fecha_csv
 
 
 class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
@@ -42,7 +42,7 @@ class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
     renglones_csv = forms.FileField(
         required=False,
         label="…o sube los renglones por CSV",
-        help_text="Columnas codigo,cantidad y opcionales lote,caducidad (AAAA-MM-DD). "
+        help_text="Columnas codigo,cantidad y opcionales lote,caducidad (AAAA-MM-DD o DD/MM/AAAA). "
                   "Si lo adjuntas, sustituye a los renglones capturados.",
     )
 
@@ -102,12 +102,13 @@ class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
             if cantidad < 1:
                 errores.append(f"fila {numero}: la cantidad mínima es 1")
                 continue
-            if crudo_cad:
-                try:
-                    caducidades[(sku, lote)] = date.fromisoformat(crudo_cad)
-                except ValueError:
-                    errores.append(f"fila {numero}: caducidad '{crudo_cad}' no es AAAA-MM-DD")
-                    continue
+            try:
+                caducidad = parsear_fecha_csv(crudo_cad)
+            except ValueError:
+                errores.append(f"fila {numero}: caducidad '{crudo_cad}' no es {FORMATOS_LEGIBLES}")
+                continue
+            if caducidad is not None:
+                caducidades[(sku, lote)] = caducidad
             consolidadas[(sku, lote)] = consolidadas.get((sku, lote), 0) + cantidad
         if errores:
             raise forms.ValidationError("El CSV de renglones trae errores: " + "; ".join(errores))

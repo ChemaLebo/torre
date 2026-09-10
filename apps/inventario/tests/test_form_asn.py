@@ -109,9 +109,20 @@ class RenglonesConLoteTests(BaseFormASN):
         from datetime import date
         self.assertEqual(form.cleaned_data["lineas"], [(self.te, 6, "L-9", date(2027, 2, 1)), (self.taza, 2, "", None)])
 
+    def test_csv_acepta_dd_mm_aaaa_y_placeholder_como_vacio(self):
+        from datetime import date
+        archivo = SimpleUploadedFile(
+            "r.csv",
+            "codigo,descripcion,cantidad,lote,caducidad\nTE-1,Té,5,L-9,31/12/2027\nTAZA-1,Taza,2,,AAAA-MM-DD\n".encode("utf-8-sig"),
+            content_type="text/csv",
+        )
+        form = FormAnuncioASNBase(self.cliente, {"fecha_compromiso": hoy()}, {"renglones_csv": archivo})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["lineas"], [(self.te, 5, "L-9", date(2027, 12, 31)), (self.taza, 2, "", None)])
+
     def test_csv_con_caducidad_invalida_lista_el_error(self):
         archivo = SimpleUploadedFile(
-            "r.csv", "codigo,cantidad,lote,caducidad\nTE-1,5,L-9,31/12/2027\n".encode("utf-8-sig"), content_type="text/csv",
+            "r.csv", "codigo,cantidad,lote,caducidad\nTE-1,5,L-9,2027-13-40\n".encode("utf-8-sig"), content_type="text/csv",
         )
         form = FormAnuncioASNBase(self.cliente, {"fecha_compromiso": hoy()}, {"renglones_csv": archivo})
         self.assertFalse(form.is_valid())

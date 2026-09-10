@@ -15,6 +15,7 @@ from django.db.models import F, Max, Sum
 from django.utils import timezone
 
 from apps.catalogo.models import Lote, Ubicacion
+from apps.core.fechas import FORMATOS_LEGIBLES, parsear_fecha_csv
 from apps.core.services import registrar_evento
 
 from .models import Ajuste, Conteo, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
@@ -1202,12 +1203,11 @@ def _parsear_fila_conteo(fila, cliente, skus, lotes, ubicaciones):
             f"('{sku.descripcion}'): revisa que el renglón sea el correcto."
         )
 
-    if fila["caducidad"]:
-        try:
-            renglon["fecha_caducidad"] = date.fromisoformat(fila["caducidad"])
-        except ValueError:
-            renglon["error"] = f"Caducidad '{fila['caducidad']}' inválida: usa AAAA-MM-DD."
-            return renglon
+    try:
+        renglon["fecha_caducidad"] = parsear_fecha_csv(fila["caducidad"])
+    except ValueError:
+        renglon["error"] = f"Caducidad '{fila['caducidad']}' inválida: usa {FORMATOS_LEGIBLES}."
+        return renglon
 
     if fila["ubicacion"]:
         ubic = ubicaciones.get(fila["ubicacion"].upper())

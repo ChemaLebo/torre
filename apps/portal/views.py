@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from apps.catalogo.models import SKU
 from apps.core.decorators import portal_requerido
+from apps.core.fechas import PLACEHOLDER_FECHA
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 from apps.incidencias.models import Incidencia, MensajeIncidencia
@@ -660,9 +661,10 @@ COLUMNAS_PLANTILLA_ASN = ("codigo", "descripcion", "cantidad", "lote", "caducida
 def recepciones_plantilla(request):
     """Formato CSV del anuncio de ASN (?sku=<pk>&sku=…): las columnas que lee
     FormAnuncioASN más `descripcion` para que la hoja se entienda, y un renglón
-    por SKU marcado con codigo y descripcion prellenados (cantidad, lote y
-    caducidad en blanco). Sin SKUs marcados baja solo el encabezado. SKUs de
-    otro cliente o kits se ignoran."""
+    por SKU marcado con codigo y descripcion prellenados, cantidad y lote en
+    blanco y la caducidad con el placeholder AAAA-MM-DD (enseña el formato;
+    sin tocar cuenta como vacío). Sin SKUs marcados baja solo el encabezado.
+    SKUs de otro cliente o kits se ignoran."""
     pks = [v for v in request.GET.getlist("sku") if v.isdigit()]
     skus = _skus_recibibles(request.cliente).filter(pk__in=pks) if pks else []
     hoy = timezone.localdate().strftime("%Y%m%d")
@@ -670,7 +672,7 @@ def recepciones_plantilla(request):
     w = csv.writer(respuesta)
     w.writerow(COLUMNAS_PLANTILLA_ASN)
     for sku in skus:
-        w.writerow([sku.codigo, sku.descripcion, "", "", ""])
+        w.writerow([sku.codigo, sku.descripcion, "", "", PLACEHOLDER_FECHA])
     return respuesta
 
 

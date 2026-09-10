@@ -60,7 +60,8 @@
       <form method="get" action="{% url 'portal:recepciones_plantilla' %}" id="asn-formato-form">
         <p class="small muted">
           Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y
-          descripción; tú llenas la cantidad (y lote y caducidad si aplican). Sin marcar nada baja solo el encabezado.
+          descripción; tú llenas la cantidad (y lote y caducidad si aplican; la caducidad va como
+          <span class="mono">AAAA-MM-DD</span> o <span class="mono">DD/MM/AAAA</span>). Sin marcar nada baja solo el encabezado.
         </p>
         <label class="small"><input type="checkbox" id="asn-formato-todos"> Marcar todos</label>
         <div class="grid g3 asn-formato-lista">

@@ -257,7 +257,7 @@ class TestRecepciones(BasePortal):
         self.assertEqual(respuesta["Content-Type"], "text/csv; charset=utf-8")
         lineas = respuesta.content.decode("utf-8-sig").splitlines()
         self.assertEqual(lineas[0], "codigo,descripcion,cantidad,lote,caducidad")
-        self.assertEqual(lineas[1:], [f"{self.sku.codigo},{self.sku.descripcion},,,"])
+        self.assertEqual(lineas[1:], [f"{self.sku.codigo},{self.sku.descripcion},,,AAAA-MM-DD"])
         # Sin marcar nada: solo el encabezado.
         vacio = self.client.get(reverse("portal:recepciones_plantilla")).content.decode("utf-8-sig").splitlines()
         self.assertEqual(vacio, ["codigo,descripcion,cantidad,lote,caducidad"])
