@@ -313,6 +313,11 @@ input[type="date"], input[type="datetime-local"], input[type="file"], select, te
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 ::placeholder { color: var(--ink-30); }
+/* Ícono del calendario y su popup en contraste con el tema: sin color-scheme el
+   navegador los pinta para fondo claro y en el tema oscuro el ícono se perdía
+   (negro sobre negro). */
+input[type="date"], input[type="datetime-local"] { color-scheme: dark; }
+[data-theme="light"] input[type="date"], [data-theme="light"] input[type="datetime-local"] { color-scheme: light; }
 
 /* ── Touch targets: dedos, no cursor ── */
 @media (pointer: coarse) {
