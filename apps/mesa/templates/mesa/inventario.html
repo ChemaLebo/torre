@@ -202,7 +202,13 @@
 {% elif cliente_sel %}
 
 <div class="card">
-  <div class="titulo"><h2>Inventario de {{ cliente_sel.nombre }}</h2></div>
+  <div class="titulo">
+    <h2>Inventario de {{ cliente_sel.nombre }}</h2>
+    <div class="fila">
+      <a class="btn chico" href="{% url 'mesa:inventario_exportar_conteo' %}?cliente={{ cliente_sel.slug }}">Exportar conteo</a>
+      <a class="btn chico" href="{% url 'mesa:inventario_reconciliar' %}?cliente={{ cliente_sel.slug }}">Reconciliar por CSV</a>
+    </div>
+  </div>
   <div class="tabla-wrap">
     <table>
       <thead>

@@ -837,6 +837,106 @@ def _inventario_ajustar(request):
     return destino
 
 
+@rol_requerido("mesa")
+def inventario_exportar_conteo(request):
+    """CSV de conteo del cliente (?cliente=slug): plantilla de la reconciliación,
+    una fila por anaquel/lote con `contado` prellenado con el vendible actual."""
+    from apps.inventario.services import COLUMNAS_CSV_CONTEO, exportar_conteo
+
+    cliente = get_object_or_404(Cliente, slug=(request.GET.get("cliente") or "").strip())
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    fecha = timezone.localdate().isoformat()
+    respuesta["Content-Disposition"] = f'attachment; filename="conteo-{cliente.slug}-{fecha}.csv"'
+    respuesta.write("\ufeff")
+    escritor = csv.writer(respuesta)
+    escritor.writerow(COLUMNAS_CSV_CONTEO)
+    for fila in exportar_conteo(cliente):
+        escritor.writerow([fila[c] for c in COLUMNAS_CSV_CONTEO])
+    return respuesta
+
+
+@rol_requerido("mesa")
+def inventario_reconciliar(request):
+    """Reconciliación de inventario por CSV (?cliente=slug), en dos pasos:
+    subir el archivo → previa con deltas y avisos → motivo + doble firma → aplicar.
+    El CSV viaja en un hidden entre la previa y el aplicar (sin estado en servidor).
+    Toda la lógica vive en inventario.services (previa_reconciliacion, reconciliar_conteo)."""
+    from apps.inventario.models import Ajuste
+    from apps.inventario.services import leer_csv_conteo, previa_reconciliacion, reconciliar_conteo
+
+    slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
+    cliente = get_object_or_404(Cliente, slug=slug)
+    contexto = {
+        "seccion": "inventario",
+        "cliente": cliente,
+        "motivos_ajuste": Ajuste.MOTIVOS,
+        "motivo_default": Ajuste.MOTIVO_RECONCILIACION_INV,
+    }
+    if request.method != "POST":
+        return render(request, "mesa/inventario_reconciliar.html", contexto)
+
+    accion = request.POST.get("accion", "")
+    if accion == "previa":
+        archivo = request.FILES.get("archivo")
+        try:
+            if archivo is None:
+                raise ValueError("Adjunta el CSV de conteo (usa «Exportar conteo» como plantilla).")
+            max_mb = settings.TORRE["IMPORT_CSV_MAX_MB"]
+            if archivo.size > max_mb * 1024 * 1024:
+                raise ValueError(f"El CSV no debe pasar de {max_mb} MB.")
+            try:
+                texto = archivo.read().decode("utf-8-sig")
+            except UnicodeDecodeError:
+                raise ValueError("El archivo no se pudo leer. Guárdalo como CSV UTF-8 y súbelo de nuevo.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return render(request, "mesa/inventario_reconciliar.html", contexto)
+        nombre = archivo.name
+    elif accion == "aplicar":
+        texto = request.POST.get("csv_conteo") or ""
+        nombre = (request.POST.get("archivo_nombre") or "").strip()
+        if not texto.strip():
+            messages.error(request, "No llegó el CSV de la previa; vuelve a subirlo.")
+            return redirect(f"{reverse('mesa:inventario_reconciliar')}?cliente={cliente.slug}")
+    else:
+        messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
+        return redirect(f"{reverse('mesa:inventario_reconciliar')}?cliente={cliente.slug}")
+
+    filas, errores_archivo = leer_csv_conteo(texto)
+    if errores_archivo:
+        for error in errores_archivo:
+            messages.error(request, error)
+        return render(request, "mesa/inventario_reconciliar.html", contexto)
+
+    if accion == "aplicar":
+        try:
+            resumen = reconciliar_conteo(
+                cliente, filas, request.POST.get("motivo") or "",
+                (request.POST.get("autorizo_1") or "").strip(), request.POST.get("pin_1") or "",
+                (request.POST.get("autorizo_2") or "").strip(), request.POST.get("pin_2") or "",
+                request.user, nota=(request.POST.get("nota") or "").strip(), archivo=nombre,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(
+                request,
+                f"Reconciliación aplicada: {resumen['ajustes']} ajuste(s) "
+                f"({', '.join(resumen['folios'][:8])}{'…' if len(resumen['folios']) > 8 else ''}), "
+                f"{resumen['omitidos']} renglón(es) sin cambio.",
+            )
+            return _redirect_inventario(cliente=cliente.slug)
+
+    previa = previa_reconciliacion(cliente, filas)
+    contexto.update({
+        "previa": previa,
+        "csv_conteo": texto,
+        "archivo_nombre": nombre,
+        "total_filas": len(filas),
+    })
+    return render(request, "mesa/inventario_reconciliar.html", contexto)
+
+
 def _inventario_ubicacion_nueva(request):
     """Alta de una ubicación física del Local 380 E, con auditoría."""
     from apps.catalogo.models import Ubicacion

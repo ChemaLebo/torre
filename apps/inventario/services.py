@@ -667,13 +667,40 @@ def _validar_firma(usuario, pin):
     return perfil
 
 
+def _validar_doble_firma(pin1_usuario, pin1, pin2_usuario, pin2):
+    """Dos firmas válidas de dos personas distintas. Regresa (perfil_1, perfil_2)."""
+    perfil_1 = _validar_firma(pin1_usuario, pin1)
+    perfil_2 = _validar_firma(pin2_usuario, pin2)
+    if perfil_1.usuario_id == perfil_2.usuario_id:
+        raise ValueError("La doble firma exige dos personas distintas: un PIN no firma dos veces.")
+    return perfil_1, perfil_2
+
+
 def aplicar_ajuste(
     sku, delta, motivo, pin1_usuario, pin1, pin2_usuario, pin2,
-    lote=None, conteo=None, incidencia_ref="",
+    lote=None, conteo=None, incidencia_ref="", ubicacion=None,
 ):
     """Ajuste de inventario con doble firma obligatoria: dos PINs de dos personas
     distintas con rol piso/mesa. Motivo de catálogo cerrado. Regresa el Ajuste.
+
+    `ubicacion` (opcional, tipo picking/reserva): acota el ajuste a ESE anaquel —
+    quita solo de su fila y agrega ahí. Sin ubicación: FEFO sobre todo el
+    vendible del SKU (quita) o el anaquel donde ya vive el SKU (agrega).
     """
+    perfil_1, perfil_2 = _validar_doble_firma(pin1_usuario, pin1, pin2_usuario, pin2)
+    return _aplicar_ajuste_firmado(
+        sku, delta, motivo, perfil_1, perfil_2,
+        lote=lote, conteo=conteo, incidencia_ref=incidencia_ref, ubicacion=ubicacion,
+    )
+
+
+def _aplicar_ajuste_firmado(
+    sku, delta, motivo, perfil_1, perfil_2,
+    lote=None, conteo=None, incidencia_ref="", ubicacion=None,
+):
+    """Núcleo del ajuste con las firmas YA validadas (la reconciliación por CSV
+    valida una vez y aplica N renglones; validar PINs por renglón sería
+    N×2 hashes lentos y ningún beneficio)."""
     delta = int(delta)
     if delta == 0:
         raise ValueError("Un ajuste de cero unidades no ajusta nada.")
@@ -681,31 +708,36 @@ def aplicar_ajuste(
         validos = ", ".join(clave for clave, _ in Ajuste.MOTIVOS)
         raise ValueError(f"Motivo '{motivo}' fuera del catálogo. Válidos: {validos}.")
 
-    perfil_1 = _validar_firma(pin1_usuario, pin1)
-    perfil_2 = _validar_firma(pin2_usuario, pin2)
-    if perfil_1.usuario_id == perfil_2.usuario_id:
-        raise ValueError("La doble firma exige dos personas distintas: un PIN no firma dos veces.")
-
     if lote is not None and lote.sku_id != sku.pk:
         raise ValueError(f"El lote {lote.codigo} no corresponde al SKU {sku.codigo}.")
+    if ubicacion is not None:
+        if ubicacion.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA) or not ubicacion.activo:
+            raise ValueError(
+                f"La ubicación {ubicacion.codigo} no es un anaquel de picking/reserva activo."
+            )
 
     with transaction.atomic():
         filtro = {"sku": sku, "estado": Saldo.UBICADO_VENDIBLE}
         if lote is not None:
             filtro["lote"] = lote
+        if ubicacion is not None:
+            filtro["ubicacion"] = ubicacion
         vendibles = list(Saldo.objects.select_for_update().filter(**filtro))
         total = sum(s.cantidad for s in vendibles)
 
         if delta < 0:
             if total < -delta:
+                donde = f" en {ubicacion.codigo}" if ubicacion is not None else ""
                 raise ValueError(
                     f"El ajuste dejaría el saldo negativo: hay {total} vendibles de "
-                    f"{sku.codigo} y el ajuste quita {-delta}."
+                    f"{sku.codigo}{donde} y el ajuste quita {-delta}."
                 )
             caducidades = _caducidades(vendibles)
             _restar(sorted(vendibles, key=lambda s: _clave_fefo(s, caducidades)), -delta)
         else:
-            if vendibles:
+            if ubicacion is not None:
+                _incrementar(sku, ubicacion.pk, lote.pk if lote else None, Saldo.UBICADO_VENDIBLE, delta)
+            elif vendibles:
                 caducidades = _caducidades(vendibles)
                 ancla = sorted(vendibles, key=lambda s: _clave_fefo(s, caducidades))[0]
                 _incrementar(sku, ancla.ubicacion_id, ancla.lote_id, Saldo.UBICADO_VENDIBLE, delta)
@@ -975,3 +1007,323 @@ def generar_conteo_ciclico(fecha=None):
         )
         nuevas.append(tarea)
     return existentes + nuevas
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reconciliación de inventario por CSV (Mesa): recuento físico → ajustes
+# ─────────────────────────────────────────────────────────────────────────────
+
+COLUMNAS_CSV_CONTEO = (
+    "codigo", "descripcion", "lote", "caducidad", "ubicacion", "vendible_actual", "contado",
+)
+_COLUMNAS_CSV_CONTEO_MINIMAS = ("codigo", "contado")
+
+
+def exportar_conteo(cliente):
+    """Filas del CSV de conteo (columnas COLUMNAS_CSV_CONTEO): una por anaquel
+    donde vive cada SKU/lote vendible, con `contado` prellenado con el vendible
+    actual para editar solo lo que difiere. Los SKUs activos sin stock salen con
+    una fila vacía para poder capturarlos; kits excluidos (jamás tienen stock).
+
+    La importación lee SOLO codigo, lote, caducidad, ubicacion y contado; las
+    demás columnas viajan para que el archivo sea legible (descripcion) y para
+    avisar si el stock se movió desde la exportación (vendible_actual).
+    """
+    from apps.catalogo.models import SKU
+
+    skus = list(
+        SKU.objects.filter(cliente=cliente, activo=True, es_kit=False).order_by("codigo")
+    )
+    saldos = (
+        Saldo.objects.filter(sku__in=skus, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0)
+        .select_related("lote", "ubicacion")
+        .order_by("sku__codigo", "ubicacion__codigo", "lote__codigo")
+    )
+    por_sku = {}
+    for saldo in saldos:
+        por_sku.setdefault(saldo.sku_id, []).append(saldo)
+    filas = []
+    for sku in skus:
+        for saldo in por_sku.get(sku.pk, []):
+            cad = saldo.lote.fecha_caducidad if saldo.lote else None
+            filas.append({
+                "codigo": sku.codigo,
+                "descripcion": sku.descripcion,
+                "lote": saldo.lote.codigo if saldo.lote else "",
+                "caducidad": cad.isoformat() if cad else "",
+                "ubicacion": saldo.ubicacion.codigo,
+                "vendible_actual": saldo.cantidad,
+                "contado": saldo.cantidad,
+            })
+        if not por_sku.get(sku.pk):
+            filas.append({
+                "codigo": sku.codigo, "descripcion": sku.descripcion,
+                "lote": "", "caducidad": "", "ubicacion": "",
+                "vendible_actual": 0, "contado": 0,
+            })
+    return filas
+
+
+def leer_csv_conteo(texto):
+    """Parsea el CSV de conteo. Regresa (filas, errores_de_archivo).
+
+    Cada fila: dict con codigo, descripcion, lote, caducidad, ubicacion,
+    vendible_actual (str), contado (str crudo) y `numero` (renglón en Excel).
+    Renglones totalmente vacíos se ignoran. Un CSV sin las columnas mínimas es
+    un error de archivo (no de fila).
+    """
+    import csv
+    import io
+
+    lector = csv.DictReader(io.StringIO(texto))
+    lector.fieldnames = [(e or "").strip() for e in (lector.fieldnames or [])]
+    faltan = [c for c in _COLUMNAS_CSV_CONTEO_MINIMAS if c not in lector.fieldnames]
+    if faltan:
+        return [], [
+            "El CSV debe traer al menos las columnas codigo y contado "
+            "(usa la exportación de conteo como plantilla)."
+        ]
+    filas = []
+    for numero, cruda in enumerate(lector, start=2):
+        fila = {c: (cruda.get(c) or "").strip() for c in COLUMNAS_CSV_CONTEO}
+        if not any(fila.values()):
+            continue
+        fila["numero"] = numero
+        filas.append(fila)
+    return filas, []
+
+
+def _parsear_fila_conteo(fila, cliente, skus, lotes, ubicaciones):
+    """Valida una fila del CSV y regresa el renglón de la previa (dict).
+
+    Cada renglón trae `error` (bloquea el aplicar) o `avisos` (no bloquean),
+    `omitir` (contado vacío o delta 0), `delta`, y los objetos resueltos.
+    """
+    renglon = {
+        "numero": fila["numero"], "codigo": fila["codigo"], "descripcion": fila["descripcion"],
+        "lote": fila["lote"], "caducidad": fila["caducidad"], "ubicacion": fila["ubicacion"],
+        "contado": None, "vendible_actual": 0, "delta": 0,
+        "error": "", "avisos": [], "omitir": False,
+        "sku": None, "lote_obj": None, "ubicacion_obj": None, "fecha_caducidad": None,
+        "apartado": 0, "en_empaque": 0, "cuarentena": 0, "en_recepcion": 0,
+    }
+    sku = skus.get(fila["codigo"])
+    if sku is None:
+        renglon["error"] = f"SKU desconocido '{fila['codigo']}' para este cliente."
+        return renglon
+    renglon["sku"] = sku
+    if sku.es_kit:
+        renglon["error"] = f"{sku.codigo} es un kit: no tiene stock propio, no se cuenta."
+        return renglon
+    if fila["descripcion"] and fila["descripcion"] != sku.descripcion:
+        renglon["avisos"].append(
+            f"El nombre en el archivo ('{fila['descripcion']}') no coincide con el catálogo "
+            f"('{sku.descripcion}'): revisa que el renglón sea el correcto."
+        )
+
+    if fila["caducidad"]:
+        try:
+            renglon["fecha_caducidad"] = date.fromisoformat(fila["caducidad"])
+        except ValueError:
+            renglon["error"] = f"Caducidad '{fila['caducidad']}' inválida: usa AAAA-MM-DD."
+            return renglon
+
+    if fila["ubicacion"]:
+        ubic = ubicaciones.get(fila["ubicacion"].upper())
+        if ubic is None:
+            renglon["error"] = f"La ubicación {fila['ubicacion']} no existe."
+            return renglon
+        if ubic.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA) or not ubic.activo:
+            renglon["error"] = f"La ubicación {ubic.codigo} no es un anaquel de picking/reserva activo."
+            return renglon
+        renglon["ubicacion_obj"] = ubic
+
+    lotes_del_sku = lotes.get(sku.pk, {})
+    if fila["lote"]:
+        renglon["lote_obj"] = lotes_del_sku.get(fila["lote"])
+    elif lotes_del_sku:
+        renglon["error"] = (
+            f"{sku.codigo} maneja lotes ({', '.join(sorted(lotes_del_sku))}): "
+            "captura el lote en cada renglón."
+        )
+        return renglon
+
+    if fila["contado"] == "":
+        renglon["omitir"] = True
+        renglon["avisos"].append("Sin captura: se deja como está.")
+    else:
+        try:
+            contado = int(fila["contado"])
+        except ValueError:
+            renglon["error"] = f"'{fila['contado']}' no es un número entero."
+            return renglon
+        if contado < 0:
+            renglon["error"] = "El conteo no puede ser negativo."
+            return renglon
+        renglon["contado"] = contado
+    return renglon
+
+
+def previa_reconciliacion(cliente, filas):
+    """Compara las filas del CSV contra el stock vendible actual del cliente.
+
+    Regresa {"renglones", "errores", "avisos", "aplicables", "omitidos",
+    "no_contados"}: `errores` bloquea; `no_contados` son SKU/lote/anaquel con
+    stock que el archivo no menciona (se dejan intactos, se avisa). El vendible
+    se indexa por (sku, lote, ubicación) para poder comparar por anaquel cuando
+    la fila trae ubicación y por SKU/lote cuando no; los demás estados del saldo
+    (apartado, en empaque, cuarentena, en recepción) solo se muestran.
+    """
+    from apps.catalogo.models import SKU
+
+    skus = {s.codigo: s for s in SKU.objects.filter(cliente=cliente)}
+    lotes = {}
+    for lote in Lote.objects.filter(sku__cliente=cliente):
+        lotes.setdefault(lote.sku_id, {})[lote.codigo] = lote
+    ubicaciones = {u.codigo.upper(): u for u in Ubicacion.objects.all()}
+
+    saldos = list(Saldo.objects.filter(sku__cliente=cliente, cantidad__gt=0))
+    vendible_por_clave = {}
+    otros = {}
+    for s in saldos:
+        if s.estado == Saldo.UBICADO_VENDIBLE:
+            clave = (s.sku_id, s.lote_id, s.ubicacion_id)
+            vendible_por_clave[clave] = vendible_por_clave.get(clave, 0) + s.cantidad
+        else:
+            otros.setdefault(s.sku_id, {})
+            otros[s.sku_id][s.estado] = otros[s.sku_id].get(s.estado, 0) + s.cantidad
+
+    renglones = []
+    vistos = set()
+    errores, avisos = [], []
+    for fila in filas:
+        r = _parsear_fila_conteo(fila, cliente, skus, lotes, ubicaciones)
+        if r["sku"] is not None:
+            extra = otros.get(r["sku"].pk, {})
+            r["apartado"] = extra.get(Saldo.RESERVADO, 0)
+            r["en_empaque"] = extra.get(Saldo.EN_EMPAQUE, 0)
+            r["cuarentena"] = extra.get(Saldo.CUARENTENA, 0)
+            r["en_recepcion"] = extra.get(Saldo.EN_PUTAWAY, 0)
+        if not r["error"] and r["sku"] is not None:
+            lote_id = r["lote_obj"].pk if r["lote_obj"] else None
+            ubic_id = r["ubicacion_obj"].pk if r["ubicacion_obj"] else None
+            clave = (r["sku"].pk, lote_id, ubic_id)
+            if clave in vistos:
+                r["error"] = "Renglón repetido: el mismo SKU/lote/ubicación aparece más de una vez."
+            vistos.add(clave)
+            if ubic_id is not None:
+                r["vendible_actual"] = vendible_por_clave.get(clave, 0)
+            else:
+                # Sin ubicación: se compara contra TODO el vendible de ese SKU/lote.
+                r["vendible_actual"] = sum(
+                    c for (sid, lid, _u), c in vendible_por_clave.items()
+                    if sid == r["sku"].pk and lid == lote_id
+                )
+        if r["error"]:
+            errores.append(f"fila {r['numero']}: {r['error']}")
+        elif not r["omitir"]:
+            r["delta"] = r["contado"] - r["vendible_actual"]
+            if r["delta"] == 0:
+                r["omitir"] = True
+                r["avisos"].append("Sin cambio.")
+            else:
+                if fila["vendible_actual"] not in ("", str(r["vendible_actual"])):
+                    r["avisos"].append(
+                        f"El archivo decía {fila['vendible_actual']} vendibles y hoy hay "
+                        f"{r['vendible_actual']}: el stock se movió desde la exportación."
+                    )
+                reservado = r["apartado"]
+                if reservado and r["contado"] < reservado and r["ubicacion_obj"] is None:
+                    r["avisos"].append(
+                        f"Hay {reservado} piezas apartadas para pedidos abiertos y el conteo "
+                        f"es {r['contado']}: esos pedidos quedarán sin respaldo."
+                    )
+        renglones.append(r)
+        for aviso in r["avisos"]:
+            if not r["error"]:
+                avisos.append(f"fila {r['numero']}: {aviso}")
+
+    no_contados = []
+    skus_por_id = {s.pk: s for s in skus.values()}
+    lotes_por_id = {l.pk: l for d in lotes.values() for l in d.values()}
+    ubic_por_id = {u.pk: u for u in ubicaciones.values()}
+    mencionados_sku_lote = {(r["sku"].pk, r["lote_obj"].pk if r["lote_obj"] else None)
+                            for r in renglones if r["sku"] is not None and not r["error"]}
+    for (sid, lid, uid), cantidad in sorted(vendible_por_clave.items()):
+        if (sid, lid, uid) in vistos or ((sid, lid) in mencionados_sku_lote and not any(
+            r["ubicacion_obj"] is not None for r in renglones
+            if r["sku"] is not None and r["sku"].pk == sid
+        )):
+            continue
+        lote = lotes_por_id.get(lid)
+        no_contados.append({
+            "codigo": skus_por_id[sid].codigo, "lote": lote.codigo if lote else "",
+            "ubicacion": ubic_por_id[uid].codigo, "vendible_actual": cantidad,
+        })
+
+    aplicables = [r for r in renglones if not r["error"] and not r["omitir"]]
+    return {
+        "renglones": renglones, "errores": errores, "avisos": avisos,
+        "aplicables": aplicables,
+        "omitidos": sum(1 for r in renglones if r["omitir"] and not r["error"]),
+        "no_contados": no_contados,
+    }
+
+
+def reconciliar_conteo(
+    cliente, filas, motivo, pin1_usuario, pin1, pin2_usuario, pin2, actor,
+    nota="", archivo="",
+):
+    """Aplica la reconciliación: un Ajuste (con Conteo ligado) por renglón con delta,
+    todo o nada. Las dos firmas se validan UNA vez para todo el lote.
+
+    NO abre incidencias DES: una reconciliación es, por definición, una lista de
+    descuadres ya asumidos. Regresa el resumen {"ajustes", "omitidos", "folios"}.
+    """
+    if motivo not in dict(Ajuste.MOTIVOS):
+        validos = ", ".join(clave for clave, _ in Ajuste.MOTIVOS)
+        raise ValueError(f"Motivo '{motivo}' fuera del catálogo. Válidos: {validos}.")
+    previa = previa_reconciliacion(cliente, filas)
+    if previa["errores"]:
+        raise ValueError(
+            "El archivo trae renglones con error; corrígelos antes de aplicar: "
+            + "; ".join(previa["errores"][:5])
+            + (" …" if len(previa["errores"]) > 5 else "")
+        )
+    if not previa["aplicables"]:
+        raise ValueError("Ningún renglón cambia el stock: no hay nada que aplicar.")
+    perfil_1, perfil_2 = _validar_doble_firma(pin1_usuario, pin1, pin2_usuario, pin2)
+
+    folios = []
+    with transaction.atomic():
+        for r in previa["aplicables"]:
+            sku = r["sku"]
+            lote = r["lote_obj"]
+            if lote is None and r["lote"]:
+                lote, creado = Lote.objects.get_or_create(
+                    sku=sku, codigo=r["lote"], defaults={"fecha_caducidad": r["fecha_caducidad"]},
+                )
+            if lote is not None and lote.fecha_caducidad is None and r["fecha_caducidad"]:
+                lote.fecha_caducidad = r["fecha_caducidad"]
+                lote.save(update_fields=["fecha_caducidad"])
+            conteo = Conteo.objects.create(
+                sku=sku, contador=_actor_str(actor) or "reconciliacion",
+                esperado=r["vendible_actual"], contado=r["contado"],
+            )
+            ajuste = _aplicar_ajuste_firmado(
+                sku, r["delta"], motivo, perfil_1, perfil_2,
+                lote=lote, conteo=conteo, ubicacion=r["ubicacion_obj"],
+            )
+            folios.append(ajuste.folio)
+        registrar_evento(
+            "inventario", cliente.slug, "reconciliacion_csv", actor=actor, cliente=cliente,
+            delta={
+                "archivo": archivo, "renglones": len(previa["renglones"]),
+                "ajustes": len(folios), "omitidos": previa["omitidos"],
+                "no_contados": len(previa["no_contados"]), "folios": folios,
+                "firmas": [perfil_1.usuario.username, perfil_2.usuario.username],
+                "avisos": previa["avisos"][:50],
+            },
+            motivo=(nota or f"Reconciliación de inventario por CSV ({archivo})")[:300],
+        )
+    return {"ajustes": len(folios), "omitidos": previa["omitidos"], "folios": folios}

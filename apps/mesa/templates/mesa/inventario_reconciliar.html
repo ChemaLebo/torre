@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Reconciliar inventario · {{ cliente.nombre }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">
+      <a href="{% url 'mesa:inventario' %}?cliente={{ cliente.slug }}">Inventario de {{ cliente.slug }}</a> / reconciliar
+    </div>
+    <h1>Reconciliación de inventario</h1>
+  </div>
+  <div class="quien">Recuento físico por anaquel y lote → ajustes con doble firma, todo o nada.</div>
+</div>
+
+{% if not previa %}
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h2>1 · Exporta el conteo</h2></div>
+    <p class="small">
+      Una fila por anaquel y lote con el vendible de hoy ya escrito en <span class="mono">contado</span>.
+      Edita solo lo que difiera; deja vacío lo que no contaste (se ignora).
+      Los SKUs sin stock salen con una fila vacía para capturarlos; si les pones ubicación, entran ahí.
+    </p>
+    <a class="btn primario" href="{% url 'mesa:inventario_exportar_conteo' %}?cliente={{ cliente.slug }}">Exportar conteo (CSV)</a>
+  </div>
+  <div class="card">
+    <div class="titulo"><h2>2 · Sube el conteo</h2></div>
+    <form method="post" enctype="multipart/form-data">{% csrf_token %}
+      <input type="hidden" name="accion" value="previa">
+      <input type="hidden" name="cliente" value="{{ cliente.slug }}">
+      <label for="rc-archivo">CSV de conteo</label>
+      <input type="file" name="archivo" id="rc-archivo" accept=".csv,text/csv" required>
+      <p class="small muted">
+        Columnas: <span class="mono">codigo, descripcion, lote, caducidad, ubicacion, vendible_actual, contado</span>.
+        Se leen codigo, lote, caducidad, ubicacion y contado; el resto es informativo.
+      </p>
+      <button class="btn primario" type="submit">Ver previa</button>
+    </form>
+  </div>
+</div>
+
+{% else %}
+
+<div class="card mb">
+  <div class="titulo">
+    <h2>Previa · {{ archivo_nombre|default:"conteo" }}</h2>
+    <div class="fila">
+      <span class="pill accent">{{ previa.aplicables|length }} ajuste(s)</span>
+      <span class="pill">{{ previa.omitidos }} sin cambio</span>
+      {% if previa.errores %}<span class="pill crit">{{ previa.errores|length }} error(es)</span>{% endif %}
+      {% if previa.no_contados %}<span class="pill warn">{{ previa.no_contados|length }} con stock sin contar</span>{% endif %}
+    </div>
+  </div>
+
+  {% if previa.errores %}
+  <div class="banner crit"><span class="foco"></span>
+    <div>
+      <b>Corrige el archivo y vuelve a subirlo.</b> Nada se aplica mientras haya renglones con error.
+      <ul class="small">{% for e in previa.errores %}<li>{{ e }}</li>{% endfor %}</ul>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Fila</th><th>SKU</th><th>Lote</th><th>Ubicación</th>
+          <th class="derecha">Vendible hoy</th><th class="derecha">Contado</th><th class="derecha">Delta</th>
+          <th class="derecha">Apartado</th><th class="derecha">En empaque</th><th class="derecha">Cuarentena</th><th class="derecha">En recepción</th>
+          <th>Avisos</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in previa.renglones %}
+        <tr>
+          <td class="mono">{{ r.numero }}</td>
+          <td><span class="mono">{{ r.codigo }}</span>{% if r.sku %} <span class="small muted">{{ r.sku.descripcion }}</span>{% endif %}</td>
+          <td class="mono">{{ r.lote|default:"—" }}{% if r.lote and not r.lote_obj %} <span class="pill">nuevo</span>{% endif %}</td>
+          <td class="mono">{{ r.ubicacion|default:"—" }}</td>
+          <td class="derecha mono">{{ r.vendible_actual }}</td>
+          <td class="derecha mono">{% if r.contado is None %}—{% else %}{{ r.contado }}{% endif %}</td>
+          <td class="derecha mono">
+            {% if r.error %}<span class="pill crit">error</span>
+            {% elif r.omitir %}<span class="muted">0</span>
+            {% else %}<b>{{ r.delta }}</b>{% endif %}
+          </td>
+          <td class="derecha mono">{{ r.apartado }}</td>
+          <td class="derecha mono">{{ r.en_empaque }}</td>
+          <td class="derecha mono">{{ r.cuarentena }}</td>
+          <td class="derecha mono">{{ r.en_recepcion }}</td>
+          <td class="small">
+            {% if r.error %}<span class="pill crit">{{ r.error }}</span>{% endif %}
+            {% for a in r.avisos %}<span class="pill warn">{{ a }}</span> {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if previa.no_contados %}
+<div class="card mb">
+  <div class="titulo"><h3>Con stock pero sin contar (se dejan como están)</h3></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>SKU</th><th>Lote</th><th>Ubicación</th><th class="derecha">Vendible hoy</th></tr></thead>
+      <tbody>
+        {% for n in previa.no_contados %}
+        <tr><td class="mono">{{ n.codigo }}</td><td class="mono">{{ n.lote|default:"—" }}</td><td class="mono">{{ n.ubicacion }}</td><td class="derecha mono">{{ n.vendible_actual }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h2>Aplicar</h2><span class="pill crit">dos PINs</span></div>
+    {% if previa.errores or not previa.aplicables %}
+    <p class="small muted">
+      {% if previa.errores %}Hay renglones con error: corrige el archivo y súbelo de nuevo.{% else %}Ningún renglón cambia el stock.{% endif %}
+    </p>
+    {% else %}
+    <p class="small">Se aplican {{ previa.aplicables|length }} ajuste(s) con folio AJU, un conteo por renglón y un solo evento. Si uno falla, no se aplica ninguno.</p>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="aplicar">
+      <input type="hidden" name="cliente" value="{{ cliente.slug }}">
+      <input type="hidden" name="archivo_nombre" value="{{ archivo_nombre }}">
+      <input type="hidden" name="csv_conteo" value="{{ csv_conteo }}">
+      <label for="rc-motivo">Motivo</label>
+      <select name="motivo" id="rc-motivo" required>
+        {% for clave, nombre in motivos_ajuste %}
+        <option value="{{ clave }}" {% if clave == motivo_default %}selected{% endif %}>{{ nombre }}</option>
+        {% endfor %}
+      </select>
+      <label for="rc-nota">Nota (opcional)</label>
+      <input type="text" name="nota" id="rc-nota" maxlength="300" placeholder="Conteo físico tras pruebas de septiembre" autocomplete="off">
+      <div class="grid g2">
+        <div>
+          <label for="rc-a1">Firma 1 · usuario</label>
+          <input type="text" name="autorizo_1" id="rc-a1" autocomplete="off" required>
+          <label for="rc-p1">Firma 1 · PIN</label>
+          <input type="password" name="pin_1" id="rc-p1" inputmode="numeric" maxlength="6" autocomplete="off" required>
+        </div>
+        <div>
+          <label for="rc-a2">Firma 2 · usuario (distinto)</label>
+          <input type="text" name="autorizo_2" id="rc-a2" autocomplete="off" required>
+          <label for="rc-p2">Firma 2 · PIN</label>
+          <input type="password" name="pin_2" id="rc-p2" inputmode="numeric" maxlength="6" autocomplete="off" required>
+        </div>
+      </div>
+      <div class="mt"><button class="btn peligro" type="submit">Aplicar reconciliación</button></div>
+    </form>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="titulo"><h2>Subir otro archivo</h2></div>
+    <form method="post" enctype="multipart/form-data">{% csrf_token %}
+      <input type="hidden" name="accion" value="previa">
+      <input type="hidden" name="cliente" value="{{ cliente.slug }}">
+      <input type="file" name="archivo" accept=".csv,text/csv" required aria-label="CSV de conteo">
+      <button class="btn" type="submit">Ver previa</button>
+    </form>
+    <p class="small muted mt">{{ total_filas }} fila(s) leídas del archivo. Nada se ha aplicado todavía.</p>
+  </div>
+</div>
+
+{% endif %}
+
+{% endblock %}
