@@ -644,7 +644,34 @@ def recepciones(request):
         "ordenes": ordenes,
         "form": form,
         "lotes_recientes": lotes_recientes_cliente(request.cliente),
+        "skus_plantilla": _skus_recibibles(request.cliente),
     })
+
+
+def _skus_recibibles(cliente):
+    """SKUs que pueden venir en una ASN: activos y no kit (un kit se arma al empacar)."""
+    return SKU.objects.filter(cliente=cliente, activo=True, es_kit=False).order_by("codigo")
+
+
+COLUMNAS_PLANTILLA_ASN = ("codigo", "descripcion", "cantidad", "lote", "caducidad")
+
+
+@portal_requerido
+def recepciones_plantilla(request):
+    """Formato CSV del anuncio de ASN (?sku=<pk>&sku=…): las columnas que lee
+    FormAnuncioASN más `descripcion` para que la hoja se entienda, y un renglón
+    por SKU marcado con codigo y descripcion prellenados (cantidad, lote y
+    caducidad en blanco). Sin SKUs marcados baja solo el encabezado. SKUs de
+    otro cliente o kits se ignoran."""
+    pks = [v for v in request.GET.getlist("sku") if v.isdigit()]
+    skus = _skus_recibibles(request.cliente).filter(pk__in=pks) if pks else []
+    hoy = timezone.localdate().strftime("%Y%m%d")
+    respuesta = _respuesta_csv(f"asn_{request.cliente.slug}_{hoy}.csv")
+    w = csv.writer(respuesta)
+    w.writerow(COLUMNAS_PLANTILLA_ASN)
+    for sku in skus:
+        w.writerow([sku.codigo, sku.descripcion, "", "", ""])
+    return respuesta
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -301,6 +301,11 @@ dialog.modal {
 }
 dialog.modal::backdrop { background: rgba(0, 0, 0, .62); }
 dialog.modal.ancho { width: min(1080px, calc(100vw - 32px)); }
+.asn-formato-lista { max-height: 32vh; overflow: auto; margin-top: 8px; }
+.asn-formato-lista label, #asn-formato label {
+  display: flex; align-items: center; gap: 8px; margin: 4px 0;
+  font-family: var(--body); font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--ink);
+}
 dialog.modal .modal-lista { max-height: 40vh; overflow: auto; }
 
 /* ── Formularios ── */

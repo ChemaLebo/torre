@@ -244,6 +244,40 @@ class TestRecepciones(BasePortal):
         linea = OrdenEntrada.objects.filter(cliente=self.colima).latest("creado").lineas.get()
         self.assertEqual((linea.lote_codigo, linea.fecha_caducidad.isoformat()), ("L-PORTAL", "2027-04-01"))
 
+    def test_formato_csv_prellena_los_productos_marcados(self):
+        kit = SKU.objects.create(cliente=self.colima, codigo="KIT-3", descripcion="Kit", es_kit=True)
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:recepciones"))
+        self.assertContains(respuesta, "Descargar formato (CSV)")
+        self.assertContains(respuesta, f'name="sku" value="{self.sku.pk}"')
+        self.assertNotContains(respuesta, f'name="sku" value="{kit.pk}"')
+        respuesta = self.client.get(reverse("portal:recepciones_plantilla"), {
+            "sku": [str(self.sku.pk), str(self.sku_ajeno.pk), str(kit.pk)],
+        })
+        self.assertEqual(respuesta["Content-Type"], "text/csv; charset=utf-8")
+        lineas = respuesta.content.decode("utf-8-sig").splitlines()
+        self.assertEqual(lineas[0], "codigo,descripcion,cantidad,lote,caducidad")
+        self.assertEqual(lineas[1:], [f"{self.sku.codigo},{self.sku.descripcion},,,"])
+        # Sin marcar nada: solo el encabezado.
+        vacio = self.client.get(reverse("portal:recepciones_plantilla")).content.decode("utf-8-sig").splitlines()
+        self.assertEqual(vacio, ["codigo,descripcion,cantidad,lote,caducidad"])
+
+    def test_formato_csv_relleno_se_sube_tal_cual(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.entrar()
+        csv_texto = ("codigo,descripcion,cantidad,lote,caducidad\n"
+                     f"{self.sku.codigo},{self.sku.descripcion},12,L-CSV,2027-05-01\n")
+        fecha = timezone.localdate() + timedelta(days=3)
+        respuesta = self.client.post(reverse("portal:recepciones"), {
+            "fecha_compromiso": fecha.isoformat(),
+            "renglones_csv": SimpleUploadedFile("asn.csv", csv_texto.encode("utf-8-sig"), content_type="text/csv"),
+        })
+        self.assertRedirects(respuesta, reverse("portal:recepciones"))
+        linea = OrdenEntrada.objects.filter(cliente=self.colima).latest("creado").lineas.get()
+        self.assertEqual((linea.cantidad_anunciada, linea.lote_codigo, linea.fecha_caducidad.isoformat()),
+                         (12, "L-CSV", "2027-05-01"))
+
     def test_datalist_de_lotes_trae_la_caducidad(self):
         from apps.catalogo.models import Lote
 

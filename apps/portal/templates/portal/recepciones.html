@@ -109,6 +109,26 @@
         <button class="btn primario" type="submit">Anunciar entrega</button>
       </div>
     </form>
+
+    {# Formato del CSV: GET aparte (un form no puede anidar otro); marca productos para prellenarlos. #}
+    <details class="mt" id="asn-formato">
+      <summary class="small"><b>Descargar el formato del CSV</b> · marca los productos que llegan para prellenarlos</summary>
+      <form method="get" action="{% url 'portal:recepciones_plantilla' %}" id="asn-formato-form">
+        <p class="small muted">
+          Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y
+          descripción; tú llenas la cantidad (y lote y caducidad si aplican). Sin marcar nada baja solo el encabezado.
+        </p>
+        <label class="small"><input type="checkbox" id="asn-formato-todos"> Marcar todos</label>
+        <div class="grid g3 asn-formato-lista">
+          {% for sku in skus_plantilla %}
+          <label class="small"><input type="checkbox" name="sku" value="{{ sku.pk }}"> <span class="mono">{{ sku.codigo }}</span> {{ sku.descripcion }}</label>
+          {% empty %}
+          <span class="muted small">Todavía no tienes productos dados de alta.</span>
+          {% endfor %}
+        </div>
+        <div class="mt"><button class="btn chico" type="submit">Descargar formato (CSV)</button></div>
+      </form>
+    </details>
     <script>
     (function () {
       var boton = document.getElementById("btn-mas-renglon");
@@ -153,6 +173,10 @@
         }
         if (!opcion) { opcion = document.createElement("option"); opcion.value = codigo; lista.appendChild(opcion); }
         if (caducidad.value) opcion.dataset.caducidad = caducidad.value;
+      });
+      var todos = document.getElementById("asn-formato-todos");
+      todos.addEventListener("change", function () {
+        document.querySelectorAll("#asn-formato-form input[name=sku]").forEach(function (c) { c.checked = todos.checked; });
       });
       var modal = document.getElementById("asn-modal");
       document.getElementById("asn-abrir").addEventListener("click", function () { modal.showModal(); });
