@@ -646,6 +646,8 @@ def recepciones(request):
         "form": form,
         "lotes_recientes": lotes_recientes_cliente(request.cliente),
         "skus_plantilla": _skus_recibibles(request.cliente),
+        # codigo → pk para que el navegador vuelque un CSV elegido en los renglones
+        "codigos_sku": {s.codigo: s.pk for s in _skus_recibibles(request.cliente)},
     })
 
 

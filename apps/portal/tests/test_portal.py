@@ -249,6 +249,9 @@ class TestRecepciones(BasePortal):
         self.entrar()
         respuesta = self.client.get(reverse("portal:recepciones"))
         self.assertContains(respuesta, "Descargar formato (CSV)")
+        # Mapa codigo → pk para volcar el CSV en los renglones desde el navegador.
+        self.assertContains(respuesta, 'id="asn-codigos"')
+        self.assertContains(respuesta, f'"{self.sku.codigo}": {self.sku.pk}')
         self.assertContains(respuesta, f'name="sku" value="{self.sku.pk}"')
         self.assertNotContains(respuesta, f'name="sku" value="{kit.pk}"')
         respuesta = self.client.get(reverse("portal:recepciones_plantilla"), {
