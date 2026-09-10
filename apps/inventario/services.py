@@ -17,7 +17,7 @@ from django.utils import timezone
 from apps.catalogo.models import Lote, Ubicacion
 from apps.core.services import registrar_evento
 
-from .models import Ajuste, Conteo, Movimiento, OrdenEntrada, Saldo, TareaConteo
+from .models import Ajuste, Conteo, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers internos
@@ -477,6 +477,36 @@ def _notificar_recepcion_cerrada(orden):
     except ImportError:
         return None
     return enviar_recepcion_cerrada(orden)
+
+
+def anunciar_asn(cliente, fecha_compromiso, tarimas, lineas, actor, origen, motivo=""):
+    """Alta de una ASN (Mesa o portal): OrdenEntrada + una LineaASN por
+    (SKU, lote anunciado) + evento `anunciada_<origen>`. `lineas` viene del form
+    como [(sku, cantidad, lote_codigo, fecha_caducidad)]; lote y caducidad son
+    opcionales y quedan en la línea para preseleccionarlos al ubicar en piso.
+    """
+    with transaction.atomic():
+        orden = OrdenEntrada.objects.create(
+            cliente=cliente, fecha_compromiso=fecha_compromiso, tarimas=tarimas or 0,
+        )
+        detalle = []
+        for sku, cantidad, lote_codigo, fecha_caducidad in lineas:
+            if sku.cliente_id != cliente.pk:
+                raise ValueError(f"El SKU {sku.codigo} no es de {cliente.nombre}.")
+            LineaASN.objects.create(
+                orden=orden, sku=sku, cantidad_anunciada=cantidad,
+                lote_codigo=lote_codigo or "", fecha_caducidad=fecha_caducidad,
+            )
+            fila = {"sku": sku.codigo, "cantidad": cantidad}
+            if lote_codigo:
+                fila["lote"] = lote_codigo
+            detalle.append(fila)
+        registrar_evento(
+            "asn", orden.folio, f"anunciada_{origen}", actor=actor, cliente=cliente,
+            delta={"fecha_compromiso": str(fecha_compromiso), "tarimas": tarimas or 0, "lineas": detalle},
+            motivo=motivo,
+        )
+    return orden
 
 
 def cerrar_recepcion(orden, actor, tarimas_recibidas=None):

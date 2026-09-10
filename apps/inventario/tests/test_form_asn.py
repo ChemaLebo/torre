@@ -31,7 +31,7 @@ class RenglonesDinamicosTests(BaseFormASN):
             datos[f"cantidad_{i}"] = "2"
         form = FormAnuncioASNBase(self.cliente, datos)
         self.assertTrue(form.is_valid(), form.errors)
-        self.assertEqual(form.cleaned_data["lineas"], [(self.te, 20)])  # consolidado
+        self.assertEqual(form.cleaned_data["lineas"], [(self.te, 20, "", None)])
 
     def test_renglon_incompleto_es_error(self):
         form = FormAnuncioASNBase(
@@ -60,7 +60,10 @@ class RenglonesCSVTests(BaseFormASN):
     def test_csv_reemplaza_renglones_y_consolida(self):
         form = self._form_con_csv("codigo,cantidad\nTE-1,5\nTAZA-1,2\nTE-1,1\n")
         self.assertTrue(form.is_valid(), form.errors)
-        self.assertEqual(dict(form.cleaned_data["lineas"]), {self.te: 6, self.taza: 2})
+        self.assertEqual(
+            {(sku, lote): piezas for sku, piezas, lote, _ in form.cleaned_data["lineas"]},
+            {(self.te, ""): 6, (self.taza, ""): 2},
+        )
 
     def test_csv_con_sku_desconocido_lista_el_error(self):
         form = self._form_con_csv("codigo,cantidad\nNO-EXISTE,5\n")
@@ -71,3 +74,45 @@ class RenglonesCSVTests(BaseFormASN):
         form = self._form_con_csv("sku,piezas\nTE-1,5\n")
         self.assertFalse(form.is_valid())
         self.assertIn("codigo,cantidad", str(form.errors))
+
+
+class RenglonesConLoteTests(BaseFormASN):
+    def test_consolida_por_sku_y_lote_y_guarda_caducidad(self):
+        form = FormAnuncioASNBase(self.cliente, {
+            "fecha_compromiso": hoy(),
+            "sku_1": str(self.te.pk), "cantidad_1": "5", "lote_1": " L-1 ", "caducidad_1": "2027-01-15",
+            "sku_2": str(self.te.pk), "cantidad_2": "3", "lote_2": "L-1",
+            "sku_3": str(self.te.pk), "cantidad_3": "2", "lote_3": "L-2",
+            "sku_4": str(self.taza.pk), "cantidad_4": "1",
+        })
+        self.assertTrue(form.is_valid(), form.errors)
+        from datetime import date
+        self.assertEqual(form.cleaned_data["lineas"], [
+            (self.te, 8, "L-1", date(2027, 1, 15)),
+            (self.te, 2, "L-2", None),
+            (self.taza, 1, "", None),
+        ])
+
+    def test_caducidad_invalida_es_error(self):
+        form = FormAnuncioASNBase(self.cliente, {
+            "fecha_compromiso": hoy(), "sku_1": str(self.te.pk), "cantidad_1": "5", "caducidad_1": "ayer",
+        })
+        self.assertFalse(form.is_valid())
+
+    def test_csv_con_lote_y_caducidad(self):
+        archivo = SimpleUploadedFile(
+            "r.csv", "codigo,cantidad,lote,caducidad\nTE-1,5,L-9,2027-02-01\nTE-1,1,L-9,\nTAZA-1,2,,\n".encode("utf-8-sig"),
+            content_type="text/csv",
+        )
+        form = FormAnuncioASNBase(self.cliente, {"fecha_compromiso": hoy()}, {"renglones_csv": archivo})
+        self.assertTrue(form.is_valid(), form.errors)
+        from datetime import date
+        self.assertEqual(form.cleaned_data["lineas"], [(self.te, 6, "L-9", date(2027, 2, 1)), (self.taza, 2, "", None)])
+
+    def test_csv_con_caducidad_invalida_lista_el_error(self):
+        archivo = SimpleUploadedFile(
+            "r.csv", "codigo,cantidad,lote,caducidad\nTE-1,5,L-9,31/12/2027\n".encode("utf-8-sig"), content_type="text/csv",
+        )
+        form = FormAnuncioASNBase(self.cliente, {"fecha_compromiso": hoy()}, {"renglones_csv": archivo})
+        self.assertFalse(form.is_valid())
+        self.assertIn("AAAA-MM-DD", str(form.errors))

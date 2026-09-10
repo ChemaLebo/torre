@@ -18,7 +18,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.catalogo.models import SKU, Lote, Ubicacion
+from apps.catalogo.models import SKU, Ubicacion
 from apps.core.decorators import rol_requerido
 from apps.core.models import EventoAuditoria, EvidenciaFoto
 from apps.core.services import registrar_evento
@@ -473,8 +473,10 @@ def recepcion_detalle(request, pk):
         .annotate(t=Sum("cantidad"))
         .values_list("sku_id", "t")
     )
+    from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
     for linea in lineas:
         linea.por_ubicar = putaway.get(linea.sku_id, 0)
+        linea.lotes_sugeridos = lotes_sugeridos(linea.sku, orden)
     sla_texto, sla_tono = _sla_recepcion(orden)
     contexto = {
         "seccion": "recepcion",
@@ -572,9 +574,8 @@ def _recepcion_ubicar(request, orden):
             except ValueError:
                 messages.error(request, "La fecha de caducidad no es válida. Usa el calendario.")
                 return destino
-        lote, _ = Lote.objects.get_or_create(
-            sku=sku, codigo=lote_codigo, defaults={"fecha_caducidad": fecha_caducidad}
-        )
+        from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+        lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
 
     from apps.inventario.services import ubicar  # lazy por contrato
     try:
@@ -1838,6 +1839,9 @@ def cuarentena(request):
         .select_related("sku", "sku__cliente", "lote", "ubicacion")
         .order_by("sku__cliente__nombre", "sku__codigo", "ubicacion__codigo")
     )
+    from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
+    for saldo in putaway:
+        saldo.lotes_sugeridos = lotes_sugeridos(saldo.sku) if saldo.lote_id is None else []
     from apps.core.models import PerfilUsuario  # lazy: modelo de otra app
     firmantes = list(
         PerfilUsuario.objects.filter(
@@ -1941,9 +1945,8 @@ def _cuarentena_ubicar(request):
                 except ValueError:
                     messages.error(request, "La fecha de caducidad no es válida. Usa el calendario.")
                     return destino
-            lote, _ = Lote.objects.get_or_create(
-                sku=sku, codigo=lote_codigo, defaults={"fecha_caducidad": fecha_caducidad}
-            )
+            from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+            lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
 
     from apps.inventario.services import ubicar  # lazy por contrato
     try:

@@ -1098,7 +1098,9 @@ def recepciones(request):
     El aviso que llega por WhatsApp se captura aquí en ≤15 min: primero se
     elige el cliente (los SKUs dependen de él) y luego se llena el anuncio.
     """
-    from apps.inventario.models import LineaASN, OrdenEntrada  # lazy: modelo de otra app
+    from apps.catalogo.services import lotes_recientes_cliente  # lazy por contrato
+    from apps.inventario.models import OrdenEntrada  # lazy: modelo de otra app
+    from apps.inventario.services import anunciar_asn  # lazy por contrato
 
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
     cliente = None
@@ -1106,28 +1108,16 @@ def recepciones(request):
         cliente = get_object_or_404(Cliente, slug=slug, activo=True)
 
     form = None
+    lotes_recientes = []
     if cliente is not None:
         form = FormAnuncioASNMesa(cliente, request.POST or None, request.FILES or None)
+        lotes_recientes = lotes_recientes_cliente(cliente)
         if request.method == "POST" and form.is_valid():
             fecha = form.cleaned_data["fecha_compromiso"]
             tarimas = form.cleaned_data.get("tarimas") or 0
-            orden = OrdenEntrada.objects.create(
-                cliente=cliente, fecha_compromiso=fecha, tarimas=tarimas,
-            )
-            for sku, cantidad in form.cleaned_data["lineas"]:
-                LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=cantidad)
-            registrar_evento(
-                "asn", orden.folio, "anunciada_mesa",
-                actor=request.user, cliente=cliente,
-                delta={
-                    "fecha_compromiso": str(fecha),
-                    "tarimas": tarimas,
-                    "lineas": [
-                        {"sku": sku.codigo, "cantidad": cantidad}
-                        for sku, cantidad in form.cleaned_data["lineas"]
-                    ],
-                },
-                motivo="Capturada por Mesa (aviso fuera del portal)",
+            orden = anunciar_asn(
+                cliente, fecha, tarimas, form.cleaned_data["lineas"], request.user,
+                origen="mesa", motivo="Capturada por Mesa (aviso fuera del portal)",
             )
             _avisar_piso_asn(orden)
             cita = fecha.strftime("%d/%m/%Y")
@@ -1158,6 +1148,7 @@ def recepciones(request):
         "cerradas": cerradas,
         "cliente_captura": cliente,
         "form": form,
+        "lotes_recientes": lotes_recientes,
         "clientes_activos": Cliente.objects.filter(activo=True).order_by("nombre"),
     })
 
@@ -1681,6 +1672,50 @@ def cliente_cajas(request, pk):
         "cajas": cajas,
         "form": form,
         "editar": editar,
+    })
+
+
+@rol_requerido("mesa")
+def cliente_lotes(request, pk):
+    """Lotes del cliente: lista con piezas por lote, alta de lote (SKU + código +
+    caducidad) y corrección de caducidad. Toda mutación pasa por catalogo.services."""
+    from datetime import date
+
+    from apps.catalogo.models import SKU, Lote
+    from apps.catalogo.services import actualizar_caducidad, crear_lote, lotes_cliente
+
+    cliente = get_object_or_404(Cliente, pk=pk)
+    destino = redirect("mesa:cliente_lotes", pk=cliente.pk)
+    if request.method == "POST":
+        accion = request.POST.get("accion", "")
+        crudo = (request.POST.get("caducidad") or "").strip()
+        try:
+            caducidad = date.fromisoformat(crudo) if crudo else None
+        except ValueError:
+            messages.error(request, "La caducidad no se entiende: usa el calendario (AAAA-MM-DD).")
+            return destino
+        try:
+            if accion == "nuevo":
+                sku = get_object_or_404(SKU, cliente=cliente, pk=request.POST.get("sku_id"), es_kit=False)
+                lote = crear_lote(sku, request.POST.get("codigo"), caducidad, request.user)
+                messages.success(request, f"Lote {lote.codigo} de {sku.codigo} dado de alta.")
+            elif accion == "caducidad":
+                lote = get_object_or_404(Lote, sku__cliente=cliente, pk=request.POST.get("lote_id"))
+                actualizar_caducidad(lote, caducidad, request.user)
+                messages.success(request, f"Caducidad de {lote.codigo} ({lote.sku.codigo}) actualizada.")
+            else:
+                messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return destino
+
+    return render(request, "mesa/cliente_lotes.html", {
+        "seccion": "clientes",
+        "cliente": cliente,
+        "lotes": lotes_cliente(cliente),
+        "skus": SKU.objects.filter(cliente=cliente, activo=True, es_kit=False).order_by("codigo"),
+        "hoy": timezone.localdate(),
+        "dias_sugerencia": settings.TORRE["LOTES_SUGERENCIA_DIAS"],
     })
 
 

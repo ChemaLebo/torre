@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Lotes · {{ cliente.nombre }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">
+      <a href="{% url 'mesa:clientes' %}">Clientes</a> /
+      <a href="{% url 'mesa:cliente_detalle' cliente.pk %}">{{ cliente.slug }}</a> / lotes
+    </div>
+    <h1>Lotes de {{ cliente.nombre }}</h1>
+  </div>
+  <div class="quien">El FEFO ordena por caducidad, no por el nombre del lote: sin caducidad, el lote se surte al final.</div>
+</div>
+
+<div class="grid g2 mb">
+  <div class="card">
+    <div class="titulo"><h2>Nuevo lote</h2></div>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="nuevo">
+      <label for="lt-sku">Producto</label>
+      <select name="sku_id" id="lt-sku" required>
+        <option value="">Elige un producto</option>
+        {% for sku in skus %}<option value="{{ sku.pk }}">{{ sku.descripcion }} — {{ sku.codigo }}</option>{% endfor %}
+      </select>
+      <div class="grid g2">
+        <div>
+          <label for="lt-codigo">Código del lote</label>
+          <input type="text" name="codigo" id="lt-codigo" class="mono" placeholder="L-2026-09" maxlength="60" autocomplete="off" required>
+        </div>
+        <div>
+          <label for="lt-cad">Caducidad</label>
+          <input type="date" name="caducidad" id="lt-cad">
+        </div>
+      </div>
+      <div class="mt"><button class="btn primario" type="submit">Dar de alta</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <div class="titulo"><h2>Cómo se usan</h2></div>
+    <ul class="small timeline">
+      <li>Al anunciar una ASN, cada renglón puede traer lote y caducidad: el piso lo ve preseleccionado al ubicar.</li>
+      <li>En piso, el campo de lote sugiere los de esa ASN, los que tienen stock y los creados en los últimos {{ dias_sugerencia }} días; escribir uno nuevo lo crea.</li>
+      <li>La caducidad se captura una vez; aquí se corrige si quedó mal o vacía.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Lotes registrados</h2><span class="pill">{{ lotes|length }}</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>SKU</th><th>Lote</th><th>Caducidad</th><th class="derecha">Piezas</th><th>Creado</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for lote in lotes %}
+        <tr>
+          <td><span class="mono">{{ lote.sku.codigo }}</span> <span class="small muted">{{ lote.sku.descripcion }}</span></td>
+          <td class="mono">{{ lote.codigo }}</td>
+          <td>
+            {% if lote.fecha_caducidad %}
+              <span class="pill {% if lote.fecha_caducidad < hoy %}crit{% endif %}">{{ lote.fecha_caducidad|date:"d/M/Y" }}</span>
+            {% else %}<span class="pill warn">sin caducidad</span>{% endif %}
+          </td>
+          <td class="derecha mono">{{ lote.piezas }}</td>
+          <td class="small muted">{{ lote.creado|date:"d/M/Y" }}</td>
+          <td class="derecha">
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="caducidad">
+              <input type="hidden" name="lote_id" value="{{ lote.pk }}">
+              <input type="date" name="caducidad" value="{{ lote.fecha_caducidad|date:'Y-m-d' }}" aria-label="Caducidad de {{ lote.codigo }}">
+              <button class="btn chico" type="submit">Guardar</button>
+            </form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="muted centro">Este cliente no tiene lotes todavía.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

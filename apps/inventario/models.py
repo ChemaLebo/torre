@@ -213,6 +213,11 @@ class LineaASN(models.Model):
     cantidad_anunciada = models.PositiveIntegerField()
     cantidad_recibida = models.PositiveIntegerField(default=0)
     cantidad_danada = models.PositiveIntegerField(default=0)
+    lote_codigo = models.CharField(
+        max_length=60, blank=True, default="",
+        help_text="Lote anunciado por el cliente; el piso lo ve preseleccionado al ubicar",
+    )
+    fecha_caducidad = models.DateField(null=True, blank=True)
 
     class Meta:
         ordering = ["orden", "id"]

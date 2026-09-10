@@ -97,7 +97,13 @@
       <div class="grid g2">
         <div>
           <label for="lote">Lote (si el producto lo pide)</label>
-          <input type="text" name="lote" id="lote" class="mono" placeholder="L-2026-07" autocomplete="off">
+          <input type="text" name="lote" id="lote" class="mono" placeholder="L-2026-07" autocomplete="off" list="lotes-sku">
+          <datalist id="lotes-sku"></datalist>
+          {% for linea in lineas %}
+          <datalist id="lotes-sku-{{ linea.sku_id }}" data-sku="{{ linea.sku_id }}">
+            {% for l in linea.lotes_sugeridos %}<option value="{{ l.codigo }}" data-caducidad="{{ l.caducidad }}" data-origen="{{ l.origen }}">{% if l.origen == "asn" %}anunciado{% elif l.origen == "orden" %}en esta ASN{% elif l.origen == "stock" %}con stock{% else %}reciente{% endif %}{% if l.caducidad %} · cad {{ l.caducidad }}{% endif %}</option>{% endfor %}
+          </datalist>
+          {% endfor %}
         </div>
         <div>
           <label for="fecha_caducidad">Caducidad del lote</label>
@@ -151,6 +157,34 @@ document.addEventListener("DOMContentLoaded", function () {
   chips.forEach(function (chip) {
     chip.addEventListener("click", function () { ponUbicacion(chip.dataset.ubicacion); });
   });
+
+  /* Lotes sugeridos: la lista sigue al producto elegido; el anunciado en la ASN
+     se preselecciona y elegir uno con caducidad conocida la rellena. */
+  var selectSku = document.getElementById("sku_id");
+  var inputLote = document.getElementById("lote");
+  var inputCad = document.getElementById("fecha_caducidad");
+  var listaBase = document.getElementById("lotes-sku");
+  function opcionesDe(skuId) {
+    var lista = document.getElementById("lotes-sku-" + skuId);
+    return lista ? Array.prototype.slice.call(lista.options) : [];
+  }
+  function cargaLotes() {
+    if (!selectSku || !inputLote || !listaBase) return;
+    var opciones = opcionesDe(selectSku.value);
+    listaBase.innerHTML = "";
+    opciones.forEach(function (o) { listaBase.appendChild(o.cloneNode(true)); });
+    var anunciado = opciones.filter(function (o) { return o.dataset.origen === "asn"; })[0];
+    if (anunciado && !inputLote.value) { inputLote.value = anunciado.value; }
+    rellenaCaducidad();
+  }
+  function rellenaCaducidad() {
+    if (!inputLote || !inputCad) return;
+    var valor = inputLote.value.trim();
+    var opcion = opcionesDe(selectSku.value).filter(function (o) { return o.value === valor; })[0];
+    if (opcion && opcion.dataset.caducidad) { inputCad.value = opcion.dataset.caducidad; }
+  }
+  if (selectSku) { selectSku.addEventListener("change", function () { if (inputLote) inputLote.value = ""; cargaLotes(); }); cargaLotes(); }
+  if (inputLote) { inputLote.addEventListener("change", rellenaCaducidad); inputLote.addEventListener("input", rellenaCaducidad); }
 
   function eligeSku(valor) {
     var pego = false;

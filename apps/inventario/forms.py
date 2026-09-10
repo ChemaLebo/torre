@@ -6,6 +6,7 @@ la hoja vive fuera del navegador y un refresh no pierde nada.
 """
 import csv
 import io
+from datetime import date
 
 from django import forms
 from django.utils import timezone
@@ -16,6 +17,7 @@ from apps.catalogo.models import SKU
 
 class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
     excluir_kits = True  # un kit no se recibe: se arma al empacar
+    con_lotes = True
     error_sin_lineas = "Captura al menos un producto con sus piezas para registrar la ASN."
 
     fecha_compromiso = forms.DateField(
@@ -40,7 +42,8 @@ class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
     renglones_csv = forms.FileField(
         required=False,
         label="…o sube los renglones por CSV",
-        help_text="Columnas codigo,cantidad. Si lo adjuntas, sustituye a los renglones capturados.",
+        help_text="Columnas codigo,cantidad y opcionales lote,caducidad (AAAA-MM-DD). "
+                  "Si lo adjuntas, sustituye a los renglones capturados.",
     )
 
     def __init__(self, cliente, data=None, files=None, **kwargs):
@@ -79,10 +82,12 @@ class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
             s.codigo: s
             for s in SKU.objects.filter(cliente=self.cliente, activo=True, es_kit=False)
         }
-        consolidadas, errores = {}, []
+        consolidadas, caducidades, errores = {}, {}, []
         for numero, fila in enumerate(lector, start=2):
             codigo = (fila.get("codigo") or "").strip()
             crudo = (fila.get("cantidad") or "").strip()
+            lote = (fila.get("lote") or "").strip()
+            crudo_cad = (fila.get("caducidad") or "").strip()
             if not codigo and not crudo:
                 continue
             sku = por_codigo.get(codigo)
@@ -97,7 +102,16 @@ class FormAnuncioASNBase(ConRenglonesSKU, forms.Form):
             if cantidad < 1:
                 errores.append(f"fila {numero}: la cantidad mínima es 1")
                 continue
-            consolidadas[sku] = consolidadas.get(sku, 0) + cantidad
+            if crudo_cad:
+                try:
+                    caducidades[(sku, lote)] = date.fromisoformat(crudo_cad)
+                except ValueError:
+                    errores.append(f"fila {numero}: caducidad '{crudo_cad}' no es AAAA-MM-DD")
+                    continue
+            consolidadas[(sku, lote)] = consolidadas.get((sku, lote), 0) + cantidad
         if errores:
             raise forms.ValidationError("El CSV de renglones trae errores: " + "; ".join(errores))
-        return list(consolidadas.items())
+        return [
+            (sku, piezas, lote, caducidades.get((sku, lote)))
+            for (sku, lote), piezas in consolidadas.items()
+        ]

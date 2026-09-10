@@ -213,6 +213,7 @@ class Lote(models.Model):
     sku = models.ForeignKey(SKU, on_delete=models.PROTECT, related_name="lotes")
     codigo = models.CharField(max_length=60)
     fecha_caducidad = models.DateField(null=True, blank=True)
+    creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = [("sku", "codigo")]

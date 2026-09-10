@@ -198,3 +198,27 @@ class CerrarConTarimasTests(PisoTestCase):
         self.orden.refresh_from_db()
         self.assertEqual(self.orden.estado, OrdenEntrada.CERRADA)
         self.assertEqual(self.orden.tarimas_recibidas, 16)
+
+
+class LotesSugeridosEnPutAwayTests(PisoTestCase):
+    def test_datalist_trae_el_lote_anunciado_y_ubicar_completa_la_caducidad(self):
+        from apps.catalogo.models import Lote
+        from apps.inventario.models import LineaASN, OrdenEntrada
+        from apps.inventario.services import recibir
+
+        orden = OrdenEntrada.objects.create(cliente=self.cliente)
+        linea = LineaASN.objects.create(
+            orden=orden, sku=self.sku, cantidad_anunciada=4, lote_codigo="L-ANUNCIADO", fecha_caducidad=None,
+        )
+        recibir(linea, 4, 0, self.operador)
+        Lote.objects.create(sku=self.sku, codigo="L-ANUNCIADO")
+        self.client.force_login(self.operador)
+        respuesta = self.client.get(reverse("piso:recepcion_detalle", args=[orden.pk]))
+        self.assertContains(respuesta, f'id="lotes-sku-{self.sku.pk}"')
+        self.assertContains(respuesta, 'value="L-ANUNCIADO" data-caducidad="" data-origen="asn"')
+        self.client.post(reverse("piso:recepcion_detalle", args=[orden.pk]), {
+            "accion": "ubicar", "sku_id": self.sku.pk, "cantidad": "4", "ubicacion": "A-01-1",
+            "lote": "L-ANUNCIADO", "fecha_caducidad": "2027-05-05",
+        })
+        lote = Lote.objects.get(sku=self.sku, codigo="L-ANUNCIADO")
+        self.assertEqual(lote.fecha_caducidad.isoformat(), "2027-05-05")

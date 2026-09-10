@@ -23,7 +23,7 @@ from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 from apps.incidencias.models import Incidencia, MensajeIncidencia
 from apps.integraciones.models import SyncLog
-from apps.inventario.models import LineaASN, Movimiento, OrdenEntrada
+from apps.inventario.models import Movimiento, OrdenEntrada
 from apps.pedidos.models import Pedido
 
 from .forms import (
@@ -614,27 +614,16 @@ def _avisar_piso_asn(orden):
 
 @portal_requerido
 def recepciones(request):
+    from apps.catalogo.services import lotes_recientes_cliente  # lazy por contrato
+    from apps.inventario.services import anunciar_asn  # lazy por contrato
+
     form = FormAnuncioASN(request.cliente, request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
         fecha = form.cleaned_data["fecha_compromiso"]
         tarimas = form.cleaned_data.get("tarimas") or 0
-        orden = OrdenEntrada.objects.create(
-            cliente=request.cliente, fecha_compromiso=fecha, tarimas=tarimas,
-        )
-        for sku, cantidad in form.cleaned_data["lineas"]:
-            LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=cantidad)
-        registrar_evento(
-            "asn", orden.folio, "anunciada_portal",
-            actor=request.user, cliente=request.cliente,
-            delta={
-                "fecha_compromiso": str(fecha),
-                "tarimas": tarimas,
-                "lineas": [
-                    {"sku": sku.codigo, "cantidad": cantidad}
-                    for sku, cantidad in form.cleaned_data["lineas"]
-                ],
-            },
-            motivo="Entrega anunciada desde el portal del cliente.",
+        orden = anunciar_asn(
+            request.cliente, fecha, tarimas, form.cleaned_data["lineas"], request.user,
+            origen="portal", motivo="Entrega anunciada desde el portal del cliente.",
         )
         _avisar_piso_asn(orden)
         horas = settings.TORRE["SLA_RECEPCION_HORAS_CONTRACTUAL"]
@@ -654,6 +643,7 @@ def recepciones(request):
         "seccion": "recepciones",
         "ordenes": ordenes,
         "form": form,
+        "lotes_recientes": lotes_recientes_cliente(request.cliente),
     })
 
 

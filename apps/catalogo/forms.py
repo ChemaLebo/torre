@@ -20,6 +20,7 @@ class ConRenglonesSKU:
 
     renglones_iniciales = 6
     excluir_kits = False  # ASN lo prende: recibir un kit fabricaría stock inexistente
+    con_lotes = False  # ASN lo prende: cada renglón trae lote y caducidad opcionales
     error_renglon_incompleto = "Completa producto y piezas en cada renglón que uses."
 
     def _armar_renglones(self, cliente):
@@ -47,24 +48,59 @@ class ConRenglonesSKU:
                 widget=forms.NumberInput(attrs={"placeholder": "Piezas"}),
                 error_messages={"min_value": "Las piezas deben ser al menos 1."},
             )
+            if self.con_lotes:
+                self.fields[f"lote_{i}"] = forms.CharField(
+                    required=False, max_length=60, label="Lote",
+                    widget=forms.TextInput(attrs={
+                        "placeholder": "L-2026-09", "class": "mono", "autocomplete": "off",
+                        "list": "lotes-recientes",
+                    }),
+                )
+                self.fields[f"caducidad_{i}"] = forms.DateField(
+                    required=False, label="Caducidad",
+                    widget=forms.DateInput(attrs={"type": "date"}),
+                    error_messages={"invalid": "Esa caducidad no se entiende; elígela del calendario."},
+                )
 
     def renglones(self):
         """Pares (producto, piezas) para pintar la tabla del formulario."""
         for i in self.indices_renglones:
             yield self[f"sku_{i}"], self[f"cantidad_{i}"]
 
+    def renglones_con_lote(self):
+        """(producto, piezas, lote, caducidad) para los forms con `con_lotes`."""
+        for i in self.indices_renglones:
+            yield self[f"sku_{i}"], self[f"cantidad_{i}"], self[f"lote_{i}"], self[f"caducidad_{i}"]
+
     def consolidar_renglones(self, datos):
-        """[(SKU, piezas)] consolidando duplicados; ValidationError si un renglón cojea."""
+        """Renglones consolidados; ValidationError si un renglón cojea.
+
+        Sin lotes: [(SKU, piezas)] sumando duplicados por SKU. Con lotes:
+        [(SKU, piezas, lote_codigo, fecha_caducidad)] sumando por (SKU, lote).
+        """
         qs = SKU.objects.filter(cliente=self.cliente, activo=True)
         if self.excluir_kits:
             qs = qs.filter(es_kit=False)
         activos = {str(s.pk): s for s in qs}
         consolidadas = {}
+        caducidades = {}
         for i in self.indices_renglones:
             sku = activos.get(datos.get(f"sku_{i}") or "")
             cantidad = datos.get(f"cantidad_{i}")
             if sku is not None and cantidad:
-                consolidadas[sku] = consolidadas.get(sku, 0) + cantidad
+                if self.con_lotes:
+                    lote = (datos.get(f"lote_{i}") or "").strip()
+                    clave = (sku, lote)
+                    if datos.get(f"caducidad_{i}"):
+                        caducidades[clave] = datos[f"caducidad_{i}"]
+                else:
+                    clave = sku
+                consolidadas[clave] = consolidadas.get(clave, 0) + cantidad
             elif sku is not None or cantidad:
                 raise forms.ValidationError(self.error_renglon_incompleto)
-        return list(consolidadas.items())
+        if not self.con_lotes:
+            return list(consolidadas.items())
+        return [
+            (sku, piezas, lote, caducidades.get((sku, lote)))
+            for (sku, lote), piezas in consolidadas.items()
+        ]

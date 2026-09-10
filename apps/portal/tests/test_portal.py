@@ -234,6 +234,16 @@ class TestRecepciones(BasePortal):
             ).exists()
         )
 
+    def test_anunciar_con_lote_lo_guarda_en_la_linea(self):
+        self.entrar()
+        fecha = timezone.localdate() + timedelta(days=3)
+        self.client.post(reverse("portal:recepciones"), {
+            "fecha_compromiso": fecha.isoformat(),
+            "sku_1": str(self.sku.pk), "cantidad_1": "12", "lote_1": "L-PORTAL", "caducidad_1": "2027-04-01",
+        })
+        linea = OrdenEntrada.objects.filter(cliente=self.colima).latest("creado").lineas.get()
+        self.assertEqual((linea.lote_codigo, linea.fecha_caducidad.isoformat()), ("L-PORTAL", "2027-04-01"))
+
     def test_anunciar_sin_lineas_no_crea_nada(self):
         self.entrar()
         antes = OrdenEntrada.objects.count()

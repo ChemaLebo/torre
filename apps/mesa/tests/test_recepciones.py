@@ -138,3 +138,28 @@ class AltaAsnMesaTests(BaseRecepcionesMesa):
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "de hoy en adelante")
         self.assertEqual(OrdenEntrada.objects.count(), 0)
+
+
+class AltaAsnConLoteTests(BaseRecepcionesMesa):
+    def test_alta_guarda_lote_y_caducidad_por_linea(self):
+        self.entrar_mesa()
+        fecha = timezone.localdate() + timedelta(days=2)
+        respuesta = self.client.post(self.url, {
+            "cliente": "colima", "fecha_compromiso": fecha.isoformat(),
+            "sku_1": str(self.sku_colima.pk), "cantidad_1": "24", "lote_1": "L-2026-09", "caducidad_1": "2027-03-01",
+            "sku_2": str(self.sku_colima.pk), "cantidad_2": "6", "lote_2": "L-2026-10",
+        })
+        self.assertRedirects(respuesta, self.url)
+        orden = OrdenEntrada.objects.get(cliente=self.colima)
+        lineas = {l.lote_codigo: l for l in orden.lineas.all()}
+        self.assertEqual(set(lineas), {"L-2026-09", "L-2026-10"})
+        self.assertEqual(lineas["L-2026-09"].fecha_caducidad.isoformat(), "2027-03-01")
+        self.assertIsNone(lineas["L-2026-10"].fecha_caducidad)
+        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=orden.folio, accion="anunciada_mesa")
+        self.assertEqual(evento.delta["lineas"][0]["lote"], "L-2026-09")
+
+    def test_form_muestra_columnas_de_lote_y_datalist(self):
+        self.entrar_mesa()
+        respuesta = self.client.get(self.url + "?cliente=colima")
+        self.assertContains(respuesta, 'name="lote_1"')
+        self.assertContains(respuesta, 'id="lotes-recientes"')

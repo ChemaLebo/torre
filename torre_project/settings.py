@@ -256,6 +256,9 @@ TORRE = {
     "META_PROFIT_MES_MXN": 100000,
     # ── Relay de impresión: fallas del agente antes de marcar ERROR ──
     "IMPRESION_MAX_INTENTOS": 5,
+    # Lotes sugeridos al ubicar/anunciar: además de los que tienen stock, los
+    # creados en esta ventana (un lote suele usarse una sola vez).
+    "LOTES_SUGERENCIA_DIAS": 90,
 }
 
 # ── Relay de impresión (Torre en VPS, térmica en bodega) ──

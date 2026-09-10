@@ -29,8 +29,8 @@
       {{ form.tarimas.errors }}
 
       <div id="renglones-asn">
-        {% for sku_campo, cantidad_campo in form.renglones %}
-        <div class="grid g2 renglon-asn">
+        {% for sku_campo, cantidad_campo, lote_campo, caducidad_campo in form.renglones_con_lote %}
+        <div class="grid g4 renglon-asn">
           <div>
             <label for="{{ sku_campo.id_for_label }}">{{ sku_campo.label }}</label>
             {{ sku_campo }}
@@ -41,9 +41,22 @@
             {{ cantidad_campo }}
             {{ cantidad_campo.errors }}
           </div>
+          <div>
+            <label for="{{ lote_campo.id_for_label }}">{{ lote_campo.label }}</label>
+            {{ lote_campo }}
+            {{ lote_campo.errors }}
+          </div>
+          <div>
+            <label for="{{ caducidad_campo.id_for_label }}">{{ caducidad_campo.label }}</label>
+            {{ caducidad_campo }}
+            {{ caducidad_campo.errors }}
+          </div>
         </div>
         {% endfor %}
       </div>
+      <datalist id="lotes-recientes">
+        {% for codigo in lotes_recientes %}<option value="{{ codigo }}"></option>{% endfor %}
+      </datalist>
       <div class="mt"><button class="btn chico" type="button" id="btn-mas-renglon">+ Agregar renglón</button></div>
 
       <div class="mt">
@@ -77,6 +90,16 @@
         });
         nueva.querySelectorAll("ul.errorlist").forEach(function (e) { e.remove(); });
         caja.appendChild(nueva);
+      });
+      /* Un lote tecleado en un renglón se sugiere en los demás de la misma ASN. */
+      var lista = document.getElementById("lotes-recientes");
+      caja.addEventListener("change", function (evento) {
+        var campo = evento.target;
+        if (!lista || !campo.name || campo.name.indexOf("lote_") !== 0) return;
+        var valor = campo.value.trim();
+        if (!valor) return;
+        var existe = Array.prototype.some.call(lista.options, function (o) { return o.value === valor; });
+        if (!existe) { var opcion = document.createElement("option"); opcion.value = valor; lista.appendChild(opcion); }
       });
     })();
     </script>
