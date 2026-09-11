@@ -924,7 +924,7 @@ def inventario_reconciliar(request):
                 request,
                 f"Reconciliación aplicada: {resumen['ajustes']} ajuste(s) "
                 f"({', '.join(resumen['folios'][:8])}{'…' if len(resumen['folios']) > 8 else ''}), "
-                f"{resumen['omitidos']} renglón(es) sin cambio.",
+                f"{resumen['omitidos']} renglón(es) sin cambio; {resumen['conteos']} conteo(s) registrados.",
             )
             return _redirect_inventario(cliente=cliente.slug)
 

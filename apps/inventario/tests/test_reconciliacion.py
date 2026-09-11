@@ -212,6 +212,20 @@ class ReconciliarTests(BaseReconciliacion):
         self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE), 20)
         self.assertEqual(Conteo.objects.count(), 0)
 
+    def test_renglon_sin_cambio_tambien_deja_conteo_y_cierra_la_tarea(self):
+        from apps.inventario.models import TareaConteo
+        from apps.inventario.services import generar_conteo_ciclico
+
+        tareas = {t.sku_id: t for t in generar_conteo_ciclico()}
+        resumen = self.aplicar(csv_texto("COLIMITA-SIX,,,,,,20", "PARAMO-SIX,,L-A,,,,5"))
+        self.assertEqual((resumen["ajustes"], resumen["omitidos"], resumen["conteos"]), (1, 1, 2))
+        conteos = {c.sku.codigo: c for c in Conteo.objects.all()}
+        self.assertEqual((conteos["COLIMITA-SIX"].esperado, conteos["COLIMITA-SIX"].contado), (20, 20))
+        self.assertEqual(Ajuste.objects.count(), 1)
+        if self.sku.pk in tareas:
+            tareas[self.sku.pk].refresh_from_db()
+            self.assertEqual(tareas[self.sku.pk].estado, TareaConteo.COMPLETADA)
+
     def test_la_firma_es_el_usuario_de_mesa_sin_doble_pin(self):
         self.aplicar(csv_texto("COLIMITA-SIX,,,,,,18"))
         ajuste = Ajuste.objects.get()

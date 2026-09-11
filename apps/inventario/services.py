@@ -1434,8 +1434,11 @@ def reconciliar_conteo(cliente, filas, motivo, actor, nota="", archivo=""):
     todo o nada. La firma es el usuario de Mesa que aplica (`actor`), tras
     confirmar el resumen en pantalla; no pide doble PIN (Mesa opera como admin).
 
+    Todo renglón contado deja Conteo, también los que coinciden con el sistema
+    (sin ajuste): la reconciliación ES un conteo físico, así el "último conteo"
+    del SKU se actualiza y la tarea de conteo cíclico del día queda completada.
     NO abre incidencias DES: una reconciliación es, por definición, una lista de
-    descuadres ya asumidos. Regresa el resumen {"ajustes", "omitidos", "folios"}.
+    descuadres ya asumidos. Regresa {"ajustes", "omitidos", "conteos", "folios"}.
     """
     if motivo not in dict(Ajuste.MOTIVOS):
         validos = ", ".join(clave for clave, _ in Ajuste.MOTIVOS)
@@ -1463,24 +1466,46 @@ def reconciliar_conteo(cliente, filas, motivo, actor, nota="", archivo=""):
             if lote is not None and lote.fecha_caducidad is None and r["fecha_caducidad"]:
                 lote.fecha_caducidad = r["fecha_caducidad"]
                 lote.save(update_fields=["fecha_caducidad"])
-            conteo = Conteo.objects.create(
-                sku=sku, contador=_actor_str(actor) or "reconciliacion",
-                esperado=r["vendible_actual"], contado=r["contado"],
-            )
+            conteo = _conteo_reconciliacion(r, actor)
             ajuste = _aplicar_ajuste_firmado(
                 sku, r["delta"], motivo, firmante, firmante,
                 lote=lote, conteo=conteo, ubicacion=r["ubicacion_obj"],
             )
             folios.append(ajuste.folio)
+        # Renglones contados que coinciden con el sistema: conteo sin ajuste.
+        sin_cambio = [
+            r for r in previa["renglones"]
+            if not r["error"] and r["sku"] is not None and r["contado"] is not None and r["omitir"]
+        ]
+        for r in sin_cambio:
+            _conteo_reconciliacion(r, actor)
         registrar_evento(
             "inventario", cliente.slug, "reconciliacion_csv", actor=actor, cliente=cliente,
             delta={
                 "archivo": archivo, "renglones": len(previa["renglones"]),
                 "ajustes": len(folios), "omitidos": previa["omitidos"],
+                "conteos": len(folios) + len(sin_cambio),
                 "no_contados": len(previa["no_contados"]), "folios": folios,
                 "firma": firmante.username, "doble_firma": False,
                 "avisos": previa["avisos"][:50],
             },
             motivo=(nota or f"Reconciliación de inventario por CSV ({archivo})")[:300],
         )
-    return {"ajustes": len(folios), "omitidos": previa["omitidos"], "folios": folios}
+    return {
+        "ajustes": len(folios), "omitidos": previa["omitidos"],
+        "conteos": len(folios) + len(sin_cambio), "folios": folios,
+    }
+
+
+def _conteo_reconciliacion(renglon, actor):
+    """Conteo de un renglón de la reconciliación (esperado = vendible que se
+    comparó, contado = lo capturado) y cierre de la tarea cíclica del día del
+    SKU si estaba pendiente. Sin umbral ni DES: eso lo decide la reconciliación."""
+    conteo = Conteo.objects.create(
+        sku=renglon["sku"], contador=_actor_str(actor) or "reconciliacion",
+        esperado=renglon["vendible_actual"], contado=renglon["contado"],
+    )
+    TareaConteo.objects.filter(
+        sku=renglon["sku"], fecha=timezone.localdate(), estado=TareaConteo.PENDIENTE,
+    ).update(estado=TareaConteo.COMPLETADA, conteo=conteo)
+    return conteo
