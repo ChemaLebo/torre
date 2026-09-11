@@ -123,7 +123,10 @@ class Command(BaseCommand):
         return timezone.make_aware(datetime.combine(fecha, time(hora, minuto)))
 
     def _fechar_pedido(self, pedido, **campos):
+        """Fecha los pasos de un pedido demo; `actualizado` queda en el último
+        paso fechado para que el reporte del día lo ubique en su día real."""
         from apps.pedidos.models import Pedido
+        campos.setdefault("actualizado", max(v for v in campos.values() if v is not None))
         Pedido.objects.filter(pk=pedido.pk).update(**campos)
         pedido.refresh_from_db()
 
@@ -803,6 +806,27 @@ class Command(BaseCommand):
             self._fechar_guia(guia, creado=self._dt(2, 10, 35), ts_ultimo_movimiento=self._dt(1, 8, 40))
         resultado["cancelacion_tardia"] = (pedido, creado)
 
+        # ── C16 · ENTREGADO HOY en local (creado ayer): paso cumplido hoy + POD ──
+        pedido, creado = self._crear_pedido(t_mx, self._payload(
+            5018, "Marisol Peña", "+523121234618", "28019", "Colima", "Colima",
+            [(skus["PARAMO-SIX"], 1), (skus["TICUS-C12"], 1)],
+        ))
+        if creado:
+            guia = self._avanzar(pedido, "RECOLECTADO")
+            guia.transicionar("ENTREGADO", motivo="POD de entrega local: firma y foto en la puerta")
+            pedido.transicionar("ENTREGADO", actor="jefe", motivo="Entrega local: recibió Marisol Peña.")
+            EvidenciaFoto.objects.create(
+                entidad="entrega_local", entidad_id=str(pedido.pk), tipo="pod",
+                archivo=ContentFile(PNG_1PX, name=f"{pedido.folio}-pod.png"), tomada_por="jefe",
+            )
+            self._fechar_pedido(
+                pedido, creado=self._dt(1, 16, 10), ts_picking=self._dt(1, 16, 30),
+                ts_empacado=self._dt(1, 17, 5), ts_guia=self._dt(1, 17, 10),
+                ts_recolectado=self._dt(0, 9, 0), ts_entregado=self._dt(0, 11, 20),
+            )
+            self._fechar_guia(guia, creado=self._dt(1, 17, 10), ts_ultimo_movimiento=self._dt(0, 11, 20))
+        resultado["entregado_hoy"] = (pedido, creado)
+
         # ── N1 · Mezcal Nocturno ENTREGADO (aislamiento multi-tenant) ──
         pedido, creado = self._crear_pedido(t_noc, self._payload(
             5015, "Camila Ortega", "+525512345615", "06140", "Ciudad de México", "CDMX",
@@ -1127,6 +1151,7 @@ class Command(BaseCommand):
             "reingreso": getattr(cancelado.reingresos.first(), "folio", "—"),
             "retornado": pedidos["retornado"][0].folio,
             "tardia": pedidos["cancelacion_tardia"][0].folio,
+            "entregado_hoy": pedidos["entregado_hoy"][0].folio,
         }
         self._resumen()
 
@@ -1176,6 +1201,9 @@ class Command(BaseCommand):
             w(f"  Reingresos por decidir (Mesa → Recepciones): {f['retornado']} retornado · "
               f"{f['tardia']} cancelación tardía")
             w("  EN_EMPAQUE huérfano (2 CAYACO-SIX): python manage.py limpiar_en_empaque [--aplicar]")
+            w(f"  Reporte del día (Mesa y portal → Reportes): creados hoy PED-00007…00013, "
+              f"entregado hoy con POD {f['entregado_hoy']} (creado ayer), cancelado hoy {f['cancelado']}; "
+              "ayer y antes: el resto, con el selector de fecha")
             w("")
         # División de envíos + tokens de rastreo para los pedidos del demo
         try:

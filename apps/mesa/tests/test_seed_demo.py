@@ -95,6 +95,29 @@ class SeedDemoTests(TestCase):
         self.assertEqual(reingreso.pedido.reingreso_estado, Pedido.REINGRESADO)
         self.assertEqual(reingreso.lineas.get().cantidad_recibida, 1)
 
+    def test_reporte_del_dia_tiene_casos_de_hoy_y_de_ayer(self):
+        from django.utils import timezone
+
+        from apps.pedidos import reportes
+        from apps.pedidos.models import Pedido
+
+        hoy = timezone.localdate()
+        de_hoy = list(reportes.pedidos_con_actividad(hoy))
+        estados_hoy = {p.estado for p in de_hoy}
+        for estado in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA,
+                       Pedido.RECOLECTADO, Pedido.CANCELADO, Pedido.ENTREGADO):
+            self.assertIn(estado, estados_hoy)
+        entregado_hoy = Pedido.objects.get(shopify_order_id="5018")
+        self.assertIn(entregado_hoy, de_hoy)
+        self.assertLess(entregado_hoy.creado.date(), hoy)
+        # Lo fechado días atrás NO cae en hoy: actualizado sigue al último paso.
+        self.assertNotIn(Pedido.objects.get(shopify_order_id="5001"), de_hoy)
+        [r] = reportes.armar_reporte([entregado_hoy], con_operador=True)
+        etapas = {e["clave"]: e for e in r["etapas"]}
+        self.assertEqual(len(etapas["empaque"]["fotos"]), 2)
+        self.assertEqual(len(etapas["entrega"]["fotos"]), 1)
+        self.assertEqual(etapas["entrega"]["operador"], "jefe")
+
     def test_timestamps_escalonados_y_coherentes(self):
         from apps.pedidos.models import Pedido
 
