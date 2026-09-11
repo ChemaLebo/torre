@@ -6,7 +6,7 @@ exporta datos de otro cliente — ni siquiera adivinando IDs.
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -317,6 +317,40 @@ class TestRecepciones(BasePortal):
         self.entrar()
         respuesta = self.client.get(reverse("portal:recepciones"))
         self.assertContains(respuesta, orden.folio)
+
+
+@override_settings(MEDIA_ROOT="/tmp/torre-test-reporte-portal")
+class TestReporteDia(BasePortal):
+    def test_solo_mis_pedidos_sin_operador(self):
+        from django.core.files.base import ContentFile
+
+        from apps.core.models import EvidenciaFoto
+
+        self.pedido.transicionar(Pedido.EN_PICKING, actor=self.karina)
+        foto = EvidenciaFoto.objects.create(
+            entidad="pedido", entidad_id=str(self.pedido.pk), tipo="contenido",
+            archivo=ContentFile(b"\x89PNG", name="c.png"), tomada_por="piso1",
+        )
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:reporte_dia"))
+        self.assertContains(respuesta, self.pedido.folio)
+        self.assertNotContains(respuesta, self.pedido_ajeno.folio)
+        self.assertContains(respuesta, reverse("core:evidencia", args=[foto.pk]))
+        self.assertNotContains(respuesta, "· karina")   # el portal no ve quién
+        self.assertNotContains(respuesta, "(piso1)")
+        self.assertNotContains(respuesta, "Toda la bodega")
+        self.assertContains(respuesta, 'data-grupo="portal-reportes"')
+
+    def test_csv_del_cliente(self):
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:reporte_dia_csv"))
+        lineas = respuesta.content.decode("utf-8-sig").splitlines()
+        self.assertEqual(lineas[0].split(",")[0], "folio")
+        self.assertTrue(any(self.pedido.folio in l for l in lineas[1:]))
+        self.assertFalse(any(self.pedido_ajeno.folio in l for l in lineas[1:]))
+
+    def test_anonimo_va_a_login(self):
+        self.assertEqual(self.client.get(reverse("portal:reporte_dia")).status_code, 302)
 
 
 class TestExportar(BasePortal):

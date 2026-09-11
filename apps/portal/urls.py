@@ -19,4 +19,6 @@ urlpatterns = [
     path("manuales/", views.manuales, name="manuales"),
     path("manuales/<slug:slug>/", views.manual_detalle, name="manual_detalle"),
     path("exportar/", views.exportar, name="exportar"),
+    path("reportes/dia/", views.reporte_dia, name="reporte_dia"),
+    path("reportes/dia.csv", views.reporte_dia_csv, name="reporte_dia_csv"),
 ]

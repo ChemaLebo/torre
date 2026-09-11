@@ -522,6 +522,15 @@ details.colapsable > summary::after { content: "▾"; margin-left: auto; color: 
 details.colapsable[open] > summary::after { content: "▴"; }
 details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 
+/* ── Reporte del día (mesa:reporte_dia · portal:reporte_dia) ── */
+.reporte-pedido > summary { flex-wrap: wrap; gap: 10px 14px; font-family: var(--body); letter-spacing: 0; }
+.reporte-pedido > summary a { position: relative; z-index: 1; }
+.etapas { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
+.etapa { border: 1px solid var(--hair); border-radius: var(--r); padding: 10px 12px; background: var(--panel-2); }
+.etapa.pendiente { opacity: .55; }
+.etapa-cabeza { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.etapa .fotos img { width: 96px; height: 96px; }
+
 /* ── Chips de ubicaciones / SKUs (tap en vez de teclear) ── */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {

@@ -1183,6 +1183,56 @@ def recepciones(request):
     })
 
 
+def _reporte_dia_datos(request):
+    """(fecha, cliente, renglones) del reporte del día de Mesa: toda la bodega o
+    un cliente (?cliente=slug), con operador por etapa."""
+    from apps.pedidos.reportes import armar_reporte, fecha_desde_get, pedidos_con_actividad  # lazy por contrato
+
+    fecha, valida = fecha_desde_get(request.GET.get("fecha"))
+    if not valida:
+        messages.warning(request, "Esa fecha no se entiende; se muestra hoy.")
+    slug = (request.GET.get("cliente") or "").strip()
+    cliente = get_object_or_404(Cliente, slug=slug) if slug else None
+    return fecha, cliente, armar_reporte(pedidos_con_actividad(fecha, cliente), con_operador=True)
+
+
+@rol_requerido("mesa")
+def reporte_dia(request):
+    """Reporte del día: pedidos con actividad en la fecha, evidencia por etapa
+    y quién hizo cada paso. Misma plantilla que el portal (reportes/reporte_dia.html)."""
+    from apps.pedidos.reportes import contexto_fecha, resumen_estados  # lazy por contrato
+
+    fecha, cliente, renglones = _reporte_dia_datos(request)
+    params = f"?fecha={fecha.isoformat()}" + (f"&cliente={cliente.slug}" if cliente else "")
+    contexto = {
+        "seccion": "reportes", "es_mesa": True, "cliente": cliente,
+        "clientes": Cliente.objects.filter(activo=True).order_by("nombre"),
+        "renglones": renglones, "resumen": resumen_estados(renglones),
+        "url_base": reverse("mesa:reporte_dia"), "url_csv": reverse("mesa:reporte_dia_csv") + params,
+        "url_incidencia": "mesa:incidencia_detalle",
+    }
+    contexto.update(contexto_fecha(fecha))
+    return render(request, "reportes/reporte_dia.html", contexto)
+
+
+@rol_requerido("mesa")
+def reporte_dia_csv(request):
+    """El reporte del día como CSV, mismos filtros que la página."""
+    from apps.pedidos.reportes import COLUMNAS_CSV, filas_csv  # lazy por contrato
+
+    fecha, cliente, renglones = _reporte_dia_datos(request)
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    sufijo = f"-{cliente.slug}" if cliente else ""
+    respuesta["Content-Disposition"] = f'attachment; filename="reporte-{fecha.isoformat()}{sufijo}.csv"'
+    respuesta.write("\ufeff")
+    escritor = csv.writer(respuesta)
+    escritor.writerow(COLUMNAS_CSV)
+    escritor.writerows(filas_csv(
+        renglones, lambda foto: request.build_absolute_uri(reverse("core:evidencia", args=[foto.pk])),
+    ))
+    return respuesta
+
+
 @rol_requerido("mesa")
 def recepciones_plantilla(request):
     """Formato CSV del anuncio de ASN de un cliente (?cliente=slug&sku=<pk>&sku=…);

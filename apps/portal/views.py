@@ -650,6 +650,53 @@ def recepciones(request):
     })
 
 
+def _reporte_dia_datos(request):
+    """(fecha, renglones) del reporte del día del cliente del portal, sin operadores."""
+    from apps.pedidos.reportes import armar_reporte, fecha_desde_get, pedidos_con_actividad  # lazy por contrato
+
+    fecha, valida = fecha_desde_get(request.GET.get("fecha"))
+    if not valida:
+        messages.warning(request, "Esa fecha no se entiende; se muestra hoy.")
+    return fecha, armar_reporte(pedidos_con_actividad(fecha, request.cliente), con_operador=False)
+
+
+@portal_requerido
+def reporte_dia(request):
+    """Reporte del día del cliente: sus pedidos con actividad en la fecha y la
+    evidencia por etapa. Misma plantilla que Mesa, sin el quién."""
+    from django.urls import reverse
+
+    from apps.pedidos.reportes import contexto_fecha, resumen_estados  # lazy por contrato
+
+    fecha, renglones = _reporte_dia_datos(request)
+    contexto = {
+        "seccion": "reportes", "es_mesa": False, "cliente": request.cliente, "clientes": [],
+        "renglones": renglones, "resumen": resumen_estados(renglones),
+        "url_base": reverse("portal:reporte_dia"),
+        "url_csv": reverse("portal:reporte_dia_csv") + f"?fecha={fecha.isoformat()}",
+        "url_incidencia": "portal:incidencia_detalle",
+    }
+    contexto.update(contexto_fecha(fecha))
+    return render(request, "reportes/reporte_dia.html", contexto)
+
+
+@portal_requerido
+def reporte_dia_csv(request):
+    """El reporte del día del cliente como CSV."""
+    from django.urls import reverse
+
+    from apps.pedidos.reportes import COLUMNAS_CSV, filas_csv  # lazy por contrato
+
+    fecha, renglones = _reporte_dia_datos(request)
+    respuesta = _respuesta_csv(f"reporte-{fecha.isoformat()}.csv")
+    w = csv.writer(respuesta)
+    w.writerow(COLUMNAS_CSV)
+    w.writerows(filas_csv(
+        renglones, lambda foto: request.build_absolute_uri(reverse("core:evidencia", args=[foto.pk])),
+    ))
+    return respuesta
+
+
 @portal_requerido
 def recepciones_plantilla(request):
     """Formato CSV del anuncio de ASN (?sku=<pk>&sku=…); sin SKUs marcados baja

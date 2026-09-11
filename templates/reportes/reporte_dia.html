@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Reporte del día · {{ fecha|date:"d/M/Y" }}{% endblock %}
+{% block content %}
+{# Compartida por Mesa (es_mesa: selector de cliente y operador por etapa) y portal. #}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Reportes{% if cliente %} · {{ cliente.nombre }}{% endif %}</div>
+    <h1>Reporte del día</h1>
+  </div>
+  <div class="quien"><b>{{ renglones|length }}</b> pedido(s) con actividad el {{ fecha|date:"l d/M/Y" }}</div>
+</div>
+
+<div class="card mb">
+  <form method="get" class="fila">
+    <div>
+      <label for="f-fecha">Fecha</label>
+      <input type="date" id="f-fecha" name="fecha" value="{{ fecha|date:'Y-m-d' }}" max="{{ hoy|date:'Y-m-d' }}">
+    </div>
+    {% if es_mesa %}
+    <div style="flex:1;min-width:200px">
+      <label for="f-cliente">Cliente</label>
+      <select id="f-cliente" name="cliente">
+        <option value="">Toda la bodega</option>
+        {% for c in clientes %}<option value="{{ c.slug }}" {% if cliente and cliente.pk == c.pk %}selected{% endif %}>{{ c.nombre }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div class="fila" style="align-self:flex-end">
+      <button class="btn primario" type="submit">Ver</button>
+      <a class="btn" href="{{ url_base }}?fecha={{ ayer|date:'Y-m-d' }}{% if es_mesa and cliente %}&cliente={{ cliente.slug }}{% endif %}">◀ Día anterior</a>
+      {% if manana %}<a class="btn" href="{{ url_base }}?fecha={{ manana|date:'Y-m-d' }}{% if es_mesa and cliente %}&cliente={{ cliente.slug }}{% endif %}">Día siguiente ▶</a>{% endif %}
+      {% if fecha != hoy %}<a class="btn" href="{{ url_base }}{% if es_mesa and cliente %}?cliente={{ cliente.slug }}{% endif %}">Hoy</a>{% endif %}
+      <a class="btn" href="{{ url_csv }}">Exportar CSV</a>
+    </div>
+  </form>
+  {% if resumen %}
+  <div class="fila mt">
+    {% for nombre, pill, n in resumen %}<span class="pill {{ pill }}">{{ n }} · {{ nombre }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+{% for r in renglones %}
+<details class="colapsable reporte-pedido mb">
+  <summary>
+    <span class="mono"><b>{{ r.pedido.folio }}</b></span>
+    {% if r.shopify_url %}<a class="small" href="{{ r.shopify_url }}" target="_blank" rel="noopener" title="Abrir la orden en Shopify">Shopify ↗</a>{% endif %}
+    {% if es_mesa %}<span class="small muted">{{ r.pedido.cliente.nombre }}</span>{% endif %}
+    <span>{{ r.pedido.comprador_nombre|default:"—" }}</span>
+    <span class="pill {{ r.pill }}">{{ r.pedido.get_estado_display }}</span>
+    <span class="small">
+      {% if r.guia %}
+        {{ r.guia.carrier }}
+        {% if r.rastreo_url %}<a class="mono" href="{{ r.rastreo_url }}" target="_blank" rel="noopener" title="Rastreo del carrier">{{ r.guia.numero }} ↗</a>
+        {% else %}<span class="mono">{{ r.guia.numero|default:"sin número" }}</span>{% endif %}
+      {% else %}<span class="muted">sin guía</span>{% endif %}
+    </span>
+    <span class="small muted">{% if r.fotos_total %}{{ r.fotos_total }} foto(s) · {{ r.resumen_fotos }}{% else %}sin fotos{% endif %}</span>
+    {% for i in r.incidencias %}<span class="pill {% if i.abierta %}warn{% endif %}">{{ i.incidencia.folio }}</span>{% endfor %}
+  </summary>
+  <div class="colapsable-cuerpo">
+    <div class="etapas">
+      {% for e in r.etapas %}
+      <div class="etapa {% if not e.hecha %}pendiente{% endif %}">
+        <div class="etapa-cabeza">
+          <b>{{ e.etiqueta }}</b>
+          <span class="small muted">{% if e.hecha %}{{ e.ts|date:"d/M H:i" }}{% if e.operador %} · {{ e.operador }}{% endif %}{% else %}pendiente{% endif %}</span>
+        </div>
+        {% if e.fotos %}
+        <div class="fotos">
+          {% for f in e.fotos %}
+          <a href="{% url 'core:evidencia' f.foto.pk %}" target="_blank" rel="noopener" title="{{ f.etiqueta }}">
+            <img src="{% url 'core:evidencia' f.foto.pk %}" alt="{{ f.etiqueta }}" loading="lazy">
+          </a>
+          {% endfor %}
+        </div>
+        <div class="small muted mt">{% for f in e.fotos %}{{ f.etiqueta }}{% if es_mesa and f.foto.tomada_por %} ({{ f.foto.tomada_por }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+        {% elif e.hecha %}
+        <div class="small muted">Sin foto en esta etapa.</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if r.incidencias %}
+    <div class="small mt">
+      <b>Incidencias:</b>
+      {% for i in r.incidencias %}
+        <a href="{% url url_incidencia i.incidencia.pk %}">{{ i.incidencia.folio }}</a>
+        {{ i.incidencia.get_tipo_display }} · {{ i.incidencia.get_estado_display }}{% if i.fotos %} · {{ i.fotos }} foto(s) en la incidencia{% endif %}{% if not forloop.last %}; {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</details>
+{% empty %}
+<div class="card"><p class="muted">Sin pedidos con actividad ese día.</p></div>
+{% endfor %}
+
+{% endblock %}
