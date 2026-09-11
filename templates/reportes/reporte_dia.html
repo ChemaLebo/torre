@@ -60,14 +60,18 @@
     {% for i in r.incidencias %}<span class="pill {% if i.abierta %}warn{% endif %}">{{ i.incidencia.folio }}</span>{% endfor %}
   </summary>
   <div class="colapsable-cuerpo">
+    <div class="small muted linea-tiempo">
+      {% for e in r.hechas %}<span>{{ e.etiqueta }} <b>{{ e.ts|date:"d/M H:i" }}</b>{% if e.operador %} · {{ e.operador }}{% endif %}</span>{% endfor %}
+    </div>
+    <div class="mt"><b>Evidencias</b></div>
+    {% if r.con_fotos %}
     <div class="etapas">
-      {% for e in r.etapas %}
-      <div class="etapa {% if not e.hecha %}pendiente{% endif %}">
+      {% for e in r.con_fotos %}
+      <div class="etapa">
         <div class="etapa-cabeza">
           <b>{{ e.etiqueta }}</b>
-          <span class="small muted">{% if e.hecha %}{{ e.ts|date:"d/M H:i" }}{% if e.operador %} · {{ e.operador }}{% endif %}{% else %}pendiente{% endif %}</span>
+          <span class="small muted">{{ e.ts|date:"d/M H:i" }}{% if e.operador %} · {{ e.operador }}{% endif %}</span>
         </div>
-        {% if e.fotos %}
         <div class="fotos">
           {% for f in e.fotos %}
           <a href="{% url 'core:evidencia' f.foto.pk %}" target="_blank" rel="noopener" title="{{ f.etiqueta }}">
@@ -76,12 +80,12 @@
           {% endfor %}
         </div>
         <div class="small muted mt">{% for f in e.fotos %}{{ f.etiqueta }}{% if es_mesa and f.foto.tomada_por %} ({{ f.foto.tomada_por }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
-        {% elif e.hecha %}
-        <div class="small muted">Sin foto en esta etapa.</div>
-        {% endif %}
       </div>
       {% endfor %}
     </div>
+    {% else %}
+    <div class="small muted">Sin evidencia fotográfica.</div>
+    {% endif %}
     {% if r.incidencias %}
     <div class="small mt">
       <b>Incidencias:</b>

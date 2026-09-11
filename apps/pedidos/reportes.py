@@ -206,6 +206,8 @@ def armar_reporte(pedidos, con_operador=False):
                 conteo[e["clave"]] = len(e["fotos"])
         renglones.append({
             "pedido": p,
+            "hechas": [e for e in etapas if e["hecha"]],
+            "con_fotos": [e for e in etapas if e["fotos"]],
             "pill": PILL.get(p.estado, ""),
             "shopify_url": url_orden_shopify(p),
             "guia": guia,

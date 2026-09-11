@@ -538,7 +538,7 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 .reporte-pedido > summary a { position: relative; z-index: 1; }
 .etapas { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
 .etapa { border: 1px solid var(--hair); border-radius: var(--r); padding: 10px 12px; background: var(--panel-2); }
-.etapa.pendiente { opacity: .55; }
+.linea-tiempo { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 6px 0 2px; }
 .etapa-cabeza { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .etapa .fotos img { width: 96px; height: 96px; }
 
