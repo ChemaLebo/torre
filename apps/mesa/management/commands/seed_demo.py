@@ -415,6 +415,36 @@ class Command(BaseCommand):
             motivo="Resurtido anunciado desde el portal (cita en ventana mar/jue)",
         )
 
+    def _recepcion_con_faltante(self, colima, skus):
+        """Recepción chica cerrada con faltante (24 anunciadas de PIEDRA-LISA-SIX,
+        llegan 21) con foto de llegada: al cerrar, cerrar_recepcion abre sola la
+        incidencia DES ligada a la orden, que es lo que el acordeón de
+        Recepciones enlaza. Idempotente por la forma de su línea."""
+        from apps.catalogo.models import Ubicacion
+        from apps.catalogo.services import obtener_o_crear_lote
+        from apps.core.models import EvidenciaFoto
+        from apps.inventario.models import LineaASN, OrdenEntrada
+        from apps.inventario.services import cerrar_recepcion, recibir, ubicar
+
+        sku = skus["PIEDRA-LISA-SIX"]
+        if LineaASN.objects.filter(orden__cliente=colima, sku=sku, cantidad_anunciada=24, cantidad_recibida=21).exists():
+            return
+        orden = OrdenEntrada.objects.create(
+            cliente=colima, fecha_compromiso=timezone.localdate() - timedelta(days=2), tarimas=1,
+        )
+        linea = LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=24, lote_codigo="LPL-2608")
+        recibir(linea, 21, 0, actor="jefe")
+        EvidenciaFoto.objects.create(
+            entidad="asn", entidad_id=orden.folio, tipo="llegada",
+            archivo=ContentFile(PNG_1PX, name=f"{orden.folio}-llegada.png"), tomada_por="jefe",
+        )
+        ubicar(sku, 21, Ubicacion.objects.get(codigo="A-03-1"), obtener_o_crear_lote(sku, "LPL-2608"), actor="jefe")
+        cerrar_recepcion(orden, "jefe", tarimas_recibidas=1)
+        OrdenEntrada.objects.filter(pk=orden.pk).update(
+            creado=self._dt(2, 9, 0), ts_descarga_fin=self._dt(2, 9, 40), ts_vendible=self._dt(2, 10, 30),
+        )
+        self._folio_recepcion_faltante = orden.folio
+
     def _lote_extra(self, colima, skus):
         """Segundo lote de COLIMITA-SIX (LC-2512: caduca en 45 días, 12 piezas
         en A-02-1) que entró por una recepción chica ya cerrada. El FEFO lo
@@ -1136,6 +1166,7 @@ class Command(BaseCommand):
         self._stock_inicial(colima, skus, lotes, STOCK_COLIMA, dias_atras=7)
         self._stock_inicial(nocturno, skus, lotes, STOCK_NOCTURNO, dias_atras=7)
         self._lote_extra(colima, skus)
+        self._recepcion_con_faltante(colima, skus)
         asn = self._asn_anunciada(colima, skus)
         pedidos = self._pedidos(colima, nocturno, tiendas, skus, usuarios)
         self._escenarios_lote_a(colima, tiendas, skus)
@@ -1201,6 +1232,8 @@ class Command(BaseCommand):
             w(f"  Reingresos por decidir (Mesa → Recepciones): {f['retornado']} retornado · "
               f"{f['tardia']} cancelación tardía")
             w("  EN_EMPAQUE huérfano (2 CAYACO-SIX): python manage.py limpiar_en_empaque [--aplicar]")
+            w(f"  Recepción cerrada con faltante y DES ligada (acordeón de Recepciones): "
+              f"{getattr(self, '_folio_recepcion_faltante', 'ya sembrada')}")
             w(f"  Reporte del día (Mesa y portal → Reportes): creados hoy PED-00007…00013, "
               f"entregado hoy con POD {f['entregado_hoy']} (creado ayer), cancelado hoy {f['cancelado']}; "
               "ayer y antes: el resto, con el selector de fecha")

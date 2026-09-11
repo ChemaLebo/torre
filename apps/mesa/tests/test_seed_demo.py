@@ -251,8 +251,11 @@ class SeedDemoTests(TestCase):
         from apps.inventario.models import Conteo
 
         self.assertGreaterEqual(Conteo.objects.count(), 6)
-        # Las diferencias sembradas quedan bajo umbral: no se abren DES falsas.
-        self.assertFalse(Incidencia.objects.filter(tipo="DES").exists())
+        # Las diferencias de conteo sembradas quedan bajo umbral: no abren DES.
+        # La única DES es la de la recepción con faltante, ligada a su orden.
+        des = Incidencia.objects.get(tipo="DES")
+        self.assertIsNotNone(des.orden)
+        self.assertEqual(des.orden.lineas.get().cantidad_recibida, 21)
 
     # ── Plantillas, reglas y sync ──
 
