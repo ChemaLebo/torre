@@ -84,6 +84,7 @@ class CerrarRecepcionTests(InventarioTestCase):
         orden = self._orden_recibida(anunciada=10, ok=12)
         cerrar_recepcion(orden, "piso1")
         self.assertEqual(Incidencia.objects.filter(tipo="DES").count(), 1)
+        self.assertEqual(Incidencia.objects.get().orden, orden)  # ligada a su recepción
         apertura = Incidencia.objects.get().mensajes.first()
         self.assertIn("sobraron 2", apertura.texto)
 

@@ -615,7 +615,7 @@ def _avisar_piso_asn(orden):
 @portal_requerido
 def recepciones(request):
     from apps.catalogo.services import lotes_recientes_cliente  # lazy por contrato
-    from apps.inventario.services import anunciar_asn, skus_recibibles  # lazy por contrato
+    from apps.inventario.services import anunciar_asn, detalle_recepciones, skus_recibibles  # lazy por contrato
 
     form = FormAnuncioASN(request.cliente, request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
@@ -634,11 +634,11 @@ def recepciones(request):
             f"lista para vender en un máximo de {horas} horas.",
         )
         return redirect("portal:recepciones")
-    ordenes = [
+    ordenes = detalle_recepciones(
         _decorar_orden(orden)
         for orden in OrdenEntrada.objects.filter(cliente=request.cliente)
-        .prefetch_related("lineas__sku")
-    ]
+        .prefetch_related("lineas__sku", "incidencias")
+    )
     return render(request, "portal/recepciones.html", {
         "seccion": "recepciones",
         "ordenes": ordenes,

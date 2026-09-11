@@ -539,6 +539,9 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 .etapas { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
 .etapa { border: 1px solid var(--hair); border-radius: var(--r); padding: 10px 12px; background: var(--panel-2); }
 .linea-tiempo { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 6px 0 2px; }
+/* Acordeón de recepciones (portal y Mesa) */
+.recepcion-fila > summary { flex-wrap: wrap; gap: 10px 14px; font-family: var(--body); letter-spacing: 0; }
+.recepcion-fila tr.con-diferencia td { background: var(--warn-soft); }
 .etapa-cabeza { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .etapa .fotos img { width: 96px; height: 96px; }
 

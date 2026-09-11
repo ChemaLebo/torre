@@ -16,34 +16,23 @@
     <h3>Tus entregas</h3>
     <button class="btn primario" type="button" id="asn-abrir">Anunciar entrega</button>
   </div>
-  <div class="tabla-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Folio</th>
-          <th>Cita</th>
-          <th>Tarimas</th>
-          <th>Piezas</th>
-          <th>Estado</th>
-          <th>Avance</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for orden in ordenes %}
-          <tr>
-            <td class="mono">{{ orden.folio }}</td>
-            <td class="small">{% if orden.fecha_compromiso %}{{ orden.fecha_compromiso|date:"d/M/Y" }}{% else %}—{% endif %}</td>
-            <td class="mono">{% if orden.tarimas %}{{ orden.tarimas }}{% else %}—{% endif %}</td>
-            <td class="mono">{{ orden.total_recibido }}/{{ orden.total_anunciado }}{% if orden.total_danado %} <span class="pill crit">{{ orden.total_danado }} dañadas</span>{% endif %}</td>
-            <td><span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span></td>
-            <td><span class="pill {{ orden.reloj_clase }}">{{ orden.reloj_texto }}</span></td>
-          </tr>
-        {% empty %}
-          <tr><td colspan="6" class="muted">Todavía no anuncias entregas. Usa «Anunciar entrega» para la primera.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  {# Cada entrega es un acordeón: al expandirla, el detalle por SKU, fotos de llegada e incidencias. #}
+  {% for orden in ordenes %}
+  <details class="colapsable recepcion-fila mb">
+    <summary>
+      <span class="mono"><b>{{ orden.folio }}</b></span>
+      <span class="small muted">cita {% if orden.fecha_compromiso %}{{ orden.fecha_compromiso|date:"d/M/Y" }}{% else %}—{% endif %}</span>
+      <span class="small muted">Tarimas {% if orden.tarimas %}{{ orden.tarimas }}{% else %}—{% endif %}</span>
+      <span class="mono">{{ orden.total_recibido }}/{{ orden.total_anunciado }} piezas{% if orden.total_danado %} <span class="pill crit">{{ orden.total_danado }} dañadas</span>{% endif %}</span>
+      <span class="pill {{ orden.pill }}">{{ orden.get_estado_display }}</span>
+      <span class="pill {{ orden.reloj_clase }}">{{ orden.reloj_texto }}</span>
+      {% for inc in orden.incidencias_orden %}<span class="pill warn">{{ inc.folio }}</span>{% endfor %}
+    </summary>
+    {% include "includes/recepcion_detalle.html" with orden=orden url_incidencia="portal:incidencia_detalle" es_mesa=False %}
+  </details>
+  {% empty %}
+  <p class="muted">Todavía no anuncias entregas. Usa «Anunciar entrega» para la primera.</p>
+  {% endfor %}
   <p class="small mt">Si llega algo dañado o distinto a lo anunciado, lo documentamos con foto el mismo día y te avisamos con las diferencias.</p>
 </div>
 

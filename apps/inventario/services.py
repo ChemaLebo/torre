@@ -467,7 +467,7 @@ def _abrir_incidencia_discrepancia_recepcion(orden, discrepancias):
             None,
         )
     return incidencias_services.abrir_incidencia(
-        cliente=orden.cliente, tipo="DES", origen="auto", sku=sku, texto=texto,
+        cliente=orden.cliente, tipo="DES", origen="auto", sku=sku, texto=texto, orden=orden,
     )
 
 
@@ -478,6 +478,37 @@ def _notificar_recepcion_cerrada(orden):
     except ImportError:
         return None
     return enviar_recepcion_cerrada(orden)
+
+
+def detalle_recepciones(ordenes):
+    """Anota cada OrdenEntrada con lo que el acordeón de recepciones muestra al
+    expandirla: `detalle_lineas` (por SKU: anunciada, recibida, dañada, diferencia,
+    lote y caducidad; la diferencia solo se evalúa en órdenes CERRADAS),
+    `fotos_llegada` (evidencia de la recepción, ligada al folio) e
+    `incidencias_orden` (las DES nacidas de ella). Regresa la lista."""
+    from apps.core.models import EvidenciaFoto
+
+    ordenes = list(ordenes)
+    fotos = {}
+    for foto in EvidenciaFoto.objects.filter(
+        entidad="asn", entidad_id__in=[o.folio for o in ordenes],
+    ).order_by("ts", "pk"):
+        fotos.setdefault(foto.entidad_id, []).append(foto)
+    for orden in ordenes:
+        orden.evaluada = orden.estado == OrdenEntrada.CERRADA
+        orden.detalle_lineas = []
+        for linea in orden.lineas.all():
+            llegaron = linea.cantidad_recibida + linea.cantidad_danada
+            orden.detalle_lineas.append({
+                "sku": linea.sku, "anunciada": linea.cantidad_anunciada,
+                "recibida": linea.cantidad_recibida, "danada": linea.cantidad_danada,
+                "diferencia": llegaron - linea.cantidad_anunciada,
+                "lote": linea.lote_codigo, "caducidad": linea.fecha_caducidad,
+                "con_diferencia": orden.evaluada and (llegaron != linea.cantidad_anunciada or linea.cantidad_danada > 0),
+            })
+        orden.fotos_llegada = fotos.get(orden.folio, [])
+        orden.incidencias_orden = list(orden.incidencias.all())
+    return ordenes
 
 
 def skus_recibibles(cliente):

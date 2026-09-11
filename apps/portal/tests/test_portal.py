@@ -318,6 +318,31 @@ class TestRecepciones(BasePortal):
         respuesta = self.client.get(reverse("portal:recepciones"))
         self.assertContains(respuesta, orden.folio)
 
+    @override_settings(MEDIA_ROOT="/tmp/torre-test-recepcion-portal")
+    def test_acordeon_con_detalle_por_sku_fotos_e_incidencia(self):
+        from django.core.files.base import ContentFile
+
+        from apps.core.models import EvidenciaFoto
+
+        orden = OrdenEntrada.objects.create(cliente=self.colima, estado=OrdenEntrada.CERRADA)
+        LineaASN.objects.create(orden=orden, sku=self.sku, cantidad_anunciada=24, cantidad_recibida=20, cantidad_danada=2, lote_codigo="L-9")
+        foto = EvidenciaFoto.objects.create(
+            entidad="asn", entidad_id=orden.folio, tipo="llegada",
+            archivo=ContentFile(b"\x89PNG", name="llegada.png"), tomada_por="piso1",
+        )
+        des = abrir_incidencia(self.colima, "DES", "auto", texto="Diferencias", orden=orden)
+        ajena = OrdenEntrada.objects.create(cliente=self.otro)
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:recepciones"))
+        self.assertContains(respuesta, 'class="colapsable recepcion-fila')
+        self.assertContains(respuesta, "Evidencias de llegada")
+        self.assertContains(respuesta, "L-9")
+        self.assertContains(respuesta, ">-2<")  # diferencia: llegaron 22 de 24
+        self.assertContains(respuesta, reverse("core:evidencia", args=[foto.pk]))
+        self.assertContains(respuesta, reverse("portal:incidencia_detalle", args=[des.pk]))
+        self.assertNotContains(respuesta, "(piso1)")  # el portal no ve quién tomó la foto
+        self.assertNotContains(respuesta, ajena.folio)
+
 
 @override_settings(MEDIA_ROOT="/tmp/torre-test-reporte-portal")
 class TestReporteDia(BasePortal):

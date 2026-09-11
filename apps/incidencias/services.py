@@ -63,8 +63,9 @@ def _congelar_evidencia_pedido(pedido):
     ).update(congelada=True)
 
 
-def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None):
+def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None, orden=None):
     """Abre una incidencia con folio y relojes SLA. N por pedido permitidas.
+    `orden`: la recepción (OrdenEntrada) de la que nace, para las DES de recepción.
 
     - SLA de primera respuesta: 30 min si origen=comprador, 2 h en los demás
       casos (valores canónicos de settings.TORRE).
@@ -83,6 +84,7 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
         cliente=cliente,
         pedido=pedido,
         sku=sku,
+        orden=orden,
         tipo=tipo,
         origen=origen,
         prioridad=prioridad or PRIORIDAD_DEFAULT_POR_TIPO.get(tipo, Incidencia.P2),

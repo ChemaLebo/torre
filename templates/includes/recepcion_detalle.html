@@ -1,0 +1,55 @@
+{# Cuerpo del acordeón de una recepción (portal y Mesa): detalle por SKU, fotos de llegada e incidencias. #}
+{# Espera: orden (decorada por inventario.services.detalle_recepciones), url_incidencia (nombre de url), es_mesa. #}
+<div class="colapsable-cuerpo">
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>SKU</th><th>Lote</th>
+          <th class="derecha">Anunciado</th><th class="derecha">Recibido</th><th class="derecha">Dañado</th><th class="derecha">Diferencia</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in orden.detalle_lineas %}
+        <tr{% if l.con_diferencia %} class="con-diferencia"{% endif %}>
+          <td><span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span></td>
+          <td class="mono">{{ l.lote|default:"—" }}{% if l.caducidad %} <span class="small muted">cad. {{ l.caducidad|date:"d/M/Y" }}</span>{% endif %}</td>
+          <td class="derecha mono">{{ l.anunciada }}</td>
+          <td class="derecha mono">{{ l.recibida }}</td>
+          <td class="derecha mono">{% if l.danada %}<span class="pill crit">{{ l.danada }}</span>{% else %}0{% endif %}</td>
+          <td class="derecha mono">
+            {% if orden.evaluada %}
+              {% if l.diferencia == 0 and not l.danada %}<span class="pill ok">completo</span>
+              {% elif l.diferencia == 0 %}<span class="pill warn">con daño</span>
+              {% else %}<span class="pill {% if l.diferencia < 0 %}crit{% else %}warn{% endif %}">{{ l.diferencia|stringformat:"+d" }}</span>{% endif %}
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="muted">Sin renglones.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt"><b>Evidencias de llegada</b></div>
+  {% if orden.fotos_llegada %}
+  <div class="fotos">
+    {% for foto in orden.fotos_llegada %}
+    <a href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="Llegada · {{ foto.ts|date:'d/M H:i' }}">
+      <img src="{% url 'core:evidencia' foto.pk %}" alt="Foto de llegada {{ orden.folio }}" loading="lazy">
+    </a>
+    {% endfor %}
+  </div>
+  {% if es_mesa %}<div class="small muted mt">{% for foto in orden.fotos_llegada %}{{ foto.ts|date:"d/M H:i" }}{% if foto.tomada_por %} ({{ foto.tomada_por }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}</div>{% endif %}
+  {% else %}
+  <div class="small muted">Sin foto de llegada{% if not orden.evaluada %} todavía{% endif %}.</div>
+  {% endif %}
+  {% if orden.incidencias_orden %}
+  <div class="small mt">
+    <b>Incidencias:</b>
+    {% for inc in orden.incidencias_orden %}
+      <a href="{% url url_incidencia inc.pk %}">{{ inc.folio }}</a> {{ inc.get_tipo_display }} · {{ inc.get_estado_display }}{% if not forloop.last %}; {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>

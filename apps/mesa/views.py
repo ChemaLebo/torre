@@ -1107,7 +1107,7 @@ def recepciones(request):
     """
     from apps.catalogo.services import lotes_recientes_cliente  # lazy por contrato
     from apps.inventario.models import OrdenEntrada  # lazy: modelo de otra app
-    from apps.inventario.services import anunciar_asn, skus_recibibles  # lazy por contrato
+    from apps.inventario.services import anunciar_asn, detalle_recepciones, skus_recibibles  # lazy por contrato
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
@@ -1143,16 +1143,16 @@ def recepciones(request):
     estados_abiertos = [
         OrdenEntrada.ANUNCIADA, OrdenEntrada.EN_RECEPCION, OrdenEntrada.RECIBIDA,
     ]
-    abiertas = [
+    abiertas = detalle_recepciones(
         _decorar_asn(orden)
         for orden in OrdenEntrada.objects.filter(estado__in=estados_abiertos)
-        .select_related("cliente", "pedido").prefetch_related("lineas__sku")
-    ]
-    cerradas = [
+        .select_related("cliente", "pedido").prefetch_related("lineas__sku", "incidencias")
+    )
+    cerradas = detalle_recepciones(
         _decorar_asn(orden)
         for orden in OrdenEntrada.objects.filter(estado=OrdenEntrada.CERRADA)
-        .select_related("cliente").prefetch_related("lineas__sku")[:10]
-    ]
+        .select_related("cliente").prefetch_related("lineas__sku", "incidencias")[:10]
+    )
 
     from apps.incidencias.models import Incidencia  # lazy por contrato
     from apps.pedidos.services import reingresos_por_decidir  # lazy por contrato

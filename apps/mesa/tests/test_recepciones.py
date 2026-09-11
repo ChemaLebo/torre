@@ -175,6 +175,29 @@ class AltaAsnConLoteTests(BaseRecepcionesMesa):
             f"{self.sku_colima.codigo},{self.sku_colima.descripcion},,,AAAA-MM-DD",
         ])
 
+    def test_acordeon_de_recepciones_con_detalle_por_sku(self):
+        from django.core.files.base import ContentFile
+        from django.test import override_settings
+
+        from apps.core.models import EvidenciaFoto
+        from apps.incidencias.services import abrir_incidencia
+
+        orden = OrdenEntrada.objects.create(cliente=self.colima, estado=OrdenEntrada.CERRADA)
+        LineaASN.objects.create(orden=orden, sku=self.sku_colima, cantidad_anunciada=10, cantidad_recibida=10)
+        with override_settings(MEDIA_ROOT="/tmp/torre-test-recepcion-mesa"):
+            foto = EvidenciaFoto.objects.create(
+                entidad="asn", entidad_id=orden.folio, tipo="llegada",
+                archivo=ContentFile(b"\x89PNG", name="llegada.png"), tomada_por="piso1",
+            )
+        des = abrir_incidencia(self.colima, "DES", "auto", texto="Diferencias", orden=orden)
+        self.entrar_mesa()
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, 'class="colapsable recepcion-fila')
+        self.assertContains(respuesta, "completo")
+        self.assertContains(respuesta, reverse("core:evidencia", args=[foto.pk]))
+        self.assertContains(respuesta, "(piso1)")  # Mesa sí ve quién tomó la foto
+        self.assertContains(respuesta, reverse("mesa:incidencia_detalle", args=[des.pk]))
+
     def test_form_muestra_columnas_de_lote_y_datalist(self):
         from apps.catalogo.models import Lote
 

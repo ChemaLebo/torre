@@ -135,6 +135,11 @@ class Incidencia(MaquinaEstados):
     sku = models.ForeignKey(
         "catalogo.SKU", null=True, blank=True, on_delete=models.PROTECT, related_name="incidencias"
     )
+    # Recepción de la que nació (DES por diferencias contra lo anunciado):
+    # el portal y Mesa enlazan la incidencia desde el detalle de la recepción.
+    orden = models.ForeignKey(
+        "inventario.OrdenEntrada", null=True, blank=True, on_delete=models.PROTECT, related_name="incidencias"
+    )
     folio = models.CharField(max_length=20, unique=True, blank=True, editable=False)
     tipo = models.CharField(max_length=3, choices=TIPOS)
     prioridad = models.CharField(max_length=2, choices=PRIORIDADES, default=P2)
