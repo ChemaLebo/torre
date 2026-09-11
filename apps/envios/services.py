@@ -30,6 +30,18 @@ PROVEEDOR_99MIN = "99minutos"
 PROVEEDOR_MOCK = "mock"
 
 
+def url_rastreo_carrier(carrier, numero):
+    """URL pública de rastreo del carrier para una guía, según
+    TORRE["RASTREO_CARRIER_URL"]; "" si el carrier no tiene patrón (entrega
+    local, mock) o la guía no trae número."""
+    from urllib.parse import quote
+
+    patron = settings.TORRE.get("RASTREO_CARRIER_URL", {}).get(carrier or "", "")
+    if not patron or not numero:
+        return ""
+    return patron.format(numero=quote(str(numero), safe=""))
+
+
 def _proveedor_para(carrier, cliente=None):
     """Proveedor para el carrier. La integración del CLIENTE manda primero
     (flip por cliente, sep-2026); sin cliente aplica el mapa global

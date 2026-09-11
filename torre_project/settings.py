@@ -228,6 +228,17 @@ TORRE = {
     # (su pickup es nativo: pickUpAfter en el create). Descubrimiento fino vía
     # API de envia: pendiente (mapa manual mientras).
     "CARRIERS_PICKUP": {"fedex": True, "estafeta": True, "paquetexpress": True, "dhl": True},
+    # Rastreo PÚBLICO del carrier para el reporte del día: patrón con {numero}
+    # (la guía se escapa para URL). Carrier sin entrada (local, mock) = número
+    # sin link. Verificar cada patrón con una guía real al primer uso: las
+    # páginas de rastreo cambian sin aviso; esto es config, no código.
+    "RASTREO_CARRIER_URL": {
+        "estafeta": "https://rastreo3.estafeta.com/RastreoWebInternet/consultaEnvio.do?dispatch=doRastreoInternet&tipoGuia=ESTAFETA&guias={numero}",
+        "paquetexpress": "https://www.paquetexpress.com.mx/rastreo/{numero}",
+        "fedex": "https://www.fedex.com/fedextrack/?trknbr={numero}",
+        "dhl": "https://www.dhl.com/mx-es/home/tracking/tracking-express.html?submit=1&tracking-id={numero}",
+        "noventa9Minutos": "https://tracking.99minutos.com/search/{numero}",
+    },
     # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
     # ventana (acuerdo con el founder). El sync recurrente no se acota.
     "BACKFILL_DIAS": 90,
