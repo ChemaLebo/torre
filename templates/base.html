@@ -79,9 +79,7 @@ window.addEventListener("load", function () {
         <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'portal:reporte_dia' %}">Reporte del día</a>
         <a class="nav-link {% if seccion == 'exportar' %}activo{% endif %}" href="{% url 'portal:exportar' %}">Exportar</a>
       </details>
-      {# Manuales fuera del menú del portal (2026-09-11): los SOPs son internos de
-         bodega; la ruta sigue viva. Ver DEUDA-TECNICA.md → "Manuales por tipo de usuario". #}
-      {% comment %}
+      {% comment "Manuales fuera del menú del portal (2026-09-11): los SOPs son internos de bodega; la ruta sigue viva. Ver DEUDA-TECNICA.md, Manuales por tipo de usuario." %}
       <details class="nav-grupo" data-grupo="portal-ayuda">
         <summary>Ayuda</summary>
         <a class="nav-link {% if seccion == 'manuales' %}activo{% endif %}" href="{% url 'portal:manuales' %}">Manuales</a>
