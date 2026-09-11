@@ -62,15 +62,27 @@ window.addEventListener("load", function () {
 
     <nav class="nav-links">
     {% if rol_actual == "portal" %}
-      <div class="nav-sec">Tu operación</div>
-      <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'portal:dashboard' %}">Hoy</a>
-      <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'portal:pedidos' %}">Pedidos</a>
-      <a class="nav-link {% if seccion == 'inventario' %}activo{% endif %}" href="{% url 'portal:inventario' %}">Inventario</a>
-      <a class="nav-link {% if seccion == 'bodega' %}activo{% endif %}" href="{% url 'portal:bodega' %}">Bodega en vivo</a>
-      <a class="nav-link {% if seccion == 'manuales' %}activo{% endif %}" href="{% url 'portal:manuales' %}">Manuales</a>
-      <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'portal:incidencias' %}">Incidencias</a>
-      <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'portal:recepciones' %}">Recepciones</a>
-      <a class="nav-link {% if seccion == 'exportar' %}activo{% endif %}" href="{% url 'portal:exportar' %}">Exportar</a>
+      <details class="nav-grupo" data-grupo="portal-operacion">
+        <summary>Tu operación</summary>
+        <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'portal:dashboard' %}">Hoy</a>
+        <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'portal:pedidos' %}">Pedidos</a>
+        <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'portal:recepciones' %}">Recepciones</a>
+        <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'portal:incidencias' %}">Incidencias</a>
+      </details>
+      <details class="nav-grupo" data-grupo="portal-inventario">
+        <summary>Inventario</summary>
+        <a class="nav-link {% if seccion == 'inventario' %}activo{% endif %}" href="{% url 'portal:inventario' %}">Inventario</a>
+        <a class="nav-link {% if seccion == 'bodega' %}activo{% endif %}" href="{% url 'portal:bodega' %}">Bodega en vivo</a>
+      </details>
+      <details class="nav-grupo" data-grupo="portal-reportes">
+        <summary>Reportes</summary>
+        <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'portal:reporte_dia' %}">Reporte del día</a>
+        <a class="nav-link {% if seccion == 'exportar' %}activo{% endif %}" href="{% url 'portal:exportar' %}">Exportar</a>
+      </details>
+      <details class="nav-grupo" data-grupo="portal-ayuda">
+        <summary>Ayuda</summary>
+        <a class="nav-link {% if seccion == 'manuales' %}activo{% endif %}" href="{% url 'portal:manuales' %}">Manuales</a>
+      </details>
     {% elif rol_actual == "piso" %}
       <div class="nav-sec">Piso</div>
       <a class="nav-link {% if seccion == 'home' %}activo{% endif %}" href="{% url 'piso:home' %}">Tareas</a>
@@ -83,19 +95,46 @@ window.addEventListener("load", function () {
       <a class="nav-link {% if seccion == 'manuales' %}activo{% endif %}" href="{% url 'mesa:manuales' %}">Manuales</a>
     {% elif rol_actual == "mesa" or user.is_superuser %}
       <div class="nav-sec">Mesa de Control</div>
-      <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'mesa:dashboard' %}">Torre de control</a>
-      <a class="nav-link {% if seccion == 'bodega' %}activo{% endif %}" href="{% url 'mesa:bodega' %}">Bodega</a>
-      <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'mesa:incidencias' %}">Incidencias</a>
-      <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'mesa:pedidos' %}">Pedidos</a>
-      <a class="nav-link {% if seccion == 'inventario' %}activo{% endif %}" href="{% url 'mesa:inventario' %}">Inventario</a>
-      <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones{% if reingresos_pendientes %} <span class="pill warn">{{ reingresos_pendientes }}</span>{% endif %}</a>
-      <a class="nav-link {% if seccion == 'sync' %}activo{% endif %}" href="{% url 'mesa:sync' %}">Salud de sync</a>
-      <a class="nav-link {% if seccion == 'clientes' %}activo{% endif %}" href="{% url 'mesa:clientes' %}">Clientes</a>
-      <a class="nav-link {% if seccion == 'finanzas' %}activo{% endif %}" href="{% url 'mesa:finanzas' %}">Finanzas</a>
-      <a class="nav-link {% if seccion == 'manuales' %}activo{% endif %}" href="{% url 'mesa:manuales' %}">Manuales</a>
-      <a class="nav-link" href="/admin/">Admin</a>
+      <details class="nav-grupo" data-grupo="mesa-operacion">
+        <summary>Operación</summary>
+        <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'mesa:dashboard' %}">Torre de control</a>
+        <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'mesa:pedidos' %}">Pedidos</a>
+        <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones{% if reingresos_pendientes %} <span class="pill warn">{{ reingresos_pendientes }}</span>{% endif %}</a>
+        <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'mesa:incidencias' %}">Incidencias</a>
+        <a class="nav-link {% if seccion == 'bodega' %}activo{% endif %}" href="{% url 'mesa:bodega' %}">Bodega</a>
+      </details>
+      <details class="nav-grupo" data-grupo="mesa-inventario">
+        <summary>Inventario</summary>
+        <a class="nav-link {% if seccion == 'inventario' %}activo{% endif %}" href="{% url 'mesa:inventario' %}">Inventario</a>
+      </details>
+      <details class="nav-grupo" data-grupo="mesa-reportes">
+        <summary>Reportes</summary>
+        <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'mesa:reporte_dia' %}">Reporte del día</a>
+      </details>
+      <details class="nav-grupo" data-grupo="mesa-admin">
+        <summary>Administración</summary>
+        <a class="nav-link {% if seccion == 'clientes' %}activo{% endif %}" href="{% url 'mesa:clientes' %}">Clientes</a>
+        <a class="nav-link {% if seccion == 'finanzas' %}activo{% endif %}" href="{% url 'mesa:finanzas' %}">Finanzas</a>
+        <a class="nav-link {% if seccion == 'sync' %}activo{% endif %}" href="{% url 'mesa:sync' %}">Salud de sync</a>
+        <a class="nav-link {% if seccion == 'manuales' %}activo{% endif %}" href="{% url 'mesa:manuales' %}">Manuales</a>
+        <a class="nav-link" href="/admin/">Admin</a>
+      </details>
     {% endif %}
     </nav>
+    <script>
+      /* Acordeón del menú: el grupo de la página actual abre siempre; el resto
+         recuerda su estado por navegador (torre-nav-<grupo>). */
+      (function () {
+        document.querySelectorAll(".nav-grupo").forEach(function (grupo) {
+          var clave = "torre-nav-" + grupo.dataset.grupo, guardado = null;
+          try { guardado = localStorage.getItem(clave); } catch (e) {}
+          grupo.open = grupo.querySelector(".nav-link.activo") !== null || guardado !== "0";
+          grupo.addEventListener("toggle", function () {
+            try { localStorage.setItem(clave, grupo.open ? "1" : "0"); } catch (e) {}
+          });
+        });
+      })();
+    </script>
 
     <div class="abajo">
       {% if user.is_authenticated %}

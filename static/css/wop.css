@@ -155,6 +155,16 @@ small, .small { font-size: 12.5px; color: var(--ink-50); }
 .brand-sub { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--ink-30); text-transform: uppercase; margin-bottom: 22px; }
 .nav-links { display: flex; flex-direction: column; gap: 4px; }
 .nav-sec { font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--ink-30); text-transform: uppercase; margin: 16px 8px 6px; }
+/* Grupos del menú (acordeón nativo): el summary hace de título de sección. */
+.nav-grupo > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; user-select: none;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--ink-30); text-transform: uppercase;
+  margin: 14px 8px 4px; padding: 4px 0;
+}
+.nav-grupo > summary::-webkit-details-marker { display: none; }
+.nav-grupo > summary::after { content: "▾"; margin-left: auto; font-size: 12px; }
+.nav-grupo[open] > summary::after { content: "▴"; }
+.nav-grupo > summary:hover { color: var(--ink-50); }
 .nav-link {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: var(--r);
@@ -196,7 +206,8 @@ small, .small { font-size: 12.5px; color: var(--ink-50); }
   }
   .sidebar-cabeza { flex: none; }
   .brand { font-size: 17px; margin-bottom: 0; }
-  .brand-sub, .nav-sec, .usuario-info { display: none; }
+  .brand-sub, .nav-sec, .usuario-info, .nav-grupo > summary { display: none; }
+  .nav-grupo { display: contents; }  /* en móvil los grupos se aplanan en la tira de chips */
   .nav-links {
     flex: 1 1 auto; min-width: 0;
     flex-direction: row; gap: 6px;
