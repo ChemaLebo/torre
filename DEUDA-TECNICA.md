@@ -56,3 +56,47 @@ número, proveedor) que cree la Guia, avance el pedido, despache el stock y
 marque el fulfillment en Shopify. Bajar `poll_tracking` a cada 15 min (luego 10
 si el log no muestra errores por límite de API) en `deploy/crontab.txt` y en el
 crontab del servidor; ampliar la ventana horaria si hay entregas después de las 22.
+
+## Checklist de empaque configurable por cliente
+
+**Estado (2026-09-14):** los pasos del wizard de empaque en piso están escritos en
+`apps/piso/views.py::_checklist_empaque`, con dos variantes fijas (local con
+naked packing / resto). Cambiar un texto o agregar un paso es código y deploy.
+
+**Por hacer:** dos campos de texto en la ficha del cliente, "Checklist de
+empaque" y "Checklist de empaque local", un paso por línea; vacío = default
+actual. El wizard los muestra tal cual y sigue agregando solo el paso de la nota
+de regalo. Migración chica en core.Cliente.
+
+## Campo "Visto bueno desde (MXN)" sin uso
+
+**Estado (2026-09-14):** `Cliente.umbral_visto_bueno_mxn` se captura y se muestra
+en la ficha, pero nadie lo lee. La idea era exigir visto bueno del cliente a
+compensaciones/resoluciones a partir de ese monto; el flujo de "resolución
+propuesta" existe pero no depende del monto.
+
+**Decisión pendiente:** conectarlo a compensaciones e incidencias, o quitarlo del
+formulario para no confundir.
+
+## Carrier preferente ignorado bajo integración 99minutos
+
+**Estado (2026-09-14):** con `integracion_envios = 99minutos` el carrier
+preferente no se usa (envios.services.elegir_carrier); solo una ReglaEnvio
+manda por encima. El default del campo al crear cliente es 99minutos.
+
+**Por hacer:** ayuda en el formulario que lo explique y/o ocultar el preferente
+cuando la integración sea 99minutos; considerar default envia.com.
+
+## Integración directa con iMile
+
+**Estado (2026-09-14):** iMile solo existe vía envia.com y está fuera de
+`CARRIERS_COTIZAR` porque envia cotiza pero falla al generar (no cubre CDMX
+como origen, error 1300, PED-00021). No hay adapter propio.
+
+**Por hacer:** adapter `AdapterImile` en `apps/envios/adapters.py` con el mismo
+contrato que `Adapter99Minutos` (cotizar, generar, rastrear, cancelar,
+recolección si la API lo da), credenciales y modo por env (`IMILE_API_KEY`,
+`IMILE_MODO` off|cotizar|full, como 99minutos), proveedor "imile" en
+`PROVEEDOR_POR_CARRIER`, patrón de rastreo público en `RASTREO_CARRIER_URL`,
+y tests con respuestas grabadas. Antes: conseguir credenciales y documentación
+de la API de iMile México y confirmar cobertura de origen.
