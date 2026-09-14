@@ -63,6 +63,14 @@ class TransformadorTests(SimpleTestCase):
         ))
         self.assertTrue(any("750999" in a and "compartido" in a for a in resultado["avisos"]))
 
+    def test_columna_variant_barcodes_en_plural(self):
+        # Export de Shopify de 2026: la columna se llama "Variant Barcodes".
+        texto = _csv("te,Té verde,Tés,Title,Default Title,,,,,TV-1,100,10.00,7503059795352").replace(
+            "Variant Barcode", "Variant Barcodes", 1,
+        )
+        resultado = transformar_export_shopify(texto)
+        self.assertEqual(resultado["filas"][0]["codigo_barras"], "7503059795352")
+
     def test_gramos_cero_queda_vacio(self):
         resultado = transformar_export_shopify(_csv(
             "a,Con peso,Tés,Title,Default Title,,,,,P-1,520,10.00,",

@@ -72,7 +72,9 @@ def transformar_export_shopify(texto_csv):
             continue
         vistos.add(codigo)
 
-        barcode = (cruda.get("Variant Barcode") or "").strip()
+        # Shopify renombró la columna en exports recientes: "Variant Barcodes"
+        # (plural, 2026); los exports viejos traen "Variant Barcode".
+        barcode = (cruda.get("Variant Barcode") or cruda.get("Variant Barcodes") or "").strip()
         if barcode:
             barcodes.setdefault(barcode, []).append(codigo)
 
