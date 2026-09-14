@@ -118,6 +118,12 @@ class SeedDemoTests(TestCase):
         self.assertEqual(len(etapas["entrega"]["fotos"]), 1)
         self.assertEqual(etapas["entrega"]["operador"], "jefe")
 
+    def test_canales_de_venta_sembrados(self):
+        from apps.pedidos.models import Pedido
+
+        canales = {p.shopify_order_id: p.canal for p in Pedido.objects.filter(shopify_order_id__in=["5009", "5011", "5001"])}
+        self.assertEqual(canales, {"5009": Pedido.CANAL_B2B, "5011": Pedido.CANAL_TIKTOK, "5001": Pedido.CANAL_WEB})
+
     def test_timestamps_escalonados_y_coherentes(self):
         from apps.pedidos.models import Pedido
 

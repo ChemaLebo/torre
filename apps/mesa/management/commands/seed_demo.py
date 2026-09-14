@@ -481,13 +481,16 @@ class Command(BaseCommand):
     # Pedidos
     # ────────────────────────────────────────────────────────────────────
 
-    def _payload(self, order_id, nombre, tel, cp, ciudad, provincia, lineas, note=""):
-        """Payload estilo Shopify con los campos que la ingesta consume."""
+    def _payload(self, order_id, nombre, tel, cp, ciudad, provincia, lineas, note="", source_name="web", tags=""):
+        """Payload estilo Shopify con los campos que la ingesta consume;
+        source_name/tags fijan el canal de venta (web, tiktok, shopify_draft_order = B2B)."""
         partes = nombre.split(" ", 1)
         total = sum(sku.precio_declarado * cantidad for sku, cantidad in lineas)
         return {
             "id": order_id,
             "name": f"#{order_id}",
+            "source_name": source_name,
+            "tags": tags,
             "email": f"comprador{order_id}@example.com",
             "financial_status": "paid",  # los filtros de ingesta solo dejan pasar lo pagado
             "total_price": str(total),
@@ -737,6 +740,7 @@ class Command(BaseCommand):
         pedido, creado = self._crear_pedido(t_mx, self._payload(
             5009, "Emilio Cortés", "+524421234609", "76000", "Querétaro", "Querétaro",
             [(skus["CAYACO-SIX"], 2)],
+            source_name="shopify_draft_order", tags="B2B, mayoreo",
         ))
         if creado:
             self._avanzar(pedido, "EMPACADO")
@@ -751,6 +755,7 @@ class Command(BaseCommand):
         pedido, creado = self._crear_pedido(t_mx, self._payload(
             5010, "Valeria Chávez", "+523121234610", "28017", "Colima", "Colima",
             [(skus["PIEDRA-LISA-SIX"], 1), (skus["COLIMITA-SIX"], 1)],
+            source_name="web",
         ))
         if creado:
             iniciar_picking(pedido, "piso1")
@@ -766,6 +771,7 @@ class Command(BaseCommand):
         pedido, creado = self._crear_pedido(t_mx, self._payload(
             5011, "Hugo Miranda", "+529991234611", "97300", "Mérida", "Yucatán",
             [(skus["PARAMO-SIX"], 2)],
+            source_name="tiktok",
         ))
         if creado:
             self._fechar_pedido(pedido, creado=ahora - timedelta(minutes=40))
