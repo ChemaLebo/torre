@@ -1,8 +1,9 @@
 /* ══════════════════════════════════════════════════════════════════
    TORRE · Escáner de cámara del piso (sin librerías) + Feedback global.
 
-   Escaner.montar(contenedor, alLeer) — abre la cámara trasera y corre
-   BarcodeDetector nativa en un loop (~200 ms); llama alLeer(valor) con
+   Escaner.montar(contenedor, alLeer) — abre la cámara trasera y decodifica
+   en un loop (~200 ms) con BarcodeDetector nativa o, si el navegador no la
+   trae (Safari/iPhone, Firefox), con ZXing cargado bajo demanda; llama alLeer(valor) con
    re-armado por salida de cuadro: la MISMA lectura solo se re-acepta
    cuando el código salió del visor (~3 ciclos sin verlo) — dejar el
    producto bajo la cámara NO confirma piezas solas. Un valor DISTINTO
@@ -22,21 +23,109 @@ window.Escaner = (function () {
   var FORMATOS = ["ean_13", "ean_8", "code_128", "upc_a", "qr_code"];
   var CICLOS_REARME = 3;    // ciclos consecutivos SIN ver el código para re-armarlo
   var MAX_FALLOS_DETECT = 30; // detect() reventando seguido = sin backend real
+  // ZXing (decodificador en JS) se carga SOLO si el navegador no trae
+  // BarcodeDetector nativa (Safari/iPhone, Firefox). La URL la pone base.html
+  // en data-zxing del propio <script> (respeta el hash de collectstatic).
+  var ZXING_URL = (document.currentScript && document.currentScript.dataset.zxing) || "";
   var video = null, stream = null, timer = null, activo = false;
   var ultimo = "", ultimoTs = 0, ciclosSinUltimo = 0, rearmado = true;
   var fallosDetect = 0, contenedorActivo = null, huboVisor = false;
+  var zxingCarga = null;
 
   function soporta() {
-    return (
-      "BarcodeDetector" in window &&
-      navigator.mediaDevices && navigator.mediaDevices.getUserMedia
-    );
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   }
 
   function aviso(contenedor, texto) {
     contenedor.classList.remove("escaner-vivo");
     contenedor.innerHTML =
       '<div class="escaner-sin-lector">' + texto + "</div>";
+  }
+
+  // Decodificador nativo: BarcodeDetector. Resuelve [{rawValue}] por cuadro.
+  function detectorNativo() {
+    var det = new BarcodeDetector({ formats: FORMATOS });
+    return { detect: function (v) { return det.detect(v); } };
+  }
+
+  function cargarZXing() {
+    if (window.ZXing) return Promise.resolve();
+    if (!ZXING_URL) return Promise.reject(new Error("sin url de zxing"));
+    if (!zxingCarga) {
+      zxingCarga = new Promise(function (resolve, reject) {
+        var tag = document.createElement("script");
+        tag.src = ZXING_URL;
+        tag.onload = function () { window.ZXing ? resolve() : reject(new Error("zxing sin global")); };
+        tag.onerror = function () { zxingCarga = null; reject(new Error("zxing no cargó")); };
+        document.head.appendChild(tag);
+      });
+    }
+    return zxingCarga;
+  }
+
+  // Decodificador ZXing: pinta el cuadro en un canvas y decodifica por
+  // software con los mismos formatos. Sin código en el cuadro ZXing lanza
+  // NotFoundException, que aquí es un cuadro vacío, no un fallo.
+  function detectorZXing() {
+    var Z = window.ZXing;
+    var formatos = [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.CODE_128,
+                    Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.QR_CODE];
+    var hints = new Map();
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, formatos);
+    hints.set(Z.DecodeHintType.TRY_HARDER, true);
+    var lector = new Z.MultiFormatReader();
+    lector.setHints(hints);
+    var canvas = document.createElement("canvas");
+    var ctx = canvas.getContext("2d", { willReadFrequently: true });
+    return {
+      detect: function (v) {
+        return new Promise(function (resolve, reject) {
+          var w = v.videoWidth, h = v.videoHeight;
+          if (!w || !h) { resolve([]); return; }
+          // Cuadro a lo sumo de 800 px de ancho: suficiente para EAN y más
+          // barato de decodificar en un iPhone viejo.
+          var escala = Math.min(1, 800 / w);
+          canvas.width = Math.round(w * escala);
+          canvas.height = Math.round(h * escala);
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+          try {
+            var fuente = new Z.HTMLCanvasElementLuminanceSource(canvas);
+            var bitmap = new Z.BinaryBitmap(new Z.HybridBinarizer(fuente));
+            var res = lector.decodeWithState(bitmap);
+            resolve(res ? [{ rawValue: res.getText() }] : []);
+          } catch (err) {
+            // El build minificado renombra la clase: preguntar por instancia o kind.
+            var vacio = err && (err instanceof Z.NotFoundException ||
+                                (err.getKind && err.getKind() === "NotFoundException"));
+            if (vacio) resolve([]);
+            else reject(err);
+          } finally {
+            lector.reset();
+          }
+        });
+      }
+    };
+  }
+
+  // Elige decodificador: nativo si existe y detecta alguno de nuestros
+  // formatos; si no, ZXing bajo demanda. Rechaza si no hay ninguno.
+  function obtenerDetector() {
+    if ("BarcodeDetector" in window) {
+      var nativo;
+      try { nativo = detectorNativo(); } catch (err) { nativo = null; }
+      if (nativo) {
+        // BarcodeDetector puede existir SIN backend real (detecta cero formatos).
+        if (window.BarcodeDetector.getSupportedFormats) {
+          return window.BarcodeDetector.getSupportedFormats().then(function (fmts) {
+            var alguno = FORMATOS.some(function (f) { return fmts.indexOf(f) !== -1; });
+            if (alguno) return nativo;
+            return cargarZXing().then(detectorZXing);
+          }, function () { return nativo; });
+        }
+        return Promise.resolve(nativo);
+      }
+    }
+    return cargarZXing().then(detectorZXing);
   }
 
   function montar(contenedor, alLeer) {
@@ -54,7 +143,7 @@ window.Escaner = (function () {
           "«insecure-origin-as-secure» con esta dirección (guía de instalación, " +
           "paso 1) y reinicia Chrome. Mientras, teclea el código.");
       } else {
-        aviso(contenedor, "Este navegador no trae lector de códigos — teclea el código (en el celular Android sí hay cámara).");
+        aviso(contenedor, "Este navegador no permite usar la cámara — teclea el código.");
       }
       return false;
     }
@@ -70,32 +159,11 @@ window.Escaner = (function () {
     contenedor.appendChild(video);
     contenedor.classList.add("escaner-vivo");
 
-    var detector;
-    try {
-      detector = new BarcodeDetector({ formats: FORMATOS });
-    } catch (err) {
-      aviso(contenedor, "Tu navegador no trae lector — teclea el código");
-      activo = false;
-      return false;
-    }
-
-    // BarcodeDetector puede existir SIN backend real (detecta cero formatos):
-    // exigir intersección de formatos soportados antes de confiar en él.
-    try {
-      if (window.BarcodeDetector.getSupportedFormats) {
-        window.BarcodeDetector.getSupportedFormats().then(function (fmts) {
-          var alguno = FORMATOS.some(function (f) { return fmts.indexOf(f) !== -1; });
-          if (!alguno && activo) {
-            aviso(contenedor, "Tu navegador no trae lector — teclea el código");
-            detener();
-          }
-        }).catch(function () {});
-      }
-    } catch (err) {}
-
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "environment" }, audio: false })
-      .then(function (s) {
+    var camara = navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    Promise.all([obtenerDetector(), camara])
+      .then(function (r) {
+        var detector = r[0], s = r[1];
         if (!activo) {
           s.getTracks().forEach(function (t) { t.stop(); });
           return;
@@ -106,8 +174,14 @@ window.Escaner = (function () {
         if (p && p.catch) p.catch(function () {});
         ciclo(detector, alLeer);
       })
-      .catch(function () {
-        if (activo) aviso(contenedor, "Sin permiso de cámara — teclea el código");
+      .catch(function (err) {
+        if (!activo) return;
+        var sinCamara = err && (err.name === "NotAllowedError" || err.name === "NotFoundError" ||
+                                err.name === "NotReadableError" || err.name === "OverconstrainedError");
+        aviso(contenedor, sinCamara
+          ? "Sin permiso de cámara — teclea el código"
+          : "Este navegador no trae lector de códigos — teclea el código");
+        detener();
       });
     return true;
   }

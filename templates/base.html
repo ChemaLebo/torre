@@ -35,7 +35,7 @@
 </script>
 {# Sin CSS de fuentes por CDN: un stylesheet remoto render-bloquea con lie-fi. Cuerpo = stack de sistema. #}
 <link rel="stylesheet" href="{% static 'css/wop.css' %}">
-<script defer src="{% static 'js/escaner.js' %}"></script>
+<script defer src="{% static 'js/escaner.js' %}" data-zxing="{% static 'js/zxing.min.js' %}"></script>
 {% if user.is_authenticated %}
 {# PWA: el SW se registra SOLO en páginas autenticadas — rastreo público y etiquetas QR jamás. #}
 <script defer src="{% static 'js/push.js' %}"></script>

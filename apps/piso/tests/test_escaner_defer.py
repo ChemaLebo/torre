@@ -36,7 +36,20 @@ class EscanerDeferTests(SimpleTestCase):
     def test_base_carga_escaner_con_defer(self):
         contenido = (BASE / "templates" / "base.html").read_text(encoding="utf-8")
         # El tag exacto: dos substrings sueltos pasarían con un defer en un comentario.
-        self.assertIn("<script defer src=\"{% static 'js/escaner.js' %}\">", contenido)
+        self.assertIn(
+            "<script defer src=\"{% static 'js/escaner.js' %}\" data-zxing=\"{% static 'js/zxing.min.js' %}\">",
+            contenido,
+        )
+
+    def test_zxing_es_fallback_local(self):
+        """Sin BarcodeDetector nativa (Safari/iPhone) el visor decodifica con
+        ZXing: el archivo va en static (nunca CDN) y escaner.js lo carga solo
+        cuando hace falta, leyendo la URL de data-zxing."""
+        self.assertTrue((BASE / "static" / "js" / "zxing.min.js").exists())
+        escaner = (BASE / "static" / "js" / "escaner.js").read_text(encoding="utf-8")
+        self.assertIn("dataset.zxing", escaner)
+        self.assertIn("HTMLCanvasElementLuminanceSource", escaner)
+        self.assertNotIn("cdn.", escaner)
 
     def test_inline_con_escaner_montar_espera_domcontentloaded(self):
         con_escaner = []
