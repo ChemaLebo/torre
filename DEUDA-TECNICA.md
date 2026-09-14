@@ -100,3 +100,30 @@ recolección si la API lo da), credenciales y modo por env (`IMILE_API_KEY`,
 `PROVEEDOR_POR_CARRIER`, patrón de rastreo público en `RASTREO_CARRIER_URL`,
 y tests con respuestas grabadas. Antes: conseguir credenciales y documentación
 de la API de iMile México y confirmar cobertura de origen.
+
+## Canal de venta: crudo en el pedido, traducción en tabla administrable
+
+**Estado (2026-09-14):** `Pedido.canal` se calcula en la ingesta con
+`TORRE["CANAL_POR_SOURCE"]` / `["CANAL_POR_TAG"]` (prefijos de `source_name` y
+tags) y `canal_fuente` guarda el `source_name` crudo. Un valor no mapeado cae en
+"otro" y mapearlo exige despliegue. Valores reales vistos en Infinitea: orden
+web `source_name=web`, `app_id=580111`; renovación de suscripción Appstle
+`source_name=subscription_contract_checkout_one`,
+`tags=appstle_subscription_recurring_order`, `app_id=4877949` (la primera compra
+de una suscripción entra como web). TikTok Shop: por confirmar con la primera
+orden real de Colima.
+
+**Diseño acordado:**
+- El pedido guarda solo lo crudo: `source_name`, `app_id` y `tags` tal cual
+  llegan. Se quita el `canal` calculado; la ingesta no clasifica nada.
+- Tabla `CanalVenta` (cliente opcional, criterio source_name | tag | app_id,
+  valor exacto, nombre visible). Solo traduce al pintar: columna, filtro y
+  reporte del día. Cambiar un nombre se refleja en todos los pedidos sin
+  reclasificar.
+- Un valor sin fila se muestra crudo capitalizado y se registra solo en la
+  tabla como "por nombrar", con cliente y conteo de pedidos.
+- Pantalla en Mesa → Administración (o admin de Django) para nombrar los valores
+  vistos por cliente. Precargar los fijos de Shopify (web, pos,
+  shopify_draft_order = B2B) y los de Appstle (suscripción).
+- Migración: crea la tabla, mueve `canal_fuente` a los campos crudos, elimina
+  `canal`. El filtro por canal filtra por valor crudo.
