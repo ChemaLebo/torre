@@ -34,6 +34,15 @@
         {% endfor %}
       </select>
     </div>
+    <div style="flex:1;min-width:160px">
+      <label for="f-canal">Canal</label>
+      <select id="f-canal" name="canal">
+        <option value="">Todos</option>
+        {% for clave, nombre in canales %}
+        <option value="{{ clave }}" {% if filtro.canal == clave %}selected{% endif %}>{{ nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
     <div style="flex:2;min-width:200px">
       <label for="f-q">Buscar</label>
       <input id="f-q" type="text" name="q" value="{{ filtro.q }}" placeholder="Folio, comprador u orden de Shopify">
@@ -45,7 +54,7 @@
 <div class="tabla-wrap">
   <table>
     <thead>
-      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Incidencia</th><th>Ingresó</th><th>Cancelar</th></tr>
+      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Incidencia</th><th>Ingresó</th><th>Cancelar</th></tr>
     </thead>
     <tbody>
       {% for pedido in pedidos %}
@@ -58,6 +67,8 @@
             <br><a class="mono" href="https://{{ pedido.tienda.dominio }}/admin/orders/{{ pedido.shopify_order_id }}" target="_blank" rel="noopener" title="Abrir la orden en el admin de Shopify">#{{ pedido.shopify_order_id }} ↗</a>
             {% endif %}
           {% else %}manual{% endif %}
+        </td>
+        <td><span class="pill" title="{{ pedido.canal_fuente }}">{{ pedido.get_canal_display }}</span>
         </td>
         <td>{{ pedido.comprador_nombre|default:"—" }}</td>
         <td>{% if pedido.es_local %}<span class="pill accent">local</span>{% else %}<span class="small">CP {{ pedido.cp|default:"—" }}</span>{% endif %}</td>

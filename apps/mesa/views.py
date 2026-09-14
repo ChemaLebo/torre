@@ -604,11 +604,14 @@ def pedidos(request):
     qs = Pedido.objects.select_related("cliente", "tienda").order_by("-creado")
     cliente_id = request.GET.get("cliente", "").strip()
     estado = request.GET.get("estado", "").strip()
+    canal = request.GET.get("canal", "").strip()
     q = request.GET.get("q", "").strip()
     if cliente_id:
         qs = qs.filter(cliente_id=cliente_id)
     if estado:
         qs = qs.filter(estado=estado)
+    if canal:
+        qs = qs.filter(canal=canal)
     if q:
         qs = qs.filter(
             Q(folio__icontains=q)
@@ -626,8 +629,9 @@ def pedidos(request):
         "pedidos": filas,
         "total": qs.count(),
         "estados": Pedido.ESTADOS,
+        "canales": Pedido.CANALES,
         "clientes_filtro": Cliente.objects.all(),
-        "filtro": {"cliente": cliente_id, "estado": estado, "q": q},
+        "filtro": {"cliente": cliente_id, "estado": estado, "canal": canal, "q": q},
     })
 
 

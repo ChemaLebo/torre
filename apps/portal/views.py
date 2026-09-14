@@ -284,6 +284,17 @@ def dashboard(request):
     maximo = max([fila["n"] for fila in embudo] + [1])
     for fila in embudo:
         fila["pct"] = int(fila["n"] * 100 / maximo)
+    # Por canal de venta: pedidos en proceso y los que entraron hoy.
+    nombres_canal = dict(Pedido.CANALES)
+    canales = {}
+    for fila in base.filter(estado__in=_ESTADOS_EN_PROCESO).values("canal").annotate(n=Count("id")):
+        canales.setdefault(fila["canal"], {"proceso": 0, "hoy": 0})["proceso"] = fila["n"]
+    for fila in base.filter(creado__date=hoy).values("canal").annotate(n=Count("id")):
+        canales.setdefault(fila["canal"], {"proceso": 0, "hoy": 0})["hoy"] = fila["n"]
+    por_canal = [
+        {"canal": c, "nombre": nombres_canal.get(c, c), **v}
+        for c, v in sorted(canales.items(), key=lambda kv: -(kv[1]["proceso"] + kv[1]["hoy"]))
+    ]
 
     abiertas = list(
         Incidencia.objects.filter(cliente=cliente, estado__in=Incidencia.ESTADOS_ABIERTOS)
@@ -324,6 +335,7 @@ def dashboard(request):
         "en_proceso": en_proceso,
         "salieron_hoy": salieron_hoy,
         "embudo": embudo,
+        "por_canal": por_canal,
         "incidencias_abiertas": abiertas[:6],
         "total_abiertas": len(abiertas),
         "criticos": criticos,
@@ -351,14 +363,26 @@ def pedidos(request):
     else:
         ver = "proceso"
         qs = qs.filter(estado__in=_ESTADOS_EN_PROCESO)
+    canal = request.GET.get("canal", "").strip()
+    if canal:
+        qs = qs.filter(canal=canal)
     lista = list(qs.annotate(piezas=Sum("lineas__cantidad"))[:200])
     for pedido in lista:
         pedido.pill = _PILL_PEDIDO.get(pedido.estado, "")
     return render(request, "portal/pedidos.html", {
         "seccion": "pedidos",
         "ver": ver,
+        "canal": canal,
+        "canales": _canales_del_cliente(request.cliente),
         "pedidos_lista": lista,
     })
+
+
+def _canales_del_cliente(cliente):
+    """[(clave, nombre)] de los canales con al menos un pedido del cliente, para
+    que el filtro no ofrezca canales que la marca no usa."""
+    usados = set(Pedido.objects.filter(cliente=cliente).values_list("canal", flat=True).distinct())
+    return [(c, n) for c, n in Pedido.CANALES if c in usados]
 
 
 def _pipeline(pedido):

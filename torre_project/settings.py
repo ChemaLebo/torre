@@ -242,6 +242,18 @@ TORRE = {
     # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
     # ventana (acuerdo con el founder). El sync recurrente no se acota.
     "BACKFILL_DIAS": 90,
+    # Canal de venta del pedido a partir del `source_name` de la orden de Shopify
+    # (minúsculas, comparación por prefijo): web = tienda en línea, pos = punto
+    # de venta, shopify_draft_order = borrador (B2B / mayoreo), tiktok = TikTok
+    # Shop. Un source_name sin entrada cae en "otro"; una etiqueta de la orden
+    # (tags) que coincida con CANAL_POR_TAG manda sobre el source_name. Ajustar
+    # con la primera orden real de cada canal (Mesa → Salud de sync muestra el
+    # payload).
+    "CANAL_POR_SOURCE": {
+        "web": "web", "pos": "pos", "shopify_draft_order": "b2b", "draft": "b2b",
+        "tiktok": "tiktok", "instagram": "social", "facebook": "social",
+    },
+    "CANAL_POR_TAG": {"b2b": "b2b", "mayoreo": "b2b", "wholesale": "b2b", "tiktok": "tiktok"},
     "COTIZACION_CACHE_DIAS": 7,  # vigencia del caché de cotizaciones por (CP, peso)
     # ── Finanzas: tarifario default y costos (dashboard Mesa → Finanzas) ──
     # Modelo A (Colima): calibrado sobre junio-2026 real para dar ~9% de ahorro

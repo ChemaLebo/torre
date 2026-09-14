@@ -118,6 +118,20 @@ class TestAislamientoTenant(BasePortal):
         self.assertContains(respuesta, self.pedido.folio)
         self.assertNotContains(respuesta, self.pedido_ajeno.folio)
 
+    def test_canal_en_lista_filtro_y_dashboard(self):
+        b2b = Pedido.objects.create(cliente=self.colima, comprador_nombre="Mayorista", cp="06600", canal=Pedido.CANAL_B2B)
+        self.entrar()
+        lista = self.client.get(reverse("portal:pedidos"), {"ver": "todos"})
+        self.assertContains(lista, "B2B")
+        self.assertContains(lista, "Tienda en línea")
+        self.assertContains(lista, "canal=b2b")  # el filtro aparece porque hay más de un canal
+        solo_b2b = self.client.get(reverse("portal:pedidos"), {"ver": "todos", "canal": "b2b"})
+        self.assertContains(solo_b2b, b2b.folio)
+        self.assertNotContains(solo_b2b, self.pedido.folio)
+        inicio = self.client.get(reverse("portal:dashboard"))
+        self.assertContains(inicio, "Por canal de venta")
+        self.assertContains(inicio, "B2B")
+
     def test_inventario_solo_muestra_mis_skus(self):
         self.entrar()
         respuesta = self.client.get(reverse("portal:inventario"))

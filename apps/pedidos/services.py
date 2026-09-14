@@ -435,6 +435,10 @@ def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
         if valor and getattr(pedido, campo) != valor:
             setattr(pedido, campo, valor)
             campos.append(campo)
+    canal, canal_fuente = canal_desde_payload(payload)
+    if (canal, canal_fuente) != (pedido.canal, pedido.canal_fuente) and (canal_fuente or canal != Pedido.CANAL_OTRO):
+        pedido.canal, pedido.canal_fuente = canal, canal_fuente
+        campos += ["canal", "canal_fuente"]
     nota = payload.get("note") or ""
     if nota and nota != pedido.nota_regalo:
         pedido.nota_regalo = nota
@@ -639,6 +643,28 @@ def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
     return (sku.peso_gr or 0) * cantidad, valor
 
 
+def canal_desde_payload(payload):
+    """(canal, source_name crudo) de una orden de Shopify: una etiqueta de la orden
+    en TORRE["CANAL_POR_TAG"] manda; si no, el source_name por prefijo en
+    TORRE["CANAL_POR_SOURCE"]; sin coincidencia → "otro"."""
+    torre = settings.TORRE
+    fuente = str(payload.get("source_name") or "").strip()
+    tags = payload.get("tags") or ""
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",")]
+    for tag in tags:
+        canal = torre["CANAL_POR_TAG"].get(str(tag).strip().lower())
+        if canal:
+            return canal, fuente
+    clave = fuente.lower()
+    if not clave:
+        return Pedido.CANAL_WEB, fuente  # sin source_name (payloads viejos, tests): tienda en línea
+    for prefijo, canal in torre["CANAL_POR_SOURCE"].items():
+        if clave.startswith(prefijo):
+            return canal, fuente
+    return Pedido.CANAL_OTRO, fuente
+
+
 def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
     cliente = tienda.cliente
 
@@ -661,11 +687,14 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
     except InvalidOperation:
         valor_declarado = Decimal("0")
 
+    canal, canal_fuente = canal_desde_payload(payload)
     pedido = Pedido.objects.create(
         tienda=tienda,
         cliente=cliente,
         shopify_order_id=shopify_order_id,
         origen=origen,
+        canal=canal,
+        canal_fuente=canal_fuente,
         comprador_nombre=nombre,
         comprador_tel=tel,
         comprador_email=email,
@@ -788,6 +817,7 @@ def crear_pedido_manual(cliente, *, comprador_nombre, comprador_tel="",
         cliente=cliente,
         shopify_order_id="",
         origen="manual",
+        canal=Pedido.CANAL_MANUAL,
         comprador_nombre=comprador_nombre[:120],
         comprador_tel=str(comprador_tel or "").strip()[:20],
         comprador_email=str(comprador_email or "").strip(),

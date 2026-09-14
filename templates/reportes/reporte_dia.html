@@ -48,6 +48,7 @@
     {% if r.shopify_url %}<a class="small" href="{{ r.shopify_url }}" target="_blank" rel="noopener" title="Abrir la orden en Shopify">Shopify ↗</a>{% endif %}
     {% if es_mesa %}<span class="small muted">{{ r.pedido.cliente.nombre }}</span>{% endif %}
     <span>{{ r.pedido.comprador_nombre|default:"—" }}</span>
+    <span class="pill" title="{{ r.pedido.canal_fuente }}">{{ r.pedido.get_canal_display }}</span>
     <span class="pill {{ r.pill }}">{{ r.pedido.get_estado_display }}</span>
     <span class="small">
       {% if r.guia %}

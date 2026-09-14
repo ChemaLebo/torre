@@ -37,6 +37,16 @@
       </div>
       <div class="medidor mb"><span style="width: {{ fila.pct }}%"></span></div>
     {% endfor %}
+    {% if por_canal|length > 1 %}
+    <div class="sep"></div>
+    <div class="small muted mb">Por canal de venta · en proceso / entraron hoy</div>
+    {% for c in por_canal %}
+      <div class="fila entre">
+        <a class="small" href="{% url 'portal:pedidos' %}?ver=todos&canal={{ c.canal }}">{{ c.nombre }}</a>
+        <span class="mono">{{ c.proceso }} / {{ c.hoy }}</span>
+      </div>
+    {% endfor %}
+    {% endif %}
   </div>
 
   <div class="card">

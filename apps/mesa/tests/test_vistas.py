@@ -207,6 +207,12 @@ class PedidosGlobalesTests(BaseMesaTest):
         self.assertContains(buscado, p1.folio)
         self.assertNotContains(buscado, p2.folio)
 
+        Pedido.objects.filter(pk=p2.pk).update(canal=Pedido.CANAL_TIKTOK)
+        por_canal = self.client.get(url, {"canal": Pedido.CANAL_TIKTOK})
+        self.assertContains(por_canal, p2.folio)
+        self.assertNotContains(por_canal, p1.folio)
+        self.assertContains(por_canal, "TikTok Shop")
+
 
 class SyncTests(BaseMesaTest):
     def test_el_boton_de_push_manual_ya_no_existe(self):

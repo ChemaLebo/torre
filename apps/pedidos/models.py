@@ -92,6 +92,23 @@ class Pedido(models.Model):
     shopify_order_id = models.CharField(max_length=40, blank=True, default="")
     folio = models.CharField(max_length=12, unique=True, blank=True, editable=False)
     origen = models.CharField(max_length=15, choices=ORIGENES, default="webhook")
+    # Canal de venta (de dónde vino la compra), distinto de `origen` (cómo llegó
+    # a Torre): se deriva del source_name / tags de la orden de Shopify con
+    # TORRE["CANAL_POR_SOURCE"] y ["CANAL_POR_TAG"]; manual para los de Mesa.
+    CANAL_WEB = "web"
+    CANAL_TIKTOK = "tiktok"
+    CANAL_B2B = "b2b"
+    CANAL_POS = "pos"
+    CANAL_SOCIAL = "social"
+    CANAL_MANUAL = "manual"
+    CANAL_OTRO = "otro"
+    CANALES = [
+        (CANAL_WEB, "Tienda en línea"), (CANAL_TIKTOK, "TikTok Shop"), (CANAL_B2B, "B2B"),
+        (CANAL_POS, "Punto de venta"), (CANAL_SOCIAL, "Redes sociales"),
+        (CANAL_MANUAL, "Manual"), (CANAL_OTRO, "Otro"),
+    ]
+    canal = models.CharField(max_length=12, choices=CANALES, default=CANAL_WEB, db_index=True)
+    canal_fuente = models.CharField(max_length=60, blank=True, help_text="source_name crudo de Shopify")
     comprador_nombre = models.CharField(max_length=120, blank=True)
     comprador_tel = models.CharField(max_length=20, blank=True)
     comprador_email = models.EmailField(blank=True)

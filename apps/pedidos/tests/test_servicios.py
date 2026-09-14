@@ -120,6 +120,24 @@ class IngestaTests(BaseServicios):
         confirmacion.assert_called_once()
         abrir.assert_not_called()
 
+    def test_ingesta_deriva_el_canal_de_venta(self):
+        casos = [
+            ({}, Pedido.CANAL_WEB, ""),
+            ({"source_name": "web"}, Pedido.CANAL_WEB, "web"),
+            ({"source_name": "shopify_draft_order"}, Pedido.CANAL_B2B, "shopify_draft_order"),
+            ({"source_name": "tiktok"}, Pedido.CANAL_TIKTOK, "tiktok"),
+            ({"source_name": "pos"}, Pedido.CANAL_POS, "pos"),
+            ({"source_name": "12345678"}, Pedido.CANAL_OTRO, "12345678"),
+            ({"source_name": "web", "tags": "Mayoreo, urgente"}, Pedido.CANAL_B2B, "web"),
+        ]
+        for i, (extra, canal, fuente) in enumerate(casos):
+            payload = payload_shopify(order_id=7700 + i)
+            payload.update(extra)
+            pedido, *_ = self._ingerir(payload)
+            self.assertEqual((pedido.canal, pedido.canal_fuente), (canal, fuente), extra)
+        # Un "sin source_name" nace web, no "otro": la tienda en línea es el default honesto.
+        self.assertEqual(services.canal_desde_payload({"source_name": ""}), (Pedido.CANAL_WEB, ""))
+
     def test_ingesta_respeta_current_quantity(self):
         """Orden que llega ya parcialmente reembolsada: se surte lo que QUEDA."""
         payload = payload_shopify()
