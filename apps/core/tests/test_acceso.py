@@ -55,6 +55,25 @@ class AccesoPorCorreoTests(TestCase):
         respuesta = self.client.get("/" + ruta, follow=True)
         self.assertContains(respuesta, "Enlace caducado")
 
+    def test_correo_brandeado_html_y_reply_to(self):
+        from django.test import override_settings
+
+        Cliente.objects.filter(pk=self.colima.pk).update(
+            branding={"color_primario": "#123456", "nombre_publico": "Colima", "logo_url": "https://cdn/logo.png"},
+        )
+        self.colima.refresh_from_db()
+        with override_settings(EMAIL_REPLY_TO="eduardo@wop.partners"):
+            services.enviar_acceso(self.karina, cliente=self.colima)
+        correo = mail.outbox[0]
+        self.assertEqual(correo.reply_to, ["eduardo@wop.partners"])
+        self.assertNotIn("Local 380", correo.body)
+        html, tipo = correo.alternatives[0]
+        self.assertEqual(tipo, "text/html")
+        self.assertIn("#123456", html)
+        self.assertIn("https://cdn/logo.png", html)
+        self.assertIn("Definir mi contraseña", html)
+        self.assertIn(RE_URL.search(correo.body).group(0), html)  # el botón lleva al mismo enlace
+
     def test_sin_correo_real_no_manda(self):
         self.assertFalse(services.enviar_acceso(self.sin_correo))
         self.assertEqual(len(mail.outbox), 0)
@@ -66,6 +85,9 @@ class AccesoPorCorreoTests(TestCase):
         self.assertContains(respuesta, "Revisa tu correo")
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("/restablecer/", mail.outbox[0].body)
+        html = mail.outbox[0].alternatives[0][0]
+        self.assertIn("Definir contraseña nueva", html)
+        self.assertIn("/restablecer/", html)
         respuesta = self.client.post(reverse("core:olvide"), {"email": "nadie@colima.mx"}, follow=True)
         self.assertContains(respuesta, "Revisa tu correo")
         self.assertEqual(len(mail.outbox), 1)

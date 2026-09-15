@@ -6,5 +6,3 @@ Si no fuiste tú, ignora este correo; tu contraseña no cambia.
 Define una nueva aquí (el enlace se usa una sola vez):
 
 {{ protocol }}://{{ domain }}{% url 'core:restablecer' uidb64=uid token=token %}
-
-— Torre · Local 380 E

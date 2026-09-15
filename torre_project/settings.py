@@ -334,6 +334,9 @@ EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
 EMAIL_TIMEOUT = 15
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Torre <acceso@localhost>")
+# A quién llegan las respuestas a los correos automáticos (el remitente no
+# tiene buzón). Vacío = sin Reply-To.
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "")
 PASSWORD_RESET_TIMEOUT = 60 * 60 * 72  # el enlace de acceso vale 72 h
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")  # sin token → consola
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")

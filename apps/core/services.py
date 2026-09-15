@@ -28,27 +28,54 @@ def url_acceso(usuario):
     return base + reverse("core:restablecer", kwargs={"uidb64": uid, "token": token})
 
 
+BRANDING_CORREO_DEFAULT = {"nombre_publico": "Torre", "color_primario": "#1C1D1D", "logo_url": ""}
+
+
+def branding_correo(cliente=None):
+    """Colores, logo y nombre para los correos: los del cliente (Cliente.branding,
+    los mismos del rastreo) o los de Torre si no hay cliente o no los capturó."""
+    marca = dict(BRANDING_CORREO_DEFAULT)
+    if cliente is not None:
+        for clave in marca:
+            valor = (cliente.branding or {}).get(clave)
+            if valor:
+                marca[clave] = valor
+        if not (cliente.branding or {}).get("nombre_publico"):
+            marca["nombre_publico"] = cliente.nombre
+    return marca
+
+
+def enviar_correo(destinatario, asunto, plantilla, contexto):
+    """Correo multipart: texto plano desde `<plantilla>.txt` y HTML brandeado
+    desde `<plantilla>.html`, con Reply-To de settings.EMAIL_REPLY_TO."""
+    from django.conf import settings
+    from django.core.mail import EmailMultiAlternatives
+    from django.template.loader import render_to_string
+
+    correo = EmailMultiAlternatives(
+        subject=asunto,
+        body=render_to_string(f"{plantilla}.txt", contexto),
+        to=[destinatario],
+        reply_to=[settings.EMAIL_REPLY_TO] if settings.EMAIL_REPLY_TO else None,
+    )
+    correo.attach_alternative(render_to_string(f"{plantilla}.html", contexto), "text/html")
+    correo.send()
+
+
 def enviar_acceso(usuario, *, cliente=None, actor=None, motivo=""):
     """Manda al correo del usuario el enlace para definir su contraseña. Sin
     correo real no manda nada y regresa False. Queda en auditoría (sin el
     token). Un fallo del servidor de correo se propaga: quien lo llama decide
     cómo avisarlo."""
     from django.conf import settings
-    from django.core.mail import send_mail
-    from django.template.loader import render_to_string
 
     if not email_real(usuario):
         return False
     contexto = {
         "usuario": usuario, "url": url_acceso(usuario), "cliente": cliente,
-        "horas": settings.PASSWORD_RESET_TIMEOUT // 3600,
+        "horas": settings.PASSWORD_RESET_TIMEOUT // 3600, "marca": branding_correo(cliente),
     }
-    send_mail(
-        subject="Tu acceso a Torre",
-        message=render_to_string("core/correo_acceso.txt", contexto),
-        from_email=None,
-        recipient_list=[usuario.email],
-    )
+    enviar_correo(usuario.email, "Tu acceso a Torre", "core/correo_acceso", contexto)
     registrar_evento(
         "usuario", usuario.username, "acceso_enviado", actor=actor, cliente=cliente,
         motivo=motivo or f"Enlace de acceso enviado a {usuario.email}",

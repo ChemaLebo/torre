@@ -1,0 +1,9 @@
+{% extends "core/_correo_base.html" %}
+{% block titulo %}Tu acceso a Torre{% endblock %}
+{% block titulo_cuerpo %}Hola {{ usuario.first_name|default:usuario.username }}, ya tienes acceso{% endblock %}
+{% block cuerpo %}
+<p style="margin:0 0 12px;">Te dimos de alta en Torre{% if cliente %}, el portal de operación de <b>{{ marca.nombre_publico }}</b>{% endif %}.</p>
+<p style="margin:0 0 12px;">Tu usuario es <b>{{ usuario.username }}</b>. Define tu contraseña con el botón; el enlace vale {{ horas }} horas y se usa una sola vez.</p>
+{% endblock %}
+{% block boton %}{% include "core/_correo_boton.html" with url=url texto="Definir mi contraseña" %}{% endblock %}
+{% block pie %}Si el enlace caducó, en la pantalla de entrar elige «¿Olvidaste tu contraseña?» y te mandamos otro.{% endblock %}

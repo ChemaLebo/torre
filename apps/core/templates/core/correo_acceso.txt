@@ -1,6 +1,6 @@
 Hola {{ usuario.first_name|default:usuario.username }},
 
-Ya tienes acceso a Torre{% if cliente %}, el portal de operación de {{ cliente.nombre }}{% endif %}.
+Ya tienes acceso a Torre{% if cliente %}, el portal de operación de {{ marca.nombre_publico }}{% endif %}.
 
 Tu usuario: {{ usuario.username }}
 Define tu contraseña aquí (el enlace vale {{ horas }} horas y se usa una sola vez):
@@ -8,5 +8,3 @@ Define tu contraseña aquí (el enlace vale {{ horas }} horas y se usa una sola 
 {{ url }}
 
 Si el enlace caducó, en la pantalla de entrar elige "¿Olvidaste tu contraseña?" y te mandamos otro.
-
-— Torre · Local 380 E

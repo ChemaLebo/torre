@@ -1,0 +1,21 @@
+{# Base de los correos automáticos: una columna, tablas y estilos en línea (Gmail, Outlook e iOS los pintan parejo). Espera `marca` (nombre_publico, color_primario, logo_url); los hijos llenan titulo, cuerpo, boton y pie. #}
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{% block titulo %}{% endblock %}</title></head>
+<body style="margin:0;padding:0;background:#f3f3f1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1d1d;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f3f1;padding:24px 12px;">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:10px;overflow:hidden;">
+  <tr><td style="background:{{ marca.color_primario }};padding:22px 28px;color:#ffffff;">
+    {% if marca.logo_url %}<img src="{{ marca.logo_url }}" alt="{{ marca.nombre_publico }}" style="max-height:44px;max-width:220px;display:block;">
+    {% else %}<div style="font-size:20px;font-weight:700;letter-spacing:.02em;">{{ marca.nombre_publico }}</div>{% endif %}
+  </td></tr>
+  <tr><td style="padding:28px 28px 8px;font-size:16px;line-height:1.55;">
+    <h1 style="margin:0 0 14px;font-size:22px;line-height:1.3;">{% block titulo_cuerpo %}{% endblock %}</h1>
+    {% block cuerpo %}{% endblock %}
+  </td></tr>
+  <tr><td style="padding:8px 28px 24px;">{% block boton %}{% endblock %}</td></tr>
+  <tr><td style="padding:16px 28px 24px;font-size:13px;color:#666;line-height:1.5;border-top:1px solid #eee;">{% block pie %}Recibiste este correo porque tienes una cuenta en Torre{% if marca.nombre_publico != "Torre" %}, el portal de operación de {{ marca.nombre_publico }}{% endif %}.{% endblock %}</td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>

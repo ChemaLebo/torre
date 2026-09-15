@@ -3,7 +3,7 @@ from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import PasswordChangeForm
+from django.contrib.auth.forms import PasswordChangeForm, PasswordResetForm
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -17,12 +17,35 @@ class LoginView(auth_views.LoginView):
     template_name = "core/login.html"
 
 
+class FormOlvide(PasswordResetForm):
+    """PasswordResetForm con Reply-To y branding de Torre en el correo."""
+
+    def send_mail(self, subject_template_name, email_template_name, context, from_email, to_email,
+                  html_email_template_name=None):
+        from django.core.mail import EmailMultiAlternatives
+        from django.template.loader import render_to_string
+
+        from .services import branding_correo
+
+        context = dict(context, marca=branding_correo())
+        asunto = "".join(render_to_string(subject_template_name, context).splitlines())
+        correo = EmailMultiAlternatives(
+            asunto, render_to_string(email_template_name, context), from_email, [to_email],
+            reply_to=[settings.EMAIL_REPLY_TO] if settings.EMAIL_REPLY_TO else None,
+        )
+        if html_email_template_name:
+            correo.attach_alternative(render_to_string(html_email_template_name, context), "text/html")
+        correo.send()
+
+
 class OlvideView(auth_views.PasswordResetView):
     """'¿Olvidaste tu contraseña?': pide el correo y manda el enlace de
     restablecimiento. Siempre responde igual, exista o no el correo."""
 
     template_name = "core/olvide.html"
+    form_class = FormOlvide
     email_template_name = "core/correo_olvide.txt"
+    html_email_template_name = "core/correo_olvide.html"
     subject_template_name = "core/correo_olvide_asunto.txt"
     success_url = reverse_lazy("core:olvide_enviado")
 

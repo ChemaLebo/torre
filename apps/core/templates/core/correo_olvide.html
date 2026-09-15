@@ -1,0 +1,9 @@
+{% extends "core/_correo_base.html" %}
+{% block titulo %}Restablecer tu contraseña de Torre{% endblock %}
+{% block titulo_cuerpo %}Hola {{ user.first_name|default:user.username }}{% endblock %}
+{% block cuerpo %}
+<p style="margin:0 0 12px;">Recibimos una solicitud para restablecer la contraseña del usuario <b>{{ user.username }}</b>.</p>
+<p style="margin:0 0 12px;">Si no fuiste tú, ignora este correo; tu contraseña no cambia.</p>
+{% endblock %}
+{% block boton %}{% url 'core:restablecer' uidb64=uid token=token as ruta %}{% with enlace=protocol|add:"://"|add:domain|add:ruta %}{% include "core/_correo_boton.html" with url=enlace texto="Definir contraseña nueva" %}{% endwith %}{% endblock %}
+{% block pie %}El enlace se usa una sola vez. Si no lo pediste, no hace falta hacer nada.{% endblock %}
