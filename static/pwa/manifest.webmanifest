@@ -1,7 +1,7 @@
 {
   "name": "Torre",
   "short_name": "Torre",
-  "description": "Torre — operación del 3PL Local 380 E",
+  "description": "Torre — operación del 3PL",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F7F6F3",
