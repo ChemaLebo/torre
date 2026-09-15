@@ -1,10 +1,15 @@
 from django.conf import settings
+from django.contrib import messages
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import PasswordChangeForm
 from django.http import FileResponse, Http404, HttpResponse
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 
+from .forms import FormCambiarPin
 from .models import EvidenciaFoto
+from .services import registrar_evento
 
 
 class LoginView(auth_views.LoginView):
@@ -36,6 +41,38 @@ def post_login(request):
     if request.rol == "mesa" or request.user.is_superuser:
         return redirect("mesa:dashboard")
     return redirect("core:login")
+
+
+@login_required
+def cuenta(request):
+    """Mi cuenta, para todos los roles: cambiar la contraseña propia y, en piso
+    y Mesa, el PIN de firma propio (confirmado con la contraseña). Cambiar la
+    contraseña conserva la sesión abierta. Ambos cambios quedan en auditoría."""
+    con_pin = request.rol in ("piso", "mesa")
+    form_password = PasswordChangeForm(request.user)
+    form_pin = FormCambiarPin(request.user) if con_pin else None
+    if request.method == "POST":
+        accion = request.POST.get("accion")
+        if accion == "password":
+            form_password = PasswordChangeForm(request.user, request.POST)
+            if form_password.is_valid():
+                form_password.save()
+                update_session_auth_hash(request, request.user)
+                registrar_evento("usuario", request.user.username, "cambio_password", actor=request.user)
+                messages.success(request, "Contraseña actualizada.")
+                return redirect("core:cuenta")
+        elif accion == "pin" and con_pin:
+            form_pin = FormCambiarPin(request.user, request.POST)
+            if form_pin.is_valid():
+                perfil = request.user.perfil
+                perfil.pin = form_pin.cleaned_data["pin"]  # PerfilUsuario.save lo hashea
+                perfil.save(update_fields=["pin"])
+                registrar_evento("usuario", request.user.username, "cambio_pin", actor=request.user)
+                messages.success(request, "PIN actualizado.")
+                return redirect("core:cuenta")
+    return render(request, "core/cuenta.html", {
+        "form_password": form_password, "form_pin": form_pin, "con_pin": con_pin,
+    })
 
 
 def raiz(request):

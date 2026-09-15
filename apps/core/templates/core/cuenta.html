@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Mi cuenta{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">{{ user.username }}{% if user.perfil %} · {{ user.perfil.get_rol_display }}{% endif %}</div>
+    <h1>Mi cuenta</h1>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h3>Cambiar contraseña</h3></div>
+    <form method="post" autocomplete="off">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="password">
+      {% if form_password.errors %}
+      <div class="flash error">{% for campo in form_password %}{% for e in campo.errors %}{{ e }} {% endfor %}{% endfor %}{% for e in form_password.non_field_errors %}{{ e }} {% endfor %}</div>
+      {% endif %}
+      <label for="id_old_password">Contraseña actual</label>
+      <input type="password" name="old_password" id="id_old_password" autocomplete="current-password" required>
+      <label for="id_new_password1">Contraseña nueva</label>
+      <input type="password" name="new_password1" id="id_new_password1" autocomplete="new-password" required>
+      <label for="id_new_password2">Repite la contraseña nueva</label>
+      <input type="password" name="new_password2" id="id_new_password2" autocomplete="new-password" required>
+      <p class="small muted mt">Mínimo 8 caracteres. Tu sesión sigue abierta después del cambio.</p>
+      <button class="btn primario mt" type="submit">Guardar contraseña</button>
+    </form>
+  </div>
+
+  {% if con_pin %}
+  <div class="card">
+    <div class="titulo"><h3>Cambiar PIN de firma</h3></div>
+    <form method="post" autocomplete="off">
+      {% csrf_token %}
+      <input type="hidden" name="accion" value="pin">
+      {% if form_pin.errors %}
+      <div class="flash error">{% for campo in form_pin %}{% for e in campo.errors %}{{ e }} {% endfor %}{% endfor %}{% for e in form_pin.non_field_errors %}{{ e }} {% endfor %}</div>
+      {% endif %}
+      <label for="id_pin_password">Tu contraseña</label>
+      <input type="password" name="password" id="id_pin_password" autocomplete="current-password" required>
+      <label for="id_pin">PIN nuevo</label>
+      <input type="password" name="pin" id="id_pin" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" required>
+      <label for="id_pin2">Repite el PIN</label>
+      <input type="password" name="pin2" id="id_pin2" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" required>
+      <p class="small muted mt">De 4 a 6 dígitos. Es el PIN con el que firmas ajustes y conteos.</p>
+      <button class="btn primario mt" type="submit">Guardar PIN</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
