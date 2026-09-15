@@ -93,6 +93,14 @@ cuando la integración sea 99minutos; considerar default envia.com.
 `CARRIERS_COTIZAR` porque envia cotiza pero falla al generar (no cubre CDMX
 como origen, error 1300, PED-00021). No hay adapter propio.
 
+**Hallazgos (2026-09-14):** imileexpress.com NO es la API del courier en México:
+es una empresa socia en Hong Kong para envíos transfronterizos. La plataforma
+real es `openapi.imile.com` (peticiones firmadas: customerId, sign, signMethod,
+param); la documentación requiere cuenta en su portal de desarrolladores, Chema
+la comparte cuando la tenga. Reparto acordado con Diego para Colima: 75% iMile /
+25% 99minutos, al azar por pedido y configurable por cliente, para medir
+incidencias por carrier (y después por estado destino); revisar mensualmente.
+
 **Por hacer:** adapter `AdapterImile` en `apps/envios/adapters.py` con el mismo
 contrato que `Adapter99Minutos` (cotizar, generar, rastrear, cancelar,
 recolección si la API lo da), credenciales y modo por env (`IMILE_API_KEY`,
