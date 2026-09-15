@@ -61,7 +61,10 @@ class Pedido(models.Model):
         RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO},
         EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO, CANCELADO},
         ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO, CANCELADO},
-        PARCIALMENTE_DESPACHADO: {EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO},
+        # PARCIALMENTE_DESPACHADO = salieron algunas cajas y otras siguen en
+        # bodega (manifiesto por caja); al salir la última → RECOLECTADO. El
+        # tracking no lo mueve mientras queden cajas adentro.
+        PARCIALMENTE_DESPACHADO: {RECOLECTADO, EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO},
         CANCELACION_PENDIENTE: {CANCELADO},
         ENTREGADO: set(),
         CANCELADO: set(),
@@ -74,6 +77,7 @@ class Pedido(models.Model):
         EMPACADO: "ts_empacado",
         GUIA_GENERADA: "ts_guia",
         RECOLECTADO: "ts_recolectado",
+        PARCIALMENTE_DESPACHADO: "ts_recolectado",  # la primera caja que sale ya "va en camino"
         EN_TRANSITO: "ts_en_transito",
         ENTREGADO: "ts_entregado",
     }

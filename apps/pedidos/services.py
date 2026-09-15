@@ -1507,40 +1507,119 @@ def despachar_a_corral(pedido, actor):
     return {"guias": guias, "mensajes": mensajes}
 
 
-def marcar_recolectado(pedido, actor):
-    """GUIA_GENERADA → RECOLECTADO: escaneo de salida + manifiesto.
+def _lineas_de_cajas(cajas):
+    """{pk: LineaPedido} de lo que viaja en esas cajas; un kit arrastra a sus
+    hijas (el kardex despacha las hijas, nunca el kit virtual)."""
+    lineas = {}
+    for caja in cajas:
+        for pl in caja.lineas.select_related("linea_pedido__sku"):
+            linea = pl.linea_pedido
+            lineas[linea.pk] = linea
+            if linea.sku.es_kit:
+                for hija in linea.componentes.select_related("sku"):
+                    lineas[hija.pk] = hija
+    return lineas
 
-    Despacha el inventario (en_empaque → salida) y dispara la plantilla B
-    ("en camino") — SOLO aquí: jamás se avisa de un paquete que sigue en bodega.
-    Todo el efecto de dominio (kardex + transición) va en UNA transacción:
-    una línea que falle revierte completo — jamás kardex a medias con el
-    pedido irrecuperable. La plantilla B sale ya con el commit hecho.
+
+def cajas_por_salir(pedido):
+    """Cajas EMPACADO del pedido (aún en bodega) cuando se empacó POR CAJA;
+    [] si el pedido se empacó entero (legacy: sin plan o plan sin empacar por
+    caja), que sale completo en un solo manifiesto."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    cajas = sorted(pedido.paquetes.all(), key=lambda c: c.numero)
+    if not any(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in cajas):
+        return []
+    return [c for c in cajas if c.estado == Paquete.EMPACADO]
+
+
+def marcar_recolectado(pedido, actor, paquetes=None):
+    """GUIA_GENERADA / PARCIALMENTE_DESPACHADO → RECOLECTADO (o
+    PARCIALMENTE_DESPACHADO si solo salieron algunas cajas): escaneo de
+    salida + manifiesto.
+
+    `paquetes` = cajas que suben a ESTE manifiesto (None = todas las que
+    faltan). Cada caja pasa a DESPACHADO; el kardex despacha (en_empaque →
+    salida) las líneas de esas cajas la primera vez que alguna de sus
+    unidades sale — una caja 24 reempacada en dos medias sale del kardex con
+    la primera media: la unidad de venta ya se abrió. Pedido empacado entero
+    (sin cajas EMPACADO): sale completo, como siempre. Con cajas pendientes
+    el pedido queda PARCIALMENTE_DESPACHADO; con todas fuera, RECOLECTADO.
+
+    Todo el efecto de dominio (kardex + transiciones) va en UNA transacción:
+    una línea que falle revierte completo. La plantilla B ("va en camino")
+    sale SOLO aquí y una sola vez por pedido: en su primer manifiesto (el
+    rastreo público muestra cada caja). El fulfillment en Shopify sale con el
+    pedido completo fuera.
     """
-    if pedido.estado != Pedido.GUIA_GENERADA:
+    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         raise ValueError(
             f"El pedido {pedido.folio} no tiene guía lista (está {pedido.get_estado_display()}); "
             "no se puede marcar recolectado."
         )
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
     from apps.inventario.services import despachar  # lazy
+
+    primer_manifiesto = pedido.estado == Pedido.GUIA_GENERADA
     with transaction.atomic():
-        for linea in pedido.lineas.select_related("sku"):
+        Pedido.objects.select_for_update().get(pk=pedido.pk)
+        pendientes = cajas_por_salir(pedido)
+        if pendientes and paquetes is not None:
+            ids = {c.pk for c in paquetes}
+            salen = [c for c in pendientes if c.pk in ids]
+        else:
+            salen = pendientes
+        if pendientes and not salen:
+            raise ValueError(
+                f"{pedido.folio}: ninguna de las cajas palomeadas sigue pendiente de salir."
+            )
+        if salen:
+            ya_fuera = _lineas_de_cajas(
+                [c for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
+            )
+            lineas = [l for pk, l in _lineas_de_cajas(salen).items() if pk not in ya_fuera]
+        else:
+            lineas = list(pedido.lineas.select_related("sku"))
+        for linea in lineas:
             if linea.cantidad_pickeada and not linea.sku.es_kit:
                 despachar(linea.sku, linea.cantidad_pickeada, pedido.folio)
-        pedido.transicionar(
-            Pedido.RECOLECTADO, actor=actor,
-            motivo="Escaneo de salida + manifiesto firmado (RECOLECTADO autoritativo).",
-        )
-    try:
-        from apps.mensajeria.services import enviar_en_camino  # lazy — plantilla B: SOLO aquí
-    except ImportError:
-        pass
-    else:
-        enviar_en_camino(pedido)
+        for caja in salen:
+            caja.transicionar(
+                Paquete.DESPACHADO, actor=actor,
+                motivo=f"Caja {caja.numero} de {pedido.folio} subió al camión (manifiesto firmado).",
+            )
+        quedan = [c for c in pendientes if c not in salen]
+        if quedan:
+            numeros = ", ".join(str(c.numero) for c in salen)
+            faltan = ", ".join(str(c.numero) for c in quedan)
+            motivo = f"Manifiesto por caja: salió la caja {numeros}; la caja {faltan} sigue en bodega."
+            if pedido.estado == Pedido.GUIA_GENERADA:
+                pedido.transicionar(Pedido.PARCIALMENTE_DESPACHADO, actor=actor, motivo=motivo)
+            else:
+                registrar_evento(
+                    "pedido", pedido.pk, "salida_parcial", actor=actor, cliente=pedido.cliente,
+                    delta={"salen": [c.numero for c in salen], "quedan": [c.numero for c in quedan]},
+                    motivo=motivo,
+                )
+        else:
+            pedido.transicionar(
+                Pedido.RECOLECTADO, actor=actor,
+                motivo="Escaneo de salida + manifiesto firmado (RECOLECTADO autoritativo).",
+            )
+    if primer_manifiesto:
+        try:
+            from apps.mensajeria.services import enviar_en_camino  # lazy — plantilla B: SOLO aquí
+        except ImportError:
+            pass
+        else:
+            enviar_en_camino(pedido)
+    if quedan:
+        return pedido
 
     # Hermano del "va en camino": el fulfillment en Shopify sale del MISMO
     # momento canónico (correo nativo de envío + Fulfilled en el admin del
-    # cliente). Best-effort total en on_commit: Shopify jamás bloquea un
-    # manifiesto.
+    # cliente) cuando el pedido completo está fuera. Best-effort total en
+    # on_commit: Shopify jamás bloquea un manifiesto.
     def _fulfillment():
         try:
             from apps.integraciones.services import marcar_fulfillment  # lazy

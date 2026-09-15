@@ -566,14 +566,41 @@ def _procesar_rastreo(guia, info, ahora):
     return resultado
 
 
+def _estado_por_guias(pedido):
+    """Estado que le toca al pedido según TODAS sus guías: "ENTREGADO" solo
+    cuando cada guía activa está entregada; "RETORNADO" cuando ninguna sigue
+    activa (todas regresaron); None mientras haya cajas en juego. Un pedido
+    de una sola guía se comporta como siempre."""
+    guias = list(pedido.guias.all())
+    activas = [g for g in guias if g.es_activa]
+    if guias and not activas:
+        return "RETORNADO"
+    if activas and all(g.estado == Guia.ENTREGADO for g in activas):
+        return "ENTREGADO"
+    return None
+
+
 def _aplicar_efectos(guia, estado, descripcion):
-    """Efectos del cambio de estado de la guía sobre el pedido/incidencias."""
+    """Efectos del cambio de estado de la guía sobre el pedido/incidencias.
+
+    El pedido se mueve por el conjunto de sus guías (una caja entregada no
+    entrega el pedido) y jamás mientras queden cajas en bodega
+    (PARCIALMENTE_DESPACHADO): ahí manda el manifiesto de las que faltan."""
     pedido = guia.pedido
     abiertas = 0
+    en_bodega = pedido.estado == "PARCIALMENTE_DESPACHADO"
     if estado in {Guia.EN_TRANSITO, Guia.EN_RUTA}:
-        _transicionar_pedido(pedido, "EN_TRANSITO", motivo=descripcion)
+        if not en_bodega:
+            _transicionar_pedido(pedido, "EN_TRANSITO", motivo=descripcion)
     elif estado == Guia.ENTREGADO:
-        _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion)
+        if _estado_por_guias(pedido) == "ENTREGADO":
+            _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion)
+        elif not en_bodega:
+            caja = f"caja {guia.paquete.numero}" if guia.paquete_id else f"guía {guia.numero}"
+            _transicionar_pedido(
+                pedido, "EN_TRANSITO",
+                motivo=f"{caja} entregada; faltan otras cajas del pedido. {descripcion}"[:300],
+            )
     elif estado == Guia.INTENTO_FALLIDO:
         texto = (
             f"Intento de entrega fallido en la guía {guia.numero} ({guia.carrier}). "
@@ -582,7 +609,8 @@ def _aplicar_efectos(guia, estado, descripcion):
         if _abrir_incidencia(pedido, "RF", texto, prioridad="P1"):
             abiertas += 1
     elif estado == Guia.RETORNO:
-        _transicionar_pedido(pedido, "RETORNADO", motivo=descripcion)
+        if _estado_por_guias(pedido) == "RETORNADO":
+            _transicionar_pedido(pedido, "RETORNADO", motivo=descripcion)
         texto = (
             f"El carrier marcó retorno al remitente en la guía {guia.numero} ({guia.carrier}). "
             f"Último evento: {descripcion or 'sin detalle'}. Requiere reingreso y reexpedición."

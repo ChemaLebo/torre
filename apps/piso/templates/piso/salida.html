@@ -50,6 +50,24 @@
     <div class="small"><b class="mono">{{ grupo.carrier|upper }}</b> · palomea lo que sube a ESTE camión:</div>
     {% for p in grupo.listos %}
     <div class="corral-fila">
+      {% if p.por_caja %}
+      {# Varias cajas: se palomea CADA caja; la que no tiene su foto de cierre se queda. #}
+      <div class="crece">
+        <span class="mono">{{ p.folio }}</span>
+        · <span class="small">{{ p.cajas_salida|length }} caja(s) por salir{% if p.estado == "PARCIALMENTE_DESPACHADO" %} · <span class="pill warn">salida parcial</span>{% endif %}</span>
+        <div class="small">{{ p.cliente.nombre }}</div>
+        {% for c in p.cajas_salida %}
+        <label class="small" style="display:block">
+          {% if c.cierre_ok %}
+          <input type="checkbox" name="paquete_id" value="{{ c.pk }}" checked
+                 form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">
+          {% endif %}
+          Caja {{ c.numero }} · <span class="mono">{{ c.guia.numero|default:"—" }}</span>
+          {% if not c.cierre_ok %}<span class="pill crit">falta foto de cierre</span>{% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
       <label class="crece">
         {% if p.cierre_ok %}
         <input type="checkbox" name="pedido_id" value="{{ p.pk }}" checked
@@ -61,6 +79,7 @@
           {% if not p.cierre_ok %}<span class="pill crit">falta foto de cierre</span>{% endif %}
         </div>
       </label>
+      {% endif %}
       <div class="fila">
         {% for g in p.guias_activas %}
         {% if g.etiqueta_url %}

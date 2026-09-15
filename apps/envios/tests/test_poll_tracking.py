@@ -154,3 +154,66 @@ class PollTrackingTests(TestCase):
         guia.refresh_from_db()
         self.assertEqual(guia.estado, Guia.EN_TRANSITO)
         self.assertFalse(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
+
+
+class MultiGuiaTests(TestCase):
+    """El pedido se mueve por el CONJUNTO de sus guías: una caja entregada
+    no entrega el pedido, una caja regresada no lo retorna, y mientras queden
+    cajas en bodega (PARCIALMENTE_DESPACHADO) el tracking no lo toca."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete
+
+        MockAdapter.reiniciar()
+        self.adapter = MockAdapter()
+        self.cliente = crear_cliente()
+        self.tienda = crear_tienda(self.cliente)
+        self.pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO")
+        for numero in (1, 2):
+            Paquete.objects.create(
+                pedido=self.pedido, numero=numero, peso_kg=Decimal("2"),
+                carrier="estafeta", servicio="ground",
+            )
+        guias = services.generar_guias(self.pedido)
+        self.g1, self.g2 = sorted(guias, key=lambda g: g.paquete.numero)
+        self.pedido.refresh_from_db()
+
+    def _poll(self, guia, estado):
+        self.adapter.avanzar_estado(guia.numero, estado)
+        services.poll_tracking()
+        self.pedido.refresh_from_db()
+        return self.pedido.estado
+
+    def test_una_caja_entregada_no_entrega_el_pedido(self):
+        self.pedido.transicionar("RECOLECTADO", motivo="Manifiesto (test)")
+        self.assertEqual(self._poll(self.g1, "EN_TRANSITO"), "EN_TRANSITO")
+        self.assertEqual(self._poll(self.g1, "ENTREGADO"), "EN_TRANSITO")
+        self.g1.refresh_from_db()
+        self.assertEqual(self.g1.estado, Guia.ENTREGADO)
+        self.assertEqual(self._poll(self.g2, "ENTREGADO"), "ENTREGADO")
+
+    def test_una_caja_regresada_no_retorna_el_pedido(self):
+        from apps.incidencias.models import Incidencia
+
+        self.pedido.transicionar("RECOLECTADO", motivo="Manifiesto (test)")
+        self._poll(self.g1, "EN_TRANSITO")
+        self.assertEqual(self._poll(self.g1, "RETORNO"), "EN_TRANSITO")
+        self.assertTrue(Incidencia.objects.filter(pedido=self.pedido, tipo="RF").exists())
+        # La caja que sigue viva decide: entregada → el pedido queda entregado.
+        self.assertEqual(self._poll(self.g2, "ENTREGADO"), "ENTREGADO")
+
+    def test_todas_las_cajas_regresadas_retorna_el_pedido(self):
+        self.pedido.transicionar("RECOLECTADO", motivo="Manifiesto (test)")
+        self._poll(self.g1, "EN_TRANSITO")
+        self._poll(self.g1, "RETORNO")
+        self.assertEqual(self._poll(self.g2, "RETORNO"), "RETORNADO")
+
+    def test_con_cajas_en_bodega_el_tracking_no_mueve_el_pedido(self):
+        self.pedido.transicionar("PARCIALMENTE_DESPACHADO", motivo="Salió la caja 1 (test)")
+        self.assertEqual(self._poll(self.g1, "EN_TRANSITO"), "PARCIALMENTE_DESPACHADO")
+        self.assertEqual(self._poll(self.g1, "ENTREGADO"), "PARCIALMENTE_DESPACHADO")
+        # Sale la última caja: RECOLECTADO, y el tracking de la 2 cierra el pedido.
+        self.pedido.transicionar("RECOLECTADO", motivo="Salió la caja 2 (test)")
+        self.assertEqual(self._poll(self.g2, "ENTREGADO"), "ENTREGADO")

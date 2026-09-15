@@ -73,7 +73,7 @@ _ESTADO_ESPECIAL = {
     ),
     Pedido.PARCIALMENTE_DESPACHADO: (
         "warn",
-        "Una parte del pedido ya va en camino; el resto sale en cuanto haya producto.",
+        "Una parte del pedido ya va en camino; el resto está empacado y sale en la siguiente recolección.",
     ),
     Pedido.CANCELACION_PENDIENTE: (
         "warn",

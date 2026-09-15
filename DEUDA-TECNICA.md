@@ -168,33 +168,33 @@ y estafeta, Mérida forzado a paquetexpress por regla.
   camino legacy sin plan). En reparto sí se respeta. Generalizarlo cambiaría
   el costo de clientes con reglas catch-all: decidir con Chema.
 
-## Despacho parcial por guía y paquete
+## Despacho parcial por guía y paquete — hecho 2026-09-15
 
-Hoy `PARCIALMENTE_DESPACHADO` existe en la máquina de estados del pedido
-pero nadie lo pone automáticamente, y el poller marca el pedido ENTREGADO
-cuando la PRIMERA guía llega (`envios.services._aplicar_efectos`), aunque el
-pedido tenga varias cajas. `Paquete` ya es el bulto físico (uno por guía).
+Salida palomea POR CAJA los pedidos empacados por caja (`paquete_id`); solo
+sube la caja con su foto de cierre. `marcar_recolectado(pedido, actor,
+paquetes)` marca las cajas DESPACHADO, despacha del kardex lo que viaja en
+ellas (una unidad de venta reempacada en medias sale con la primera media)
+y deja el pedido PARCIALMENTE_DESPACHADO hasta que sale la última (→
+RECOLECTADO; transición nueva). Plantilla B una sola vez (primer
+manifiesto); fulfillment en Shopify con el pedido completo fuera. El poller
+mueve el pedido por el conjunto de sus guías: ENTREGADO solo con todas las
+activas entregadas, RETORNADO solo con todas regresadas, y no toca un pedido
+con cajas en bodega. Sin migración.
 
-**Plan:** el estado del pedido se deriva de sus guías/paquetes: RECOLECTADO
-cuando salió al menos una caja y quedan otras → PARCIALMENTE_DESPACHADO;
-ENTREGADO solo cuando TODAS las guías activas están entregadas; RETORNADO si
-alguna regresa y ninguna sigue en tránsito (decidir con Chema). Salida y el
-rastreo público muestran el estado por caja. Migración: ninguna (usa
-Paquete/Guia); cambia `_aplicar_efectos` y `marcar_recolectado`.
+**Queda:** el rastreo público ya muestra el estado por caja; falta decidir
+con Chema si un pedido con una caja regresada y otra entregada debe cerrar
+como ENTREGADO (hoy sí, con la incidencia RF abierta) o quedarse abierto.
 
-## Auditoría usada como estado de negocio → columnas
+## Auditoría usada como estado de negocio → columnas — hecho 2026-09-15
 
-`core.EventoAuditoria` es un log append-only, pero hoy se LEE como estado:
-`Pedido.cajas_cerradas_completas` y el candado de `cerrar_caja` buscan el
-evento `caja_cerrada_con_evidencia` por paquete; el reporte del día saca de
-ahí el número de caja de cada foto; `cerrar_entregas_presuntas` toma el
-último evento como "fecha de cierre presunto". Cada lectura es una consulta
-por evento y amarra el negocio al formato del delta.
+`Paquete.ts_cierre` + `Paquete.foto_cierre` (migración envios 0009 con
+backfill desde los eventos). `cajas_cerradas_completas`, el candado de
+`cerrar_caja`, el wizard de piso y el reporte del día leen las columnas;
+`cerrar_entregas_presuntas` usa ts_en_transito / `Pedido.actualizado` /
+último movimiento de las guías. El evento `caja_cerrada_con_evidencia`
+sigue registrándose como bitácora.
 
-**Plan:** `Paquete.ts_cierre` + `Paquete.foto_cierre` (FK a EvidenciaFoto)
-escritos al cerrar la caja (el evento se sigue registrando, solo deja de
-leerse); `cajas_cerradas_completas` = todos los paquetes con ts_cierre; el
-reporte del día liga foto → caja por la FK; cierre presunto usa
-`Pedido.actualizado`. Migración con backfill desde los eventos existentes.
-Después de eso, decidir si el kardex (`inventario.Movimiento`) y la
-auditoría se traslapan (pendiente desde 2026-09-10).
+**Queda:** decidir si el kardex (`inventario.Movimiento`) y la auditoría se
+traslapan (pendiente desde 2026-09-10). Ya no hay lecturas de negocio sobre
+`EventoAuditoria` fuera del reporte del día (quién hizo cada paso) y el
+reporte de reparto.

@@ -1416,19 +1416,32 @@ def salida(request):
     ):
         pedido.contenido = _contenido_salida(pedido)
         _grupo(_carrier_probable(pedido))["sin_guia"].append(pedido)
+    from apps.pedidos.services import cajas_por_salir  # lazy por contrato
     for pedido in (
-        Pedido.objects.filter(estado=Pedido.GUIA_GENERADA)
-        .select_related("cliente").prefetch_related(*prefetch_contenido)
+        Pedido.objects.filter(estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO])
+        .select_related("cliente").prefetch_related(*prefetch_contenido, "paquetes__guias")
     ):
         pedido.contenido = _contenido_salida(pedido)
-        # Todas las guías vigentes: multi-paquete = una etiqueta por guía.
-        pedido.guias_activas = list(
-            pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
-        )
+        # Cajas que siguen en bodega (empaque por caja): cada una se palomea
+        # sola en el manifiesto y necesita SU foto de cierre. Vacío = el
+        # pedido se empacó entero y sale completo.
+        pedido.cajas_salida = cajas_por_salir(pedido)
+        for caja in pedido.cajas_salida:
+            caja.cierre_ok = caja.ts_cierre is not None
+            caja.guia = caja.guia_activa
+        pedido.por_caja = _por_caja(pedido)
+        # Todas las guías vigentes de lo que sigue aquí: una etiqueta por guía.
+        pedido.guias_activas = [
+            g for g in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
+            if g.paquete_id is None or g.paquete.estado != Paquete.DESPACHADO
+        ]
         guia = pedido.guias_activas[-1] if pedido.guias_activas else None
         pedido.guia = guia
         # Sin foto de cierre el manifiesto lo deja fuera: se avisa desde antes.
-        pedido.cierre_ok = pedido.cajas_cerradas_completas
+        if pedido.por_caja:
+            pedido.cierre_ok = any(c.cierre_ok for c in pedido.cajas_salida)
+        else:
+            pedido.cierre_ok = pedido.cajas_cerradas_completas
         carrier = guia.carrier if guia else _carrier_probable(pedido)
         _grupo(carrier)["listos"].append(pedido)
     for grupo in grupos.values():
@@ -1549,6 +1562,14 @@ def _salida_recoleccion(request):
     return redirect("piso:salida")
 
 
+def _por_caja(pedido):
+    """True si el pedido se empacó por caja con más de una caja: el manifiesto
+    palomea cajas (paquete_id), no el pedido entero."""
+    return sum(
+        1 for c in pedido.paquetes.all() if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)
+    ) > 1
+
+
 def _salida_manifiesto(request):
     """Manifiesto firmado: marca RECOLECTADO lo palomeado de UN carrier.
 
@@ -1558,6 +1579,8 @@ def _salida_manifiesto(request):
     Por carrier y con selección: SAL-OTRO junta varios carriers y cada chofer
     firma SOLO por lo que sube a SU camión; lo no palomeado (camión lleno,
     caja con detalle) se queda en el corral para la siguiente recolección.
+    Pedidos de varias cajas se palomean POR CAJA (paquete_id): las que suben
+    salen y el pedido queda PARCIALMENTE_DESPACHADO hasta que salga la última.
     """
     corral = (request.POST.get("corral") or "").strip()
     conocidos = {codigo for codigo, _ in corrales_activos()} | {CORRAL_LOCAL, CORRAL_OTRO}
@@ -1568,19 +1591,25 @@ def _salida_manifiesto(request):
     if not carrier:
         messages.error(request, "Falta el carrier del manifiesto. Usa los botones de la pantalla.")
         return redirect("piso:salida")
-    seleccion = {v for v in request.POST.getlist("pedido_id") if v.isdigit()}
-    if not seleccion:
+    seleccion = {int(v) for v in request.POST.getlist("pedido_id") if v.isdigit()}
+    cajas_sel = {int(v) for v in request.POST.getlist("paquete_id") if v.isdigit()}
+    if not seleccion and not cajas_sel:
         messages.error(
             request,
             "No palomeaste ningún pedido: marca lo que el chofer se lleva y vuelve a firmar.",
         )
         return redirect("piso:salida")
+    pedidos_de_cajas = set(
+        Paquete.objects.filter(pk__in=cajas_sel).values_list("pedido_id", flat=True)
+    )
 
+    from apps.pedidos.services import cajas_por_salir  # lazy por contrato
     listos, sin_cierre = [], []
     mapa = _mapa_corrales()
     for pedido in Pedido.objects.filter(
-        estado=Pedido.GUIA_GENERADA, pk__in=seleccion,
-    ).select_related("cliente"):
+        estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO],
+        pk__in=seleccion | pedidos_de_cajas,
+    ).select_related("cliente").prefetch_related("paquetes__guias"):
         guia = _guia_activa(pedido)
         carrier_pedido = guia.carrier if guia else _carrier_probable(pedido)
         # Un pedido de otro carrier u otro corral no sube a ESTE manifiesto
@@ -1588,11 +1617,22 @@ def _salida_manifiesto(request):
         if _corral_de_carrier(carrier_pedido, mapa) != corral or carrier_pedido != carrier:
             continue
         # Sin evidencia de cierre (foto de la caja cerrada con su etiqueta
-        # pegada) el pedido NO sube al manifiesto: se queda y se avisa.
-        if not pedido.cajas_cerradas_completas:
+        # pegada) el pedido — o la caja — NO sube al manifiesto: se queda y se avisa.
+        if not _por_caja(pedido):
+            if not pedido.cajas_cerradas_completas:
+                sin_cierre.append(pedido)
+                continue
+            listos.append((pedido, None))
+            continue
+        elegidas = [
+            c for c in cajas_por_salir(pedido)
+            if pedido.pk in seleccion or c.pk in cajas_sel
+        ]
+        cerradas = [c for c in elegidas if c.ts_cierre is not None]
+        if not cerradas:
             sin_cierre.append(pedido)
             continue
-        listos.append(pedido)
+        listos.append((pedido, cerradas))
     for pedido in sin_cierre:
         messages.warning(
             request,
@@ -1608,12 +1648,21 @@ def _salida_manifiesto(request):
 
     from apps.pedidos.services import marcar_recolectado  # lazy por contrato
     recolectados, errores = [], []
-    for pedido in listos:
+    for pedido, cajas in listos:
         try:
-            marcar_recolectado(pedido, request.user)
+            marcar_recolectado(pedido, request.user, paquetes=cajas)
             recolectados.append(pedido.folio)
         except ValueError as exc:
             errores.append(f"{pedido.folio}: {exc}")
+            continue
+        pedido.refresh_from_db()
+        if pedido.estado == Pedido.PARCIALMENTE_DESPACHADO:
+            quedan = ", ".join(str(c.numero) for c in cajas_por_salir(pedido))
+            messages.warning(
+                request,
+                f"{pedido.folio}: salió la caja {', '.join(str(c.numero) for c in cajas)}; "
+                f"la caja {quedan} se queda en el corral para la siguiente recolección.",
+            )
 
     if recolectados:
         registrar_evento(

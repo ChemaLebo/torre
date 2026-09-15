@@ -310,3 +310,94 @@ class SalidaOcultaSalLocalTests(PisoTestCase):
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "SAL-LOCAL")
         self.assertContains(respuesta, pedido.folio)
+
+
+@override_settings(TORRE=TORRE_POOL_LEGADO)
+class ManifiestoPorCajaTests(PisoTestCase):
+    """Pedido empacado por caja: Salida palomea cada caja (paquete_id); solo
+    la que tiene su foto de cierre sube; lo que sale deja el pedido
+    PARCIALMENTE_DESPACHADO hasta que sale la última."""
+
+    def setUp(self):
+        self.login_piso()
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=50)
+        self.url = reverse("piso:salida")
+
+    def _pedido_dos_cajas(self):
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from apps.envios.models import Paquete, PaqueteLinea
+
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
+        linea = pedido.lineas.get()
+        cajas = [
+            Paquete.objects.create(
+                pedido=pedido, numero=n, peso_kg=Decimal("2"), carrier="puntopost",
+                estado=Paquete.EMPACADO,
+            )
+            for n in (1, 2)
+        ]
+        for caja in cajas:
+            PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=2)
+        self.client.post(self.url, {"accion": "generar_guia", "pedido_id": pedido.pk})
+        Paquete.objects.filter(pk=cajas[0].pk).update(ts_cierre=timezone.now())
+        pedido.refresh_from_db()
+        return pedido, cajas[0], cajas[1]
+
+    def test_salida_palomea_por_caja_y_solo_la_cerrada(self):
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, f'name="paquete_id" value="{c1.pk}"')
+        self.assertNotContains(respuesta, f'name="paquete_id" value="{c2.pk}"')
+        self.assertNotContains(respuesta, f'name="pedido_id" value="{pedido.pk}"')
+        self.assertContains(respuesta, "falta foto de cierre")
+
+    def test_sale_una_caja_y_el_pedido_queda_parcial_hasta_la_ultima(self):
+        from django.utils import timezone
+
+        from apps.envios.models import Paquete
+
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        respuesta = self.client.post(self.url, {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "paquete_id": [c1.pk, c2.pk],  # la 2 va palomeada pero no tiene cierre
+        }, follow=True)
+        self.assertContains(respuesta, "se queda en el corral")
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+        self.assertEqual((c1.estado, c2.estado), (Paquete.DESPACHADO, Paquete.EMPACADO))
+        # Sigue en Salida con su caja pendiente y marcado como salida parcial.
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, "salida parcial")
+        self.assertNotContains(respuesta, f'name="paquete_id" value="{c1.pk}"')
+
+        Paquete.objects.filter(pk=c2.pk).update(ts_cierre=timezone.now())
+        self.client.post(self.url, {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "paquete_id": [c2.pk],
+        }, follow=True)
+        pedido.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+        self.assertEqual(c2.estado, Paquete.DESPACHADO)
+        en_empaque = (
+            Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_EMPAQUE)
+            .aggregate(t=Sum("cantidad"))["t"] or 0
+        )
+        self.assertEqual(en_empaque, 0)
+        self.assertNotContains(self.client.get(self.url), pedido.folio)
+
+    def test_pedido_id_de_un_pedido_por_caja_sube_solo_las_cerradas(self):
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        self.client.post(self.url, {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "pedido_id": [pedido.pk],
+        }, follow=True)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)

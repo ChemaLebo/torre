@@ -251,8 +251,10 @@ def enviar_en_camino(pedido):
 
     Se dispara en RECOLECTADO (escaneo de salida + manifiesto), nunca en
     etiquetado. Jamás se marca enviado un paquete que sigue en la bodega.
+    PARCIALMENTE_DESPACHADO cuenta: la primera caja ya subió al camión (el
+    rastreo público muestra cada caja).
     """
-    estados_validos = {"RECOLECTADO", "EN_TRANSITO", "ENTREGADO"}
+    estados_validos = {"RECOLECTADO", "PARCIALMENTE_DESPACHADO", "EN_TRANSITO", "ENTREGADO"}
     if pedido.estado not in estados_validos:
         raise ValueError(
             f"La plantilla B (en camino) solo se envía cuando el pedido fue RECOLECTADO; "

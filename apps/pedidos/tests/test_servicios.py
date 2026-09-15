@@ -1027,6 +1027,100 @@ class GuiaYSalidaTests(BaseServicios):
             services.marcar_recolectado(pedido, actor=None)
 
 
+class SalidaParcialTests(BaseServicios):
+    """Manifiesto por caja: salen las cajas palomeadas, el kardex despacha
+    solo lo que viaja en ellas, el pedido queda PARCIALMENTE_DESPACHADO hasta
+    que sale la última; plantilla B una sola vez, fulfillment al final."""
+
+    def _pedido_dos_cajas(self):
+        from decimal import Decimal
+
+        from apps.catalogo.models import SKU
+        from apps.envios.models import Paquete, PaqueteLinea
+
+        otro = SKU.objects.create(
+            cliente=self.cliente, codigo="OTRO-SIX", descripcion="Otro six",
+            peso_gr=1000, precio_declarado=Decimal("100"),
+        )
+        pedido = self.pedido_directo(estado=Pedido.GUIA_GENERADA)
+        l1 = LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2, reservada=True)
+        l2 = LineaPedido.objects.create(pedido=pedido, sku=otro, cantidad=1, cantidad_pickeada=1, reservada=True)
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("2"), carrier="estafeta", estado=Paquete.EMPACADO)
+        c2 = Paquete.objects.create(pedido=pedido, numero=2, peso_kg=Decimal("1"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=l1, cantidad=2)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=l2, cantidad=1)
+        return pedido, c1, c2, otro
+
+    def _salida(self, pedido, paquetes):
+        with patch("apps.inventario.services.despachar") as despachar, \
+             patch("apps.mensajeria.services.enviar_en_camino") as en_camino, \
+             patch("apps.integraciones.services.marcar_fulfillment") as fulfillment, \
+             self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, actor=None, paquetes=paquetes)
+        pedido.refresh_from_db()
+        return despachar, en_camino, fulfillment
+
+    def test_sale_una_caja_y_luego_la_otra(self):
+        from apps.envios.models import Paquete
+
+        pedido, c1, c2, otro = self._pedido_dos_cajas()
+        despachar, en_camino, fulfillment = self._salida(pedido, [c1])
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+        self.assertIsNotNone(pedido.ts_recolectado)
+        self.assertEqual((c1.estado, c2.estado), (Paquete.DESPACHADO, Paquete.EMPACADO))
+        despachar.assert_called_once_with(self.sku, 2, pedido.folio)
+        en_camino.assert_called_once()
+        fulfillment.assert_not_called()
+        self.assertEqual(services.cajas_por_salir(pedido), [c2])
+
+        despachar, en_camino, fulfillment = self._salida(pedido, [c2])
+        c2.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+        self.assertEqual(c2.estado, Paquete.DESPACHADO)
+        despachar.assert_called_once_with(otro, 1, pedido.folio)
+        en_camino.assert_not_called()
+        fulfillment.assert_called_once()
+
+    def test_todas_las_cajas_de_una_vez_es_recolectado_directo(self):
+        pedido, c1, c2, otro = self._pedido_dos_cajas()
+        despachar, en_camino, fulfillment = self._salida(pedido, None)
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+        self.assertEqual(despachar.call_count, 2)
+        en_camino.assert_called_once()
+        fulfillment.assert_called_once()
+
+    def test_ninguna_caja_pendiente_entre_las_palomeadas_truena(self):
+        pedido, c1, c2, _ = self._pedido_dos_cajas()
+        with self.assertRaises(ValueError):
+            services.marcar_recolectado(pedido, actor=None, paquetes=[])
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)
+
+    def test_un_kit_en_la_caja_despacha_sus_hijas(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete, PaqueteLinea
+
+        from apps.catalogo.models import SKU
+
+        sku_kit = SKU.objects.create(
+            cliente=self.cliente, codigo="KIT-3", descripcion="Kit de 3", peso_gr=100,
+            precio_declarado=Decimal("300"), es_kit=True,
+        )
+        pedido = self.pedido_directo(estado=Pedido.GUIA_GENERADA)
+        kit = LineaPedido.objects.create(pedido=pedido, sku=sku_kit, cantidad=1, cantidad_pickeada=1, reservada=True)
+        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=1, cantidad_pickeada=1, reservada=True, parte_de_kit=kit)
+        suelta = LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=3, cantidad_pickeada=3, reservada=True)
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("1"), carrier="estafeta", estado=Paquete.EMPACADO)
+        c2 = Paquete.objects.create(pedido=pedido, numero=2, peso_kg=Decimal("3"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=kit, cantidad=1)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=suelta, cantidad=3)
+        despachar, _en_camino, _fulfillment = self._salida(pedido, [c1])
+        despachar.assert_called_once_with(self.sku, 1, pedido.folio)  # la hija, jamás el kit
+
+
 class CancelacionTests(BaseServicios):
     def test_cancelar_pendiente_se_cancela_solo_y_libera(self):
         pedido = self.pedido_directo()
