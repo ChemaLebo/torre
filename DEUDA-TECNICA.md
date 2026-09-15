@@ -167,3 +167,34 @@ y estafeta, Mérida forzado a paquetexpress por regla.
   ReglaEnvio que aplique (la regla solo manda en el atajo local y en el
   camino legacy sin plan). En reparto sí se respeta. Generalizarlo cambiaría
   el costo de clientes con reglas catch-all: decidir con Chema.
+
+## Despacho parcial por guía y paquete
+
+Hoy `PARCIALMENTE_DESPACHADO` existe en la máquina de estados del pedido
+pero nadie lo pone automáticamente, y el poller marca el pedido ENTREGADO
+cuando la PRIMERA guía llega (`envios.services._aplicar_efectos`), aunque el
+pedido tenga varias cajas. `Paquete` ya es el bulto físico (uno por guía).
+
+**Plan:** el estado del pedido se deriva de sus guías/paquetes: RECOLECTADO
+cuando salió al menos una caja y quedan otras → PARCIALMENTE_DESPACHADO;
+ENTREGADO solo cuando TODAS las guías activas están entregadas; RETORNADO si
+alguna regresa y ninguna sigue en tránsito (decidir con Chema). Salida y el
+rastreo público muestran el estado por caja. Migración: ninguna (usa
+Paquete/Guia); cambia `_aplicar_efectos` y `marcar_recolectado`.
+
+## Auditoría usada como estado de negocio → columnas
+
+`core.EventoAuditoria` es un log append-only, pero hoy se LEE como estado:
+`Pedido.cajas_cerradas_completas` y el candado de `cerrar_caja` buscan el
+evento `caja_cerrada_con_evidencia` por paquete; el reporte del día saca de
+ahí el número de caja de cada foto; `cerrar_entregas_presuntas` toma el
+último evento como "fecha de cierre presunto". Cada lectura es una consulta
+por evento y amarra el negocio al formato del delta.
+
+**Plan:** `Paquete.ts_cierre` + `Paquete.foto_cierre` (FK a EvidenciaFoto)
+escritos al cerrar la caja (el evento se sigue registrando, solo deja de
+leerse); `cajas_cerradas_completas` = todos los paquetes con ts_cierre; el
+reporte del día liga foto → caja por la FK; cierre presunto usa
+`Pedido.actualizado`. Migración con backfill desde los eventos existentes.
+Después de eso, decidir si el kardex (`inventario.Movimiento`) y la
+auditoría se traslapan (pendiente desde 2026-09-10).
