@@ -337,7 +337,40 @@ class SeedEscenariosLoteATests(TestCase):
             LineaPedido.objects.filter(sku__codigo="COL-AGOTADO", reservada=False).exists()
         )
         replan = Pedido.objects.get(shopify_order_id="88003")
-        self.assertEqual(replan.paquetes.get().carrier, "noventa9Minutos")
+        self.assertEqual(replan.paquetes.get().carrier, "fedex")  # fuera del reparto → replan al generar
         self.assertEqual(
             Cliente.objects.get(slug="mezcal-nocturno").integracion_envios, "99minutos",
         )
+
+    def test_colima_reparte_por_porcentajes(self):
+        from apps.core.models import Cliente
+        from apps.envios.models import ReglaEnvio
+        from apps.envios.reparto import reporte_mes
+        from apps.pedidos.models import Pedido
+
+        colima = Cliente.objects.get(slug="colima")
+        self.assertEqual(colima.integracion_envios, "reparto")
+        self.assertEqual(colima.reparto_pesos, {"noventa9Minutos": 75, "estafeta": 25})
+        repartidos = Pedido.objects.filter(cliente=colima).exclude(reparto_carrier="")
+        self.assertGreaterEqual(repartidos.count(), 8)
+        self.assertEqual(colima.reparto_cursor, repartidos.count())
+        self.assertTrue(set(repartidos.values_list("reparto_carrier", flat=True)) <= {"noventa9Minutos", "estafeta"})
+        for pedido in repartidos.prefetch_related("guias"):
+            for guia in pedido.guias.all():
+                self.assertEqual(guia.carrier, pedido.reparto_carrier, pedido.folio)
+        # Mérida va forzado a paquetexpress por regla: sin carta.
+        merida = Pedido.objects.filter(cliente=colima, cp__startswith="97")
+        self.assertTrue(merida.exists())
+        self.assertFalse(merida.exclude(reparto_carrier="").exists())
+        self.assertEqual(ReglaEnvio.objects.get(cliente=colima, prioridad=20).condicion, {"cp_prefijo": "97"})
+        [bloque] = reporte_mes(*self._mes_completo())
+        self.assertGreaterEqual(bloque["cartas"], 8)
+        self.assertGreaterEqual(bloque["forzados_regla"], 1)
+
+    def _mes_completo(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        ahora = timezone.now()
+        return ahora - timedelta(days=30), ahora + timedelta(days=1)

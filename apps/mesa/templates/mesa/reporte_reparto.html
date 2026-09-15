@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Reparto de carriers · {{ mes|date:"F Y" }} · Mesa{% endblock %}
+{% block content %}
+{# Reparto de carriers por porcentajes: cartas asignadas contra guías efectivas, por cliente y mes. #}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Reportes{% if cliente %} · {{ cliente.nombre }}{% endif %}</div>
+    <h1>Reparto de carriers</h1>
+  </div>
+  <div class="quien">{{ mes|date:"F Y" }}</div>
+</div>
+
+<div class="card mb">
+  <form method="get" class="fila">
+    <div>
+      <label for="f-mes">Mes</label>
+      <input type="month" id="f-mes" name="mes" value="{{ mes|date:'Y-m' }}">
+    </div>
+    <div style="flex:1;min-width:200px">
+      <label for="f-cliente">Cliente</label>
+      <select id="f-cliente" name="cliente">
+        <option value="">Todos los que reparten</option>
+        {% for c in clientes %}<option value="{{ c.slug }}" {% if cliente and cliente.pk == c.pk %}selected{% endif %}>{{ c.nombre }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="fila" style="align-self:flex-end">
+      <button class="btn primario" type="submit">Ver</button>
+      <a class="btn" href="{% url 'mesa:reporte_reparto' %}?mes={{ anterior|date:'Y-m' }}{% if cliente %}&cliente={{ cliente.slug }}{% endif %}">◀ Mes anterior</a>
+      {% if siguiente %}<a class="btn" href="{% url 'mesa:reporte_reparto' %}?mes={{ siguiente|date:'Y-m' }}{% if cliente %}&cliente={{ cliente.slug }}{% endif %}">Mes siguiente ▶</a>{% endif %}
+    </div>
+  </form>
+  <p class="small muted mt">
+    Cada pedido elegible saca una carta de la baraja del cliente; la carta no se devuelve aunque el carrier falle.
+    «Con la carta» = guía activa con ese carrier; «otro carrier» = Mesa lo forzó después de la carta;
+    «sin guía» = pendiente o fallo de la integración (se ve en Salida); «forzados por regla» = una ReglaEnvio decidió antes y no consumió carta.
+    Los pedidos entran por su fecha de creación.
+  </p>
+</div>
+
+{% for b in bloques %}
+<div class="card mb">
+  <div class="titulo">
+    <h3>{{ b.cliente.nombre }}</h3>
+    <span class="small muted">
+      {% if b.en_reparto %}bloque de {{ b.tam }} cartas · siguiente: carta {{ b.posicion }} del bloque {{ b.bloque }}{% else %}ya no reparte (cartas históricas){% endif %}
+      · <a href="{% url 'mesa:cliente_detalle' b.cliente.pk %}">ficha →</a>
+    </span>
+  </div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Carrier</th><th class="derecha">Peso</th><th class="derecha">Cartas</th><th class="derecha">% real</th>
+          <th class="derecha">Con la carta</th><th class="derecha">Otro carrier</th><th class="derecha">Sin guía</th><th class="derecha">Canceladas</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in b.filas %}
+        <tr>
+          <td class="mono">{{ f.carrier }}</td>
+          <td class="derecha mono">{% if f.peso is not None %}{{ f.peso }}%{% else %}<span class="muted">fuera</span>{% endif %}</td>
+          <td class="derecha mono">{{ f.cartas }}</td>
+          <td class="derecha mono">{% if f.porcentaje is not None %}{{ f.porcentaje }}%{% else %}—{% endif %}</td>
+          <td class="derecha mono">{% if f.efectivas %}<span class="pill ok">{{ f.efectivas }}</span>{% else %}0{% endif %}</td>
+          <td class="derecha mono">{% if f.otro_carrier %}<span class="pill warn">{{ f.otro_carrier }}</span>{% else %}0{% endif %}</td>
+          <td class="derecha mono">{% if f.sin_guia %}<span class="pill warn">{{ f.sin_guia }}</span>{% else %}0{% endif %}</td>
+          <td class="derecha mono">{{ f.canceladas }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="muted">Sin pesos configurados.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="small muted mt">
+    {{ b.pedidos }} pedido(s) del mes · {{ b.cartas }} con carta · {{ b.forzados_regla }} forzado(s) por regla (guía sin carta)
+  </div>
+</div>
+{% empty %}
+<div class="card"><p class="muted">Ningún cliente reparte por porcentajes{% if cliente %} (o {{ cliente.nombre }} no tiene cartas ese mes){% endif %}.</p></div>
+{% endfor %}
+
+{% endblock %}

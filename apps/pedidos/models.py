@@ -115,6 +115,11 @@ class Pedido(models.Model):
     direccion = models.JSONField(default=dict, blank=True)
     cp = models.CharField("código postal", max_length=10, blank=True)
     es_local = models.BooleanField(default=False, help_text="CP de Colima (28xxx): entrega local propia")
+    # Carta que le tocó en el reparto por porcentajes del cliente (vacío si el
+    # cliente no reparte o una ReglaEnvio decidió antes). Se saca una sola vez
+    # por pedido (envios.reparto.sacar_carta) y aquí queda para que todas las
+    # llamadas a elegir_carrier (plan, cada paquete, corral de Salida) coincidan.
+    reparto_carrier = models.CharField(max_length=40, blank=True)
     parcial_de_orden = models.BooleanField(
         default=False,
         help_text="La orden de Shopify se dividió entre locations: este pedido ampara solo NUESTRO ticket",

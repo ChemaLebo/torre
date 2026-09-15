@@ -1238,6 +1238,36 @@ def reporte_dia_csv(request):
 
 
 @rol_requerido("mesa")
+def reporte_reparto(request):
+    """Reparto de carriers por porcentajes: por cliente y mes (?mes=AAAA-MM,
+    ?cliente=slug), cartas asignadas por carrier contra guías efectivas,
+    forzados y bloque en curso. Base para revisar los pesos."""
+    from datetime import date, datetime
+
+    from apps.envios.reparto import reporte_mes  # lazy por contrato
+
+    hoy = timezone.localdate()
+    try:
+        mes = date.fromisoformat((request.GET.get("mes") or "").strip() + "-01")
+    except ValueError:
+        mes = hoy.replace(day=1)
+    siguiente = date(mes.year + (mes.month == 12), mes.month % 12 + 1, 1)
+    anterior = date(mes.year - (mes.month == 1), (mes.month - 2) % 12 + 1, 1)
+    inicio = timezone.make_aware(datetime.combine(mes, datetime.min.time()))
+    fin = timezone.make_aware(datetime.combine(siguiente, datetime.min.time()))
+    slug = (request.GET.get("cliente") or "").strip()
+    cliente = get_object_or_404(Cliente, slug=slug) if slug else None
+    return render(request, "mesa/reporte_reparto.html", {
+        "seccion": "reporte_reparto",
+        "mes": mes, "anterior": anterior,
+        "siguiente": siguiente if siguiente <= hoy else None,
+        "cliente": cliente,
+        "clientes": Cliente.objects.filter(activo=True).order_by("nombre"),
+        "bloques": reporte_mes(inicio, fin, cliente),
+    })
+
+
+@rol_requerido("mesa")
 def recepciones_plantilla(request):
     """Formato CSV del anuncio de ASN de un cliente (?cliente=slug&sku=<pk>&sku=…);
     sin SKUs marcados baja solo el encabezado. Lógica en inventario.services."""
@@ -1414,6 +1444,7 @@ def cliente_detalle(request, pk):
         "pedidos_recientes": pedidos_recientes,
         "incidencias_abiertas": incidencias_abiertas,
         "reglas_envio": ReglaEnvio.objects.filter(Q(cliente=cliente) | Q(cliente__isnull=True)),
+        "reparto": _resumen_reparto(cliente),
         "plantillas": PlantillaMensaje.objects.filter(Q(cliente=cliente) | Q(cliente__isnull=True)),
     })
 
@@ -1428,6 +1459,28 @@ def _serializar_delta(valor):
     if isinstance(valor, Decimal):
         return str(valor)
     return valor
+
+
+def _avisar_reparto(request, form):
+    """Flash con el tamaño de bloque y los redondeos de los pesos del reparto."""
+    resumen = form.resumen_reparto()
+    if resumen is None:
+        return
+    texto = f"Reparto por porcentajes: bloque de {resumen['tam']} cartas."
+    if resumen["redondeados"]:
+        texto += " Pesos redondeados al tope del bloque: " + ", ".join(resumen["redondeados"]) + "."
+    messages.info(request, texto)
+
+
+def _resumen_reparto(cliente):
+    """Pesos, bloque y siguiente carta del cliente para la ficha; None si no reparte."""
+    if cliente.integracion_envios != Cliente.INTEGRACION_REPARTO or not cliente.reparto_pesos:
+        return None
+    from apps.envios.reparto import posicion, resumen_pesos  # lazy por contrato
+
+    resumen = resumen_pesos(cliente.reparto_pesos)
+    resumen["bloque"], resumen["posicion"], _tam = posicion(cliente)
+    return resumen
 
 
 @rol_requerido("mesa")
@@ -1449,11 +1502,13 @@ def cliente_nuevo(request):
             "Cliente creado. Siguiente: carga sus SKUs, crea su usuario del portal "
             "y revisa su tarifario.",
         )
+        _avisar_reparto(request, form)
         return redirect("mesa:cliente_detalle", pk=cliente.pk)
     return render(request, "mesa/cliente_form.html", {
         "seccion": "clientes",
         "form": form,
         "cliente": None,
+        "reparto_bloque_max": settings.TORRE.get("REPARTO_BLOQUE_MAX", 100),
     })
 
 
@@ -1475,6 +1530,7 @@ def cliente_editar(request, pk):
         "umbral_visto_bueno_mxn": cliente.umbral_visto_bueno_mxn,
         "guia_de_voz": cliente.guia_de_voz,
         "activo": cliente.activo,
+        **{f"peso_{carrier}": peso for carrier, peso in (cliente.reparto_pesos or {}).items()},
         **{f"brand_{clave}": branding.get(clave, "") for clave in (
             "color_primario", "color_fondo", "logo_url",
             "nombre_publico", "whatsapp_soporte", "dominio_tienda",
@@ -1490,6 +1546,11 @@ def cliente_editar(request, pk):
             if viejo != nuevo:
                 delta[campo] = [_serializar_delta(viejo), _serializar_delta(nuevo)]
                 setattr(cliente, campo, nuevo)
+        if "reparto_pesos" in delta:
+            # Pesos nuevos = bloque nuevo desde el siguiente pedido; el bloque
+            # parcial anterior se abandona (se ve en el reporte de reparto).
+            delta["reparto_base"] = [cliente.reparto_base, cliente.reparto_cursor]
+            cliente.reparto_base = cliente.reparto_cursor
         if delta:
             cliente.save()
             registrar_evento(
@@ -1497,6 +1558,7 @@ def cliente_editar(request, pk):
                 delta=delta, motivo="Edición desde Mesa de Control",
             )
             messages.success(request, f"Cliente actualizado: cambiaron {len(delta)} campo(s).")
+            _avisar_reparto(request, form)
         else:
             messages.success(request, "Sin cambios que guardar: la ficha ya estaba así.")
         return redirect("mesa:cliente_detalle", pk=cliente.pk)

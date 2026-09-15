@@ -18,6 +18,7 @@ urlpatterns = [
     path("recepciones/plantilla.csv", views.recepciones_plantilla, name="recepciones_plantilla"),
     path("reportes/dia/", views.reporte_dia, name="reporte_dia"),
     path("reportes/dia.csv", views.reporte_dia_csv, name="reporte_dia_csv"),
+    path("reportes/reparto/", views.reporte_reparto, name="reporte_reparto"),
     path("sync/", views.sync, name="sync"),
     path("clientes/", views.clientes, name="clientes"),
     path("clientes/nuevo/", views.cliente_nuevo, name="cliente_nuevo"),

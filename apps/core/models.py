@@ -21,12 +21,27 @@ class Cliente(models.Model):
     # nuevos; los existentes migraron a "envia" (0005, cero cambio de
     # conducta al desplegar). Sin NOVENTA9_API_KEY/MODO=full el directo
     # cae a envia (fail-safe de configuración).
+    # "reparto" = cada pedido saca una carta de una baraja con los carriers
+    # en la proporción de reparto_pesos (envios.reparto); el proveedor de
+    # cada carrier sale de TORRE["PROVEEDOR_POR_CARRIER"] como siempre.
     INTEGRACION_ENVIA = "envia"
     INTEGRACION_99MIN = "99minutos"
-    INTEGRACIONES = [(INTEGRACION_ENVIA, "envia.com"), (INTEGRACION_99MIN, "99minutos directo")]
+    INTEGRACION_REPARTO = "reparto"
+    INTEGRACIONES = [
+        (INTEGRACION_ENVIA, "envia.com"),
+        (INTEGRACION_99MIN, "99minutos directo"),
+        (INTEGRACION_REPARTO, "Reparto por porcentajes"),
+    ]
     integracion_envios = models.CharField(
         max_length=12, choices=INTEGRACIONES, default=INTEGRACION_99MIN,
     )
+    # Reparto por porcentajes: {carrier: peso} (suman 100, hasta dos
+    # decimales). El cursor es el N del siguiente pedido que saca carta; la
+    # base es el N en que entraron en vigor los pesos actuales (cambiar pesos
+    # → base = cursor: arranca bloque nuevo, el parcial anterior se abandona).
+    reparto_pesos = models.JSONField(default=dict, blank=True)
+    reparto_cursor = models.PositiveIntegerField(default=0)
+    reparto_base = models.PositiveIntegerField(default=0)
     naked_packing_local = models.BooleanField(default=True)
     guia_de_voz = models.TextField(blank=True, help_text="Reglas de tono para mensajes al comprador final")
     umbral_visto_bueno_mxn = models.DecimalField(max_digits=8, decimal_places=2, default=2000)

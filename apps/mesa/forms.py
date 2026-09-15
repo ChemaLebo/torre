@@ -92,7 +92,10 @@ class FormCliente(forms.Form):
         label="Integración de envíos",
         choices=Cliente.INTEGRACIONES,
         initial=Cliente.INTEGRACION_99MIN,
-        help_text="Por dónde viajan sus guías: envia.com (multi-carrier) o 99minutos directo.",
+        help_text=(
+            "Por dónde viajan sus guías: envia.com (multi-carrier), 99minutos directo "
+            "o reparto por porcentajes (cada pedido saca una carta según los pesos de abajo)."
+        ),
         error_messages={"required": "Elige la integración de envíos."},
     )
     naked_packing_local = forms.BooleanField(
@@ -139,14 +142,64 @@ class FormCliente(forms.Form):
         self.cliente = cliente
         carriers = list(settings.TORRE["CARRIERS_COTIZAR"]) + ["local"]
         self.fields["carrier_preferente"].choices = [(c, c) for c in carriers]
+        # Pesos del reparto por porcentajes: un campo por carrier elegible
+        # (peso_<carrier>); solo se validan y guardan con integración "reparto".
+        from apps.envios.reparto import carriers_elegibles  # lazy por contrato
+        self.carriers_reparto = carriers_elegibles()
+        for carrier in self.carriers_reparto:
+            self.fields[f"peso_{carrier}"] = forms.DecimalField(
+                label=carrier, required=False, min_value=0, max_value=100,
+                max_digits=5, decimal_places=2,
+                widget=forms.NumberInput(attrs={"step": "0.01", "inputmode": "decimal"}),
+                error_messages={
+                    "invalid": f"El peso de {carrier} debe ser un número (ej. 75 o 12.5).",
+                    "min_value": f"El peso de {carrier} no puede ser negativo.",
+                    "max_value": f"El peso de {carrier} no puede pasar de 100.",
+                    "max_decimal_places": f"El peso de {carrier} lleva hasta dos decimales.",
+                },
+            )
         if cliente is not None:
             # El slug es la llave de idempotencia del seed: en edición no se toca.
             self.fields["slug"].disabled = True
             self.fields["slug"].initial = cliente.slug
             self.fields["slug"].help_text = "El slug no se cambia: es la llave del cliente en URLs y seed."
 
+    def campos_reparto(self):
+        """Bound fields de los pesos, en el orden de carriers elegibles (template)."""
+        return [self[f"peso_{carrier}"] for carrier in self.carriers_reparto]
+
+    def _validar_reparto(self, datos):
+        """Con integración "reparto": los pesos capturados (> 0) deben sumar
+        exactamente 100; deja datos["reparto_pesos"] = {carrier: peso}."""
+        pesos = {}
+        for carrier in self.carriers_reparto:
+            valor = datos.get(f"peso_{carrier}")
+            if valor:
+                pesos[carrier] = _numero_json(valor)
+        if datos.get("integracion_envios") != Cliente.INTEGRACION_REPARTO:
+            return
+        suma = sum(Decimal(str(v)) for v in pesos.values())
+        if not pesos or suma != 100:
+            self.add_error(
+                "integracion_envios",
+                f"Para repartir por porcentajes los pesos deben sumar 100 (suman {suma:g}). "
+                "Deja en 0 o vacío los carriers que no entran.",
+            )
+            return
+        datos["reparto_pesos"] = pesos
+
+    def resumen_reparto(self):
+        """Tamaño de bloque y redondeos de los pesos ya validados (para avisar
+        en la ficha); None si no aplica."""
+        pesos = self.cleaned_data.get("reparto_pesos") if hasattr(self, "cleaned_data") else None
+        if not pesos:
+            return None
+        from apps.envios.reparto import resumen_pesos  # lazy por contrato
+        return resumen_pesos(pesos)
+
     def clean(self):
         datos = super().clean()
+        self._validar_reparto(datos)
         if self.cliente is not None:
             datos["slug"] = self.cliente.slug
             return datos
@@ -179,7 +232,7 @@ class FormCliente(forms.Form):
     def datos_cliente(self):
         """Campos del modelo Cliente (sin slug ni branding) ya limpios."""
         d = self.cleaned_data
-        return {
+        datos = {
             "nombre": d["nombre"].strip(),
             "razon_social": (d.get("razon_social") or "").strip(),
             "rfc": (d.get("rfc") or "").strip(),
@@ -193,6 +246,11 @@ class FormCliente(forms.Form):
             "guia_de_voz": (d.get("guia_de_voz") or "").strip(),
             "activo": d.get("activo", False),
         }
+        # Los pesos solo se tocan cuando el cliente reparte: al cambiar a otra
+        # integración se conservan por si regresa (inertes mientras tanto).
+        if "reparto_pesos" in d:
+            datos["reparto_pesos"] = d["reparto_pesos"]
+        return datos
 
 
 class FormTarifario(forms.Form):

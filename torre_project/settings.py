@@ -213,6 +213,10 @@ TORRE = {
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
     "PROVEEDOR_POR_CARRIER": {},
+    # Reparto de carriers por porcentajes (integración "reparto" por cliente):
+    # tope de cartas por bloque. Los pesos que exigen más cartas para ser
+    # exactos (92.25/7.75 → 400) se redondean a este tamaño y la ficha lo avisa.
+    "REPARTO_BLOQUE_MAX": 100,
     # Estados: envia valida direcciones con SUS códigos de 2 letras (FAQ de
     # envia, 2026-09: "do not reuse codes from other platforms"). Origen "CX"
     # fijo (ORIGEN_DEFAULT) y destino traducido con envios.cotizador.estado_envia

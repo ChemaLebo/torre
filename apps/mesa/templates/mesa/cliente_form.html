@@ -80,6 +80,22 @@
       {{ form.guia_de_voz }}{{ form.guia_de_voz.errors }}
     </div>
 
+    <div class="eyebrow mt">Reparto por porcentajes</div>
+    <p class="small muted mt">
+      Solo aplica con la integración «Reparto por porcentajes». Los pesos suman 100 (hasta dos decimales);
+      vacío o 0 = ese carrier no entra. El bloque es el mínimo que representa los pesos exactos
+      (75/25 → 4 cartas, 70/30 → 10, 92/8 → 25) con tope de {{ reparto_bloque_max }} cartas: si los pesos
+      piden más, se redondean y se avisa al guardar. Cambiar los pesos arranca un bloque nuevo.
+    </p>
+    <div class="grid g3 mt">
+      {% for campo in form.campos_reparto %}
+      <div>
+        <label for="{{ campo.id_for_label }}">{{ campo.label }} (%)</label>
+        {{ campo }}{{ campo.errors }}
+      </div>
+      {% endfor %}
+    </div>
+
     <div class="eyebrow mt">Branding del rastreo (opcional)</div>
     <div class="grid g2 mt">
       <div>

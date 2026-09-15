@@ -116,6 +116,9 @@ def elegir_carrier(pedido):
     Evalúa ReglaEnvio por prioridad (menor gana; en empate, la regla del
     cliente le gana a la global). Sin regla aplicable:
     - pedido local CON flota propia → ("local", "entrega_local") — sin guía externa;
+    - cliente en "reparto" → la carta del pedido (envios.reparto, una sola
+      vez por pedido; sin pesos configurados cae al default, fail-safe);
+    - cliente en "99minutos" → noventa9Minutos directo;
     - lo demás → carrier preferente del cliente (Colima: paquetexpress) vía envia.
 
     Sin flota propia (TORRE["FLOTA_PROPIA"]=False) las reglas con carrier
@@ -123,19 +126,67 @@ def elegir_carrier(pedido):
     guías "local" ya emitidas no se tocan (datos viejos).
     """
     flota = _flota_propia()
+    regla = _regla_aplicable(pedido, flota)
+    if regla is not None:
+        return regla
+    if pedido.es_local and flota:
+        return (CARRIER_LOCAL, SERVICIO_LOCAL)
+    carta = _carta_reparto(pedido)
+    if carta:
+        return (carta, SERVICIO_DEFAULT)
+    if getattr(pedido.cliente, "integracion_envios", "") == "99minutos":
+        # Flip por cliente: sus envíos viajan por 99minutos directo. Las
+        # ReglaEnvio siguen mandando arriba (excepciones explícitas ganan).
+        return ("noventa9Minutos", SERVICIO_DEFAULT)
+    return (pedido.cliente.carrier_preferente or "paquetexpress", SERVICIO_DEFAULT)
+
+
+def _regla_aplicable(pedido, flota):
+    """(carrier, servicio) de la primera ReglaEnvio que aplica al pedido
+    (prioridad menor gana; en empate la del cliente le gana a la global), o
+    None. Sin flota, las reglas con carrier "local" son carril muerto."""
     reglas = ReglaEnvio.objects.filter(Q(cliente=pedido.cliente) | Q(cliente__isnull=True))
     for regla in sorted(reglas, key=lambda r: (r.prioridad, r.cliente_id is None, r.pk)):
         if regla.carrier == CARRIER_LOCAL and not flota:
             continue  # regla de flota propia sin flota: carril muerto, se salta
         if regla.aplica_a(pedido):
             return (regla.carrier, regla.servicio)
-    if pedido.es_local and flota:
-        return (CARRIER_LOCAL, SERVICIO_LOCAL)
-    if getattr(pedido.cliente, "integracion_envios", "") == "99minutos":
-        # Flip por cliente: sus envíos viajan por 99minutos directo. Las
-        # ReglaEnvio siguen mandando arriba (excepciones explícitas ganan).
-        return ("noventa9Minutos", SERVICIO_DEFAULT)
-    return (pedido.cliente.carrier_preferente or "paquetexpress", SERVICIO_DEFAULT)
+    return None
+
+
+def _cliente_reparte(cliente):
+    return getattr(cliente, "integracion_envios", "") == "reparto" and bool(cliente.reparto_pesos)
+
+
+def _carta_reparto(pedido):
+    """Carta del reparto por porcentajes si el cliente está en "reparto" con
+    pesos; "" si no aplica. Se saca una sola vez por pedido (queda en
+    Pedido.reparto_carrier). No revisa reglas ni flota: quien llama ya decidió."""
+    if not _cliente_reparte(pedido.cliente):
+        return ""
+    if pedido.reparto_carrier:
+        return pedido.reparto_carrier
+    from .reparto import sacar_carta  # lazy: evita ciclo en carga
+    return sacar_carta(pedido)
+
+
+def carriers_del_pedido(pedido):
+    """Carriers que la config VIGENTE permite cotizar/comprar para este pedido.
+    Cliente en reparto: el carrier de la ReglaEnvio que aplique (decidió antes,
+    no consume carta) o la carta del pedido; cliente 99minutos directo:
+    noventa9Minutos; los demás: la lista blanca CARRIERS_COTIZAR (las reglas
+    no acotan el plan de esos clientes, conducta de siempre). Lo usan el
+    planificador y el replan."""
+    if _cliente_reparte(pedido.cliente):
+        flota = _flota_propia()
+        regla = _regla_aplicable(pedido, flota)
+        if regla is not None and regla[0] != CARRIER_LOCAL:
+            return [regla[0]]
+        if regla is None and not (pedido.es_local and flota):
+            return [_carta_reparto(pedido)]
+    elif getattr(pedido.cliente, "integracion_envios", "") == "99minutos":
+        return ["noventa9Minutos"]
+    return list(settings.TORRE["CARRIERS_COTIZAR"])
 
 
 def _respaldo_envia(adapter, pedido, carrier, exc):
@@ -232,13 +283,6 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
     return guia
 
 
-def _carriers_permitidos(cliente):
-    """Carriers que la config VIGENTE permite para este cliente."""
-    if getattr(cliente, "integracion_envios", "") == "99minutos":
-        return {"noventa9Minutos"}
-    return set(settings.TORRE["CARRIERS_COTIZAR"])
-
-
 def _replan_paquete(pedido, paquete, carrier_viejo):
     """El plan guardó un carrier que la config vigente ya no permite (lista
     recortada o cliente flipeado de integración): se re-cotiza el lane AL
@@ -249,7 +293,8 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
 
     dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
     filas = [
-        f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente)
+        f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente,
+                                carriers=carriers_del_pedido(pedido))
         if f["ok"] and f["precio"] is not None
     ]
     if not filas:
@@ -285,7 +330,7 @@ def _carrier_de_paquete(pedido, paquete):
     servicio = paquete.servicio or ""
     if not carrier or (carrier == CARRIER_LOCAL and not _flota_propia()):
         carrier, servicio = elegir_carrier(pedido)
-    elif carrier != CARRIER_LOCAL and carrier not in _carriers_permitidos(pedido.cliente):
+    elif carrier != CARRIER_LOCAL and carrier not in carriers_del_pedido(pedido):
         # Plan viejo vs config nueva (#10): la config vigente manda al generar.
         carrier, servicio = _replan_paquete(pedido, paquete, carrier)
     return carrier, servicio
@@ -305,6 +350,10 @@ def generar_guias(pedido):
     """
     from .cotizador import planificar_envio  # lazy: evita ciclo en carga
 
+    # La carta del reparto se saca ANTES de cualquier atomic de aquí abajo:
+    # si el carrier falla, la carta se queda con el pedido (es el dato del
+    # fallo que se quiere medir), no se revierte con la guía.
+    carriers_del_pedido(pedido)
     with transaction.atomic():
         paquetes = list(pedido.paquetes.select_for_update().all())
         if not paquetes:

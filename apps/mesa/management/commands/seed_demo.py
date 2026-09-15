@@ -73,6 +73,9 @@ UBICACIONES = [
     ("SAL-LOCAL", "salida", "local"), ("SAL-OTRO", "salida", ""),
 ]
 
+# Reparto de carriers por porcentajes de Colima (integración "reparto").
+REPARTO_COLIMA = {"noventa9Minutos": 75, "estafeta": 25}
+
 # Stock inicial: sku → (cantidad_ok, cantidad_danada, lote, [(ubicacion, cantidad), ...])
 STOCK_COLIMA = {
     "COLIMITA-SIX": (80, 0, "LC-2601", [("A-01-1", 60), ("RES-01", 20)]),
@@ -181,7 +184,8 @@ class Command(BaseCommand):
                 "contacto_whatsapp": "+523121112233",
                 "buffer_stock": 2,
                 "carrier_preferente": "paquetexpress",
-                "integracion_envios": "envia",
+                "integracion_envios": "reparto",
+                "reparto_pesos": dict(REPARTO_COLIMA),
                 "naked_packing_local": True,
                 "guia_de_voz": (
                     "Voz cálida y directa, orgullosamente colimense. Hablamos de "
@@ -193,6 +197,14 @@ class Command(BaseCommand):
         if creado:
             registrar_evento("cliente", colima.slug, "alta", cliente=colima,
                              motivo="Alta de cliente ancla en el seed demo")
+        if colima.integracion_envios != "reparto":
+            # Reparto por porcentajes (plan 2026-09-14): 75/25 para medir
+            # incidencias por carrier; dos carriers existentes mientras no
+            # haya adapter de iMile. Re-corridas sobre una BD vieja: se flipea.
+            colima.integracion_envios = "reparto"
+            colima.reparto_pesos = dict(REPARTO_COLIMA)
+            colima.reparto_base = colima.reparto_cursor
+            colima.save(update_fields=["integracion_envios", "reparto_pesos", "reparto_base"])
         if not colima.branding:
             colima.branding = {
                 "nombre_publico": "Cervecería de Colima",
@@ -344,10 +356,15 @@ class Command(BaseCommand):
             cliente=colima, prioridad=10,
             defaults={"condicion": {"es_local": True}, "carrier": "local", "servicio": "entrega_local"},
         )
-        ReglaEnvio.objects.get_or_create(
+        # Mérida (97xxx) forzado a paquetexpress por regla: en el reporte de
+        # reparto sale como "forzado por regla" (no consume carta).
+        regla, creada = ReglaEnvio.objects.get_or_create(
             cliente=colima, prioridad=20,
-            defaults={"condicion": {}, "carrier": "paquetexpress", "servicio": "ground"},
+            defaults={"condicion": {"cp_prefijo": "97"}, "carrier": "paquetexpress", "servicio": "ground"},
         )
+        if not creada and regla.condicion == {}:
+            regla.condicion = {"cp_prefijo": "97"}
+            regla.save(update_fields=["condicion"])
 
     # ────────────────────────────────────────────────────────────────────
     # Stock inicial (ASN recibida + ubicada vía servicios → kardex vivo)
@@ -903,8 +920,8 @@ class Command(BaseCommand):
            empaque; el gate de picking la deja pasar (nace reservada).
         2) Pedido sin existencias: FAL + línea sin reservar — el gate de
            picking lo rechaza hasta que Mesa reintente con stock nuevo.
-        3) Replan: plan viejo con carrier ya no permitido (noventa9Minutos en
-           cliente envia) — generar desde Salida re-cotiza + evento replan.
+        3) Replan: plan viejo con carrier ya no permitido (fedex, fuera del
+           reparto de Colima) — generar desde Salida re-cotiza + evento replan.
         """
         from apps.catalogo.models import SKU
         from apps.envios.models import Paquete
@@ -954,7 +971,7 @@ class Command(BaseCommand):
             self._avanzar(p3, "EMPACADO")
             Paquete.objects.create(
                 pedido=p3, numero=1, peso_kg=Decimal("2.60"),
-                carrier="noventa9Minutos", servicio="local_next_day",
+                carrier="fedex", servicio="ground",
             )
         # Lote B: stepper (2 cajas del mismo kit) + catálogo de cajas con stock.
         p4, creado = self._crear_pedido(t_mx, self._payload(
@@ -1227,6 +1244,8 @@ class Command(BaseCommand):
             w(f"  Mystery box: {f['mystery']} · Sin existencias: {f['sin_stock']} · "
               f"Replan al generar: {f['replan']} · Stepper 2 cajas: {f['stepper']}")
             w("  Mezcal Nocturno viaja por 99minutos DIRECTO (integración por cliente)")
+            w("  Cervecería Colima reparte por porcentajes (noventa9Minutos 75 / estafeta 25; "
+              "Mérida forzado a paquetexpress por regla) — Mesa → Reportes → Reparto de carriers")
             w("  Cajas de empaque de Colima: Chica y Mediana (rack 40 · packing 10 c/u)")
             w("")
         if getattr(self, "_folios_sep", None):

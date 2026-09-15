@@ -33,6 +33,8 @@
       Buffer de stock: {{ cliente.buffer_stock }} unidad(es)<br>
       Carrier preferente: {{ cliente.carrier_preferente }}<br>
       Integración de envíos: {{ cliente.get_integracion_envios_display }}<br>
+      {% if reparto %}Reparto: {% for f in reparto.filas %}{{ f.carrier }} {{ f.peso }}%{% if not forloop.last %} · {% endif %}{% endfor %}<br>
+      Bloque de {{ reparto.tam }} cartas · siguiente: carta {{ reparto.posicion }} del bloque {{ reparto.bloque }} · <a href="{% url 'mesa:reporte_reparto' %}?cliente={{ cliente.slug }}">reporte →</a><br>{% endif %}
       Naked packing local: {% if cliente.naked_packing_local %}sí{% else %}no{% endif %}<br>
       Visto bueno desde: ${{ cliente.umbral_visto_bueno_mxn }} MXN
     </p>
