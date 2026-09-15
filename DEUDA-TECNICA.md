@@ -135,3 +135,72 @@ orden real de Colima.
   shopify_draft_order = B2B) y los de Appstle (suscripción).
 - Migración: crea la tabla, mueve `canal_fuente` a los campos crudos, elimina
   `canal`. El filtro por canal filtra por valor crudo.
+
+## Reparto de carriers por porcentajes (plan cerrado 2026-09-14, ejecutar 2026-09-15)
+
+**Objetivo:** Colima manda x% de pedidos por iMile y el resto por 99minutos
+(Diego: 75/25) para medir incidencias por carrier y, después, ajustar pesos
+por costo de incidencias. Es una opción POR CLIENTE; Infinitea y los demás no
+cambian.
+
+**Decisiones acordadas con Chema:**
+- Aleatorización por bloques ("baraja"): el bloque tiene `tam` cartas con los
+  carriers en la proporción exacta de los pesos; se baraja con semilla fija y
+  cada pedido elegible saca la siguiente carta. El reparto es exacto al cerrar
+  cada bloque; a media baraja puede ir desviado, es lo esperado.
+- Tamaño de bloque = mínimo que representa los pesos exactos (75/25 → 4,
+  70/30 → 10, 92/8 → 25), con tope `TORRE["REPARTO_BLOQUE_MAX"] = 100`;
+  si los pesos exigen más de 100 cartas se redondean y la ficha avisa cuánto
+  ("92.25 → 92"). Pesos con hasta dos decimales. Con 31 pedidos/día un bloque
+  de 100 cierra en 3-4 días.
+- Semilla: SHA-256 del texto `"<slug>-<bloque>"` (sin año: no cambia el 1 de
+  enero). `random.Random(semilla).shuffle(cartas)`; cartas ordenadas por
+  carrier antes de barajar para que el resultado sea reproducible. NUNCA
+  `hash()` de Python (cambia por proceso).
+- Sin consultas que crezcan con la historia: `Cliente.reparto_cursor` (entero,
+  siguiente N) se toma bajo `select_for_update` y se incrementa; bloque y
+  posición = `divmod(n - reparto_base, tam)`; la baraja del bloque se
+  recalcula en memoria (≤100 elementos). Ni count ni query de pedidos.
+- `Cliente.reparto_base` = N en que entraron en vigor los pesos actuales. Al
+  cambiar pesos: base = cursor, arranca bloque nuevo; el bloque parcial
+  anterior se abandona (no es exacto, se ve en el reporte). Cambios de pesos
+  serán esporádicos.
+- Orden de decisión por pedido (envios.services.elegir_carrier):
+  1. ReglaEnvio explícita del cliente/global → gana, no consume carta,
+     evento "forzado".
+  2. Local con flota propia → como hoy.
+  3. Cliente con integración "reparto" → sacar carta; evento de auditoría
+     `reparto_carrier` con n, bloque, posición, carta.
+  4. Si no, lo de hoy (99minutos directo o carrier preferente).
+- SIN handover automático: si el carrier de la carta falla al cotizar o
+  generar, el pedido queda sin plan/guía y visible en Mesa como fallo, igual
+  que hoy con envia; Mesa decide a mano (evento con quién y por qué). La carta
+  NO se devuelve ni se corrige la baraja: la diferencia entre cartas asignadas
+  y guías efectivas ES la tasa de fallo de la integración, y se quiere ver.
+  El fallback automático se activará como opción cuando las integraciones
+  lleven tiempo limpias. Sin exclusiones por cobertura (ambos cubren todo el
+  país).
+- Todo forzado (antes o después de la carta) deja evento con actor y motivo.
+
+**Entregable (un commit + seed/tests):**
+- Migración core: `Cliente.reparto_pesos` (JSON `{"imile": 75, "noventa9Minutos": 25}`),
+  `reparto_cursor` (int, 0), `reparto_base` (int, 0). Sin tabla nueva.
+- `Cliente.INTEGRACION_REPARTO = "reparto"` como tercera opción de
+  "Integración de envíos" ("Reparto por porcentajes"); en la ficha, al
+  elegirla, pesos editables por carrier (choices = CARRIERS_COTIZAR +
+  noventa9Minutos + imile cuando exista) con validación: suman 100, dos
+  decimales, aviso del tamaño de bloque y del redondeo. Guardar pesos
+  distintos → base = cursor.
+- `apps/envios/reparto.py`: `tamano_bloque(pesos, tope)`, `baraja(slug, bloque,
+  pesos, tam)`, `sacar_carta(cliente, pedido)`; integrado en `elegir_carrier`.
+  El proveedor del carrier sale de `PROVEEDOR_POR_CARRIER` como hoy.
+- Mesa → Reportes → "Reparto de carriers": por cliente y mes: cartas
+  asignadas por carrier, guías efectivas, fallos (carta ≠ guía o sin guía),
+  forzados, bloque en curso (n de tam). Base para revisar pesos con Diego.
+- Tests: bloque mínimo y tope; baraja reproducible (misma semilla, mismo
+  orden) y exacta (conteo por carrier); cursor atómico; base al cambiar
+  pesos; elegir_carrier respeta reglas → local → reparto → default; sin
+  fallback al fallar; eventos de auditoría.
+- Seed: Colima en "reparto" 75/25 con algunos pedidos repartidos.
+- Hasta que exista AdapterImile, probar con dos carriers existentes
+  (p. ej. noventa9Minutos y estafeta).
