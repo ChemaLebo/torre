@@ -319,6 +319,22 @@ NOVENTA9_FALLBACK_ENVIA = os.environ.get("NOVENTA9_FALLBACK_ENVIA", "0") == "1"
 # off hoy → avisar cuando el catálogo de cajas aporte la tara → bloquear
 # cuando los pesos del catálogo sean reales. Cada salto es un flip de .env.
 TORRE_PESO_MODO = os.environ.get("TORRE_PESO_MODO", "off")
+# ── Correo saliente (accesos y "olvidé mi contraseña") ──
+# Sin EMAIL_HOST el correo se imprime en consola: la operación jamás depende
+# del correo. Con EMAIL_HOST se manda por SMTP (Google Workspace, Resend,
+# Postmark…) con las credenciales del .env.
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST
+    else "django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
+EMAIL_TIMEOUT = 15
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "Torre <acceso@localhost>")
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 72  # el enlace de acceso vale 72 h
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")  # sin token → consola
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
 SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-01")

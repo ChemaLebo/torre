@@ -14,5 +14,8 @@ urlpatterns = [
     path("salir/", views.LogoutView.as_view(), name="logout"),
     path("despues-de-entrar/", views.post_login, name="post_login"),
     path("cuenta/", views.cuenta, name="cuenta"),
+    path("olvide/", views.OlvideView.as_view(), name="olvide"),
+    path("olvide/enviado/", views.OlvideEnviadoView.as_view(), name="olvide_enviado"),
+    path("restablecer/<uidb64>/<token>/", views.RestablecerView.as_view(), name="restablecer"),
     path("evidencia/<int:pk>/", views.evidencia, name="evidencia"),
 ]

@@ -175,6 +175,12 @@
             <td class="derecha">
               <form method="post" style="display:inline">
                 {% csrf_token %}
+                <input type="hidden" name="accion" value="usuario_enviar_acceso">
+                <input type="hidden" name="usuario_id" value="{{ perfil.usuario.pk }}">
+                <button class="btn chico" type="submit" title="Manda al correo un enlace de un solo uso para definir su contraseña">Enviar acceso</button>
+              </form>
+              <form method="post" style="display:inline">
+                {% csrf_token %}
                 <input type="hidden" name="accion" value="usuario_reset">
                 <input type="hidden" name="usuario_id" value="{{ perfil.usuario.pk }}">
                 <button class="btn chico" type="submit">Nueva contraseña</button>
@@ -204,9 +210,10 @@
       <label for="id_usuario_nombre">Nombre completo</label>
       <input type="text" name="nombre" id="id_usuario_nombre" placeholder="Nombre y apellido">
       <label for="id_usuario_email">Email</label>
-      <input type="email" name="email" id="id_usuario_email" placeholder="vacío = usuario@torre380e.mx">
+      <input type="email" name="email" id="id_usuario_email" placeholder="con correo, el acceso le llega por email">
       <label for="id_usuario_password">Contraseña</label>
-      <input type="text" name="password" id="id_usuario_password" placeholder="vacío = se genera sola">
+      <input type="text" name="password" id="id_usuario_password" placeholder="vacío = enlace por correo, o se genera sola">
+      <p class="small muted">Con correo y sin contraseña: le mandamos un enlace de un solo uso para que la defina (vale 72 h). Sin correo: la contraseña se genera y se muestra aquí una sola vez.</p>
       <button class="btn primario mt" type="submit">Crear usuario</button>
     </form>
   </div>

@@ -24,7 +24,7 @@ from django.utils import timezone
 
 from apps.core.decorators import rol_requerido
 from apps.core.models import Cliente, EventoAuditoria, EvidenciaFoto, PerfilUsuario
-from apps.core.services import registrar_evento
+from apps.core.services import email_real, enviar_acceso, registrar_evento
 from apps.mesa.forms import (
     CAMPOS_TARIFARIO_SIMPLES, FormAnuncioASNMesa, FormCliente, FormPedidoManual,
     FormSKU, FormTarifario, ZONAS_ENVIO,
@@ -1598,6 +1598,7 @@ def _gestionar_cliente(request, cliente):
         nombre = (request.POST.get("nombre") or "").strip()
         partes = nombre.split(" ", 1)
         email = (request.POST.get("email") or "").strip() or f"{username}@torre380e.mx"
+        password_capturada = bool((request.POST.get("password") or "").strip())
         password = (request.POST.get("password") or "").strip() or secrets.token_urlsafe(8)
         usuario = User(
             username=username,
@@ -1614,10 +1615,35 @@ def _gestionar_cliente(request, cliente):
             "usuario_portal", username, "alta", actor=request.user, cliente=cliente,
             motivo="Alta de usuario del portal desde Mesa de Control",
         )
+        # Con correo real y sin contraseña capturada, el acceso viaja por correo
+        # como enlace de un solo uso: la contraseña no se muestra a nadie.
+        if not password_capturada and email_real(usuario):
+            try:
+                enviar_acceso(usuario, cliente=cliente, actor=request.user)
+            except Exception as exc:  # servidor de correo caído: el alta ya quedó
+                raise ValueError(
+                    f"Usuario {username} creado, pero el correo no salió ({exc}). "
+                    "Usa «Enviar acceso» para reintentar."
+                ) from exc
+            return f"Usuario {username} creado. Le enviamos el enlace de acceso a {email}."
         return (
             f"Usuario {username} creado. Contraseña: {password} — compártela por "
             "canal seguro, no se vuelve a mostrar."
         )
+
+    if accion == "usuario_enviar_acceso":
+        usuario = _usuario_portal_del_cliente(request, cliente)
+        if not email_real(usuario):
+            raise ValueError(
+                f"{usuario.username} no tiene un correo real; captúralo en el admin "
+                "o usa «Nueva contraseña»."
+            )
+        try:
+            enviar_acceso(usuario, cliente=cliente, actor=request.user,
+                          motivo="Reenvío del enlace de acceso desde Mesa de Control")
+        except Exception as exc:
+            raise ValueError(f"El correo no salió ({exc}). Revisa la configuración de correo.") from exc
+        return f"Enlace de acceso enviado a {usuario.email} (vale 72 horas)."
 
     if accion == "usuario_reset":
         usuario = _usuario_portal_del_cliente(request, cliente)

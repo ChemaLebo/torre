@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Define tu contraseña{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span>Torre</div>
+    {% if validlink %}
+    <div class="brand-sub">Define tu contraseña</div>
+    {% if form.errors %}<div class="flash error">{% for campo in form %}{% for e in campo.errors %}{{ e }} {% endfor %}{% endfor %}{% for e in form.non_field_errors %}{{ e }} {% endfor %}</div>{% endif %}
+    <form method="post">{% csrf_token %}
+      <label for="id_new_password1">Contraseña nueva</label>
+      <input type="password" name="new_password1" id="id_new_password1" autofocus autocomplete="new-password" required>
+      <label for="id_new_password2">Repite la contraseña</label>
+      <input type="password" name="new_password2" id="id_new_password2" autocomplete="new-password" required>
+      <p class="small muted mt">Mínimo 8 caracteres.</p>
+      <button class="btn primario mt" style="width:100%" type="submit">Guardar y entrar</button>
+    </form>
+    {% else %}
+    <div class="brand-sub">Enlace caducado</div>
+    <p class="small">Este enlace ya se usó o caducó. Pide uno nuevo con "¿Olvidaste tu contraseña?".</p>
+    <p class="small centro mt"><a href="{% url 'core:olvide' %}">Pedir otro enlace</a></p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

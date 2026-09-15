@@ -6,6 +6,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse_lazy
 
 from .forms import FormCambiarPin
 from .models import EvidenciaFoto
@@ -14,6 +15,29 @@ from .services import registrar_evento
 
 class LoginView(auth_views.LoginView):
     template_name = "core/login.html"
+
+
+class OlvideView(auth_views.PasswordResetView):
+    """'¿Olvidaste tu contraseña?': pide el correo y manda el enlace de
+    restablecimiento. Siempre responde igual, exista o no el correo."""
+
+    template_name = "core/olvide.html"
+    email_template_name = "core/correo_olvide.txt"
+    subject_template_name = "core/correo_olvide_asunto.txt"
+    success_url = reverse_lazy("core:olvide_enviado")
+
+
+class OlvideEnviadoView(auth_views.PasswordResetDoneView):
+    template_name = "core/olvide_enviado.html"
+
+
+class RestablecerView(auth_views.PasswordResetConfirmView):
+    """Define la contraseña desde el enlace de un solo uso (alta de usuario u
+    olvido). Entra directo a la sesión al terminar."""
+
+    template_name = "core/restablecer.html"
+    success_url = reverse_lazy("core:post_login")
+    post_reset_login = True
 
 
 class LogoutView(auth_views.LogoutView):

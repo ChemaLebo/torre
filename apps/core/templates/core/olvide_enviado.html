@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Revisa tu correo{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span>Torre</div>
+    <div class="brand-sub">Revisa tu correo</div>
+    <p class="small">Si ese correo tiene una cuenta en Torre, ya va en camino un enlace para definir tu contraseña. Revisa también la carpeta de spam.</p>
+    <p class="small centro mt"><a href="{% url 'core:login' %}">Volver a entrar</a></p>
+  </div>
+</div>
+{% endblock %}

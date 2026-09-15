@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Olvidé mi contraseña{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span>Torre</div>
+    <div class="brand-sub">Restablecer contraseña</div>
+    <p class="small">Escribe el correo de tu cuenta y te mandamos un enlace para definir una contraseña nueva.</p>
+    <form method="post">{% csrf_token %}
+      <label for="id_email">Correo</label>
+      <input type="email" name="email" id="id_email" autofocus autocomplete="email" required>
+      <button class="btn primario mt" style="width:100%" type="submit">Enviar enlace</button>
+    </form>
+    <p class="small centro mt"><a href="{% url 'core:login' %}">Volver a entrar</a></p>
+  </div>
+</div>
+{% endblock %}
