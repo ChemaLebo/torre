@@ -1116,15 +1116,18 @@ class CancelacionTests(BaseServicios):
 
 
 class EntregaPresuntaTests(BaseServicios):
+    """La referencia es lo más reciente entre ts_en_transito, Pedido.actualizado
+    y el último movimiento de sus guías (columnas, no auditoría)."""
+
+    def _en_transito_hace(self, dias):
+        pedido = self.pedido_directo(estado=Pedido.EN_TRANSITO)
+        hace = timezone.now() - timedelta(days=dias)
+        Pedido.objects.filter(pk=pedido.pk).update(ts_en_transito=hace, actualizado=hace)
+        return pedido
+
     def test_cierra_en_transito_viejo_y_respeta_reciente(self):
-        viejo = self.pedido_directo(estado=Pedido.EN_TRANSITO)
-        reciente = self.pedido_directo(estado=Pedido.EN_TRANSITO)
-        Pedido.objects.filter(pk=viejo.pk).update(
-            ts_en_transito=timezone.now() - timedelta(days=30),
-        )
-        Pedido.objects.filter(pk=reciente.pk).update(
-            ts_en_transito=timezone.now() - timedelta(days=1),
-        )
+        viejo = self._en_transito_hace(30)
+        reciente = self._en_transito_hace(1)
         cerrados = services.cerrar_entregas_presuntas()
         viejo.refresh_from_db()
         reciente.refresh_from_db()
@@ -1132,11 +1135,20 @@ class EntregaPresuntaTests(BaseServicios):
         self.assertEqual(reciente.estado, Pedido.EN_TRANSITO)
         self.assertEqual([p.pk for p in cerrados], [viejo.pk])
 
-    def test_idempotente(self):
-        viejo = self.pedido_directo(estado=Pedido.EN_TRANSITO)
-        Pedido.objects.filter(pk=viejo.pk).update(
-            ts_en_transito=timezone.now() - timedelta(days=30),
+    def test_movimiento_reciente_de_la_guia_o_del_pedido_lo_mantiene_vivo(self):
+        from apps.envios.models import Guia
+
+        con_guia_viva = self._en_transito_hace(30)
+        Guia.objects.create(
+            pedido=con_guia_viva, carrier="estafeta", numero="G-1", proveedor="mock",
+            ts_ultimo_movimiento=timezone.now() - timedelta(days=2),
         )
+        tocado = self._en_transito_hace(30)
+        Pedido.objects.filter(pk=tocado.pk).update(actualizado=timezone.now() - timedelta(days=1))
+        self.assertEqual(services.cerrar_entregas_presuntas(), [])
+
+    def test_idempotente(self):
+        self._en_transito_hace(30)
         primera = services.cerrar_entregas_presuntas()
         segunda = services.cerrar_entregas_presuntas()
         self.assertEqual(len(primera), 1)

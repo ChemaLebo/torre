@@ -92,9 +92,7 @@ class ReporteDiaTests(TestCase):
         paquete = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=1)
         contenido = self.foto("pedido", pedido.pk, "contenido")
         cerrada = self.foto("pedido", pedido.folio, "caja_cerrada")
-        from apps.core.services import registrar_evento
-        registrar_evento("paquete", paquete.pk, "caja_cerrada_con_evidencia", actor=self.piso,
-                         delta={"caja": 1, "evidencia_id": cerrada.pk})
+        Paquete.objects.filter(pk=paquete.pk).update(ts_cierre=aware(self.hoy, 11), foto_cierre=cerrada)
         pod = self.foto("entrega_local", pedido.pk, "pod", tomada_por="jefe")
         Guia.objects.create(pedido=pedido, carrier="fedex", numero="7788 9900", proveedor="mock")
         inc = Incidencia.objects.create(cliente=self.colima, pedido=pedido, tipo="DAN", origen="comprador")

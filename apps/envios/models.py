@@ -199,6 +199,14 @@ class Paquete(models.Model):
     )
     estado = models.CharField(max_length=12, choices=ESTADOS, default=PLANEADO, db_index=True)
     peso_real_gr = models.PositiveIntegerField(null=True, blank=True)
+    # Cierre de la caja con evidencia (foto de la caja cerrada con la etiqueta
+    # pegada, pedidos.services.cerrar_caja). Es ESTADO, no historia: el
+    # candado del cierre, el manifiesto y el reporte del día leen estas
+    # columnas; el evento caja_cerrada_con_evidencia solo queda como bitácora.
+    ts_cierre = models.DateTimeField(null=True, blank=True)
+    foto_cierre = models.ForeignKey(
+        "core.EvidenciaFoto", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from apps.catalogo.models import SKU, Ubicacion
 from apps.core.decorators import rol_requerido
-from apps.core.models import EventoAuditoria, EvidenciaFoto
+from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.inventario.models import LineaASN, OrdenEntrada, Saldo, TareaConteo
@@ -876,10 +876,8 @@ def _checklist_empaque(pedido):
 
 
 def _caja_cerrada(paquete):
-    """True si la caja ya tiene su foto de cierre (candado de cerrar_caja)."""
-    return EventoAuditoria.objects.filter(
-        entidad="paquete", entidad_id=str(paquete.pk), accion="caja_cerrada_con_evidencia",
-    ).exists()
+    """True si la caja ya tiene su foto de cierre (Paquete.ts_cierre)."""
+    return paquete.ts_cierre is not None
 
 
 def _cajas_cliente(pedido):

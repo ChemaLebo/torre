@@ -5,7 +5,8 @@ su cliente, sin operadores). "Actividad" = creado ese día, cualquier paso del
 flujo cumplido ese día o cualquier otra actualización (cancelación, retorno).
 Las fotos se catalogan por etapa según su tipo: contenido y caja cerrada van
 en Empaque, el POD en Entrega; las de incidencias no se repiten aquí, se
-enlaza la incidencia. El quién sale de la auditoría (`cambio_estado`).
+enlaza la incidencia. El quién sale de la auditoría (`cambio_estado`); el
+número de caja de cada foto de cierre, de `Paquete.foto_cierre`.
 """
 from datetime import datetime, time, timedelta
 
@@ -114,16 +115,11 @@ def _fotos_por_pedido(pedidos):
 
 
 def _cajas_por_evidencia(pedidos):
-    """{evidencia_id: número de caja} desde los eventos de cierre de caja."""
-    paquetes = [str(paq.pk) for p in pedidos for paq in p.paquetes.all()]
-    if not paquetes:
-        return {}
-    eventos = EventoAuditoria.objects.filter(
-        entidad="paquete", accion="caja_cerrada_con_evidencia", entidad_id__in=paquetes,
-    )
+    """{evidencia_id: número de caja} desde Paquete.foto_cierre (sin consultas:
+    los paquetes vienen en el prefetch)."""
     return {
-        e.delta.get("evidencia_id"): e.delta.get("caja")
-        for e in eventos if e.delta.get("evidencia_id")
+        paq.foto_cierre_id: paq.numero
+        for p in pedidos for paq in p.paquetes.all() if paq.foto_cierre_id
     }
 
 

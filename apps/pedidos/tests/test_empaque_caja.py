@@ -275,6 +275,10 @@ class CerrarCajaTests(BaseEmpaqueCaja):
     def test_cierre_feliz_adjunta_foto_y_evento_con_numero_de_caja(self):
         services.cerrar_caja(self.caja, actor=None, foto_caja_cerrada=foto("cierre.jpg"))
         self.assertEqual(self._fotos_cierre().count(), 1)
+        # El estado del cierre vive en el paquete (columnas), no en la auditoría.
+        self.caja.refresh_from_db()
+        self.assertIsNotNone(self.caja.ts_cierre)
+        self.assertEqual(self.caja.foto_cierre, self._fotos_cierre().get())
         evento = EventoAuditoria.objects.filter(
             entidad="paquete", entidad_id=str(self.caja.pk),
             accion="caja_cerrada_con_evidencia",

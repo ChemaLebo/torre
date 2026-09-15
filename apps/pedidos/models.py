@@ -263,30 +263,18 @@ class Pedido(models.Model):
     def cajas_cerradas_completas(self):
         """True si cada caja EMPACADO/DESPACHADO tiene su cierre con evidencia.
 
-        Con plan de cajas el cierre se cuenta POR CAJA vía el evento
-        `caja_cerrada_con_evidencia` (entidad "paquete") que estampa
-        cerrar_caja() — contar fotos del pedido dejaba que una foto duplicada
-        de la caja 1 "cerrara" la caja 2 sin evidencia. Pedido sin plan de
-        paquetes (o con plan aún sin empacar por caja) = 1 caja implícita:
-        basta una foto de cierre ligada al pedido. El manifiesto usa este
-        helper para excluir y avisar ("PED-x se queda: falta foto de caja
-        cerrada").
+        Con plan de cajas el cierre se cuenta POR CAJA con `Paquete.ts_cierre`
+        (lo estampa cerrar_caja()) — contar fotos del pedido dejaba que una
+        foto duplicada de la caja 1 "cerrara" la caja 2 sin evidencia. Pedido
+        sin plan de paquetes (o con plan aún sin empacar por caja) = 1 caja
+        implícita: basta una foto de cierre ligada al pedido. El manifiesto
+        usa este helper para excluir y avisar ("PED-x se queda: falta foto de
+        caja cerrada").
         """
-        from apps.core.models import EventoAuditoria, EvidenciaFoto  # lazy: evita ciclos
-        cajas = list(
-            self.paquetes.filter(estado__in=["EMPACADO", "DESPACHADO"])
-            .values_list("pk", flat=True)
-        )
+        from apps.core.models import EvidenciaFoto  # lazy: evita ciclos
+        cajas = list(self.paquetes.filter(estado__in=["EMPACADO", "DESPACHADO"]))
         if cajas:
-            cerradas = (
-                EventoAuditoria.objects.filter(
-                    entidad="paquete",
-                    entidad_id__in=[str(pk) for pk in cajas],
-                    accion="caja_cerrada_con_evidencia",
-                )
-                .values("entidad_id").distinct().count()
-            )
-            return cerradas >= len(cajas)
+            return all(c.ts_cierre is not None for c in cajas)
         return EvidenciaFoto.objects.filter(
             entidad="pedido", entidad_id=str(self.pk), tipo="caja_cerrada",
         ).exists()

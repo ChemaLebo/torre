@@ -16,7 +16,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.core.models import EventoAuditoria, EvidenciaFoto
+from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 
 from .models import LineaPedido, Pedido
@@ -1405,10 +1405,11 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
 
     Solo aplica a cajas EMPACADO/DESPACHADO y con guía (antes de la guía la
     etiqueta no existe — por eso la foto ya no se pide en empacar). Adjunta
-    EvidenciaFoto tipo "caja_cerrada" ligada al pedido; el evento lleva el
-    número de caja. Una caja no se cierra dos veces: el candado (evento
-    caja_cerrada_con_evidencia) se revisa con el paquete bajo
-    select_for_update — dos POSTs concurrentes se serializan.
+    EvidenciaFoto tipo "caja_cerrada" ligada al pedido y la estampa en el
+    paquete (ts_cierre + foto_cierre: el estado vive en columnas, el evento
+    es bitácora). Una caja no se cierra dos veces: el candado (ts_cierre) se
+    revisa con el paquete bajo select_for_update — dos POSTs concurrentes se
+    serializan.
     """
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
@@ -1431,9 +1432,7 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
         raise ValueError(
             f"Toma la foto de la caja {fresco.numero} cerrada con la etiqueta pegada."
         )
-    if EventoAuditoria.objects.filter(
-        entidad="paquete", entidad_id=str(fresco.pk), accion="caja_cerrada_con_evidencia",
-    ).exists():
+    if fresco.ts_cierre is not None:
         raise ValueError(
             f"La caja {fresco.numero} de {pedido.folio} ya tiene su foto de cierre."
         )
@@ -1442,6 +1441,12 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
         entidad="pedido", entidad_id=str(pedido.pk), tipo=TIPO_FOTO_CIERRE,
         archivo=foto_caja_cerrada, tomada_por=_actor_nombre(actor),
     )
+    fresco.ts_cierre = timezone.now()
+    fresco.foto_cierre = evidencia
+    fresco.save(update_fields=["ts_cierre", "foto_cierre"])
+    if fresco is not paquete:
+        paquete.ts_cierre = fresco.ts_cierre
+        paquete.foto_cierre = evidencia
     registrar_evento(
         "paquete", fresco.pk, "caja_cerrada_con_evidencia", actor=actor,
         cliente=pedido.cliente,
@@ -1821,21 +1826,20 @@ def cerrar_entregas_presuntas(dias=None):
     Ningún pedido queda "EN TRÁNSITO para siempre" (BLUEPRINT §1.4): el
     cierre queda documentado para confirmar con el comprador. Idempotente:
     correrlo dos veces no re-cierra nada. N sale de
-    settings.TORRE["ENTREGA_PRESUNTA_DIAS"] (default 7).
+    settings.TORRE["ENTREGA_PRESUNTA_DIAS"] (default 7). "Evento" = lo más
+    reciente entre la última actualización del pedido (Pedido.actualizado),
+    su entrada a tránsito y el último movimiento de sus guías — columnas, no
+    la auditoría.
     """
     if dias is None:
         dias = int(settings.TORRE.get("ENTREGA_PRESUNTA_DIAS", 7))
     limite = timezone.now() - timedelta(days=dias)
     cerrados = []
-    for pedido in Pedido.objects.filter(estado=Pedido.EN_TRANSITO):
-        ultimo_evento = (
-            EventoAuditoria.objects
-            .filter(entidad="pedido", entidad_id=str(pedido.pk))
-            .order_by("-ts")
-            .first()
-        )
-        referencia = ultimo_evento.ts if ultimo_evento else (pedido.ts_en_transito or pedido.creado)
-        if referencia is not None and referencia <= limite:
+    for pedido in Pedido.objects.filter(estado=Pedido.EN_TRANSITO).prefetch_related("guias"):
+        marcas = [pedido.ts_en_transito or pedido.creado, pedido.actualizado]
+        marcas += [g.ts_ultimo_movimiento for g in pedido.guias.all()]
+        referencia = max(m for m in marcas if m is not None)
+        if referencia <= limite:
             pedido.transicionar(
                 Pedido.ENTREGA_PRESUNTA,
                 motivo=(
