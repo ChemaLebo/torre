@@ -360,6 +360,13 @@ class SeedEscenariosLoteATests(TestCase):
         self.assertEqual(set(dos.guias.values_list("estado", flat=True)), {Guia.EN_TRANSITO, Guia.ENTREGADO})
         self.assertTrue(all(c.estado == Paquete.DESPACHADO for c in dos.paquetes.all()))
 
+    def test_lineas_con_precio_de_venta_para_el_reporte_de_ventas(self):
+        from apps.pedidos.models import LineaPedido
+
+        con_precio = LineaPedido.objects.filter(precio_unitario__isnull=False, parte_de_kit__isnull=True)
+        self.assertGreater(con_precio.count(), 20)
+        self.assertFalse(con_precio.filter(pedido__origen="manual").exists())
+
     def test_colima_reparte_por_porcentajes(self):
         from apps.core.models import Cliente
         from apps.envios.models import ReglaEnvio

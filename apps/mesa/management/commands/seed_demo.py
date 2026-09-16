@@ -519,7 +519,10 @@ class Command(BaseCommand):
                 "province": provincia, "country": "México",
             },
             "line_items": [
-                {"sku": sku.codigo, "quantity": cantidad, "title": sku.descripcion}
+                # price = precio de venta real de la tienda (LineaPedido.precio_unitario,
+                # reporte de ventas); en el demo vale el precio declarado del catálogo.
+                {"sku": sku.codigo, "quantity": cantidad, "title": sku.descripcion,
+                 "price": str(sku.precio_declarado)}
                 for sku, cantidad in lineas
             ],
         }
