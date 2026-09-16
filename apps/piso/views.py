@@ -934,7 +934,9 @@ def empaque_pedido(request, pk):
             return _empaque_quitar_contenido_kit(request, pedido)
         return _empacar(request, pedido)
 
-    if pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+    # PARCIALMENTE_DESPACHADO: ya salió alguna caja; las que siguen en bodega
+    # toman aquí su foto de cierre para poder subir al siguiente manifiesto.
+    if pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         return _render_cierre_o_exito(request, pedido)
     if pedido.estado != Pedido.EN_PICKING:
         messages.error(

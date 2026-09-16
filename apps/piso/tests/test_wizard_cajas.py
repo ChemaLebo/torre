@@ -121,6 +121,37 @@ class WizardCajasTests(PisoTestCase):
         self.assertEqual(fotos.filter(tipo="contenido").count(), 2)
         self.assertEqual(fotos.filter(tipo="caja_cerrada").count(), 2)
 
+    def test_con_una_caja_ya_fuera_el_wizard_cierra_la_que_queda(self):
+        from apps.pedidos.services import cerrar_caja, marcar_recolectado
+
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
+            for caja, peso in ((self.caja1, "12100"), (self.caja2, "8100")):
+                self.client.post(self.url, {
+                    "accion": "empacar_caja", "paquete_id": caja.pk,
+                    "peso_real_gr": peso, "foto_contenido": self.foto(),
+                })
+        cerrar_caja(self.caja1, self.operador, self.foto("z1.jpg"))
+        self.pedido.refresh_from_db()
+        marcar_recolectado(self.pedido, self.operador, paquetes=[self.caja1])
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+
+        # El link "tomar foto de cierre" de Salida abre el paso de cierre de la caja 2.
+        respuesta = self.client.get(self.url)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'value="cerrar_caja"')
+        self.assertContains(respuesta, f'value="{self.caja2.pk}"')
+        self.assertNotContains(respuesta, "no se puede empacar")
+
+        respuesta = self.client.post(self.url, {
+            "accion": "cerrar_caja", "paquete_id": self.caja2.pk,
+            "foto_cierre": self.foto("z2.jpg"),
+        }, follow=True)
+        self.assertContains(respuesta, "SIGUIENTE PEDIDO")
+        self.caja2.refresh_from_db()
+        self.assertIsNotNone(self.caja2.ts_cierre)
+        self.assertTrue(self.pedido.cajas_cerradas_completas)
+
     def test_una_caja_no_se_cierra_dos_veces(self):
         with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
             for caja, peso in ((self.caja1, "12100"), (self.caja2, "8100")):
