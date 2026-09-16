@@ -198,3 +198,67 @@ sigue registrándose como bitácora.
 traslapan (pendiente desde 2026-09-10). Ya no hay lecturas de negocio sobre
 `EventoAuditoria` fuera del reporte del día (quién hizo cada paso) y el
 reporte de reparto.
+
+## Reportería para clientes (pedido de Colima, plan cerrado 2026-09-15)
+
+Nueve reportes pedidos por el equipo de Colima, en el portal (su cliente) y en
+Mesa (todos los clientes). Uno ya existe (reporte del día); el resto se
+construye con datos que ya guardamos, más dos piezas de datos nuevas.
+
+**Decisiones con Chema (2026-09-15):**
+- Ventas en dinero con el precio de venta REAL de Shopify (`line_items[].price`,
+  con descuentos), no con el precio del catálogo (`SKU.precio_declarado`),
+  que no es venta real. Columna nueva `LineaPedido.precio_unitario` (nullable),
+  llenada al ingerir; el importe sale solo en líneas con precio. Relleno del
+  histórico: migración que recorre `WebhookEvento.payload` de cada pedido
+  (el JSON ya está guardado) y empata `line_items` con las líneas por SKU;
+  Colima todavía no tiene pedidos, así que aplica a Infinitea. Pedidos
+  manuales quedan sin precio.
+- "En búsqueda" no existe en Torre; Chema cree que es jerga de otra
+  plataforma para picking o recepción. El reporte de inventario por bodega
+  sale con disponible + en tránsito (ASN anunciadas no recibidas) + en
+  recepción (put-away) + apartado/en empaque; se agrega la columna cuando
+  Colima defina el término.
+- Costos: el portal muestra lo que el cliente PAGA (tarifario: alistamiento,
+  empaque, envío por bloque y zona, almacenaje); Mesa muestra además el
+  costo real de la guía (lo que pagamos). Nunca el costo real en el portal.
+- Bodega: columna fija "Torre" hasta que exista una segunda bodega.
+- Timestamps de paquetería: los de bodega son exactos (ts_* del pedido). Los
+  del carrier se guardan con la hora que reporta el carrier en una tabla
+  nueva `EventoGuia` (guia, estado canónico, estado crudo, descripción,
+  ts_carrier, ts_visto, raw) alimentada por el poller (cada 15 min, cron
+  del VPS). envia.com regresa el historial completo con fecha por evento
+  (ya se parsea en `EnviaAdapter._evento_mas_reciente`); 99minutos tiene
+  `GET /api/v3/shipments/tracking?identifier=<trackingId|internalKey>` con
+  `data.events[]` (statusCode, statusName, data, createdAt) y batch en
+  `/shipments/tracking/batch` (8 req/s): cambiar `Adapter99Minutos.rastrear`
+  de `/shipments/{id}` (solo último estado) a tracking con historial. Sin
+  necesidad de webhooks; 99minutos los ofrece (`POST /api/v3/webhooks`, JWT)
+  y quedan como mejora si algún día se quiere tiempo real.
+
+**Reportes y orden de ejecución** (cada bloque = un commit; app nueva
+`apps/reportes` con la lógica compartida, Mesa = todos los clientes, portal
+= el suyo; rango de fechas y CSV en todos):
+1. Lotes y caducidad por producto en el portal (hoy solo Mesa → Cliente →
+   Lotes), con filtro de próximos a caducar; existencias SKU × lote por
+   estado con la última diferencia de conteo y de recepción
+   (faltantes/sobrantes).
+2. Incidencias con solución: incidencia, pedido, tipo, resolución,
+   compensación (reposición/reembolso/cupón, monto, estado), reclamación al
+   carrier. Daños en entrega: por periodo y carrier, entregados vs con
+   incidencia DAN, porcentaje (fotos "dano" enlazadas).
+3. Ventas a nivel línea por fechas: pedido, SKU, producto, cantidad, precio
+   unitario e importe (solo con precio), bodega, canal, estado. Requiere
+   `LineaPedido.precio_unitario` + backfill.
+4. Horarios logísticos: por pedido cada hora (creado, picking, empacado,
+   guía, recolectado, en tránsito, entregado) y duraciones entre pasos;
+   promedios por estado destino (CP → estado), zona (local/metro/nacional) y
+   carrier. Requiere `EventoGuia` y el cambio de rastreo de 99minutos.
+5. Costo por entrega: por pedido, transporte (tarifa por bloque y zona) y
+   almacén (alistamiento + empaque) desde `finanzas.tarifario_de`; en Mesa
+   además el costo real de la guía y el margen.
+6. Inventario por bodega: disponible, en tránsito, en recepción, apartado,
+   cuarentena; columna "en búsqueda" cuando Colima la defina.
+
+Ya existe y no se toca: pedidos del día con estatus, guía y evidencia
+(Mesa y portal → Reportes → Reporte del día, con CSV).
