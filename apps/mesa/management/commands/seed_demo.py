@@ -580,6 +580,47 @@ class Command(BaseCommand):
             marcar_recolectado(pedido, "jefe")
         return guia
 
+    def _salida_por_caja(self, pedido, cerrar, salen):
+        """Pedido de varias cajas por el carril REAL del piso: una caja por
+        línea (el plan automático se rehace), empacar_caja en cada una (peso
+        contra su plan + foto de contenido), guías por caja, foto de cierre
+        solo en las cajas `cerrar` y manifiesto de las cajas `salen`
+        (marcar_recolectado por caja). Regresa las cajas en orden."""
+        from apps.envios.models import Paquete, PaqueteLinea
+        from apps.pedidos.services import (
+            cerrar_caja, confirmar_linea_pick, empacar_caja, generar_guia, iniciar_picking,
+            marcar_recolectado,
+        )
+
+        iniciar_picking(pedido, "piso1")
+        lineas = list(pedido.lineas.order_by("pk"))
+        for linea in lineas:
+            confirmar_linea_pick(linea, linea.cantidad, "piso1")
+        pedido.paquetes.all().delete()
+        cajas = []
+        for numero, linea in enumerate(lineas, start=1):
+            peso = (Decimal(linea.sku.peso_gr * linea.cantidad) / 1000 * Decimal("1.05")).quantize(Decimal("0.01"))
+            caja = Paquete.objects.create(
+                pedido=pedido, numero=numero, peso_kg=peso, carrier="paquetexpress", servicio="ground",
+            )
+            PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=linea.cantidad)
+            cajas.append(caja)
+        for caja in cajas:
+            empacar_caja(
+                caja, "piso1", int(caja.peso_kg * 1000),
+                foto_contenido=ContentFile(PNG_1PX, name=f"{pedido.folio}-contenido-{caja.numero}.png"),
+            )
+        pedido.refresh_from_db()
+        generar_guia(pedido)  # una guía por caja
+        for caja in cajas:
+            caja.refresh_from_db()
+            if caja.numero in cerrar:
+                cerrar_caja(caja, "piso1", ContentFile(PNG_1PX, name=f"{pedido.folio}-cierre-{caja.numero}.png"))
+        pedido.refresh_from_db()
+        marcar_recolectado(pedido, "jefe", paquetes=[c for c in cajas if c.numero in salen])
+        pedido.refresh_from_db()
+        return cajas
+
     def _en_transito(self, pedido, guia, motivo="En tránsito hacia destino (mock)"):
         guia.transicionar("EN_TRANSITO", motivo=motivo)
         pedido.transicionar("EN_TRANSITO", motivo=motivo)
@@ -595,7 +636,6 @@ class Command(BaseCommand):
         solo cuando el pedido acaba de sembrarse (idempotencia).
         """
         from apps.core.models import EvidenciaFoto
-        from apps.inventario.services import despachar
         from apps.pedidos.services import cancelar, confirmar_linea_pick, iniciar_picking
 
         t_mx = tiendas["colima-mx.myshopify.com"]
@@ -821,25 +861,42 @@ class Command(BaseCommand):
             self._fechar_pedido(pedido, creado=self._dt(2, 12, 10))
         resultado["cancelado"] = (pedido, creado)
 
-        # ── C14 · PARCIALMENTE_DESPACHADO (salió 1 de 2 bultos) ──
+        # ── C14 · PARCIALMENTE_DESPACHADO (manifiesto por caja: salió la caja 1 de 2;
+        #    la 2 está empacada en el corral sin su foto de cierre) ──
         pedido, creado = self._crear_pedido(t_mx, self._payload(
             5014, "Fernanda Lugo", "+526621234614", "83000", "Hermosillo", "Sonora",
             [(skus["COLIMITA-C24"], 1), (skus["PARAMO-C12"], 1)],
         ))
         if creado:
-            guia = self._avanzar(pedido, "GUIA_GENERADA")
-            primera = pedido.lineas.first()
-            despachar(primera.sku, primera.cantidad_pickeada, pedido.folio)
-            pedido.transicionar(
-                "PARCIALMENTE_DESPACHADO", actor="jefe",
-                motivo="Salió 1 de 2 bultos con Paquetexpress; el segundo sale en la siguiente recolección.",
-            )
+            caja1, _caja2 = self._salida_por_caja(pedido, cerrar=(1,), salen=(1,))
             self._fechar_pedido(
                 pedido, creado=self._dt(1, 10, 0), ts_picking=self._dt(1, 10, 25),
                 ts_empacado=self._dt(1, 11, 10), ts_guia=self._dt(1, 11, 15),
+                ts_recolectado=self._dt(1, 14, 30),
             )
-            self._fechar_guia(guia, creado=self._dt(1, 11, 15), ts_ultimo_movimiento=self._dt(1, 14, 30))
+            self._fechar_guia(caja1.guia_activa, creado=self._dt(1, 11, 15), ts_ultimo_movimiento=self._dt(1, 14, 30))
         resultado["parcial"] = (pedido, creado)
+
+        # ── C14b · EN_TRANSITO de dos cajas: la caja 1 ya se entregó, la 2 sigue en camino
+        #    (el pedido NO cierra hasta que lleguen todas) ──
+        pedido, creado = self._crear_pedido(t_mx, self._payload(
+            5020, "Mariana Cota", "+523312345620", "45040", "Zapopan", "Jalisco",
+            [(skus["COLIMITA-C24"], 1), (skus["PARAMO-C12"], 1)],
+        ))
+        if creado:
+            caja1, caja2 = self._salida_por_caja(pedido, cerrar=(1, 2), salen=(1, 2))
+            guia1, guia2 = caja1.guia_activa, caja2.guia_activa
+            self._en_transito(pedido, guia1)
+            guia2.transicionar("EN_TRANSITO", motivo="En tránsito hacia destino (mock)")
+            guia1.transicionar("ENTREGADO", motivo="Entregada la caja 1 de 2 (mock); la caja 2 sigue en camino")
+            self._fechar_pedido(
+                pedido, creado=self._dt(3, 9, 0), ts_picking=self._dt(3, 9, 20),
+                ts_empacado=self._dt(3, 10, 5), ts_guia=self._dt(3, 10, 10),
+                ts_recolectado=self._dt(3, 13, 0), ts_en_transito=self._dt(2, 8, 30),
+            )
+            self._fechar_guia(guia1, creado=self._dt(3, 10, 10), ts_ultimo_movimiento=self._dt(1, 12, 0))
+            self._fechar_guia(guia2, creado=self._dt(3, 10, 10), ts_ultimo_movimiento=self._dt(1, 9, 0))
+        resultado["dos_cajas"] = (pedido, creado)
 
         # ── C15 · EN_TRANSITO con cancelación tardía (incidencia CAN; Mesa decide) ──
         pedido, creado = self._crear_pedido(t_mx, self._payload(
@@ -1206,6 +1263,8 @@ class Command(BaseCommand):
             "retornado": pedidos["retornado"][0].folio,
             "tardia": pedidos["cancelacion_tardia"][0].folio,
             "entregado_hoy": pedidos["entregado_hoy"][0].folio,
+            "parcial": pedidos["parcial"][0].folio,
+            "dos_cajas": pedidos["dos_cajas"][0].folio,
         }
         self._resumen()
 
@@ -1246,6 +1305,8 @@ class Command(BaseCommand):
             w("  Mezcal Nocturno viaja por 99minutos DIRECTO (integración por cliente)")
             w("  Cervecería Colima reparte por porcentajes (noventa9Minutos 75 / estafeta 25; "
               "Mérida forzado a paquetexpress por regla) — Mesa → Reportes → Reparto de carriers")
+            w(f"  Salida por caja: {self._folios_sep['parcial']} salió la caja 1 de 2 (la 2 espera su foto de cierre "
+              f"en Salida); {self._folios_sep['dos_cajas']} dos cajas en camino, la 1 ya entregada y el pedido sigue EN_TRANSITO")
             w("  Cajas de empaque de Colima: Chica y Mediana (rack 40 · packing 10 c/u)")
             w("")
         if getattr(self, "_folios_sep", None):

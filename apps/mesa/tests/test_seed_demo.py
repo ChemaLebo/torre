@@ -342,6 +342,24 @@ class SeedEscenariosLoteATests(TestCase):
             Cliente.objects.get(slug="mezcal-nocturno").integracion_envios, "99minutos",
         )
 
+    def test_salida_por_caja_parcial_y_pedido_de_dos_cajas_en_camino(self):
+        from apps.envios.models import Guia, Paquete
+        from apps.pedidos.models import Pedido
+
+        parcial = Pedido.objects.get(shopify_order_id="5014")
+        self.assertEqual(parcial.estado, Pedido.PARCIALMENTE_DESPACHADO)
+        self.assertIsNotNone(parcial.ts_recolectado)
+        c1, c2 = parcial.paquetes.order_by("numero")
+        self.assertEqual((c1.estado, c2.estado), (Paquete.DESPACHADO, Paquete.EMPACADO))
+        self.assertIsNotNone(c1.ts_cierre)
+        self.assertIsNone(c2.ts_cierre)  # la caja 2 espera su foto de cierre en Salida
+        self.assertEqual(parcial.guias.count(), 2)
+
+        dos = Pedido.objects.get(shopify_order_id="5020")
+        self.assertEqual(dos.estado, Pedido.EN_TRANSITO)
+        self.assertEqual(set(dos.guias.values_list("estado", flat=True)), {Guia.EN_TRANSITO, Guia.ENTREGADO})
+        self.assertTrue(all(c.estado == Paquete.DESPACHADO for c in dos.paquetes.all()))
+
     def test_colima_reparte_por_porcentajes(self):
         from apps.core.models import Cliente
         from apps.envios.models import ReglaEnvio
