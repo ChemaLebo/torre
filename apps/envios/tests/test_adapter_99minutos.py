@@ -161,3 +161,51 @@ class Adapter99MinutosTests(TestCase):
         self.assertEqual(CODIGOS_ESTADO_99MIN[4101], "INTENTO_FALLIDO")
         self.assertEqual(CODIGOS_ESTADO_99MIN[5001], "RETORNO")
         self.assertEqual(CODIGOS_ESTADO_99MIN[8003], "EXCEPCION")
+
+
+@override_settings(NOVENTA9_API_KEY="cid-prueba:secreto-prueba")
+class Rastreo99HistorialTests(TestCase):
+    """rastrear usa GET /api/v3/shipments/tracking (events[] con createdAt) y
+    cae a /shipments/{id} cuando el historial viene vacío."""
+
+    def setUp(self):
+        Adapter99Minutos.reiniciar_token()
+        self.adapter = Adapter99Minutos()
+
+    def test_historial_con_hora_del_carrier(self):
+        cuerpo = {"data": {"trackingId": 1, "events": [
+            {"statusCode": "2003", "statusName": "collected", "data": {"comment": "Chofer Luis"}, "createdAt": "2026-09-14T10:00:00Z"},
+            {"statusCode": "4002", "statusName": "delivered", "data": {}, "createdAt": "2026-09-15T08:30:00Z"},
+        ]}}
+        with patch("apps.envios.adapters.requests.post", return_value=_token_ok()), \
+             patch("apps.envios.adapters.requests.request", return_value=_resp(200, cuerpo)) as req:
+            info = self.adapter.rastrear("1")
+        self.assertEqual(info["estado"], "ENTREGADO")
+        self.assertEqual(info["ts_evento"].isoformat(), "2026-09-15T08:30:00+00:00")
+        self.assertEqual([e["estado"] for e in info["eventos"]], ["RECOLECTADO", "ENTREGADO"])
+        self.assertEqual(info["eventos"][0]["descripcion"], "collected · Chofer Luis")
+        self.assertIn("/api/v3/shipments/tracking", req.call_args_list[0].args[1])
+        self.assertEqual(req.call_args_list[0].kwargs.get("params"), {"identifier": "1"})
+
+    def test_sin_historial_cae_al_shipment(self):
+        cuerpo = {"data": {"trackingId": 1, "status": 3001, "updatedAt": "2026-08-26T10:00:00Z"}}
+        with patch("apps.envios.adapters.requests.post", return_value=_token_ok()), \
+             patch("apps.envios.adapters.requests.request", return_value=_resp(200, cuerpo)):
+            info = self.adapter.rastrear("1")
+        self.assertEqual(info["estado"], "EN_TRANSITO")
+        self.assertNotIn("eventos", info)
+
+
+class HistorialEnviaTests(TestCase):
+    def test_historial_normaliza_y_ordena(self):
+        from apps.envios.adapters import EnviaAdapter
+
+        eventos = [
+            {"status": "Delivered", "description": "Entregado", "date": "2026-09-15 08:30:00"},
+            {"status": "Picked up", "description": "Recolectado", "date": "2026-09-14 10:00:00"},
+            "basura",
+        ]
+        historial = EnviaAdapter._historial(eventos)
+        self.assertEqual([h["crudo"] for h in historial], ["Picked up", "Delivered"])
+        self.assertEqual(historial[1]["estado"], "ENTREGADO")
+        self.assertIsNotNone(historial[0]["ts"])

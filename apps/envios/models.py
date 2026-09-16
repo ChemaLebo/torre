@@ -391,3 +391,31 @@ class CotizacionCache(models.Model):
     def __str__(self):
         precio = f"${self.precio}" if self.ok else "no cotiza"
         return f"{self.cp_destino} {self.peso_kg}kg {self.carrier}: {precio}"
+
+class EventoGuia(models.Model):
+    """Historial de rastreo de una guía tal como lo reporta el carrier.
+
+    El poller (services.poll_tracking) guarda cada evento nuevo con la hora
+    del carrier (`ts_carrier`, la que sirve para medir tiempos logísticos) y
+    la hora en que Torre lo vio (`ts_visto`). envia.com entrega el historial
+    completo por consulta; 99minutos, los events[] de /shipments/tracking.
+    Se deduplica por (guía, ts_carrier, crudo, descripción). Reporte de
+    tiempos: apps.reportes.tiempos.
+    """
+
+    guia = models.ForeignKey(Guia, on_delete=models.CASCADE, related_name="eventos")
+    estado = models.CharField(max_length=20, blank=True, help_text="Estado canónico de Torre, si se pudo normalizar")
+    crudo = models.CharField(max_length=80, blank=True, help_text="Código o status tal cual lo manda el carrier")
+    descripcion = models.CharField(max_length=300, blank=True)
+    ts_carrier = models.DateTimeField(null=True, blank=True, db_index=True)
+    ts_visto = models.DateTimeField(auto_now_add=True)
+    raw = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["ts_carrier", "pk"]
+        verbose_name = "evento de guía"
+        verbose_name_plural = "eventos de guía"
+
+    def __str__(self):
+        return f"{self.guia_id} · {self.estado or self.crudo} · {self.ts_carrier or self.ts_visto}"
+

@@ -217,3 +217,51 @@ class MultiGuiaTests(TestCase):
         # Sale la última caja: RECOLECTADO, y el tracking de la 2 cierra el pedido.
         self.pedido.transicionar("RECOLECTADO", motivo="Salió la caja 2 (test)")
         self.assertEqual(self._poll(self.g2, "ENTREGADO"), "ENTREGADO")
+
+
+class EventosGuiaTests(TestCase):
+    """El poller guarda el historial de rastreo en EventoGuia: uno por
+    movimiento visto con el mock (sin historial), el historial completo del
+    carrier cuando lo manda, siempre deduplicado."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.adapter = MockAdapter()
+        self.cliente = crear_cliente()
+        self.tienda = crear_tienda(self.cliente)
+        self.pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO")
+        self.guia = services.generar_guia(self.pedido)
+        self.pedido.refresh_from_db()
+        self.pedido.transicionar("RECOLECTADO", motivo="Manifiesto (test)")
+
+    def test_un_evento_por_movimiento_sin_duplicar(self):
+        from apps.envios.models import EventoGuia
+
+        self.adapter.avanzar_estado(self.guia.numero, "EN_TRANSITO")
+        services.poll_tracking()
+        services.poll_tracking()  # mismo estado y descripción: nada nuevo
+        self.adapter.avanzar_estado(self.guia.numero, "ENTREGADO")
+        services.poll_tracking()
+        eventos = list(EventoGuia.objects.filter(guia=self.guia))
+        self.assertEqual([e.estado for e in eventos], ["EN_TRANSITO", "ENTREGADO"])
+        self.assertTrue(all(e.ts_visto for e in eventos))
+
+    def test_historial_del_carrier_con_su_hora(self):
+        from datetime import datetime, timezone as tz
+
+        from apps.envios.models import EventoGuia
+
+        t1 = datetime(2026, 9, 14, 10, 0, tzinfo=tz.utc)
+        t2 = datetime(2026, 9, 15, 8, 30, tzinfo=tz.utc)
+        info = {
+            "estado": "EN_RUTA", "descripcion": "Out for delivery", "ts_evento": t2, "raw": {},
+            "eventos": [
+                {"estado": "RECOLECTADO", "crudo": "pickup", "descripcion": "Picked up", "ts": t1, "raw": {"a": 1}},
+                {"estado": "EN_RUTA", "crudo": "ofd", "descripcion": "Out for delivery", "ts": t2, "raw": {"a": 2}},
+            ],
+        }
+        self.assertEqual(services._guardar_eventos(self.guia, info, "EN_RUTA", True, timezone.now()), 2)
+        self.assertEqual(services._guardar_eventos(self.guia, info, "", False, timezone.now()), 0)
+        eventos = list(EventoGuia.objects.filter(guia=self.guia))
+        self.assertEqual([(e.estado, e.ts_carrier) for e in eventos], [("RECOLECTADO", t1), ("EN_RUTA", t2)])
+        self.assertEqual(eventos[0].raw, {"a": 1})

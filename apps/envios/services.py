@@ -19,7 +19,7 @@ from django.utils import timezone
 from apps.core.services import registrar_evento
 
 from .adapters import Adapter99Minutos, EnviaAdapter, ErrorCarrier, MockAdapter
-from .models import Guia, Paquete, Recoleccion, ReglaEnvio
+from .models import EventoGuia, Guia, Paquete, Recoleccion, ReglaEnvio
 
 CARRIER_LOCAL = "local"
 SERVICIO_LOCAL = "entrega_local"
@@ -553,6 +553,8 @@ def _procesar_rastreo(guia, info, ahora):
     if campos:
         guia.save(update_fields=sorted(set(campos)))
 
+    _guardar_eventos(guia, info, estado_nuevo if cambio else "", hubo_movimiento, ahora)
+
     if cambio:
         resultado["actualizada"] = 1
         resultado["incidencias"] += _aplicar_efectos(guia, estado_nuevo, descripcion)
@@ -578,6 +580,40 @@ def _estado_por_guias(pedido):
     if activas and all(g.estado == Guia.ENTREGADO for g in activas):
         return "ENTREGADO"
     return None
+
+
+def _guardar_eventos(guia, info, estado_nuevo, hubo_movimiento, ahora):
+    """EventoGuia con lo nuevo del rastreo: el historial completo del carrier
+    (`info["eventos"]`, con su hora) deduplicado contra lo ya guardado; sin
+    historial, un evento por movimiento visto (hora del carrier si la mandó)."""
+    vistos = {
+        (e.ts_carrier, e.crudo, e.descripcion)
+        for e in EventoGuia.objects.filter(guia=guia).only("ts_carrier", "crudo", "descripcion")
+    }
+    nuevos = []
+    historial = info.get("eventos") or []
+    if historial:
+        for e in historial:
+            clave = (e.get("ts"), (e.get("crudo") or "")[:80], (e.get("descripcion") or "")[:300])
+            if clave in vistos:
+                continue
+            vistos.add(clave)
+            nuevos.append(EventoGuia(
+                guia=guia, estado=e.get("estado") or "", crudo=clave[1], descripcion=clave[2],
+                ts_carrier=e.get("ts"), raw=e.get("raw") or {},
+            ))
+    elif hubo_movimiento:
+        descripcion = (info.get("descripcion") or "")[:300]
+        crudo = str(info.get("estado") or "")[:80]
+        clave = (info.get("ts_evento"), crudo, descripcion)
+        if clave not in vistos:
+            nuevos.append(EventoGuia(
+                guia=guia, estado=estado_nuevo or guia.estado, crudo=crudo, descripcion=descripcion,
+                ts_carrier=info.get("ts_evento"), raw=info.get("raw") or {},
+            ))
+    if nuevos:
+        EventoGuia.objects.bulk_create(nuevos)
+    return len(nuevos)
 
 
 def _aplicar_efectos(guia, estado, descripcion):

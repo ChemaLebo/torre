@@ -589,7 +589,26 @@ class EnviaAdapter(CarrierAdapter):
             "descripcion": descripcion,
             "ts_evento": ts_evento,
             "raw": d0,
+            "eventos": self._historial(eventos),
         }
+
+    @staticmethod
+    def _historial(eventos):
+        """[{estado, crudo, descripcion, ts, raw}] del historial completo de envia
+        (fecha por evento) para EventoGuia; en orden cronológico."""
+        historial = []
+        for e in eventos:
+            if not isinstance(e, dict):
+                continue
+            crudo = str(e.get("status") or e.get("code") or "")
+            descripcion = str(e.get("description") or e.get("event") or crudo)[:300]
+            historial.append({
+                "estado": normalizar_estado_envia(crudo) or normalizar_estado_envia(descripcion) or "",
+                "crudo": crudo[:80], "descripcion": descripcion,
+                "ts": _parsear_fecha(e.get("date") or e.get("created_at")), "raw": e,
+            })
+        historial.sort(key=lambda h: (h["ts"] is None, h["ts"] or 0))
+        return historial
 
     @staticmethod
     def _evento_mas_reciente(eventos):
@@ -997,7 +1016,50 @@ class Adapter99Minutos(CarrierAdapter):
         self._json(resp, "/shipments (cancel)")
         return True
 
+    def _eventos_tracking(self, numero):
+        """events[] de GET /api/v3/shipments/tracking?identifier= (historial con
+        createdAt por evento); [] si el endpoint no trae eventos."""
+        try:
+            resp = self._request("GET", "/api/v3/shipments/tracking", params={"identifier": numero})
+            cuerpo = self._json(resp, "/shipments/tracking")
+        except ErrorCarrier:
+            return []
+        datos = cuerpo.get("data") if isinstance(cuerpo, dict) else None
+        if isinstance(datos, list):
+            datos = datos[0] if datos else {}
+        eventos = (datos or {}).get("events") if isinstance(datos, dict) else None
+        historial = []
+        for e in eventos or []:
+            if not isinstance(e, dict):
+                continue
+            try:
+                codigo = int(e.get("statusCode"))
+            except (TypeError, ValueError):
+                codigo = None
+            nombre = str(e.get("statusName") or "")
+            comentario = str((e.get("data") or {}).get("comment") or "") if isinstance(e.get("data"), dict) else ""
+            historial.append({
+                "estado": CODIGOS_ESTADO_99MIN.get(codigo, "") if codigo is not None else "",
+                "crudo": str(e.get("statusCode") or nombre)[:80],
+                "descripcion": (f"{nombre} · {comentario}" if comentario else nombre)[:300],
+                "ts": _parsear_fecha(e.get("createdAt") or e.get("created_at")), "raw": e,
+            })
+        historial.sort(key=lambda h: (h["ts"] is None, h["ts"] or 0))
+        return historial
+
     def rastrear(self, numero):
+        """Historial de /shipments/tracking (estado y hora del último evento) y,
+        si viene vacío, el estado del shipment como antes."""
+        historial = self._eventos_tracking(numero)
+        if historial:
+            ultimo = historial[-1]
+            return {
+                "estado": ultimo["estado"] or normalizar_estado_envia(ultimo["descripcion"]),
+                "descripcion": ultimo["descripcion"],
+                "ts_evento": ultimo["ts"],
+                "raw": ultimo["raw"],
+                "eventos": historial,
+            }
         datos = self._shipment_remoto(numero)
         if not datos:
             raise ErrorCarrier(f"99minutos sin datos de rastreo para {numero}")
