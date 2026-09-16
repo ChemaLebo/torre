@@ -722,6 +722,40 @@ def reporte_dia_csv(request):
 
 
 @portal_requerido
+def reportes(request):
+    """Índice de reportes del cliente (apps.reportes) más el reporte del día."""
+    from django.urls import reverse
+
+    from apps.reportes.views import indice  # lazy por contrato
+
+    return render(request, "reportes/indice.html", {
+        "seccion": "reportes", "cliente": request.cliente, "url_dia": reverse("portal:reporte_dia"),
+        "reportes": indice(request, False, lambda clave: reverse("portal:reporte", args=[clave])),
+    })
+
+
+@portal_requerido
+def reporte(request, clave):
+    """Un reporte de apps.reportes acotado al cliente del portal (sin columnas de Mesa)."""
+    from django.urls import reverse
+
+    from apps.reportes.views import render_reporte  # lazy por contrato
+
+    return render_reporte(
+        request, clave, cliente=request.cliente, clientes=[], es_mesa=False,
+        url_base=reverse("portal:reporte", args=[clave]), url_csv=reverse("portal:reporte_csv", args=[clave]),
+        url_indice=reverse("portal:reportes"), seccion="reportes",
+    )
+
+
+@portal_requerido
+def reporte_csv(request, clave):
+    from apps.reportes.views import csv_reporte  # lazy por contrato
+
+    return csv_reporte(request, clave, cliente=request.cliente, clientes=[], es_mesa=False)
+
+
+@portal_requerido
 def recepciones_plantilla(request):
     """Formato CSV del anuncio de ASN (?sku=<pk>&sku=…); sin SKUs marcados baja
     solo el encabezado. Lógica en inventario.services.filas_plantilla_asn."""

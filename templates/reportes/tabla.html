@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ titulo }}{% if cliente %} · {{ cliente.nombre }}{% endif %}{% endblock %}
+{% block content %}
+{# Plantilla genérica de reportes (apps.reportes): filtros, resumen, tabla y grupos. Mesa y portal. #}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{{ url_indice }}">Reportes</a>{% if cliente %} · {{ cliente.nombre }}{% endif %}</div>
+    <h1>{{ titulo }}</h1>
+  </div>
+  <div class="quien"><b>{{ n_filas }}</b> renglón(es)</div>
+</div>
+
+<div class="card mb">
+  <p class="small muted" style="margin-top:0">{{ descripcion }}</p>
+  <form method="get" class="fila">
+    {% if con_fechas %}
+    <div>
+      <label for="f-desde">Desde</label>
+      <input type="date" id="f-desde" name="desde" value="{{ desde|date:'Y-m-d' }}">
+    </div>
+    <div>
+      <label for="f-hasta">Hasta</label>
+      <input type="date" id="f-hasta" name="hasta" value="{{ hasta|date:'Y-m-d' }}">
+    </div>
+    {% endif %}
+    {% if es_mesa %}
+    <div style="flex:1;min-width:200px">
+      <label for="f-cliente">Cliente</label>
+      <select id="f-cliente" name="cliente">
+        <option value="">Todos los clientes</option>
+        {% for c in clientes %}<option value="{{ c.slug }}" {% if cliente and cliente.pk == c.pk %}selected{% endif %}>{{ c.nombre }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% for f in definiciones %}
+    <div>
+      {% if f.tipo == "checkbox" %}
+      <label for="f-{{ f.nombre }}">{{ f.etiqueta }}</label>
+      <input type="checkbox" id="f-{{ f.nombre }}" name="{{ f.nombre }}" {% for k, v in filtros.items %}{% if k == f.nombre and v %}checked{% endif %}{% endfor %}>
+      {% elif f.tipo == "select" %}
+      <label for="f-{{ f.nombre }}">{{ f.etiqueta }}</label>
+      <select id="f-{{ f.nombre }}" name="{{ f.nombre }}">
+        {% for valor, texto in f.opciones %}<option value="{{ valor }}" {% for k, v in filtros.items %}{% if k == f.nombre and v == valor %}selected{% endif %}{% endfor %}>{{ texto }}</option>{% endfor %}
+      </select>
+      {% else %}
+      <label for="f-{{ f.nombre }}">{{ f.etiqueta }}</label>
+      <input type="number" id="f-{{ f.nombre }}" name="{{ f.nombre }}" min="0" value="{% for k, v in filtros.items %}{% if k == f.nombre and v != None %}{{ v }}{% endif %}{% endfor %}">
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="fila" style="align-self:flex-end">
+      <button class="btn primario" type="submit">Ver</button>
+      <a class="btn" href="{{ url_csv }}">Exportar CSV</a>
+    </div>
+  </form>
+  {% if resumen %}
+  <div class="fila mt">
+    {% for etiqueta, valor in resumen %}<span class="pill">{{ valor }} · {{ etiqueta }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card mb">
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr>{% for e in encabezados %}<th>{{ e }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for fila in filas %}
+        <tr>{% for valor, numerico in fila %}<td class="{% if numerico %}derecha mono{% endif %}">{{ valor }}</td>{% endfor %}</tr>
+        {% empty %}
+        <tr><td colspan="{{ encabezados|length }}" class="muted">Sin datos para estos filtros.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% for g in grupos %}
+<div class="card mb">
+  <div class="titulo"><h3>{{ g.titulo }}</h3></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr>{% for e in g.encabezados %}<th>{{ e }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for fila in g.filas %}
+        <tr>{% for valor, numerico in fila %}<td class="{% if numerico %}derecha mono{% endif %}">{{ valor }}</td>{% endfor %}</tr>
+        {% empty %}
+        <tr><td colspan="{{ g.encabezados|length }}" class="muted">Sin datos.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}

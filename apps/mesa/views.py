@@ -1267,6 +1267,45 @@ def reporte_reparto(request):
     })
 
 
+def _alcance_reportes(request):
+    """(cliente elegido o None = todos, clientes activos) para los reportes de Mesa."""
+    slug = (request.GET.get("cliente") or "").strip()
+    cliente = get_object_or_404(Cliente, slug=slug) if slug else None
+    return cliente, Cliente.objects.filter(activo=True).order_by("nombre")
+
+
+@rol_requerido("mesa")
+def reportes(request):
+    """Índice de reportes (apps.reportes) más el reporte del día y el de reparto."""
+    from apps.reportes.views import indice  # lazy por contrato
+
+    return render(request, "reportes/indice.html", {
+        "seccion": "reportes", "cliente": None, "url_dia": reverse("mesa:reporte_dia"),
+        "reportes": indice(request, True, lambda clave: reverse("mesa:reporte", args=[clave])),
+    })
+
+
+@rol_requerido("mesa")
+def reporte(request, clave):
+    """Un reporte de apps.reportes para todos los clientes o el elegido (?cliente=slug)."""
+    from apps.reportes.views import render_reporte  # lazy por contrato
+
+    cliente, clientes = _alcance_reportes(request)
+    return render_reporte(
+        request, clave, cliente=cliente, clientes=clientes, es_mesa=True,
+        url_base=reverse("mesa:reporte", args=[clave]), url_csv=reverse("mesa:reporte_csv", args=[clave]),
+        url_indice=reverse("mesa:reportes"), seccion="reportes",
+    )
+
+
+@rol_requerido("mesa")
+def reporte_csv(request, clave):
+    from apps.reportes.views import csv_reporte  # lazy por contrato
+
+    cliente, clientes = _alcance_reportes(request)
+    return csv_reporte(request, clave, cliente=cliente, clientes=clientes, es_mesa=True)
+
+
 @rol_requerido("mesa")
 def recepciones_plantilla(request):
     """Formato CSV del anuncio de ASN de un cliente (?cliente=slug&sku=<pk>&sku=…);

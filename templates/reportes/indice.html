@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Reportes{% if cliente %} · {{ cliente.nombre }}{% endif %}{% endblock %}
+{% block content %}
+{# Índice de reportes (apps.reportes): Mesa y portal comparten la lista. #}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Reportes{% if cliente %} · {{ cliente.nombre }}{% endif %}</div>
+    <h1>Reportes</h1>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h3><a href="{{ url_dia }}">Reporte del día</a></h3></div>
+    <p class="small muted">Pedidos con actividad en una fecha: estatus, guía, evidencia por etapa e incidencias.</p>
+  </div>
+  {% for r in reportes %}
+  <div class="card">
+    <div class="titulo"><h3><a href="{{ r.url }}">{{ r.titulo }}</a></h3></div>
+    <p class="small muted">{{ r.descripcion }}</p>
+  </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

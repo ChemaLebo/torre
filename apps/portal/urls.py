@@ -21,4 +21,7 @@ urlpatterns = [
     path("exportar/", views.exportar, name="exportar"),
     path("reportes/dia/", views.reporte_dia, name="reporte_dia"),
     path("reportes/dia.csv", views.reporte_dia_csv, name="reporte_dia_csv"),
+    path("reportes/", views.reportes, name="reportes"),
+    path("reportes/<slug:clave>/", views.reporte, name="reporte"),
+    path("reportes/<slug:clave>.csv", views.reporte_csv, name="reporte_csv"),
 ]

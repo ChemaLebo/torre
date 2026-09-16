@@ -76,7 +76,7 @@ window.addEventListener("load", function () {
       </details>
       <details class="nav-grupo" data-grupo="portal-reportes">
         <summary>Reportes</summary>
-        <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'portal:reporte_dia' %}">Reporte del día</a>
+        <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'portal:reportes' %}">Reportes</a>
         <a class="nav-link {% if seccion == 'exportar' %}activo{% endif %}" href="{% url 'portal:exportar' %}">Exportar</a>
       </details>
       {% comment "Manuales fuera del menú del portal (2026-09-11): los SOPs son internos de bodega; la ruta sigue viva. Ver DEUDA-TECNICA.md, Manuales por tipo de usuario." %}
@@ -111,7 +111,7 @@ window.addEventListener("load", function () {
       </details>
       <details class="nav-grupo" data-grupo="mesa-reportes">
         <summary>Reportes</summary>
-        <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'mesa:reporte_dia' %}">Reporte del día</a>
+        <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'mesa:reportes' %}">Reportes</a>
         <a class="nav-link {% if seccion == 'reporte_reparto' %}activo{% endif %}" href="{% url 'mesa:reporte_reparto' %}">Reparto de carriers</a>
       </details>
       <details class="nav-grupo" data-grupo="mesa-admin">
