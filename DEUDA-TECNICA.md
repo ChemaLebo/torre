@@ -199,7 +199,17 @@ traslapan (pendiente desde 2026-09-10). Ya no hay lecturas de negocio sobre
 `EventoAuditoria` fuera del reporte del día (quién hizo cada paso) y el
 reporte de reparto.
 
-## Reportería para clientes (pedido de Colima, plan cerrado 2026-09-15)
+## Reportería para clientes (pedido de Colima) — hecho 2026-09-15
+
+Ejecutado el mismo día en seis commits (bloques 1-6 de abajo): app
+`apps/reportes` con índice en Mesa → Reportes y portal → Reportes, siete
+reportes nuevos más el del día. **Queda:** la columna "en búsqueda" del
+inventario cuando Colima defina el término; webhooks de 99minutos solo si
+algún día quieren tiempo real; ventas en dinero de Colima empiezan a
+llenarse con sus primeros pedidos (los de Infinitea se rellenaron con el
+backfill de la migración pedidos 0010).
+
+### Plan original (cerrado 2026-09-15)
 
 Nueve reportes pedidos por el equipo de Colima, en el portal (su cliente) y en
 Mesa (todos los clientes). Uno ya existe (reporte del día); el resto se
