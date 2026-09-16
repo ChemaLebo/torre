@@ -291,6 +291,11 @@ class LineaPedido(models.Model):
     sku = models.ForeignKey("catalogo.SKU", on_delete=models.PROTECT, related_name="lineas_pedido")
     cantidad = models.PositiveIntegerField()
     cantidad_pickeada = models.PositiveIntegerField(default=0)
+    # Precio de venta unitario REAL de la tienda (line_items[].price de Shopify,
+    # con descuentos), para el reporte de ventas. Null en pedidos manuales y en
+    # líneas agregadas por edición; las hijas de kit no llevan precio (lo lleva
+    # el kit). Nunca se usa el precio del catálogo: no es venta real.
+    precio_unitario = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     lote_asignado = models.ForeignKey(
         "catalogo.Lote", null=True, blank=True, on_delete=models.SET_NULL, related_name="lineas_pedido",
     )

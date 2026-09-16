@@ -577,6 +577,18 @@ def _resolver_componentes_kit(pedido, props):
     return componentes
 
 
+def precio_de_item(item):
+    """Precio unitario del line_item de Shopify como Decimal, o None si no viene
+    o no se entiende."""
+    crudo = item.get("price")
+    if crudo in (None, ""):
+        return None
+    try:
+        return Decimal(str(crudo)).quantize(Decimal("0.01"))
+    except InvalidOperation:
+        return None
+
+
 def _agregar_linea_kit(pedido, sku, cantidad, item, cancelada, faltantes):
     """Línea kit + (si Appstle trae la elección) sus hijas materializadas.
 
@@ -585,7 +597,9 @@ def _agregar_linea_kit(pedido, sku, cantidad, item, cancelada, faltantes):
     desde la ingesta. Sin datos resolubles → evento y el kit se declara en
     empaque leyendo nota_kit (la orden jamás se bloquea por el parser).
     """
-    linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad, reservada=True)
+    linea = LineaPedido.objects.create(
+        pedido=pedido, sku=sku, cantidad=cantidad, reservada=True, precio_unitario=precio_de_item(item),
+    )
     peso = (sku.peso_gr or 0) * cantidad
     props = _propiedades(item)
     if props.get("products"):
@@ -636,7 +650,9 @@ def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
         # MISMO (sus componentes, si la orden los trae, sí reservan normal).
         peso = _agregar_linea_kit(pedido, sku, cantidad, item, cancelada, faltantes)
         return peso, valor
-    linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
+    linea = LineaPedido.objects.create(
+        pedido=pedido, sku=sku, cantidad=cantidad, precio_unitario=precio_de_item(item),
+    )
     # Orden que llega ya cancelada: no se aparta stock.
     if not cancelada and not _reservar_linea(linea):
         faltantes.append(f"Sin stock suficiente: {sku.codigo} × {cantidad}")
