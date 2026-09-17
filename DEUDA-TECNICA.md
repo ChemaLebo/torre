@@ -296,9 +296,13 @@ el conteo cíclico lo corrige.
   `TORRE["ROTACION_DIAS"] = 90` días por SKU, acumulado 80/15/5; mientras
   no haya 90 días de datos, "automática" sin ventas suficientes = C.
 - Prioridad de acceso por anaquel (`Ubicacion.prioridad`, menor = mejor),
-  editable en Mesa → Inventario → Ubicaciones; default: pisos 1-2 mejor que
-  3, rack 1 mejor que 4 (orden de acceso real pendiente de Chema, se ajusta
-  en Mesa). Clase A → mejores prioridades, C → las peores; reserva fuera.
+  editable en Mesa → Inventario → Ubicaciones. Orden real (Chema
+  2026-09-17): rack 1 (junto a picking) → 4; dentro del rack, lado I → D;
+  dentro del lado, piso 2 → 3 → 1 (el 2 es el cómodo, el 1 el de abajo);
+  dentro del piso, frente (F) → atrás (B). Es decir: PIC-1-I-F-2,
+  PIC-1-I-B-2, PIC-1-I-F-3, PIC-1-I-B-3, PIC-1-I-F-1, PIC-1-I-B-1,
+  PIC-1-D-F-2, … `crear_racks` la calcula con esa regla. Clase A → mejores
+  prioridades, C → las peores; reserva fuera (prioridad vacía).
 - Sugerencia al ubicar (Recepción y Cuarentena) como PLAN, no una celda:
   1) el anaquel donde ya vive ese SKU si tiene espacio (no dispersar);
   2) si no, el mejor anaquel libre para su clase con espacio;
