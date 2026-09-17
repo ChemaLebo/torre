@@ -281,14 +281,18 @@ vale la pena (Chema): es un ESTIMADO volumétrico con factor de llenado, y
 el conteo cíclico lo corrige.
 
 **Decisiones con Chema:**
-- Capacidad por anaquel = volumen (largo × ancho × alto en cm) × factor de
-  llenado `TORRE["FACTOR_LLENADO"] = 0.70`. Medidas reales de las celdas
-  (cada celda I/D × F/B): pisos 1 y 2: 180 × 58 × 52; piso 3: 180 × 58 × 44;
-  piso 4 (reserva): 180 × 58, sin alto máximo → capacidad ilimitada y
-  JAMÁS se sugiere: la reserva se usa solo a mano.
-- Ocupación = Σ (volumen del SKU × piezas) / capacidad. SKU sin medidas no
-  cuenta y el anaquel se marca "con producto sin medidas". Aviso "lleno" a
-  partir del 90 %; el put-away NO se bloquea, solo avisa (estimado).
+- Capacidad por anaquel, PRODUCTO SIEMPRE PARADO (Chema 2026-09-17; el
+  alto del SKU es vertical, no se acuesta): por SKU caben
+  floor(L/l) × floor(A/a) (o girado 90° sobre el piso, el mayor) × niveles,
+  niveles = min(floor(H/h), TORRE["APILADO_MAX"] = 6). Si h > H no cabe ni
+  una (ojo piso 3, 44 cm). Sin factor de llenado: son cajas reales. Medidas
+  reales de las celdas (cada celda I/D × F/B): pisos 1 y 2: 180 × 58 × 52;
+  piso 3: 180 × 58 × 44; piso 4 (reserva): 180 × 58, sin alto máximo →
+  capacidad ilimitada y JAMÁS se sugiere: la reserva se usa solo a mano.
+- Ocupación = Σ (piezas del SKU / capacidad de ese SKU solo en el anaquel):
+  fracción del anaquel que consume cada SKU. SKU sin medidas no cuenta y el
+  anaquel se marca "con producto sin medidas". Aviso "lleno" a partir del
+  90 %; el put-away NO se bloquea, solo avisa (estimado en mezclas).
 - Rotación del SKU: clase A/B/C. Campo `SKU.rotacion` con default
   "automática"; forzada a mano en Mesa o por la columna `rotacion` del CSV
   de catálogo (Colima la llena desde su reporte de ventas de Shopify, es el
