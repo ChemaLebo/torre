@@ -1647,3 +1647,85 @@ def aviso_capacidad(ubicacion, sku, cantidad):
     if despues["estado"] == "lleno":
         return f"Ojo: {ubicacion.codigo} queda al {despues['pct']} % (estimado, producto parado)."
     return ""
+
+
+# ── Acomodo sugerido (put-away) ──
+
+def espacio_para(ubicacion, sku, ocup):
+    """Piezas del SKU que todavía caben en el anaquel según su ocupación
+    estimada `ocup` (de ocupacion()); 0 si no cabe o el anaquel ya está lleno."""
+    cap = capacidad_sku_en(ubicacion, sku)
+    if not cap:
+        return 0
+    fraccion = 0.0
+    for fila in ocup.get("por_sku", []):
+        if fila["capacidad"]:
+            fraccion += fila["piezas"] / fila["capacidad"]
+        elif fila["capacidad"] == 0:
+            fraccion += 1.0
+    return max(0, int(cap * (1 - fraccion)))
+
+
+def sugerir_anaquel(sku, cantidad):
+    """Plan de put-away para `cantidad` piezas del SKU: [{ubicacion, cantidad,
+    motivo}], en orden. Reglas (plan 2026-09-17): 1) los anaqueles donde ya
+    vive el SKU y les cabe (no dispersar), por prioridad; 2) anaqueles vacíos
+    según la clase de rotación del SKU: A los de mejor prioridad, C los de
+    peor, B desde la mitad; solo picking activo con medidas y prioridad, nunca
+    la reserva ni los marcados llenos a mano. Si no alcanza, el último renglón
+    va con ubicacion=None y lo que quedó sin lugar. [] si el SKU no tiene
+    medidas (no hay forma de saber cuánto cabe)."""
+    from apps.catalogo.services import clase_rotacion  # lazy por contrato
+
+    if cantidad <= 0 or not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
+        return []
+    anaqueles = list(
+        Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True, prioridad__isnull=False, lleno_manual=False)
+        .exclude(largo_cm=0).exclude(ancho_cm=0).exclude(alto_cm=0).order_by("prioridad", "codigo")
+    )
+    if not anaqueles:
+        return []
+    ocup = ocupaciones(anaqueles)
+    plan, restante = [], cantidad
+
+    def agrega(u, n, motivo):
+        nonlocal restante
+        plan.append({"ubicacion": u, "cantidad": n, "motivo": motivo})
+        restante -= n
+
+    con_sku = [u for u in anaqueles if any(f["sku"].pk == sku.pk for f in ocup[u.codigo]["por_sku"])]
+    for u in con_sku:
+        if restante <= 0:
+            break
+        libre = espacio_para(u, sku, ocup[u.codigo])
+        if libre > 0:
+            agrega(u, min(libre, restante), f"ya tiene este SKU · caben {libre} más")
+    if restante > 0:
+        vacios = [u for u in anaqueles if not ocup[u.codigo]["por_sku"] and capacidad_sku_en(u, sku)]
+        clase = clase_rotacion(sku)
+        if clase == "C":
+            vacios = list(reversed(vacios))
+        elif clase == "B":
+            mitad = len(vacios) // 2
+            vacios = vacios[mitad:] + vacios[:mitad]
+        for u in vacios:
+            if restante <= 0:
+                break
+            cap = capacidad_sku_en(u, sku)
+            agrega(u, min(cap, restante), f"anaquel libre para clase {clase} · caben {cap}")
+    if restante > 0:
+        plan.append({"ubicacion": None, "cantidad": restante, "motivo": "sin anaquel con espacio"})
+    return plan
+
+
+def marcar_anaquel(ubicacion, lleno, actor=None):
+    """El piso marca el anaquel lleno (deja de sugerirse) o con espacio; con auditoría."""
+    if ubicacion.lleno_manual == bool(lleno):
+        return False
+    ubicacion.lleno_manual = bool(lleno)
+    ubicacion.save(update_fields=["lleno_manual"])
+    registrar_evento(
+        "ubicacion", ubicacion.codigo, "anaquel_lleno" if lleno else "anaquel_con_espacio", actor=actor,
+        motivo="Marcado por el piso al contar." if lleno else "Liberado por el piso al contar.",
+    )
+    return True

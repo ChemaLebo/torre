@@ -243,3 +243,27 @@ class UbicacionPredictivaTests(PisoTestCase):
         self.assertContains(respuesta, '<option value="PIC-4-D-F-3">')
         self.assertNotContains(respuesta, 'PIC-9-9-9')
         self.assertNotContains(respuesta, 'chips-ubicacion')
+
+
+class SugerenciaEnRecepcionTests(PisoTestCase):
+    """La pantalla de ubicar trae el plan de acomodo por producto (data-sug-*)."""
+
+    def test_option_trae_anaquel_y_cantidad_sugeridos(self):
+        from django.urls import reverse
+
+        from apps.catalogo.models import Ubicacion
+        from apps.inventario.models import LineaASN, OrdenEntrada, Saldo
+        from apps.inventario.services import recibir
+
+        Ubicacion.objects.create(codigo="PIC-1-I-F-2", tipo=Ubicacion.PICKING, largo_cm=180, ancho_cm=58, alto_cm=52, prioridad=1)
+        self.sku.largo_cm, self.sku.ancho_cm, self.sku.alto_cm = 36, 24, 17
+        self.sku.save()
+        self.login_piso()
+        orden = OrdenEntrada.objects.create(cliente=self.cliente)
+        linea = LineaASN.objects.create(orden=orden, sku=self.sku, cantidad_anunciada=40)
+        recibir(linea, 40, 0, self.operador)
+        self.assertEqual(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).count(), 1)
+        respuesta = self.client.get(reverse("piso:recepcion_detalle", args=[orden.pk]))
+        self.assertContains(respuesta, 'data-sug-ubicacion="PIC-1-I-F-2"')
+        self.assertContains(respuesta, 'data-sug-cantidad="30"')
+        self.assertContains(respuesta, "10 sin anaquel con espacio")

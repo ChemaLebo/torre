@@ -31,6 +31,17 @@
       <input type="hidden" name="tarea_id" value="{{ tarea.pk }}">
       <label for="contado-{{ tarea.pk }}">¿Cuántas piezas contaste? (0 también cuenta)</label>
       <input type="number" name="contado" id="contado-{{ tarea.pk }}" min="0" inputmode="numeric" autocomplete="off" required>
+      {% if tarea.anaqueles %}
+      {# Corrige la ocupación estimada: un anaquel marcado lleno deja de sugerirse hasta que otro conteo lo libere. #}
+      <label for="anaquel-{{ tarea.pk }}">¿Cómo viste el anaquel?</label>
+      <select name="anaquel_estado" id="anaquel-{{ tarea.pk }}">
+        <option value="">Sin cambio</option>
+        {% for a in tarea.anaqueles %}
+        <option value="{{ a.codigo }}|lleno">{{ a.codigo }}: lleno{% if a.lleno_manual %} (ya marcado){% endif %}</option>
+        <option value="{{ a.codigo }}|espacio">{{ a.codigo }}: con espacio</option>
+        {% endfor %}
+      </select>
+      {% endif %}
       <div class="mt"><button class="btn primario bloque" type="submit">Registrar conteo</button></div>
     </form>
   </div>

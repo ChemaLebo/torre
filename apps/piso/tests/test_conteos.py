@@ -65,3 +65,39 @@ class ConteosPisoTests(PisoTestCase):
         tarea = respuesta.context["pendientes"][0]
         self.assertEqual(list(tarea.ubicaciones), ["A-01-1"])
         self.assertNotContains(respuesta, "Esperado")  # ciego: sin cifras del sistema
+
+
+class MarcaAnaquelEnConteoTests(PisoTestCase):
+    """Al contar, el piso marca el anaquel lleno o con espacio (Ubicacion.lleno_manual)."""
+
+    def test_marca_lleno_y_luego_con_espacio(self):
+        from django.urls import reverse
+
+        from apps.catalogo.models import Ubicacion
+        from apps.inventario.models import TareaConteo
+
+        self.login_piso()
+        self.crear_stock(cantidad=10)  # deja saldo vendible en self.ubic_picking
+        anaquel = Ubicacion.objects.get(pk=self.ubic_picking.pk)
+        anaquel.largo_cm, anaquel.ancho_cm, anaquel.alto_cm, anaquel.prioridad = 180, 58, 52, 1
+        anaquel.save()
+        tarea = TareaConteo.objects.create(sku=self.sku)
+        respuesta = self.client.get(reverse("piso:conteos"))
+        self.assertContains(respuesta, f'value="{anaquel.codigo}|lleno"')
+        respuesta = self.client.post(reverse("piso:conteos"), {
+            "tarea_id": tarea.pk, "contado": "10", "anaquel_estado": f"{anaquel.codigo}|lleno",
+        }, follow=True)
+        self.assertContains(respuesta, f"{anaquel.codigo} marcado lleno")
+        anaquel.refresh_from_db()
+        self.assertTrue(anaquel.lleno_manual)
+        # Otra tarea del día (la de un SKU es única por fecha): con otro SKU en el mismo anaquel.
+        from decimal import Decimal
+
+        from apps.catalogo.models import SKU
+
+        otro = SKU.objects.create(cliente=self.cliente, codigo="OTRO", descripcion="Otro", peso_gr=100, precio_declarado=Decimal("1"), requiere_lote=False)
+        self.crear_stock(sku=otro, cantidad=5)
+        tarea2 = TareaConteo.objects.create(sku=otro)
+        self.client.post(reverse("piso:conteos"), {"tarea_id": tarea2.pk, "contado": "5", "anaquel_estado": f"{anaquel.codigo}|espacio"})
+        anaquel.refresh_from_db()
+        self.assertFalse(anaquel.lleno_manual)

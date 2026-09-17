@@ -81,9 +81,13 @@
       <label for="sku_id">Producto (o escanéalo)</label>
       <select name="sku_id" id="sku_id" required>
         {% for linea in lineas %}
-        <option value="{{ linea.sku_id }}" data-barras="{{ linea.sku.codigo_barras|default:'' }}" data-codigo="{{ linea.sku.codigo }}">{{ linea.sku.codigo }} — {{ linea.por_ubicar }} por ubicar</option>
+        <option value="{{ linea.sku_id }}" data-barras="{{ linea.sku.codigo_barras|default:'' }}" data-codigo="{{ linea.sku.codigo }}"
+                {% if linea.sugerencia and linea.sugerencia.0.ubicacion %}data-sug-ubicacion="{{ linea.sugerencia.0.ubicacion.codigo }}" data-sug-cantidad="{{ linea.sugerencia.0.cantidad }}"{% endif %}
+                data-sug-texto="{% for paso in linea.sugerencia %}{% if paso.ubicacion %}{{ paso.ubicacion.codigo }}: {{ paso.cantidad }} ({{ paso.motivo }}){% else %}{{ paso.cantidad }} sin anaquel con espacio{% endif %}{% if not forloop.last %} · {% endif %}{% empty %}{% if linea.por_ubicar %}sin sugerencia: el producto no tiene medidas{% endif %}{% endfor %}">{{ linea.sku.codigo }} — {{ linea.por_ubicar }} por ubicar</option>
         {% endfor %}
       </select>
+      {# Acomodo sugerido (inventario.services.sugerir_anaquel): prellena anaquel y cantidad; el operador puede cambiarlos. #}
+      <p class="small muted" id="sugerencia-acomodo" hidden>Sugerido: <span id="sugerencia-texto"></span></p>
       <div class="grid g2">
         <div>
           <label for="cantidad">Cantidad</label>
@@ -173,6 +177,24 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   if (selectSku) { selectSku.addEventListener("change", function () { if (inputLote) inputLote.value = ""; cargaLotes(); }); cargaLotes(); }
   if (inputLote) { inputLote.addEventListener("change", rellenaCaducidad); inputLote.addEventListener("input", rellenaCaducidad); }
+
+  /* Acomodo sugerido: al cambiar de producto se prellenan anaquel y cantidad
+     con el primer paso del plan (solo si el operador no los ha tecleado). */
+  var inputCantidad = document.getElementById("cantidad");
+  var cajaSug = document.getElementById("sugerencia-acomodo");
+  var textoSug = document.getElementById("sugerencia-texto");
+  function aplicaSugerencia() {
+    if (!selectSku || !cajaSug) return;
+    var o = selectSku.options[selectSku.selectedIndex];
+    var texto = o ? (o.dataset.sugTexto || "") : "";
+    cajaSug.hidden = !texto;
+    textoSug.textContent = texto;
+    if (o && o.dataset.sugUbicacion) {
+      if (!inputUbicacion.value) inputUbicacion.value = o.dataset.sugUbicacion;
+      if (inputCantidad && !inputCantidad.value) inputCantidad.value = o.dataset.sugCantidad;
+    }
+  }
+  if (selectSku) { selectSku.addEventListener("change", aplicaSugerencia); aplicaSugerencia(); }
 
   function eligeSku(valor) {
     var pego = false;

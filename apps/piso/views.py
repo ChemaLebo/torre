@@ -474,9 +474,12 @@ def recepcion_detalle(request, pk):
         .values_list("sku_id", "t")
     )
     from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
+    from apps.inventario.services import sugerir_anaquel  # lazy por contrato
     for linea in lineas:
         linea.por_ubicar = putaway.get(linea.sku_id, 0)
         linea.lotes_sugeridos = lotes_sugeridos(linea.sku, orden)
+        # Plan de acomodo: el primer paso prellena anaquel y cantidad; el resto se lee.
+        linea.sugerencia = sugerir_anaquel(linea.sku, linea.por_ubicar) if linea.por_ubicar else []
     sla_texto, sla_tono = _sla_recepcion(orden)
     contexto = {
         "seccion": "recepcion",
@@ -1792,6 +1795,11 @@ def conteos(request):
             .values_list("ubicacion__codigo", flat=True)
             .distinct()
         )
+        # Al contar, el piso puede marcar el anaquel lleno o con espacio
+        # (corrige la ocupación estimada del acomodo sugerido).
+        tarea.anaqueles = list(
+            Ubicacion.objects.filter(codigo__in=tarea.ubicaciones, tipo=Ubicacion.PICKING).order_by("codigo")
+        )
     for tarea in completadas:
         tarea.incidencia = _incidencia_descuadre(tarea.conteo) if tarea.conteo else None
     contexto = {
@@ -1820,6 +1828,15 @@ def _conteo_registrar(request):
     except ValueError as exc:
         messages.error(request, str(exc))
         return destino
+
+    marca = (request.POST.get("anaquel_estado") or "").strip()
+    if marca and "|" in marca:
+        codigo, estado = marca.split("|", 1)
+        anaquel = Ubicacion.objects.filter(codigo=codigo, tipo=Ubicacion.PICKING).first()
+        if anaquel is not None and estado in ("lleno", "espacio"):
+            from apps.inventario.services import marcar_anaquel  # lazy por contrato
+            if marcar_anaquel(anaquel, estado == "lleno", request.user):
+                messages.info(request, f"{anaquel.codigo} marcado {'lleno' if estado == 'lleno' else 'con espacio'}.")
 
     diferencia = conteo.diferencia
     incidencia = _incidencia_descuadre(conteo)
@@ -1892,8 +1909,10 @@ def cuarentena(request):
         .order_by("sku__cliente__nombre", "sku__codigo", "ubicacion__codigo")
     )
     from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
+    from apps.inventario.services import sugerir_anaquel  # lazy por contrato
     for saldo in putaway:
         saldo.lotes_sugeridos = lotes_sugeridos(saldo.sku) if saldo.lote_id is None else []
+        saldo.sugerencia = sugerir_anaquel(saldo.sku, saldo.cantidad)
     from apps.core.models import PerfilUsuario  # lazy: modelo de otra app
     firmantes = list(
         PerfilUsuario.objects.filter(

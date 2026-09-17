@@ -108,13 +108,16 @@
     <div class="grid g2">
       <div>
         <label for="pa-cantidad-{{ saldo.pk }}">Cantidad</label>
-        <input type="number" name="cantidad" id="pa-cantidad-{{ saldo.pk }}" min="1" max="{{ saldo.cantidad }}" inputmode="numeric" autocomplete="off" required>
+        <input type="number" name="cantidad" id="pa-cantidad-{{ saldo.pk }}" min="1" max="{{ saldo.cantidad }}" inputmode="numeric" autocomplete="off" required{% if saldo.sugerencia and saldo.sugerencia.0.ubicacion %} value="{{ saldo.sugerencia.0.cantidad }}"{% endif %}>
       </div>
       <div>
         <label for="pa-ubicacion-{{ saldo.pk }}">Ubicación (teclea o escanea)</label>
-        <input type="text" name="ubicacion" id="pa-ubicacion-{{ saldo.pk }}" class="mono" placeholder="PIC-1-I-F-1" autocomplete="off" list="ubicaciones-destino" required>
+        <input type="text" name="ubicacion" id="pa-ubicacion-{{ saldo.pk }}" class="mono" placeholder="PIC-1-I-F-1" autocomplete="off" list="ubicaciones-destino" required{% if saldo.sugerencia and saldo.sugerencia.0.ubicacion %} value="{{ saldo.sugerencia.0.ubicacion.codigo }}"{% endif %}>
       </div>
     </div>
+    {% if saldo.sugerencia %}
+    <p class="small muted">Sugerido: {% for paso in saldo.sugerencia %}{% if paso.ubicacion %}{{ paso.ubicacion.codigo }}: {{ paso.cantidad }} ({{ paso.motivo }}){% else %}{{ paso.cantidad }} sin anaquel con espacio{% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}</p>
+    {% endif %}
     {% if saldo.sku.requiere_lote and not saldo.lote %}
     <div class="grid g2">
       <div>

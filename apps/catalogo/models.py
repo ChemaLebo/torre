@@ -209,6 +209,9 @@ class Ubicacion(models.Model):
     ancho_cm = models.PositiveIntegerField(default=0)
     alto_cm = models.PositiveIntegerField(default=0, help_text="0 = sin tope de alto (reserva)")
     prioridad = models.PositiveIntegerField(null=True, blank=True, help_text="Orden de acceso: 1 = mejor; vacío = no se sugiere")
+    # El piso lo marca al contar ("anaquel lleno" / "con espacio"): corrige el
+    # estimado. Lleno a mano = no se sugiere hasta que otro conteo lo libere.
+    lleno_manual = models.BooleanField(default=False)
     carriers = models.CharField(
         max_length=200, blank=True, default="",
         help_text="Solo corrales: carriers separados por coma (vacío = comodín)",
