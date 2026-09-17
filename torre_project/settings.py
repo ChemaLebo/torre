@@ -218,6 +218,10 @@ TORRE = {
     # tope de cartas por bloque. Los pesos que exigen más cartas para ser
     # exactos (92.25/7.75 → 400) se redondean a este tamaño y la ficha lo avisa.
     "REPARTO_BLOQUE_MAX": 100,
+    # Rotación de SKUs para el acomodo sugerido: ventana de ventas y cortes del
+    # acumulado (A hasta 80 %, B hasta 95 %, C el resto).
+    "ROTACION_DIAS": 90,
+    "ROTACION_CORTES": (80, 95),
     # Estados: envia valida direcciones con SUS códigos de 2 letras (FAQ de
     # envia, 2026-09: "do not reuse codes from other platforms"). Origen "CX"
     # fijo (ORIGEN_DEFAULT) y destino traducido con envios.cotizador.estado_envia

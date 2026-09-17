@@ -340,6 +340,10 @@ class FormSKU(forms.Form):
         error_messages={"invalid": "El precio declarado debe ser un monto (ej. 250.00)."},
     )
     punto_reorden = forms.IntegerField(label="Punto de reorden", min_value=0, required=False, initial=0)
+    rotacion = forms.ChoiceField(
+        label="Rotación", choices=SKU.ROTACIONES, initial=SKU.ROTACION_AUTO, required=False,
+        help_text="Para el acomodo sugerido. Automática = por ventas de los últimos 90 días; A/B/C la fuerza.",
+    )
     empaques_divisibles = forms.IntegerField(
         label="Empaques divisibles",
         min_value=1,
@@ -399,6 +403,7 @@ class FormSKU(forms.Form):
             "unidad": (d.get("unidad") or "").strip() or "pieza",
             "precio_declarado": d.get("precio_declarado") if d.get("precio_declarado") is not None else Decimal("0"),
             "punto_reorden": d.get("punto_reorden") or 0,
+            "rotacion": d.get("rotacion") or SKU.ROTACION_AUTO,
             "empaques_divisibles": d["empaques_divisibles"],
             "backorder_habilitado": d.get("backorder_habilitado", False),
             "es_kit": d.get("es_kit", False),

@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from apps.core.services import registrar_evento
 
-from .models import Lote
+from .models import SKU, Lote
 
 
 def obtener_o_crear_lote(sku, codigo, fecha_caducidad=None):
@@ -168,3 +168,59 @@ def lotes_cliente(cliente):
     for lote in lotes:
         lote.piezas = stock.get((lote.sku_id, lote.pk), 0)
     return lotes
+
+
+# ── Rotación (acomodo sugerido) ──
+
+def clases_por_volumen(ventas, cortes=None):
+    """{clave: "A"|"B"|"C"} a partir de {clave: piezas vendidas}: ordenadas de
+    mayor a menor, un producto es A mientras el acumulado ANTES de él no llegue
+    al primer corte, B hasta el segundo, C el resto (regla ABC clásica: el que
+    cruza el corte pertenece a la clase alta; así un solo producto con el 94 %
+    de las ventas es A, no B). Cortes default TORRE["ROTACION_CORTES"] =
+    (80, 95) por ciento. Sin ventas → C."""
+    corte_a, corte_b = cortes or settings.TORRE.get("ROTACION_CORTES", (80, 95))
+    total = sum(v for v in ventas.values() if v > 0)
+    clases, acumulado = {}, 0
+    for clave, piezas in sorted(ventas.items(), key=lambda par: (-par[1], str(par[0]))):
+        if total <= 0 or piezas <= 0:
+            clases[clave] = "C"
+            continue
+        previo = acumulado * 100 / total
+        clases[clave] = "A" if previo < corte_a else "B" if previo < corte_b else "C"
+        acumulado += piezas
+    return clases
+
+
+def ventas_por_sku(cliente, dias=None):
+    """{sku_id: piezas} vendidas en pedidos no cancelados de los últimos `dias`
+    (TORRE["ROTACION_DIAS"]); las hijas de kit cuentan como el SKU que son."""
+    from apps.pedidos.models import LineaPedido, Pedido  # lazy por contrato
+
+    dias = dias or settings.TORRE.get("ROTACION_DIAS", 90)
+    desde = timezone.now() - timedelta(days=dias)
+    filas = (
+        LineaPedido.objects.filter(pedido__cliente=cliente, pedido__creado__gte=desde)
+        .exclude(pedido__estado__in=(Pedido.CANCELADO, Pedido.CANCELACION_PENDIENTE))
+        .values("sku_id").annotate(piezas=Sum("cantidad"))
+    )
+    return {f["sku_id"]: f["piezas"] or 0 for f in filas}
+
+
+def clases_rotacion(cliente, dias=None):
+    """{sku_id: clase} efectiva de todos los SKUs activos del cliente: la
+    forzada manda; los "auto" se clasifican por ventas del periodo, y sin
+    ventas quedan en C."""
+    skus = list(SKU.objects.filter(cliente=cliente, activo=True).only("id", "rotacion"))
+    automaticas = clases_por_volumen(ventas_por_sku(cliente, dias))
+    return {
+        s.pk: s.rotacion if s.rotacion != SKU.ROTACION_AUTO else automaticas.get(s.pk, "C")
+        for s in skus
+    }
+
+
+def clase_rotacion(sku, dias=None):
+    """Clase efectiva de UN SKU (ver clases_rotacion)."""
+    if sku.rotacion != SKU.ROTACION_AUTO:
+        return sku.rotacion
+    return clases_rotacion(sku.cliente, dias).get(sku.pk, "C")

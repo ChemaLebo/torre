@@ -165,6 +165,11 @@
           {{ form.punto_reorden }}{{ form.punto_reorden.errors }}
         </div>
         <div>
+          <label for="{{ form.rotacion.id_for_label }}">{{ form.rotacion.label }}</label>
+          {{ form.rotacion }}
+          <div class="small muted">{{ form.rotacion.help_text }}</div>
+        </div>
+        <div>
           <label for="{{ form.empaques_divisibles.id_for_label }}">{{ form.empaques_divisibles.label }}</label>
           {{ form.empaques_divisibles }}
           <div class="small muted">{{ form.empaques_divisibles.help_text }}</div>
@@ -216,7 +221,7 @@ document.addEventListener("DOMContentLoaded", function () {
     <label for="id_archivo">Archivo CSV (UTF-8, con encabezados)</label>
     <input type="file" name="archivo" id="id_archivo" accept=".csv" required>
     <p class="small muted mt">
-      Encabezados: <span class="mono">codigo,descripcion,variante,codigo_barras,categoria,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles,es_kit</span>.
+      Encabezados: <span class="mono">codigo,descripcion,variante,codigo_barras,categoria,peso_gr,largo_cm,ancho_cm,alto_cm,precio_declarado,punto_reorden,requiere_lote,empaques_divisibles,es_kit,rotacion</span>.
       Solo codigo y descripcion son obligatorios por fila; requiere_lote acepta si/no/1/0;
       una categoria que no existe se crea sola (vacía = Otros).
       Un código que ya existe se actualiza; las filas con error no detienen a las demás.

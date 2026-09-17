@@ -53,6 +53,15 @@ class SKU(models.Model):
     unidad = models.CharField(max_length=20, default="pieza")
     precio_declarado = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     punto_reorden = models.PositiveIntegerField(default=0)
+    # Rotación para el acomodo sugerido (plan 2026-09-17): "auto" se calcula
+    # con las ventas de los últimos TORRE["ROTACION_DIAS"] días
+    # (catalogo.services.clase_rotacion); A/B/C forzada manda, desde la ficha
+    # de Mesa, el CSV de catálogo o `manage.py rotacion_desde_ventas`.
+    ROTACION_AUTO = "auto"
+    ROTACIONES = [
+        (ROTACION_AUTO, "Automática"), ("A", "A · alta"), ("B", "B · media"), ("C", "C · baja"),
+    ]
+    rotacion = models.CharField(max_length=4, choices=ROTACIONES, default=ROTACION_AUTO)
     empaques_divisibles = models.PositiveIntegerField(
         default=1,
         help_text="En cuántas cajas puede reempacarse una unidad de venta para "

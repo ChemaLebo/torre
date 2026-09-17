@@ -489,6 +489,25 @@ class ImportCsvTests(BaseGestionClientes):
         self.assertEqual(sku.categoria, cerveza)
         self.assertFalse(sku.requiere_lote)
 
+    def test_import_y_export_con_columna_rotacion(self):
+        from apps.catalogo.models import SKU
+
+        contenido = "\n".join([
+            "codigo,descripcion,rotacion",
+            "ROT-A,Producto A,a",
+            "ROT-AUTO,Producto auto,auto",
+            "ROT-MAL,Producto malo,Z",
+        ])
+        respuesta = self._importar(contenido)
+        self.assertEqual(SKU.objects.get(cliente=self.colima, codigo="ROT-A").rotacion, "A")
+        self.assertEqual(SKU.objects.get(cliente=self.colima, codigo="ROT-AUTO").rotacion, "auto")
+        self.assertFalse(SKU.objects.filter(cliente=self.colima, codigo="ROT-MAL").exists())
+        self.assertContains(respuesta, "rotacion acepta A/B/C o auto")
+        exportado = self.client.get(reverse("mesa:cliente_skus_exportar", args=[self.colima.pk]))
+        lineas = exportado.content.decode("utf-8-sig").splitlines()
+        self.assertTrue(lineas[0].endswith(",es_kit,rotacion"))
+        self.assertTrue(any(l.startswith("ROT-A,") and l.endswith(",A") for l in lineas))
+
     def test_import_con_columna_variante(self):
         from apps.catalogo.models import SKU
 
