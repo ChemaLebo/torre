@@ -273,7 +273,18 @@ construye con datos que ya guardamos, más dos piezas de datos nuevas.
 Ya existe y no se toca: pedidos del día con estatus, guía y evidencia
 (Mesa y portal → Reportes → Reporte del día, con CSV).
 
-## Acomodo sugerido y capacidad de anaqueles (plan cerrado 2026-09-17)
+## Acomodo sugerido y capacidad de anaqueles — hecho 2026-09-17
+
+Ejecutado en tres commits el mismo día: rotación A/B/C (SKU.rotacion, CSV,
+`rotacion_desde_ventas`), capacidad y ocupación con producto parado
+(Ubicacion.largo/ancho/alto/prioridad, plano y panel por ocupación, medidas
+editables en Mesa, aviso al ubicar) y sugerencia al ubicar (plan por rack en
+Recepción y Cuarentena, marca lleno/con espacio en Conteos, reporte
+"Reacomodo sugerido"). **Queda:** afinar con uso real los umbrales (60/90 %,
+apilado 6, cortes 80/95) y, si el reacomodo se vuelve frecuente, el
+traslado entre anaqueles desde Mesa sin pasar por reconciliación.
+
+### Plan original (cerrado 2026-09-17)
 
 **Objetivo:** que Torre diga dónde acomodar cada producto al recibir según su
 rotación, y que avise cuando un anaquel se llena. El acomodo 3D exacto no
