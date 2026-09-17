@@ -111,6 +111,11 @@ class PlanoBodegaTests(BaseBodegaMesa):
         fila = next(u for u in almacen["ubicaciones"] if u["codigo"] == "A-01-1")
         self.assertEqual(fila["vendible"], 40)
         self.assertEqual(fila["apartado"], 5)
+        # Desglose por producto del anaquel: qué hay y de quién.
+        [producto] = fila["productos"]
+        self.assertEqual((producto["cliente"], producto["sku"], producto["vendible"], producto["apartado"]),
+                         ("Cervecería Colima", self.sku.codigo, 40, 5))
+        self.assertContains(respuesta, self.sku.descripcion)
         por_cliente = {f["sku__cliente__nombre"]: f["piezas"] for f in almacen["por_cliente"]}
         self.assertEqual(por_cliente["Cervecería Colima"], 40)
 

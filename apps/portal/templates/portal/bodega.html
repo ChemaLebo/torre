@@ -64,20 +64,28 @@
         <div class="stat"><b>{{ almacen.total_apartado }}</b><span>piezas apartadas para pedidos</span></div>
       </div>
       {% if almacen.ubicaciones %}
-        <div class="tabla-wrap">
-          <table>
-            <thead><tr><th>Anaquel</th><th class="derecha">Piezas</th><th class="derecha">Apartadas</th></tr></thead>
-            <tbody>
-              {% for ubic in almacen.ubicaciones %}
-              <tr>
-                <td class="mono">{{ ubic.codigo }}</td>
-                <td class="derecha mono">{{ ubic.vendible }}</td>
-                <td class="derecha mono">{{ ubic.apartado }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
+        {# Cada anaquel abre su desglose por producto; solo producto del cliente (zonas_bodega filtra por tenant). #}
+        {% for ubic in almacen.ubicaciones %}
+        <details class="colapsable">
+          <summary><span class="mono"><b>{{ ubic.codigo }}</b></span> · {{ ubic.vendible }} pieza(s) · {{ ubic.apartado }} apartada(s)</summary>
+          <div class="colapsable-cuerpo tabla-wrap">
+            <table>
+              <thead><tr><th>SKU</th><th>Producto</th><th>Lote</th><th class="derecha">Piezas</th><th class="derecha">Apartadas</th></tr></thead>
+              <tbody>
+                {% for p in ubic.productos %}
+                <tr>
+                  <td class="mono">{{ p.sku }}</td>
+                  <td>{{ p.descripcion }}</td>
+                  <td class="mono">{{ p.lote|default:"—" }}</td>
+                  <td class="derecha mono">{{ p.vendible }}</td>
+                  <td class="derecha mono">{{ p.apartado }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+        {% endfor %}
       {% else %}
         <p class="muted">Todavía no tienes producto en anaqueles. En cuanto llegue tu primera entrega lo verás aquí.</p>
       {% endif %}

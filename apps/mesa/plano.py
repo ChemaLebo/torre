@@ -157,6 +157,25 @@ def zonas_bodega(cliente=None):
             {"codigo": fila["ubicacion__codigo"], "vendible": 0, "apartado": 0},
         )
         registro["apartado"] = fila["piezas"]
+    # Desglose por producto de cada anaquel (qué hay y de quién): vendible y
+    # apartado por SKU y lote. Con `cliente` ya viene filtrado al tenant, así
+    # que el portal jamás ve producto ajeno.
+    productos = {}
+    for fila in (
+        saldos.filter(estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO])
+        .values("ubicacion__codigo", "sku__cliente__nombre", "sku__codigo", "sku__descripcion", "lote__codigo", "estado")
+        .annotate(piezas=Sum("cantidad"))
+    ):
+        clave = (fila["ubicacion__codigo"], fila["sku__cliente__nombre"], fila["sku__codigo"], fila["lote__codigo"] or "")
+        p = productos.setdefault(clave, {
+            "cliente": fila["sku__cliente__nombre"], "sku": fila["sku__codigo"],
+            "descripcion": fila["sku__descripcion"], "lote": fila["lote__codigo"] or "",
+            "vendible": 0, "apartado": 0,
+        })
+        p["vendible" if fila["estado"] == Saldo.UBICADO_VENDIBLE else "apartado"] += fila["piezas"]
+    for clave in sorted(productos):
+        registro = por_ubicacion.setdefault(clave[0], {"codigo": clave[0], "vendible": 0, "apartado": 0})
+        registro.setdefault("productos", []).append(productos[clave])
     almacen = {
         "ubicaciones": sorted(por_ubicacion.values(), key=lambda u: u["codigo"]),
         "total_vendible": sum(u["vendible"] for u in por_ubicacion.values()),

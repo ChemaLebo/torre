@@ -125,6 +125,11 @@ class BodegaPortalTests(BaseBodegaPortal):
         self.assertNotContains(respuesta, self.asn_ajena.folio)
         self.assertNotContains(respuesta, "MEZCAL-750")
         self.assertNotContains(respuesta, "Mezcal Nocturno")
+        # El desglose por anaquel solo trae producto propio: A-01-2 (ajeno) ni aparece.
+        anaqueles = {u["codigo"]: u for u in respuesta.context["almacen"]["ubicaciones"]}
+        self.assertIn("A-01-1", anaqueles)
+        self.assertNotIn("A-01-2", anaqueles)
+        self.assertEqual([p["sku"] for p in anaqueles["A-01-1"]["productos"]], ["COLIMITA-SIX"])
 
     def test_asn_en_recepcion_aparece_en_el_panel_de_descarga(self):
         respuesta = self.get_bodega()
