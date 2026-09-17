@@ -420,6 +420,7 @@ input[type="date"], input[type="datetime-local"] { color-scheme: dark; }
 .plano-rack { fill: var(--panel-2); stroke: var(--hair-2); stroke-width: 2; }
 .plano-rack.vacio { opacity: .35; }
 .plano-rack-codigo { font-size: 26px; fill: var(--ink-70); }
+.plano-rack-codigo.mini { font-size: 17px; }  /* celdas I/D × F/B: cuatro por piso */
 .plano-badge circle { fill: var(--panel); stroke: var(--accent); stroke-width: 3; }
 .plano-badge text { fill: var(--ink); font-size: 32px; font-weight: 600; }
 

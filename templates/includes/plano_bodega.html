@@ -83,7 +83,7 @@ visibilidad. Sin JS, todos los paneles quedan visibles apilados.
     {% for rack in racks %}
     {% for fila in rack.filas %}
     <rect class="plano-rack" x="{{ fila.x }}" y="{{ fila.y }}" width="{{ fila.w }}" height="{{ fila.h }}"/>
-    <text class="plano-rack-codigo" x="{{ fila.cx }}" y="{{ fila.cy }}" text-anchor="middle">{{ fila.codigo }}</text>
+    <text class="plano-rack-codigo{% if fila.mini %} mini{% endif %}" x="{{ fila.cx }}" y="{{ fila.cy }}" text-anchor="middle">{{ fila.codigo }}</text>
     {% endfor %}
     {% endfor %}
     <g class="plano-badge"><circle cx="1252" cy="732" r="36"/><text x="1252" y="744" text-anchor="middle">{{ badges.almacen }}</text></g>

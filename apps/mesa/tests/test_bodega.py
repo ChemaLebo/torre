@@ -219,3 +219,26 @@ class RacksPorNumeroTests(TestCase):
         racks = {r["etiqueta"]: [f["codigo"] for f in r["filas"]] for r in racks_bodega()}
         self.assertEqual(racks["Rack 1"], ["PIC-1-1", "PIC-1-2", "PIC-1-3", "RES-1-4"])
         self.assertEqual(racks["Rack 2"], ["PIC-2-1", "RES-2-4"])
+
+    def test_rack_doble_lado_frente_piso(self):
+        """PIC-1-I-F-1: rack 1, izquierda/derecha × frente/atrás, cuatro celdas
+        por piso y el piso de hasta arriba (RES) dibujado arriba."""
+        from apps.catalogo.models import Ubicacion
+        from apps.mesa.plano import RACK_X, racks_bodega
+        for codigo, tipo in (
+            ("PIC-1-I-F-1", Ubicacion.PICKING), ("PIC-1-D-B-1", Ubicacion.PICKING),
+            ("PIC-1-D-F-3", Ubicacion.PICKING), ("RES-1-I-F-4", Ubicacion.RESERVA),
+            ("PIC-2-I-B-2", Ubicacion.PICKING),
+        ):
+            Ubicacion.objects.get_or_create(codigo=codigo, defaults={"tipo": tipo})
+        racks = {r["etiqueta"]: r["filas"] for r in racks_bodega()}
+        celdas = {f["codigo"]: f for f in racks["Rack 1"]}
+        self.assertEqual([f["codigo"] for f in racks["Rack 1"]], ["RES-1-I-F-4", "PIC-1-D-F-3", "PIC-1-I-F-1", "PIC-1-D-B-1"])
+        ancho = celdas["PIC-1-I-F-1"]["w"]
+        self.assertEqual(celdas["PIC-1-I-F-1"]["x"], RACK_X)
+        self.assertEqual(celdas["PIC-1-D-F-3"]["x"], RACK_X + 2 * ancho)
+        self.assertEqual(celdas["PIC-1-D-B-1"]["x"], RACK_X + 3 * ancho)
+        self.assertLess(celdas["RES-1-I-F-4"]["y"], celdas["PIC-1-I-F-1"]["y"])
+        self.assertEqual(celdas["PIC-1-I-F-1"]["y"], celdas["PIC-1-D-B-1"]["y"])
+        self.assertTrue(all(f["mini"] for f in racks["Rack 1"]))
+        self.assertEqual([f["codigo"] for f in racks["Rack 2"]], ["PIC-2-I-B-2"])

@@ -14,6 +14,7 @@ copy): cada vista los decora con su propio vocabulario.
 
 Lo usan mesa:bodega y portal:bodega (import lazy desde portal, por contrato).
 """
+import re
 from datetime import timedelta
 
 from django.db.models import Q, Sum
@@ -26,33 +27,46 @@ RACK_Y0 = 760
 RACK_Y_FIN = 1960
 
 
+# Columna dentro del rack para el formato <PREFIJO>-<rack>-<lado>-<frente>-<piso>:
+# izquierda/derecha × frente/atrás, de izquierda a derecha en el dibujo.
+COLUMNAS_RACK = {("I", "F"): 0, ("I", "B"): 1, ("D", "F"): 2, ("D", "B"): 3}
+PATRON_RACK_PISO = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
+PATRON_RACK_LADO = re.compile(r"^([A-Z]+)-(\d+)-([ID])-([FB])-(\d+)$")
+
+
 def racks_bodega():
     """Racks REALES agrupados desde las Ubicaciones (picking/reserva).
 
-    Un código PIC-3-2 = rack 3, piso 2: cada rack se dibuja como un bloque
-    con UNA fila por piso (los 4 pisos se ven, no solo 2 — pedido de Chema,
-    sep-2026). Códigos sin patrón rack-piso van como bloque de un piso.
-    Regresa [{etiqueta, filas: [{x, y, w, h, cx, cy, codigo}]}].
+    Dos formatos de código conviven:
+    - PIC-3-2 = rack 3, piso 2: una fila por piso a lo ancho del rack (los 4
+      pisos se ven — pedido de Chema, sep-2026), pisos de arriba abajo en
+      orden ascendente como siempre.
+    - PIC-1-I-F-1 = rack 1, lado izquierdo (I) o derecho (D), frente (F) o
+      atrás (B), piso 1 (formato sep-2026, racks dobles): cada piso es una
+      fila con cuatro celdas I-F · I-B · D-F · D-B y el piso de hasta arriba
+      (la reserva, RES-1-D-F-4) se dibuja arriba, como en el físico.
+    La agrupación es POR NÚMERO DE RACK ignorando la letra (la letra es el
+    tipo del piso, no el rack). Códigos sin patrón van como bloque de un piso.
+    Regresa [{etiqueta, filas: [{x, y, w, h, cx, cy, codigo, mini}]}].
     """
-    import re
-
     from apps.catalogo.models import Ubicacion  # lazy por contrato
 
-    # Agrupación POR NÚMERO DE RACK, ignorando la letra (decisión de Chema,
-    # sep-2026): el rack físico 1 junta PIC-1-1/2/3 y RES-1-4 — la letra es
-    # el tipo del piso, no el rack. Códigos sin patrón letra-num-num van como
-    # bloque propio de un piso.
-    patron = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
     grupos = {}
     for codigo in (
         Ubicacion.objects.filter(
             tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA], activo=True,
         ).order_by("codigo").values_list("codigo", flat=True)
     ):
-        m = patron.match(codigo)
-        clave = f"Rack {m.group(2)}" if m else codigo
-        piso = int(m.group(3)) if m else 1
-        grupos.setdefault(clave, []).append((piso, codigo))
+        lado = PATRON_RACK_LADO.match(codigo)
+        piso_solo = PATRON_RACK_PISO.match(codigo)
+        if lado:
+            clave, piso = f"Rack {lado.group(2)}", int(lado.group(5))
+            columna = COLUMNAS_RACK[(lado.group(3), lado.group(4))]
+        elif piso_solo:
+            clave, piso, columna = f"Rack {piso_solo.group(2)}", int(piso_solo.group(3)), None
+        else:
+            clave, piso, columna = codigo, 1, None
+        grupos.setdefault(clave, []).append((piso, columna, codigo))
 
     if not grupos:
         return []
@@ -63,20 +77,28 @@ def racks_bodega():
         return (0, int(num)) if num.isdigit() else (1, 0)
 
     pitch = (RACK_Y_FIN - RACK_Y0) // max(len(grupos), 1)
+    ancho_celda = RACK_ANCHO // len(COLUMNAS_RACK)
     racks = []
-    for indice, (clave, pisos) in enumerate(sorted(grupos.items(), key=_orden)):
-        pisos.sort()
+    for indice, (clave, celdas) in enumerate(sorted(grupos.items(), key=_orden)):
+        doble = any(columna is not None for _p, columna, _c in celdas)
+        pisos = sorted({p for p, _col, _c in celdas}, reverse=doble)
         y_rack = RACK_Y0 + indice * pitch
         alto_fila = max(24, min(52, (pitch - 26) // max(len(pisos), 1)))
         filas = []
-        for j, (_, codigo) in enumerate(pisos):
+        for j, piso in enumerate(pisos):
             y = y_rack + j * alto_fila
-            filas.append({
-                "x": RACK_X, "y": y, "w": RACK_ANCHO, "h": alto_fila,
-                "cx": RACK_X + RACK_ANCHO // 2,
-                "cy": y + alto_fila // 2 + 8,
-                "codigo": codigo,
-            })
+            for _p, columna, codigo in sorted(
+                (c for c in celdas if c[0] == piso), key=lambda c: (c[1] is None, c[1] or 0, c[2]),
+            ):
+                if columna is None:
+                    x, w = RACK_X, RACK_ANCHO
+                else:
+                    x, w = RACK_X + columna * ancho_celda, ancho_celda
+                filas.append({
+                    "x": x, "y": y, "w": w, "h": alto_fila,
+                    "cx": x + w // 2, "cy": y + alto_fila // 2 + 8,
+                    "codigo": codigo, "mini": columna is not None,
+                })
         racks.append({"etiqueta": clave, "filas": filas})
     return racks
 
