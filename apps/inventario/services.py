@@ -1509,3 +1509,53 @@ def _conteo_reconciliacion(renglon, actor):
         sku=renglon["sku"], fecha=timezone.localdate(), estado=TareaConteo.PENDIENTE,
     ).update(estado=TareaConteo.COMPLETADA, conteo=conteo)
     return conteo
+
+
+# ── Reacomodo de racks ──
+
+TIPO_POR_PREFIJO = {"PIC": Ubicacion.PICKING, "RES": Ubicacion.RESERVA}
+
+
+def mover_ubicacion(codigo_origen, codigo_destino, actor=None):
+    """Mueve TODO lo que hay en una ubicación a otra, conservando SKU, lote y
+    estado de cada saldo (reacomodo de racks, sep-2026).
+
+    - Destino inexistente → la ubicación se RENOMBRA: misma ficha, mismo
+      inventario, apartados incluidos, cero movimientos. El tipo se infiere del
+      prefijo del código nuevo (PIC → picking, RES → reserva) si lo tiene.
+    - Destino existente → los saldos se FUSIONAN en el destino (misma llave
+      sku/lote/estado suma cantidades) y la origen queda inactiva.
+    Sin líneas de kardex: la cantidad y el estado del stock no cambian; queda
+    el evento de auditoría `ubicacion_movida` con el detalle. Regresa
+    {"modo": "renombrada" | "fusionada", "piezas", "saldos"}.
+    """
+    origen = Ubicacion.objects.get(codigo=codigo_origen)
+    if codigo_origen == codigo_destino:
+        raise ValueError(f"{codigo_origen}: origen y destino son la misma ubicación.")
+    with transaction.atomic():
+        destino = Ubicacion.objects.filter(codigo=codigo_destino).first()
+        saldos = list(Saldo.objects.select_for_update().filter(ubicacion=origen).select_related("sku"))
+        piezas = sum(s.cantidad for s in saldos)
+        if destino is None:
+            origen.codigo = codigo_destino
+            tipo = TIPO_POR_PREFIJO.get(codigo_destino.split("-")[0].upper())
+            if tipo:
+                origen.tipo = tipo
+            origen.save(update_fields=["codigo", "tipo"])
+            modo = "renombrada"
+        else:
+            if not destino.activo:
+                raise ValueError(f"{codigo_destino} está inactiva; actívala antes de mover ahí.")
+            for saldo in saldos:
+                if saldo.cantidad:
+                    _incrementar(saldo.sku, destino.pk, saldo.lote_id, saldo.estado, saldo.cantidad)
+                saldo.delete()
+            origen.activo = False
+            origen.save(update_fields=["activo"])
+            modo = "fusionada"
+        registrar_evento(
+            "ubicacion", codigo_origen, "ubicacion_movida", actor=actor,
+            delta={"a": codigo_destino, "modo": modo, "piezas": piezas, "saldos": len(saldos)},
+            motivo=f"Reacomodo de racks: {codigo_origen} → {codigo_destino} ({modo}, {piezas} pieza(s)).",
+        )
+    return {"modo": modo, "piezas": piezas, "saldos": len(saldos)}
