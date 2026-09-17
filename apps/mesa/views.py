@@ -745,6 +745,8 @@ def inventario(request):
             return _inventario_ubicacion_toggle(request)
         if accion == "ubicacion_carriers":
             return _inventario_ubicacion_carriers(request)
+        if accion == "ubicacion_medidas":
+            return _inventario_ubicacion_medidas(request)
         messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
         return redirect("mesa:inventario")
 
@@ -984,6 +986,45 @@ def _inventario_ubicacion_nueva(request):
 def _normalizar_carriers(crudo):
     """"a, b ,," → "a,b" (el orden se respeta)."""
     return ",".join(p.strip() for p in (crudo or "").split(",") if p.strip())
+
+
+def _inventario_ubicacion_medidas(request):
+    """Medidas libres (cm) y prioridad de acceso de un anaquel picking/reserva,
+    con auditoría. Alto 0 = sin tope; prioridad vacía = no se sugiere."""
+    from apps.catalogo.models import Ubicacion
+
+    destino = _redirect_inventario(ver="ubicaciones")
+    ubicacion = get_object_or_404(Ubicacion, pk=request.POST.get("ubicacion_id"))
+    if ubicacion.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA):
+        messages.error(request, "Las medidas y la prioridad solo aplican a anaqueles de picking o reserva.")
+        return destino
+    nuevos = {}
+    for campo in ("largo_cm", "ancho_cm", "alto_cm", "prioridad"):
+        crudo = (request.POST.get(campo) or "").strip()
+        if not crudo:
+            nuevos[campo] = None if campo == "prioridad" else 0
+            continue
+        try:
+            nuevos[campo] = int(crudo)
+        except ValueError:
+            messages.error(request, f"{campo} debe ser un número entero.")
+            return destino
+        if nuevos[campo] < 0 or (campo == "prioridad" and nuevos[campo] < 1):
+            messages.error(request, f"{campo} no puede ser negativo (prioridad mínimo 1).")
+            return destino
+    delta = {c: [getattr(ubicacion, c), v] for c, v in nuevos.items() if getattr(ubicacion, c) != v}
+    if not delta:
+        messages.info(request, f"{ubicacion.codigo} ya tenía esas medidas y prioridad.")
+        return destino
+    for campo, valor in nuevos.items():
+        setattr(ubicacion, campo, valor)
+    ubicacion.save(update_fields=list(nuevos))
+    registrar_evento(
+        "ubicacion", ubicacion.codigo, "medidas_actualizadas", actor=request.user,
+        delta=delta, motivo="Medidas y prioridad del anaquel desde Mesa de Control",
+    )
+    messages.success(request, f"{ubicacion.codigo}: medidas y prioridad guardadas.")
+    return destino
 
 
 def _inventario_ubicacion_carriers(request):

@@ -50,13 +50,14 @@ def racks_bodega():
     Regresa [{etiqueta, filas: [{x, y, w, h, cx, cy, codigo, mini}]}].
     """
     from apps.catalogo.models import Ubicacion  # lazy por contrato
+    from apps.inventario.services import ocupaciones  # lazy por contrato
 
+    ubicaciones = list(Ubicacion.objects.filter(
+        tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA], activo=True,
+    ).order_by("codigo"))
+    ocupacion_por_codigo = ocupaciones(ubicaciones)
     grupos = {}
-    for codigo in (
-        Ubicacion.objects.filter(
-            tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA], activo=True,
-        ).order_by("codigo").values_list("codigo", flat=True)
-    ):
+    for codigo in [u.codigo for u in ubicaciones]:
         lado = PATRON_RACK_LADO.match(codigo)
         piso_solo = PATRON_RACK_PISO.match(codigo)
         if lado:
@@ -94,10 +95,12 @@ def racks_bodega():
                     x, w = RACK_X, RACK_ANCHO
                 else:
                     x, w = RACK_X + columna * ancho_celda, ancho_celda
+                ocup = ocupacion_por_codigo.get(codigo) or {}
                 filas.append({
                     "x": x, "y": y, "w": w, "h": alto_fila,
                     "cx": x + w // 2, "cy": y + alto_fila // 2 + 8,
                     "codigo": codigo, "mini": columna is not None,
+                    "ocupacion": ocup.get("estado", ""), "pct": ocup.get("pct"),
                 })
         racks.append({"etiqueta": clave, "filas": filas})
     return racks
@@ -176,6 +179,14 @@ def zonas_bodega(cliente=None):
     for clave in sorted(productos):
         registro = por_ubicacion.setdefault(clave[0], {"codigo": clave[0], "vendible": 0, "apartado": 0})
         registro.setdefault("productos", []).append(productos[clave])
+    # Ocupación estimada del anaquel completo (todos los clientes: es el
+    # anaquel físico, no revela producto ajeno).
+    from apps.catalogo.models import Ubicacion  # lazy por contrato
+    from apps.inventario.services import ocupaciones  # lazy por contrato
+
+    ocupacion_por_codigo = ocupaciones(list(Ubicacion.objects.filter(codigo__in=list(por_ubicacion))))
+    for codigo, registro in por_ubicacion.items():
+        registro["ocupacion"] = ocupacion_por_codigo.get(codigo, {})
     almacen = {
         "ubicaciones": sorted(por_ubicacion.values(), key=lambda u: u["codigo"]),
         "total_vendible": sum(u["vendible"] for u in por_ubicacion.values()),

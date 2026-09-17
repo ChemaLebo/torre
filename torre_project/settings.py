@@ -222,6 +222,15 @@ TORRE = {
     # acumulado (A hasta 80 %, B hasta 95 %, C el resto).
     "ROTACION_DIAS": 90,
     "ROTACION_CORTES": (80, 95),
+    # Racks dobles (sep-2026): medidas libres por celda I/D × F/B, alto por
+    # piso (la reserva del piso 4 no tiene tope), orden de acceso de los pisos
+    # (el 2 es el cómodo, el 1 el de abajo) y apilado máximo de cajas paradas.
+    "RACK_MEDIDAS": {"largo_cm": 180, "ancho_cm": 58, "alto_por_piso": {1: 52, 2: 52, 3: 44}},
+    "RACK_ORDEN_PISOS": [2, 3, 1],
+    "APILADO_MAX": 6,
+    # Ocupación estimada de un anaquel: umbrales de "medio" y "lleno" (%).
+    "OCUPACION_MEDIO_PCT": 60,
+    "OCUPACION_LLENO_PCT": 90,
     # Estados: envia valida direcciones con SUS códigos de 2 letras (FAQ de
     # envia, 2026-09: "do not reuse codes from other platforms"). Origen "CX"
     # fijo (ORIGEN_DEFAULT) y destino traducido con envios.cotizador.estado_envia

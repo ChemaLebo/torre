@@ -29,7 +29,7 @@
   <div class="tabla-wrap">
     <table>
       <thead>
-        <tr><th>Código</th><th>Tipo</th><th>Carriers (corrales)</th><th>Estado</th><th>Saldos vivos</th><th class="derecha"></th></tr>
+        <tr><th>Código</th><th>Tipo</th><th>Carriers (corrales)</th><th>Medidas y prioridad</th><th>Estado</th><th>Saldos vivos</th><th class="derecha"></th></tr>
       </thead>
       <tbody>
         {% for ubic in ubicaciones %}
@@ -46,6 +46,20 @@
             </form>
             {% else %}<span class="muted">—</span>{% endif %}
           </td>
+          <td>
+            {% if ubic.tipo == "picking" or ubic.tipo == "reserva" %}
+            {# Capacidad (producto parado) y orden de acceso; alto 0 = sin tope, prioridad vacía = no se sugiere. #}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="ubicacion_medidas">
+              <input type="hidden" name="ubicacion_id" value="{{ ubic.pk }}">
+              <input type="number" name="largo_cm" class="mono" style="width:5em" min="0" value="{{ ubic.largo_cm }}" aria-label="Largo cm de {{ ubic.codigo }}" title="Largo (cm)">
+              <input type="number" name="ancho_cm" class="mono" style="width:5em" min="0" value="{{ ubic.ancho_cm }}" aria-label="Ancho cm de {{ ubic.codigo }}" title="Ancho (cm)">
+              <input type="number" name="alto_cm" class="mono" style="width:5em" min="0" value="{{ ubic.alto_cm }}" aria-label="Alto cm de {{ ubic.codigo }}" title="Alto (cm), 0 = sin tope">
+              <input type="number" name="prioridad" class="mono" style="width:5em" min="1" value="{{ ubic.prioridad|default_if_none:'' }}" placeholder="—" aria-label="Prioridad de {{ ubic.codigo }}" title="Prioridad: 1 = mejor; vacío = no se sugiere">
+              <button class="btn chico" type="submit">Guardar</button>
+            </form>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
           <td>{% if ubic.activo %}<span class="pill ok">activa</span>{% else %}<span class="pill warn">apagada</span>{% endif %}</td>
           <td class="num">{{ ubic.saldos_vivos }}</td>
           <td class="derecha">
@@ -57,7 +71,7 @@
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="6" class="muted centro">Sin ubicaciones dadas de alta.</td></tr>
+        <tr><td colspan="7" class="muted centro">Sin ubicaciones dadas de alta.</td></tr>
         {% endfor %}
       </tbody>
     </table>

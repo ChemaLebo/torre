@@ -267,3 +267,41 @@ class UbicacionesMesaTests(BaseInventarioMesa):
         self.assertContains(respuesta, "solo aplican a corrales")
         self.ubic_picking.refresh_from_db()
         self.assertEqual(self.ubic_picking.carriers, "")
+
+
+class UbicacionMedidasTests(TestCase):
+    """Medidas y prioridad de un anaquel desde la pestaña Ubicaciones, con auditoría."""
+
+    def setUp(self):
+        from apps.catalogo.models import Ubicacion
+
+        from .test_vistas import crear_usuario
+        self.mesa = crear_usuario("mesa9", "mesa")
+        self.client.force_login(self.mesa)
+        self.anaquel = Ubicacion.objects.create(codigo="PIC-1-I-F-2", tipo=Ubicacion.PICKING)
+        self.corral = Ubicacion.objects.create(codigo="SAL-X", tipo=Ubicacion.SALIDA)
+        self.url = reverse("mesa:inventario")
+
+    def test_guarda_medidas_y_prioridad(self):
+        from apps.core.models import EventoAuditoria
+
+        respuesta = self.client.post(self.url, {
+            "accion": "ubicacion_medidas", "ubicacion_id": self.anaquel.pk,
+            "largo_cm": "180", "ancho_cm": "58", "alto_cm": "52", "prioridad": "1",
+        }, follow=True)
+        self.assertContains(respuesta, "medidas y prioridad guardadas")
+        self.anaquel.refresh_from_db()
+        self.assertEqual((self.anaquel.largo_cm, self.anaquel.alto_cm, self.anaquel.prioridad), (180, 52, 1))
+        evento = EventoAuditoria.objects.get(entidad="ubicacion", entidad_id="PIC-1-I-F-2", accion="medidas_actualizadas")
+        self.assertEqual(evento.delta["prioridad"], [None, 1])
+        # Prioridad vacía = no se sugiere; alto vacío = sin tope.
+        self.client.post(self.url, {"accion": "ubicacion_medidas", "ubicacion_id": self.anaquel.pk,
+                                    "largo_cm": "180", "ancho_cm": "58", "alto_cm": "", "prioridad": ""})
+        self.anaquel.refresh_from_db()
+        self.assertEqual((self.anaquel.alto_cm, self.anaquel.prioridad), (0, None))
+
+    def test_corral_no_acepta_medidas_y_la_pestana_las_muestra(self):
+        respuesta = self.client.post(self.url, {"accion": "ubicacion_medidas", "ubicacion_id": self.corral.pk, "largo_cm": "1"}, follow=True)
+        self.assertContains(respuesta, "solo aplican a anaqueles")
+        respuesta = self.client.get(self.url, {"ver": "ubicaciones"})
+        self.assertContains(respuesta, 'value="ubicacion_medidas"')

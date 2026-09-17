@@ -67,7 +67,7 @@
         {# Cada anaquel abre su desglose por producto; solo producto del cliente (zonas_bodega filtra por tenant). #}
         {% for ubic in almacen.ubicaciones %}
         <details class="colapsable">
-          <summary><span class="mono"><b>{{ ubic.codigo }}</b></span> · {{ ubic.vendible }} pieza(s) · {{ ubic.apartado }} apartada(s)</summary>
+          <summary><span class="mono"><b>{{ ubic.codigo }}</b></span> · {{ ubic.vendible }} pieza(s) · {{ ubic.apartado }} apartada(s){% if ubic.ocupacion.pct != None %} · <span class="pill {% if ubic.ocupacion.estado == "lleno" %}crit{% elif ubic.ocupacion.estado == "medio" %}warn{% else %}ok{% endif %}">{{ ubic.ocupacion.pct }} % del anaquel</span>{% endif %}</summary>
           <div class="colapsable-cuerpo tabla-wrap">
             <table>
               <thead><tr><th>SKU</th><th>Producto</th><th>Lote</th><th class="derecha">Piezas</th><th class="derecha">Apartadas</th></tr></thead>

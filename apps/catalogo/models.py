@@ -178,7 +178,15 @@ class CajaStock(models.Model):
 
 class Ubicacion(models.Model):
     """Ubicación física del Local 380 E. Los corrales (tipo salida) declaran en
-    `carriers` qué guías se estacionan ahí; uno sin carriers es el comodín."""
+    `carriers` qué guías se estacionan ahí; uno sin carriers es el comodín.
+
+    Capacidad (acomodo sugerido, sep-2026): largo × ancho × alto libres en
+    cm; alto 0 = sin tope (la reserva, que jamás se sugiere); largo o ancho 0
+    = sin medidas, no se calcula ocupación. `prioridad` = orden de acceso
+    (1 = el anaquel más cómodo y cercano a picking; vacío = no se sugiere).
+    Para los códigos PIC/RES-<rack>-<I|D>-<F|B>-<piso> todo sale de
+    catalogo.services.medidas_de_codigo.
+    """
 
     RECEPCION = "recepcion"
     PICKING = "picking"
@@ -197,6 +205,10 @@ class Ubicacion(models.Model):
 
     codigo = models.CharField(max_length=20, unique=True, help_text="Ej. A-01-2, REC-01, SAL-PQX")
     tipo = models.CharField(max_length=12, choices=TIPOS)
+    largo_cm = models.PositiveIntegerField(default=0)
+    ancho_cm = models.PositiveIntegerField(default=0)
+    alto_cm = models.PositiveIntegerField(default=0, help_text="0 = sin tope de alto (reserva)")
+    prioridad = models.PositiveIntegerField(null=True, blank=True, help_text="Orden de acceso: 1 = mejor; vacío = no se sugiere")
     carriers = models.CharField(
         max_length=200, blank=True, default="",
         help_text="Solo corrales: carriers separados por coma (vacío = comodín)",

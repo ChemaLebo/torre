@@ -577,7 +577,8 @@ def _recepcion_ubicar(request, orden):
         from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
         lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
 
-    from apps.inventario.services import ubicar  # lazy por contrato
+    from apps.inventario.services import aviso_capacidad, ubicar  # lazy por contrato
+    aviso = aviso_capacidad(ubicacion, sku, cantidad)  # antes de ubicar: estimado con lo que va a entrar
     try:
         ubicar(sku, cantidad, ubicacion, lote, request.user)
     except ValueError as exc:
@@ -587,6 +588,8 @@ def _recepcion_ubicar(request, orden):
         request,
         f"{cantidad} × {sku.codigo} ubicadas en {ubicacion.codigo}: ya cuentan como vendibles.",
     )
+    if aviso:
+        messages.warning(request, aviso)
     return destino
 
 
@@ -1997,7 +2000,8 @@ def _cuarentena_ubicar(request):
             from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
             lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
 
-    from apps.inventario.services import ubicar  # lazy por contrato
+    from apps.inventario.services import aviso_capacidad, ubicar  # lazy por contrato
+    aviso = aviso_capacidad(ubicacion, sku, cantidad)  # antes de ubicar: estimado con lo que va a entrar
     try:
         ubicar(sku, cantidad, ubicacion, lote, request.user)
     except ValueError as exc:
@@ -2007,6 +2011,8 @@ def _cuarentena_ubicar(request):
         request,
         f"{cantidad} × {sku.codigo} ubicadas en {ubicacion.codigo}: ya cuentan como vendibles.",
     )
+    if aviso:
+        messages.warning(request, aviso)
     return destino
 
 

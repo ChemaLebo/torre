@@ -1559,3 +1559,91 @@ def mover_ubicacion(codigo_origen, codigo_destino, actor=None):
             motivo=f"Reacomodo de racks: {codigo_origen} → {codigo_destino} ({modo}, {piezas} pieza(s)).",
         )
     return {"modo": modo, "piezas": piezas, "saldos": len(saldos)}
+
+
+# ── Capacidad y ocupación de anaqueles (producto siempre parado) ──
+
+def capacidad_sku_en(ubicacion, sku):
+    """Piezas del SKU que caben PARADAS en la ubicación: huella (largo × ancho
+    del anaquel entre las del SKU, o girado 90° sobre el piso, el mayor) por
+    niveles (alto del anaquel entre alto del SKU, tope TORRE["APILADO_MAX"]).
+    None = no se puede calcular (anaquel sin medidas, sin tope de alto como la
+    reserva, o SKU sin medidas). 0 = no cabe ni una parada."""
+    if not (ubicacion.largo_cm and ubicacion.ancho_cm and ubicacion.alto_cm):
+        return None
+    if not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
+        return None
+    if sku.alto_cm > ubicacion.alto_cm:
+        return 0
+    niveles = min(ubicacion.alto_cm // sku.alto_cm, int(settings.TORRE.get("APILADO_MAX", 6)))
+    huella = max(
+        (ubicacion.largo_cm // sku.largo_cm) * (ubicacion.ancho_cm // sku.ancho_cm),
+        (ubicacion.largo_cm // sku.ancho_cm) * (ubicacion.ancho_cm // sku.largo_cm),
+    )
+    return huella * niveles
+
+
+def ocupacion(ubicacion, saldos=None, extra=None):
+    """Ocupación ESTIMADA del anaquel: cada SKU consume piezas / su capacidad
+    sola; la suma es la fracción ocupada. `extra` = (sku, piezas) que se
+    quieren agregar (para avisar antes de ubicar). Regresa {"pct", "estado"
+    (libre|medio|lleno|ilimitado|sin_medidas), "sin_medidas": [códigos de SKU],
+    "no_caben": [códigos], "por_sku": [{sku, piezas, capacidad}]}."""
+    if saldos is None:
+        saldos = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku")
+    piezas_por_sku = {}
+    for s in saldos:
+        piezas_por_sku.setdefault(s.sku, 0)
+        piezas_por_sku[s.sku] += s.cantidad
+    if extra is not None:
+        sku_extra, n = extra
+        piezas_por_sku[sku_extra] = piezas_por_sku.get(sku_extra, 0) + n
+    if not (ubicacion.largo_cm and ubicacion.ancho_cm):
+        return {"pct": None, "estado": "sin_medidas", "sin_medidas": [], "no_caben": [], "por_sku": []}
+    if not ubicacion.alto_cm:
+        return {"pct": None, "estado": "ilimitado", "sin_medidas": [], "no_caben": [], "por_sku": []}
+    fraccion, sin_medidas, no_caben, por_sku = 0.0, [], [], []
+    for sku, piezas in piezas_por_sku.items():
+        cap = capacidad_sku_en(ubicacion, sku)
+        por_sku.append({"sku": sku, "piezas": piezas, "capacidad": cap})
+        if cap is None:
+            sin_medidas.append(sku.codigo)
+        elif cap == 0:
+            no_caben.append(sku.codigo)
+            fraccion += 1.0
+        else:
+            fraccion += piezas / cap
+    pct = round(fraccion * 100)
+    torre = settings.TORRE
+    if pct >= int(torre.get("OCUPACION_LLENO_PCT", 90)):
+        estado = "lleno"
+    elif pct >= int(torre.get("OCUPACION_MEDIO_PCT", 60)):
+        estado = "medio"
+    else:
+        estado = "libre"
+    return {"pct": pct, "estado": estado, "sin_medidas": sin_medidas, "no_caben": no_caben, "por_sku": por_sku}
+
+
+def ocupaciones(ubicaciones):
+    """{código: ocupacion(...)} de varias ubicaciones con una sola consulta de saldos."""
+    por_ubicacion = {u.pk: [] for u in ubicaciones}
+    for s in Saldo.objects.filter(ubicacion__in=ubicaciones, cantidad__gt=0).select_related("sku"):
+        por_ubicacion[s.ubicacion_id].append(s)
+    return {u.codigo: ocupacion(u, por_ubicacion[u.pk]) for u in ubicaciones}
+
+
+def aviso_capacidad(ubicacion, sku, cantidad):
+    """Texto de aviso si ubicar `cantidad` del SKU deja el anaquel lleno o el
+    SKU no cabe parado; "" si no hay nada que avisar. Nunca bloquea."""
+    cap = capacidad_sku_en(ubicacion, sku)
+    if cap == 0:
+        return (
+            f"Ojo: {sku.codigo} no cabe parado en {ubicacion.codigo} "
+            f"(alto {sku.alto_cm} cm contra {ubicacion.alto_cm} cm libres)."
+        )
+    if cap is None:
+        return ""
+    despues = ocupacion(ubicacion, extra=(sku, cantidad))
+    if despues["estado"] == "lleno":
+        return f"Ojo: {ubicacion.codigo} queda al {despues['pct']} % (estimado, producto parado)."
+    return ""

@@ -419,6 +419,10 @@ input[type="date"], input[type="datetime-local"] { color-scheme: dark; }
 .zona-cuarentena .zona-fondo { fill: var(--zona-cuarentena); }
 .plano-rack { fill: var(--panel-2); stroke: var(--hair-2); stroke-width: 2; }
 .plano-rack.vacio { opacity: .35; }
+/* Ocupación estimada del anaquel (producto parado): libre / medio / lleno. */
+.plano-rack.ocup-libre { fill: color-mix(in srgb, var(--ok) 18%, var(--panel-2)); }
+.plano-rack.ocup-medio { fill: color-mix(in srgb, var(--warn, #c9a227) 32%, var(--panel-2)); }
+.plano-rack.ocup-lleno { fill: color-mix(in srgb, var(--crit, #b3261e) 38%, var(--panel-2)); }
 .plano-rack-codigo { font-size: 26px; fill: var(--ink-70); }
 .plano-rack-codigo.mini { font-size: 17px; }  /* celdas I/D × F/B: cuatro por piso */
 .plano-badge circle { fill: var(--panel); stroke: var(--accent); stroke-width: 3; }

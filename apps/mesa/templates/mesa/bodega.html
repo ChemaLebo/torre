@@ -90,7 +90,7 @@
         {# Cada anaquel abre su desglose por producto (cliente, SKU, lote). #}
         {% for ubic in almacen.ubicaciones %}
         <details class="colapsable">
-          <summary><span class="mono"><b>{{ ubic.codigo }}</b></span> · {{ ubic.vendible }} vendible(s) · {{ ubic.apartado }} apartada(s)</summary>
+          <summary><span class="mono"><b>{{ ubic.codigo }}</b></span> · {{ ubic.vendible }} vendible(s) · {{ ubic.apartado }} apartada(s){% if ubic.ocupacion.pct != None %} · <span class="pill {% if ubic.ocupacion.estado == "lleno" %}crit{% elif ubic.ocupacion.estado == "medio" %}warn{% else %}ok{% endif %}">{{ ubic.ocupacion.pct }} %{% if ubic.ocupacion.estado == "lleno" %} · lleno{% endif %}</span>{% elif ubic.ocupacion.estado == "ilimitado" %} · <span class="pill">reserva</span>{% endif %}{% if ubic.ocupacion.sin_medidas %} · <span class="pill warn" title="{{ ubic.ocupacion.sin_medidas|join:", " }}">producto sin medidas</span>{% endif %}{% if ubic.ocupacion.no_caben %} · <span class="pill crit" title="{{ ubic.ocupacion.no_caben|join:", " }}">no cabe parado</span>{% endif %}</summary>
           <div class="colapsable-cuerpo tabla-wrap">
             <table>
               <thead><tr><th>Cliente</th><th>SKU</th><th>Producto</th><th>Lote</th><th class="derecha">Vendibles</th><th class="derecha">Apartadas</th></tr></thead>

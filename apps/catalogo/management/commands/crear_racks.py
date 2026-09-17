@@ -3,8 +3,10 @@
 (RES-1-D-F-4) y los demás como picking (PIC-1-I-F-1).
 
 Idempotente y sin tocar inventario: solo crea las ubicaciones que faltan
-(get_or_create por código); las existentes, con su stock, se dejan como están.
-Dry-run por default; --aplicar escribe.
+(get_or_create por código) con sus medidas y prioridad (catalogo.services.
+medidas_de_codigo); las existentes, con su stock, se dejan como están salvo
+que se pida --medidas (les refresca medidas y prioridad). Dry-run por
+default; --aplicar escribe.
 
     python manage.py crear_racks --racks 4 --pisos 4 --aplicar
 """
@@ -12,6 +14,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from apps.catalogo.models import Ubicacion
+from apps.catalogo.services import aplicar_medidas, medidas_de_codigo
 
 LADOS = (("I", "izquierda"), ("D", "derecha"))
 FRENTES = (("F", "frente"), ("B", "atrás"))
@@ -44,6 +47,10 @@ class Command(BaseCommand):
         parser.add_argument("--prefijo-picking", default="PIC")
         parser.add_argument("--prefijo-reserva", default="RES")
         parser.add_argument("--aplicar", action="store_true", help="Escribe en la base (sin esto solo muestra).")
+        parser.add_argument(
+            "--medidas", action="store_true",
+            help="Además, (re)escribe medidas y prioridad en las ubicaciones existentes con el patrón.",
+        )
 
     def handle(self, *args, **opciones):
         piso_reserva = opciones["piso_reserva"]
@@ -63,7 +70,14 @@ class Command(BaseCommand):
             return
         with transaction.atomic():
             for codigo, tipo in nuevas:
-                Ubicacion.objects.get_or_create(codigo=codigo, defaults={"tipo": tipo, "activo": True})
+                Ubicacion.objects.get_or_create(
+                    codigo=codigo, defaults={"tipo": tipo, "activo": True, **(medidas_de_codigo(codigo) or {})},
+                )
+            refrescadas = 0
+            if opciones["medidas"]:
+                refrescadas = aplicar_medidas(Ubicacion.objects.filter(codigo__in=list(existentes)))
         self.stdout.write(self.style.SUCCESS(
-            f"{len(nuevas)} ubicación(es) creada(s). Las existentes y su inventario no se tocaron."
+            f"{len(nuevas)} ubicación(es) creada(s) con medidas y prioridad. "
+            f"Las existentes y su inventario no se tocaron"
+            + (f" (medidas refrescadas en {refrescadas})." if opciones["medidas"] else ".")
         ))

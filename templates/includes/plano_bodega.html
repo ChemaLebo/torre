@@ -82,7 +82,7 @@ visibilidad. Sin JS, todos los paneles quedan visibles apilados.
     <text class="plano-etiqueta" x="690" y="735">Almacén</text>
     {% for rack in racks %}
     {% for fila in rack.filas %}
-    <rect class="plano-rack" x="{{ fila.x }}" y="{{ fila.y }}" width="{{ fila.w }}" height="{{ fila.h }}"/>
+    <rect class="plano-rack{% if fila.ocupacion %} ocup-{{ fila.ocupacion }}{% endif %}" x="{{ fila.x }}" y="{{ fila.y }}" width="{{ fila.w }}" height="{{ fila.h }}">{% if fila.pct != None %}<title>{{ fila.codigo }} · {{ fila.pct }} % ocupado (estimado)</title>{% endif %}</rect>
     <text class="plano-rack-codigo{% if fila.mini %} mini{% endif %}" x="{{ fila.cx }}" y="{{ fila.cy }}" text-anchor="middle">{{ fila.codigo }}</text>
     {% endfor %}
     {% endfor %}

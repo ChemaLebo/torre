@@ -7,6 +7,7 @@ cliente. `lotes_sugeridos` alimenta el campo con sugerencias del piso y de las
 ASN: primero lo anunciado en esa ASN, luego lo que tiene stock, luego lo creado
 en los últimos TORRE["LOTES_SUGERENCIA_DIAS"] días.
 """
+import re
 from datetime import timedelta
 
 from django.conf import settings
@@ -224,3 +225,50 @@ def clase_rotacion(sku, dias=None):
     if sku.rotacion != SKU.ROTACION_AUTO:
         return sku.rotacion
     return clases_rotacion(sku.cliente, dias).get(sku.pk, "C")
+
+
+# ── Racks dobles: medidas y prioridad por código ──
+
+PATRON_RACK_LADO = re.compile(r"^([A-Z]+)-(\d+)-([ID])-([FB])-(\d+)$")
+
+
+def medidas_de_codigo(codigo):
+    """{largo_cm, ancho_cm, alto_cm, prioridad} para un código
+    <PREFIJO>-<rack>-<I|D>-<F|B>-<piso> según TORRE["RACK_MEDIDAS"]; None si
+    el código no sigue el patrón. Pisos sin alto en la tabla (la reserva) →
+    alto 0 (sin tope) y prioridad None (jamás se sugiere). Prioridad: rack
+    1 → n, lado I → D, piso en el orden TORRE["RACK_ORDEN_PISOS"] (2, 3, 1),
+    frente F → B; 1 = el mejor."""
+    m = PATRON_RACK_LADO.match(codigo or "")
+    if not m:
+        return None
+    rack, lado, frente, piso = int(m.group(2)), m.group(3), m.group(4), int(m.group(5))
+    medidas = settings.TORRE["RACK_MEDIDAS"]
+    altos = {int(k): v for k, v in medidas["alto_por_piso"].items()}
+    orden = [int(p) for p in settings.TORRE["RACK_ORDEN_PISOS"]]
+    alto = altos.get(piso, 0)
+    if alto and piso in orden:
+        indice = ((rack - 1) * 2 + ("ID".index(lado))) * (len(orden) * 2)
+        prioridad = indice + orden.index(piso) * 2 + "FB".index(frente) + 1
+    else:
+        prioridad = None
+    return {
+        "largo_cm": int(medidas["largo_cm"]), "ancho_cm": int(medidas["ancho_cm"]),
+        "alto_cm": int(alto), "prioridad": prioridad,
+    }
+
+
+def aplicar_medidas(ubicaciones):
+    """Escribe medidas y prioridad en las ubicaciones cuyo código sigue el
+    patrón de racks dobles. Regresa cuántas cambió."""
+    cambiadas = 0
+    for u in ubicaciones:
+        valores = medidas_de_codigo(u.codigo)
+        if valores is None:
+            continue
+        if any(getattr(u, campo) != valor for campo, valor in valores.items()):
+            for campo, valor in valores.items():
+                setattr(u, campo, valor)
+            u.save(update_fields=list(valores))
+            cambiadas += 1
+    return cambiadas
