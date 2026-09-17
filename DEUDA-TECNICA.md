@@ -272,3 +272,55 @@ construye con datos que ya guardamos, más dos piezas de datos nuevas.
 
 Ya existe y no se toca: pedidos del día con estatus, guía y evidencia
 (Mesa y portal → Reportes → Reporte del día, con CSV).
+
+## Acomodo sugerido y capacidad de anaqueles (plan cerrado 2026-09-17)
+
+**Objetivo:** que Torre diga dónde acomodar cada producto al recibir según su
+rotación, y que avise cuando un anaquel se llena. El acomodo 3D exacto no
+vale la pena (Chema): es un ESTIMADO volumétrico con factor de llenado, y
+el conteo cíclico lo corrige.
+
+**Decisiones con Chema:**
+- Capacidad por anaquel = volumen (largo × ancho × alto en cm) × factor de
+  llenado `TORRE["FACTOR_LLENADO"] = 0.70`. Medidas reales de las celdas
+  (cada celda I/D × F/B): pisos 1 y 2: 180 × 58 × 52; piso 3: 180 × 58 × 44;
+  piso 4 (reserva): 180 × 58, sin alto máximo → capacidad ilimitada y
+  JAMÁS se sugiere: la reserva se usa solo a mano.
+- Ocupación = Σ (volumen del SKU × piezas) / capacidad. SKU sin medidas no
+  cuenta y el anaquel se marca "con producto sin medidas". Aviso "lleno" a
+  partir del 90 %; el put-away NO se bloquea, solo avisa (estimado).
+- Rotación del SKU: clase A/B/C. Campo `SKU.rotacion` con default
+  "automática"; forzada a mano en Mesa o por la columna `rotacion` del CSV
+  de catálogo (Colima la llena desde su reporte de ventas de Shopify, es el
+  arranque). Automática = piezas vendidas en los últimos
+  `TORRE["ROTACION_DIAS"] = 90` días por SKU, acumulado 80/15/5; mientras
+  no haya 90 días de datos, "automática" sin ventas suficientes = C.
+- Prioridad de acceso por anaquel (`Ubicacion.prioridad`, menor = mejor),
+  editable en Mesa → Inventario → Ubicaciones; default: pisos 1-2 mejor que
+  3, rack 1 mejor que 4 (orden de acceso real pendiente de Chema, se ajusta
+  en Mesa). Clase A → mejores prioridades, C → las peores; reserva fuera.
+- Sugerencia al ubicar (Recepción y Cuarentena) como PLAN, no una celda:
+  1) el anaquel donde ya vive ese SKU si tiene espacio (no dispersar);
+  2) si no, el mejor anaquel libre para su clase con espacio;
+  el campo ubicación se prellena con el anaquel y la cantidad con lo que
+  cabe; el resto se sugiere en la siguiente entrega (recepción POR RACK:
+  el flujo actual ya permite varias entregas del mismo SKU). Si el
+  operador teclea otro anaquel se recalcula cuánto cabe y avisa si se pasa.
+  Siempre con el motivo visible ("ya tiene este SKU · 40 % libre").
+- Conteo cíclico: al contar, el operador marca "anaquel lleno" o "con
+  espacio" para corregir la ocupación estimada.
+- Reporte "Reacomodo sugerido": SKUs clase A en anaqueles de mala
+  prioridad y el anaquel al que convendría moverlos; ocupación por anaquel.
+
+**Entregable, tres commits:**
+1. Capacidad y ocupación: `Ubicacion.largo_cm/ancho_cm/alto_cm/prioridad`
+   (migración catalogo; `crear_racks` los llena por piso con las medidas de
+   arriba, y un comando/edición masiva en Mesa para las existentes),
+   `inventario.ocupacion(ubicacion)`; plano pintado por ocupación; panel de
+   Almacén con % y "lleno"; aviso en Recepción/Cuarentena.
+2. Rotación: `SKU.rotacion` (auto/A/B/C) en Mesa y en el CSV de catálogo;
+   `catalogo.clase_rotacion(sku)` con el cálculo a 90 días.
+3. Sugerencia y reporte: `inventario.sugerir_anaquel(sku, cantidad, orden)`
+   → [(anaquel, cantidad, motivo)], prellenado en Recepción y Cuarentena,
+   marca de lleno/con espacio en Conteos, reporte "Reacomodo sugerido" en
+   apps/reportes.
