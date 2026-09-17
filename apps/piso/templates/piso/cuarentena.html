@@ -82,9 +82,10 @@
   </div>
   {% if putaway %}
   <p class="small">Dictámenes revendibles y retornos esperando anaquel. Ubícalos para que vuelvan a estar vendibles.</p>
-  <div class="small mt">Anaqueles válidos:
-    {% for u in ubicaciones_destino %}<span class="mono">{{ u.codigo }}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
-  </div>
+  <p class="small mt">Escribe el anaquel en cada renglón: te sugiere los válidos al teclear.</p>
+  <datalist id="ubicaciones-destino">
+    {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}">{{ u.get_tipo_display }}</option>{% endfor %}
+  </datalist>
   {% else %}
   <p class="muted">Nada pendiente de ubicar.</p>
   {% endif %}
@@ -110,8 +111,8 @@
         <input type="number" name="cantidad" id="pa-cantidad-{{ saldo.pk }}" min="1" max="{{ saldo.cantidad }}" inputmode="numeric" autocomplete="off" required>
       </div>
       <div>
-        <label for="pa-ubicacion-{{ saldo.pk }}">Ubicación escaneada</label>
-        <input type="text" name="ubicacion" id="pa-ubicacion-{{ saldo.pk }}" class="mono" placeholder="A-01-2" autocomplete="off" required>
+        <label for="pa-ubicacion-{{ saldo.pk }}">Ubicación (teclea o escanea)</label>
+        <input type="text" name="ubicacion" id="pa-ubicacion-{{ saldo.pk }}" class="mono" placeholder="PIC-1-I-F-1" autocomplete="off" list="ubicaciones-destino" required>
       </div>
     </div>
     {% if saldo.sku.requiere_lote and not saldo.lote %}

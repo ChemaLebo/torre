@@ -222,3 +222,24 @@ class LotesSugeridosEnPutAwayTests(PisoTestCase):
         })
         lote = Lote.objects.get(sku=self.sku, codigo="L-ANUNCIADO")
         self.assertEqual(lote.fecha_caducidad.isoformat(), "2027-05-05")
+
+
+class UbicacionPredictivaTests(PisoTestCase):
+    """La ubicación destino se teclea con sugerencias (datalist de anaqueles
+    activos de picking/reserva), ya no con un chip por anaquel."""
+
+    def test_recepcion_lista_los_anaqueles_como_sugerencias(self):
+        from django.urls import reverse
+
+        from apps.catalogo.models import Ubicacion
+        from apps.inventario.models import OrdenEntrada
+
+        Ubicacion.objects.create(codigo="PIC-4-D-F-3", tipo=Ubicacion.PICKING)
+        Ubicacion.objects.create(codigo="PIC-9-9-9", tipo=Ubicacion.PICKING, activo=False)
+        self.login_piso()
+        orden = OrdenEntrada.objects.create(cliente=self.cliente)
+        respuesta = self.client.get(reverse("piso:recepcion_detalle", args=[orden.pk]))
+        self.assertContains(respuesta, 'list="ubicaciones-destino"')
+        self.assertContains(respuesta, '<option value="PIC-4-D-F-3">')
+        self.assertNotContains(respuesta, 'PIC-9-9-9')
+        self.assertNotContains(respuesta, 'chips-ubicacion')

@@ -71,12 +71,11 @@
 
   <div class="card">
     <div class="titulo"><h2>2 · Ubicar (put-away)</h2></div>
-    <p class="small">Nada es vendible hasta estar en su anaquel. Escanea la etiqueta del anaquel o tócalo aquí:</p>
-    <div class="chips" id="chips-ubicacion">
-      {% for u in ubicaciones_destino %}
-      <button class="chip" type="button" data-ubicacion="{{ u.codigo }}">{{ u.codigo }}</button>
-      {% endfor %}
-    </div>
+    <p class="small">Nada es vendible hasta estar en su anaquel. Escribe el anaquel (te sugiere al teclear) o escanea su etiqueta si la tiene.</p>
+    {# Anaqueles válidos como texto predictivo: con 64 racks los chips ya no caben. #}
+    <datalist id="ubicaciones-destino">
+      {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}">{{ u.get_tipo_display }}</option>{% endfor %}
+    </datalist>
     <form method="post">{% csrf_token %}
       <input type="hidden" name="accion" value="ubicar">
       <label for="sku_id">Producto (o escanéalo)</label>
@@ -91,8 +90,8 @@
           <input type="number" name="cantidad" id="cantidad" min="1" inputmode="numeric" required>
         </div>
         <div>
-          <label for="ubicacion">Ubicación (escaneada o tap)</label>
-          <input type="text" name="ubicacion" id="ubicacion" class="mono" placeholder="A-01-2" autocomplete="off" required>
+          <label for="ubicacion">Ubicación (teclea o escanea)</label>
+          <input type="text" name="ubicacion" id="ubicacion" class="mono" placeholder="PIC-1-I-F-1" autocomplete="off" list="ubicaciones-destino" required>
         </div>
       </div>
       <div class="grid g2">
@@ -143,21 +142,9 @@
    ReferenceError y se lleva la página completa. */
 document.addEventListener("DOMContentLoaded", function () {
   var inputUbicacion = document.getElementById("ubicacion");
-  var chips = Array.prototype.slice.call(document.querySelectorAll("#chips-ubicacion .chip"));
+  var anaqueles = Array.prototype.slice.call(document.querySelectorAll("#ubicaciones-destino option"))
+    .map(function (o) { return o.value; });
   var selects = [document.getElementById("linea_id"), document.getElementById("sku_id")];
-
-  function marcaChip(codigo) {
-    chips.forEach(function (chip) {
-      chip.classList.toggle("activo", chip.dataset.ubicacion.toUpperCase() === codigo.toUpperCase());
-    });
-  }
-  function ponUbicacion(codigo) {
-    inputUbicacion.value = codigo;
-    marcaChip(codigo);
-  }
-  chips.forEach(function (chip) {
-    chip.addEventListener("click", function () { ponUbicacion(chip.dataset.ubicacion); });
-  });
 
   /* Lotes sugeridos: la lista sigue al producto elegido; el anunciado en la ASN
      se preselecciona y elegir uno con caducidad conocida la rellena. */
@@ -206,10 +193,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
   Escaner.montar(document.getElementById("visor-escaner"), function (valor) {
     valor = valor.trim();
-    // ¿Anaquel destino?
-    for (var i = 0; i < chips.length; i++) {
-      if (chips[i].dataset.ubicacion.toUpperCase() === valor.toUpperCase()) {
-        ponUbicacion(chips[i].dataset.ubicacion);
+    // ¿Anaquel destino? (etiqueta del rack, cuando exista)
+    for (var i = 0; i < anaqueles.length; i++) {
+      if (anaqueles[i].toUpperCase() === valor.toUpperCase()) {
+        inputUbicacion.value = anaqueles[i];
         Feedback.ok();
         return;
       }
