@@ -43,11 +43,12 @@
   {% if orden.plan_acomodo.pasos %}
   <div class="tabla-wrap">
     <table>
-      <thead><tr><th>SKU</th><th>Anaquel</th><th class="derecha">Piezas</th><th class="derecha">Ubicadas</th><th>Motivo</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Lote</th><th>Anaquel</th><th class="derecha">Piezas</th><th class="derecha">Ubicadas</th><th>Motivo</th></tr></thead>
       <tbody>
         {% for p in orden.plan_acomodo.pasos %}
         <tr>
           <td class="mono">{{ p.sku }}</td>
+          <td class="mono">{{ p.lote|default:"—" }}</td>
           <td class="mono">{{ p.ubicacion|default:"CUARENTENA" }}</td>
           <td class="derecha mono">{{ p.cantidad }}</td>
           <td class="derecha mono">{{ p.ubicadas }}</td>

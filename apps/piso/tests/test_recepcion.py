@@ -216,6 +216,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.sku.largo_cm, self.sku.ancho_cm, self.sku.alto_cm = 36, 24, 17
         self.sku.codigo_barras = "7500000000017"
         self.sku.requiere_lote = True
+        self.sku.rotacion = "A"  # clase A: toma el mejor anaquel (C tomaría el peor)
         self.sku.precio_declarado = Decimal(1)
         self.sku.save()
         self.orden = OrdenEntrada.objects.create(cliente=self.cliente)
@@ -286,13 +287,29 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=2, lote_codigo="L-OTRO")
         self._foto()
         self.client.post(self.url, {"accion": "escanear", "codigo": "COLIMITA-SIX"})
+        # Con dos lotes anunciados, primero se pregunta el lote; el anaquel viene después.
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, "CUARENTENA")
         self.assertContains(respuesta, "¿De qué lote es esta pieza?")
         self.assertContains(respuesta, 'value="L-OTRO"')
+        self.assertNotContains(respuesta, "CUARENTENA")
+        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk, "lote": "L-ASN"})
+        self.assertContains(respuesta, "CUARENTENA")
+        self.assertContains(respuesta, 'name="lote" value="L-ASN"')
         respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"}, follow=True)
         self.assertContains(respuesta, "fue a cuarentena")
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
+
+    def test_el_plan_separa_lotes_en_anaqueles_distintos(self):
+        from apps.catalogo.models import Ubicacion
+        from apps.inventario.models import LineaASN, OrdenEntrada
+
+        Ubicacion.objects.create(codigo="PIC-1-I-B-2", tipo=Ubicacion.PICKING, largo_cm=180, ancho_cm=58, alto_cm=52, prioridad=2)
+        LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=3, lote_codigo="L-OTRO")
+        self._foto()
+        self.client.get(self.url)
+        pasos = OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"]
+        por_lote = {p["lote"]: p["ubicacion"] for p in pasos}
+        self.assertEqual(por_lote, {"L-ASN": "PIC-1-I-F-2", "L-OTRO": "PIC-1-I-B-2"})
 
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada

@@ -54,6 +54,22 @@ class SugerirAnaquelTests(TestCase):
         self.assertTrue(marcar_anaquel(self.anaqueles[2], False))
         self.assertFalse(marcar_anaquel(self.anaqueles[2], False))
 
+    def test_los_lotes_no_se_mezclan_en_un_anaquel(self):
+        from apps.catalogo.models import Lote
+
+        lote_a = Lote.objects.create(sku=self.lata, codigo="LA")
+        Saldo.objects.create(sku=self.lata, ubicacion=self.anaqueles[3], lote=lote_a, estado=Saldo.UBICADO_VENDIBLE, cantidad=5)
+        # Mismo lote: primero donde ya vive; otro lote: jamás a ese anaquel, va a uno vacío.
+        self.assertEqual(sugerir_anaquel(self.lata, 5, lote="LA")[0]["ubicacion"].codigo, "PIC-P3")
+        plan_b = sugerir_anaquel(self.lata, 5, lote="LB")
+        self.assertEqual(plan_b[0]["ubicacion"].codigo, "PIC-P1")
+        self.assertNotIn("PIC-P3", [p["ubicacion"].codigo for p in plan_b])
+        # Reservas virtuales con lote (plan en curso): el lote B no cae en el anaquel apartado para A.
+        reservas = {"PIC-P1": [(self.lata, 10, "LA")]}
+        self.assertEqual(sugerir_anaquel(self.lata, 5, reservas, lote="LB")[0]["ubicacion"].codigo, "PIC-P2")
+        # El mismo lote se consolida donde ya está apartado (P1, mejor prioridad) antes que donde vive (P3).
+        self.assertEqual(sugerir_anaquel(self.lata, 5, reservas, lote="LA")[0]["ubicacion"].codigo, "PIC-P1")
+
     def test_sin_medidas_no_hay_plan(self):
         self.assertEqual(sugerir_anaquel(self.pin, 10), [])
         self.assertEqual(sugerir_anaquel(self.lata, 0), [])

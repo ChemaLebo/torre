@@ -482,13 +482,8 @@ def recepcion_detalle(request, pk):
         .annotate(t=Sum("cantidad"))
         .values_list("sku_id", "t")
     )
-    from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
-    from apps.inventario.services import sugerir_anaquel  # lazy por contrato
     for linea in lineas:
         linea.por_ubicar = putaway.get(linea.sku_id, 0)
-        linea.lotes_sugeridos = lotes_sugeridos(linea.sku, orden)
-        # Plan de acomodo: el primer paso prellena anaquel y cantidad; el resto se lee.
-        linea.sugerencia = sugerir_anaquel(linea.sku, linea.por_ubicar) if linea.por_ubicar else []
     sla_texto, sla_tono = _sla_recepcion(orden)
     fotos_llegada = EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio)
     contexto = {
@@ -574,10 +569,8 @@ def recepcion_ubicar(request, pk):
     if _suma(sku, Saldo.EN_PUTAWAY) <= 0:
         messages.info(request, f"No hay piezas de {sku.codigo} en recepción por ubicar.")
         return volver
-    paso = siguiente_paso(orden, sku)
-    if paso is None:
-        planear_acomodo(orden, request.user)
-        paso = siguiente_paso(orden, sku)
+    # 1) El lote va ANTES del anaquel: fijo si la orden anuncia uno, a elegir si
+    #    anuncia varios, a capturar si el producto lo pide; el plan es por lote.
     lotes = []
     for l in lineas:
         codigo = (l.lote_codigo or "").strip()
@@ -591,14 +584,39 @@ def recepcion_ubicar(request, pk):
         modo_lote = "capturar"
     else:
         modo_lote = "ninguno"
+    lote_elegido = (request.GET.get("lote") or "").strip()
+    caducidad_elegida = (request.GET.get("fecha_caducidad") or "").strip()
+    if modo_lote == "fijo":
+        lote_elegido, caducidad_elegida = lotes[0]["codigo"], lotes[0]["caducidad"]
+    elif modo_lote == "elegir" and lote_elegido:
+        caducidad_elegida = next((x["caducidad"] for x in lotes if x["codigo"] == lote_elegido), "")
     from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
     contexto = {
-        "seccion": "recepcion", "orden": orden, "sku": sku, "paso": paso,
-        "lotes": lotes, "modo_lote": modo_lote,
+        "seccion": "recepcion", "orden": orden, "sku": sku,
+        "lotes": lotes, "modo_lote": modo_lote, "lote": lote_elegido, "caducidad": caducidad_elegida,
         "lotes_sugeridos": lotes_sugeridos(sku, orden) if modo_lote == "capturar" else [],
         "por_ubicar": _suma(sku, Saldo.EN_PUTAWAY),
-        "ubicaciones_destino": Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True).order_by("codigo"),
+        "pedir_lote": modo_lote in ("elegir", "capturar") and not lote_elegido,
     }
+    if contexto["pedir_lote"]:
+        return render(request, "piso/recepcion_ubicar.html", contexto)
+    # 2) El anaquel del plan para ese SKU y lote; sin paso, se rehace el plan y,
+    #    si aun así no hay, se sugiere ad hoc para esta pieza.
+    paso = siguiente_paso(orden, sku, lote_elegido)
+    if paso is None:
+        planear_acomodo(orden, request.user)
+        paso = siguiente_paso(orden, sku, lote_elegido)
+    if paso is None:
+        from apps.inventario.services import sugerir_anaquel  # lazy por contrato
+        ad_hoc = sugerir_anaquel(sku, 1, lote=lote_elegido or None)
+        if ad_hoc:
+            u = ad_hoc[0]["ubicacion"]
+            paso = {"ubicacion": u.codigo if u else None, "cantidad": 1, "ubicadas": 0,
+                    "motivo": ad_hoc[0]["motivo"] + " (fuera del plan)"}
+    contexto.update({
+        "paso": paso,
+        "ubicaciones_destino": Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True).order_by("codigo"),
+    })
     return render(request, "piso/recepcion_ubicar.html", contexto)
 
 

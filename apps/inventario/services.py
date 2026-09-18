@@ -1591,12 +1591,17 @@ def ocupacion(ubicacion, saldos=None, extra=None):
     "no_caben": [códigos], "por_sku": [{sku, piezas, capacidad}]}."""
     if saldos is None:
         saldos = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku")
-    piezas_por_sku = {}
+    piezas_por_sku, lotes_por_sku = {}, {}
     for s in saldos:
         piezas_por_sku.setdefault(s.sku, 0)
         piezas_por_sku[s.sku] += s.cantidad
-    for sku_extra, n in (extra if isinstance(extra, list) else ([extra] if extra else [])):
+        if s.lote_id:
+            lotes_por_sku.setdefault(s.sku, set()).add(s.lote.codigo)
+    for item in (extra if isinstance(extra, list) else ([extra] if extra else [])):
+        sku_extra, n = item[0], item[1]
         piezas_por_sku[sku_extra] = piezas_por_sku.get(sku_extra, 0) + n
+        if len(item) > 2 and item[2]:
+            lotes_por_sku.setdefault(sku_extra, set()).add(item[2])
     if not (ubicacion.largo_cm and ubicacion.ancho_cm):
         return {"pct": None, "estado": "sin_medidas", "sin_medidas": [], "no_caben": [], "por_sku": []}
     if not ubicacion.alto_cm:
@@ -1604,7 +1609,7 @@ def ocupacion(ubicacion, saldos=None, extra=None):
     fraccion, sin_medidas, no_caben, por_sku = 0.0, [], [], []
     for sku, piezas in piezas_por_sku.items():
         cap = capacidad_sku_en(ubicacion, sku)
-        por_sku.append({"sku": sku, "piezas": piezas, "capacidad": cap})
+        por_sku.append({"sku": sku, "piezas": piezas, "capacidad": cap, "lotes": sorted(lotes_por_sku.get(sku, ()))})
         if cap is None:
             sin_medidas.append(sku.codigo)
         elif cap == 0:
@@ -1668,7 +1673,7 @@ def espacio_para(ubicacion, sku, ocup):
     return max(0, int(cap * (1 - fraccion)))
 
 
-def sugerir_anaquel(sku, cantidad, reservas=None):
+def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
     """Plan de put-away para `cantidad` piezas del SKU: [{ubicacion, cantidad,
     motivo}], en orden. Reglas (plan 2026-09-17): 1) los anaqueles donde ya
     vive el SKU y les cabe (no dispersar), por prioridad; 2) anaqueles vacíos
@@ -1677,7 +1682,10 @@ def sugerir_anaquel(sku, cantidad, reservas=None):
     la reserva ni los marcados llenos a mano. Si no alcanza, el último renglón
     va con ubicacion=None y lo que quedó sin lugar. [] si el SKU no tiene
     medidas (no hay forma de saber cuánto cabe). `reservas` = {código:
-    [(sku, piezas)]} ya apartadas por un plan en curso (planear_acomodo)."""
+    [(sku, piezas, lote)]} ya apartadas por un plan en curso (planear_acomodo).
+    `lote` (código): los lotes de un mismo SKU no se mezclan en un anaquel —
+    "ya vive el SKU" exige el mismo lote, y un anaquel con otro lote del SKU no
+    es candidato (Chema 2026-09-17)."""
     from apps.catalogo.services import clase_rotacion  # lazy por contrato
 
     if cantidad <= 0 or not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
@@ -1696,13 +1704,16 @@ def sugerir_anaquel(sku, cantidad, reservas=None):
         plan.append({"ubicacion": u, "cantidad": n, "motivo": motivo})
         restante -= n
 
-    con_sku = [u for u in anaqueles if any(f["sku"].pk == sku.pk for f in ocup[u.codigo]["por_sku"])]
+    def _mismo_lote(fila):
+        return fila["sku"].pk == sku.pk and (not lote or not fila["lotes"] or lote in fila["lotes"])
+
+    con_sku = [u for u in anaqueles if any(_mismo_lote(f) for f in ocup[u.codigo]["por_sku"])]
     for u in con_sku:
         if restante <= 0:
             break
         libre = espacio_para(u, sku, ocup[u.codigo])
         if libre > 0:
-            agrega(u, min(libre, restante), f"ya tiene este SKU · caben {libre} más")
+            agrega(u, min(libre, restante), f"ya tiene este SKU{' y lote' if lote else ''} · caben {libre} más")
     if restante > 0:
         vacios = [u for u in anaqueles if not ocup[u.codigo]["por_sku"] and capacidad_sku_en(u, sku)]
         clase = clase_rotacion(sku)
@@ -1748,23 +1759,29 @@ def planear_acomodo(orden, actor=None):
 
     clases = clases_rotacion(orden.cliente)
     lineas = list(orden.lineas.select_related("sku"))
-    lineas.sort(key=lambda l: (clases.get(l.sku_id, "C"), l.sku.codigo))
+    lineas.sort(key=lambda l: (clases.get(l.sku_id, "C"), l.sku.codigo, l.lote_codigo or ""))
+    # Lo ya ubicado según el plan anterior, por (sku, lote): no se vuelve a planear.
+    ubicadas_previas = {}
+    for p in (orden.plan_acomodo or {}).get("pasos", []):
+        clave = (p["sku_id"], p.get("lote") or "")
+        ubicadas_previas[clave] = ubicadas_previas.get(clave, 0) + p.get("ubicadas", 0)
     reservas, pasos = {}, []
     for linea in lineas:
         sku = linea.sku
-        pendientes = max(linea.cantidad_anunciada - linea.cantidad_recibida, 0) + _suma(sku, Saldo.EN_PUTAWAY)
+        lote = (linea.lote_codigo or "").strip()
+        pendientes = max(linea.cantidad_anunciada - ubicadas_previas.get((sku.pk, lote), 0), 0)
         if pendientes <= 0:
             continue
-        plan = sugerir_anaquel(sku, pendientes, reservas)
+        plan = sugerir_anaquel(sku, pendientes, reservas, lote=lote or None)
         if not plan:  # sin medidas: todo a cuarentena hasta que Mesa las capture
             plan = [{"ubicacion": None, "cantidad": pendientes, "motivo": "sin medidas del producto: a cuarentena"}]
         for paso in plan:
             u = paso["ubicacion"]
             if u is not None:
-                reservas.setdefault(u.codigo, []).append((sku, paso["cantidad"]))
+                reservas.setdefault(u.codigo, []).append((sku, paso["cantidad"], lote or None))
             motivo = paso["motivo"] if u is not None else "sin anaquel con espacio: a cuarentena"
             pasos.append({
-                "sku_id": sku.pk, "sku": sku.codigo, "ubicacion": u.codigo if u else None,
+                "sku_id": sku.pk, "sku": sku.codigo, "lote": lote, "ubicacion": u.codigo if u else None,
                 "cantidad": paso["cantidad"], "ubicadas": 0, "motivo": motivo,
             })
     orden.plan_acomodo = {"generado": timezone.now().isoformat(), "pasos": pasos}
@@ -1777,20 +1794,25 @@ def planear_acomodo(orden, actor=None):
     return orden.plan_acomodo
 
 
-def siguiente_paso(orden, sku):
-    """Paso del plan que sigue para ese SKU (el primero con piezas por ubicar);
-    None si el plan no lo contempla (Mesa debe rehacer el plan)."""
+def siguiente_paso(orden, sku, lote=None):
+    """Paso del plan que sigue para ese SKU y lote (el primero con piezas por
+    ubicar); None si el plan no lo contempla (se rehace o se sugiere ad hoc)."""
+    lote = (lote or "").strip()
     for paso in (orden.plan_acomodo or {}).get("pasos", []):
-        if paso["sku_id"] == sku.pk and paso["ubicadas"] < paso["cantidad"]:
+        if paso["sku_id"] == sku.pk and (paso.get("lote") or "") == lote and paso["ubicadas"] < paso["cantidad"]:
             return paso
     return None
 
 
-def _avanzar_plan(orden, sku, codigo_ubicacion):
+def _avanzar_plan(orden, sku, codigo_ubicacion, lote=None):
     """Marca una pieza ubicada en el paso que corresponde (el del anaquel
-    elegido si existe y le faltan; si no, el siguiente del SKU)."""
+    elegido si existe y le faltan; si no, el siguiente del SKU y lote)."""
+    lote = (lote or "").strip()
     pasos = (orden.plan_acomodo or {}).get("pasos", [])
-    candidatos = [p for p in pasos if p["sku_id"] == sku.pk and p["ubicadas"] < p["cantidad"]]
+    candidatos = [
+        p for p in pasos
+        if p["sku_id"] == sku.pk and (p.get("lote") or "") == lote and p["ubicadas"] < p["cantidad"]
+    ]
     elegido = next((p for p in candidatos if p["ubicacion"] == codigo_ubicacion), None) or (candidatos[0] if candidatos else None)
     if elegido is not None:
         elegido["ubicadas"] += 1
@@ -1818,12 +1840,13 @@ def a_cuarentena_desde_recepcion(sku, cantidad, referencia, actor, motivo=""):
 def ubicar_pieza(orden, sku, lote, ubicacion, actor):
     """Una pieza recién escaneada: a su anaquel (ubicar) o, sin anaquel
     (ubicacion=None), a cuarentena por falta de espacio; avanza el plan."""
+    codigo_lote = lote.codigo if lote is not None else None
     if ubicacion is None:
         a_cuarentena_desde_recepcion(sku, 1, orden.folio, actor, motivo="Sin anaquel con espacio en el plan de acomodo.")
-        _avanzar_plan(orden, sku, None)
+        _avanzar_plan(orden, sku, None, codigo_lote)
         return None
     ubicar(sku, 1, ubicacion, lote, actor)
-    _avanzar_plan(orden, sku, ubicacion.codigo)
+    _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote)
     return ubicacion
 
 

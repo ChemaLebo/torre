@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Ubicar · {{ orden.folio }}{% endblock %}
 {% block content %}
-{# Ubicar UNA pieza recién escaneada: anaquel del plan de la orden (o cuarentena), lote si aplica, y salidas. #}
+{# Ubicar UNA pieza recién escaneada. Paso 1: lote (si hay que elegirlo o capturarlo). Paso 2: anaquel del plan de la orden para ese SKU y lote (o cuarentena) y salidas. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
@@ -11,45 +11,25 @@
   <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Volver al escáner</a>
 </div>
 
-<form method="post" class="card" id="form-ubicar">{% csrf_token %}
-  <input type="hidden" name="accion" value="ubicar">
-  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
-
-  {% if paso and paso.ubicacion %}
-  <div class="eyebrow">Ve a</div>
-  <div class="pick-ubicacion" id="anaquel-sugerido">{{ paso.ubicacion }}</div>
-  <div class="small muted">{{ paso.motivo }} · pieza {{ paso.ubicadas|add:1 }} de {{ paso.cantidad }} en este anaquel</div>
-  {% elif paso %}
-  <div class="eyebrow">Sin anaquel con espacio</div>
-  <div class="pick-ubicacion">CUARENTENA</div>
-  <div class="small muted">{{ paso.motivo }}. Llévala a la zona de cuarentena; Mesa decide dónde acomodarla.</div>
-  {% else %}
-  <div class="banner warn"><span class="foco"></span>El plan de la orden no contempla este producto. Elige un anaquel a mano o avisa a Mesa para rehacer el plan.</div>
-  {% endif %}
-
-  <label for="ubicacion" class="mt">Anaquel (cámbialo si lo acomodaste en otro; vacío = cuarentena)</label>
-  <input type="text" name="ubicacion" id="ubicacion" class="mono" autocomplete="off" list="ubicaciones-destino"
-         value="{% if paso and paso.ubicacion %}{{ paso.ubicacion }}{% endif %}" placeholder="PIC-1-I-F-1">
-  <datalist id="ubicaciones-destino">
-    {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
-  </datalist>
-
-  {% if modo_lote == "fijo" %}
-  <input type="hidden" name="lote" value="{{ lotes.0.codigo }}">
-  <input type="hidden" name="fecha_caducidad" value="{{ lotes.0.caducidad }}">
-  <p class="small mt">Lote <span class="mono">{{ lotes.0.codigo }}</span>{% if lotes.0.caducidad %} · caduca {{ lotes.0.caducidad }}{% endif %} (anunciado en la orden)</p>
-  {% elif modo_lote == "elegir" %}
-  <div class="mt"><b>¿De qué lote es esta pieza?</b></div>
+{% if pedir_lote %}
+<form method="get" class="card" id="form-lote">
+  <input type="hidden" name="sku" value="{{ sku.pk }}">
+  {% if modo_lote == "elegir" %}
+  <div class="eyebrow">Primero</div>
+  <h2>¿De qué lote es esta pieza?</h2>
   {% for l in lotes %}
-  <label class="small" style="display:block">
+  <label style="display:block" class="mt">
     <input type="radio" name="lote" value="{{ l.codigo }}" required{% if forloop.first %} checked{% endif %}>
     <span class="mono">{{ l.codigo }}</span>{% if l.caducidad %} · caduca {{ l.caducidad }}{% endif %}
   </label>
   {% endfor %}
-  {% elif modo_lote == "capturar" %}
-  <div class="grid g2 mt">
+  {% else %}
+  <div class="eyebrow">Primero</div>
+  <h2>Lote de esta pieza</h2>
+  <p class="small">El producto lo pide y la orden no lo anunció: tecléalo (te sugiere los conocidos).</p>
+  <div class="grid g2">
     <div>
-      <label for="lote">Lote (el producto lo pide)</label>
+      <label for="lote">Lote</label>
       <input type="text" name="lote" id="lote" class="mono" autocomplete="off" required list="lotes-sku">
       <datalist id="lotes-sku">
         {% for l in lotes_sugeridos %}<option value="{{ l.codigo }}" data-caducidad="{{ l.caducidad }}">{% if l.caducidad %}cad {{ l.caducidad }}{% endif %}</option>{% endfor %}
@@ -61,6 +41,35 @@
     </div>
   </div>
   {% endif %}
+  <div class="mt"><button class="btn primario gigante bloque" type="submit">Siguiente: ver anaquel</button></div>
+</form>
+{% else %}
+<form method="post" class="card" id="form-ubicar">{% csrf_token %}
+  <input type="hidden" name="accion" value="ubicar">
+  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
+  <input type="hidden" name="lote" value="{{ lote }}">
+  <input type="hidden" name="fecha_caducidad" value="{{ caducidad }}">
+
+  {% if paso and paso.ubicacion %}
+  <div class="eyebrow">Ve a</div>
+  <div class="pick-ubicacion" id="anaquel-sugerido">{{ paso.ubicacion }}</div>
+  <div class="small muted">{{ paso.motivo }} · pieza {{ paso.ubicadas|add:1 }} de {{ paso.cantidad }} en este anaquel</div>
+  {% elif paso %}
+  <div class="eyebrow">Sin anaquel con espacio</div>
+  <div class="pick-ubicacion">CUARENTENA</div>
+  <div class="small muted">{{ paso.motivo }}. Llévala a la zona de cuarentena; Mesa decide dónde acomodarla.</div>
+  {% else %}
+  <div class="banner warn"><span class="foco"></span>Sin sugerencia para este producto (¿sin medidas?). Elige un anaquel a mano o avisa a Mesa.</div>
+  {% endif %}
+  {% if lote %}<p class="small mt">Lote <span class="mono">{{ lote }}</span>{% if caducidad %} · caduca {{ caducidad }}{% endif %}{% if modo_lote == "fijo" %} (anunciado en la orden){% endif %}
+    {% if modo_lote != "fijo" %}· <a href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ sku.pk }}">cambiar lote</a>{% endif %}</p>{% endif %}
+
+  <label for="ubicacion" class="mt">Anaquel (cámbialo si lo acomodaste en otro; vacío = cuarentena)</label>
+  <input type="text" name="ubicacion" id="ubicacion" class="mono" autocomplete="off" list="ubicaciones-destino"
+         value="{% if paso and paso.ubicacion %}{{ paso.ubicacion }}{% endif %}" placeholder="PIC-1-I-F-1">
+  <datalist id="ubicaciones-destino">
+    {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
+  </datalist>
 
   <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADA · siguiente pieza</button></div>
 </form>
@@ -70,6 +79,7 @@
   <input type="hidden" name="sku_id" value="{{ sku.pk }}">
   <button class="btn bloque" type="submit">Esta pieza llega dañada → cuarentena</button>
 </form>
+{% endif %}
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
