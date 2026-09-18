@@ -18,26 +18,10 @@
 <div class="banner {{ sla_tono }}"><span class="foco"></span>{{ sla_texto }}. La orden se cierra cuando TODO quedó ubicado y vendible.</div>
 {% endif %}
 
-<div class="card">
-  <div class="titulo"><h2>Líneas de la orden</h2><span class="pill accent">conteo ciego</span></div>
-  <p class="small">Cada escaneo cuenta UNA pieza recibida y te lleva a ubicarla. Aquí solo aparece lo que TÚ has capturado.</p>
-  {% for linea in lineas %}
-  <div class="corral-fila">
-    <div class="crece">
-      <span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}
-      <div class="small">Recibido <span class="num">{{ linea.cantidad_recibida }}</span>
-        · Dañado <span class="num">{{ linea.cantidad_danada }}</span>
-        · Por ubicar <span class="num">{{ linea.por_ubicar }}</span></div>
-    </div>
-    {% if linea.completa %}<span class="pill ok">Completa</span>{% else %}<span class="pill warn">En conteo</span>{% endif %}
-  </div>
-  {% endfor %}
-</div>
-
 {% if orden.estado != 'CERRADA' %}
 {% if not tiene_foto %}
 <div class="card mt">
-  <div class="titulo"><h2>1 · Foto de llegada</h2><span class="pill warn">obligatoria</span></div>
+  <div class="titulo"><h2>Foto de llegada</h2><span class="pill warn">obligatoria</span></div>
   <p class="small">Tómale foto al camión o a las tarimas como llegaron antes de escanear la primera pieza (SOP RE-01).</p>
   <form method="post" enctype="multipart/form-data">{% csrf_token %}
     <input type="hidden" name="accion" value="foto">
@@ -47,7 +31,7 @@
 </div>
 {% else %}
 <div class="card mt">
-  <div class="titulo"><h2>2 · Escanea una pieza</h2><span class="pill accent">1 escaneo = 1 pieza</span></div>
+  <div class="titulo"><h2>Escanea una pieza</h2><span class="pill accent">1 escaneo = 1 pieza</span></div>
   <p class="small">Apunta al código de barras del producto. Torre la cuenta como recibida y te dice dónde ubicarla.</p>
   <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
   {# Sin cámara: teclea el código y confirma. #}
@@ -64,9 +48,25 @@
 </div>
 {% endif %}
 
+<div class="card mt">
+  <div class="titulo"><h2>Líneas de la orden</h2><span class="pill accent">conteo ciego</span></div>
+  <p class="small">Cada escaneo cuenta UNA pieza recibida y te lleva a ubicarla. Aquí solo aparece lo que TÚ has capturado.</p>
+  {% for linea in lineas %}
+  <div class="corral-fila">
+    <div class="crece">
+      <span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}
+      <div class="small">Recibido <span class="num">{{ linea.cantidad_recibida }}</span>
+        · Dañado <span class="num">{{ linea.cantidad_danada }}</span>
+        · Por ubicar <span class="num">{{ linea.por_ubicar }}</span></div>
+    </div>
+    {% if linea.completa %}<span class="pill ok">Completa</span>{% else %}<span class="pill warn">En conteo</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
 {% if orden.estado != 'CERRADA' %}
 <div class="card mt">
-  <div class="titulo"><h2>3 · Cerrar la orden</h2></div>
+  <div class="titulo"><h2>Cerrar la orden</h2></div>
   <p class="small">Solo cuando TODO esté ubicado. Captura las tarimas que de verdad llegaron (vacío = las anunciadas).</p>
   <form method="post">{% csrf_token %}
     <input type="hidden" name="accion" value="cerrar">

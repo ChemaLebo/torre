@@ -228,7 +228,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
 
     def test_sin_foto_no_se_escanea_y_la_pantalla_lo_pide(self):
         respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, "1 · Foto de llegada")
+        self.assertContains(respuesta, "Foto de llegada")
         self.assertNotContains(respuesta, 'id="form-escanear"')
         respuesta = self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"}, follow=True)
         self.assertContains(respuesta, "Tómale foto al camión/tarimas")
