@@ -1595,8 +1595,7 @@ def ocupacion(ubicacion, saldos=None, extra=None):
     for s in saldos:
         piezas_por_sku.setdefault(s.sku, 0)
         piezas_por_sku[s.sku] += s.cantidad
-    if extra is not None:
-        sku_extra, n = extra
+    for sku_extra, n in (extra if isinstance(extra, list) else ([extra] if extra else [])):
         piezas_por_sku[sku_extra] = piezas_por_sku.get(sku_extra, 0) + n
     if not (ubicacion.largo_cm and ubicacion.ancho_cm):
         return {"pct": None, "estado": "sin_medidas", "sin_medidas": [], "no_caben": [], "por_sku": []}
@@ -1624,12 +1623,15 @@ def ocupacion(ubicacion, saldos=None, extra=None):
     return {"pct": pct, "estado": estado, "sin_medidas": sin_medidas, "no_caben": no_caben, "por_sku": por_sku}
 
 
-def ocupaciones(ubicaciones):
-    """{código: ocupacion(...)} de varias ubicaciones con una sola consulta de saldos."""
+def ocupaciones(ubicaciones, reservas=None):
+    """{código: ocupacion(...)} de varias ubicaciones con una sola consulta de
+    saldos. `reservas` = {código: [(sku, piezas)]} apartadas de forma virtual
+    (un plan en curso) que se suman a lo físico."""
     por_ubicacion = {u.pk: [] for u in ubicaciones}
     for s in Saldo.objects.filter(ubicacion__in=ubicaciones, cantidad__gt=0).select_related("sku"):
         por_ubicacion[s.ubicacion_id].append(s)
-    return {u.codigo: ocupacion(u, por_ubicacion[u.pk]) for u in ubicaciones}
+    reservas = reservas or {}
+    return {u.codigo: ocupacion(u, por_ubicacion[u.pk], extra=reservas.get(u.codigo)) for u in ubicaciones}
 
 
 def aviso_capacidad(ubicacion, sku, cantidad):
@@ -1666,7 +1668,7 @@ def espacio_para(ubicacion, sku, ocup):
     return max(0, int(cap * (1 - fraccion)))
 
 
-def sugerir_anaquel(sku, cantidad):
+def sugerir_anaquel(sku, cantidad, reservas=None):
     """Plan de put-away para `cantidad` piezas del SKU: [{ubicacion, cantidad,
     motivo}], en orden. Reglas (plan 2026-09-17): 1) los anaqueles donde ya
     vive el SKU y les cabe (no dispersar), por prioridad; 2) anaqueles vacíos
@@ -1674,7 +1676,8 @@ def sugerir_anaquel(sku, cantidad):
     peor, B desde la mitad; solo picking activo con medidas y prioridad, nunca
     la reserva ni los marcados llenos a mano. Si no alcanza, el último renglón
     va con ubicacion=None y lo que quedó sin lugar. [] si el SKU no tiene
-    medidas (no hay forma de saber cuánto cabe)."""
+    medidas (no hay forma de saber cuánto cabe). `reservas` = {código:
+    [(sku, piezas)]} ya apartadas por un plan en curso (planear_acomodo)."""
     from apps.catalogo.services import clase_rotacion  # lazy por contrato
 
     if cantidad <= 0 or not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
@@ -1685,7 +1688,7 @@ def sugerir_anaquel(sku, cantidad):
     )
     if not anaqueles:
         return []
-    ocup = ocupaciones(anaqueles)
+    ocup = ocupaciones(anaqueles, reservas)
     plan, restante = [], cantidad
 
     def agrega(u, n, motivo):
@@ -1729,3 +1732,120 @@ def marcar_anaquel(ubicacion, lleno, actor=None):
         motivo="Marcado por el piso al contar." if lleno else "Liberado por el piso al contar.",
     )
     return True
+
+
+# ── Plan de acomodo por orden de entrada (recepción pieza por pieza) ──
+
+def planear_acomodo(orden, actor=None):
+    """Plan de put-away de TODA la orden con lo que falta por ubicar de cada
+    línea: lo anunciado que no ha llegado más lo que ya está en recepción
+    (en_putaway) de ese SKU. Las líneas se planean de clase A a C para que la
+    alta rotación tome los mejores anaqueles, apartando virtualmente lo que
+    cada SKU va ocupando (sin doble asignación). Lo que no cabe queda como
+    paso sin anaquel: va a cuarentena (ilimitada, decisión de Chema
+    2026-09-17). Se guarda en orden.plan_acomodo y se audita."""
+    from apps.catalogo.services import clases_rotacion  # lazy por contrato
+
+    clases = clases_rotacion(orden.cliente)
+    lineas = list(orden.lineas.select_related("sku"))
+    lineas.sort(key=lambda l: (clases.get(l.sku_id, "C"), l.sku.codigo))
+    reservas, pasos = {}, []
+    for linea in lineas:
+        sku = linea.sku
+        pendientes = max(linea.cantidad_anunciada - linea.cantidad_recibida, 0) + _suma(sku, Saldo.EN_PUTAWAY)
+        if pendientes <= 0:
+            continue
+        plan = sugerir_anaquel(sku, pendientes, reservas)
+        if not plan:  # sin medidas: todo a cuarentena hasta que Mesa las capture
+            plan = [{"ubicacion": None, "cantidad": pendientes, "motivo": "sin medidas del producto: a cuarentena"}]
+        for paso in plan:
+            u = paso["ubicacion"]
+            if u is not None:
+                reservas.setdefault(u.codigo, []).append((sku, paso["cantidad"]))
+            motivo = paso["motivo"] if u is not None else "sin anaquel con espacio: a cuarentena"
+            pasos.append({
+                "sku_id": sku.pk, "sku": sku.codigo, "ubicacion": u.codigo if u else None,
+                "cantidad": paso["cantidad"], "ubicadas": 0, "motivo": motivo,
+            })
+    orden.plan_acomodo = {"generado": timezone.now().isoformat(), "pasos": pasos}
+    orden.save(update_fields=["plan_acomodo"])
+    registrar_evento(
+        "asn", orden.folio, "plan_acomodo", actor=actor, cliente=orden.cliente,
+        delta={"pasos": [(p["sku"], p["ubicacion"], p["cantidad"]) for p in pasos]},
+        motivo=f"Plan de acomodo de {orden.folio}: {len(pasos)} paso(s).",
+    )
+    return orden.plan_acomodo
+
+
+def siguiente_paso(orden, sku):
+    """Paso del plan que sigue para ese SKU (el primero con piezas por ubicar);
+    None si el plan no lo contempla (Mesa debe rehacer el plan)."""
+    for paso in (orden.plan_acomodo or {}).get("pasos", []):
+        if paso["sku_id"] == sku.pk and paso["ubicadas"] < paso["cantidad"]:
+            return paso
+    return None
+
+
+def _avanzar_plan(orden, sku, codigo_ubicacion):
+    """Marca una pieza ubicada en el paso que corresponde (el del anaquel
+    elegido si existe y le faltan; si no, el siguiente del SKU)."""
+    pasos = (orden.plan_acomodo or {}).get("pasos", [])
+    candidatos = [p for p in pasos if p["sku_id"] == sku.pk and p["ubicadas"] < p["cantidad"]]
+    elegido = next((p for p in candidatos if p["ubicacion"] == codigo_ubicacion), None) or (candidatos[0] if candidatos else None)
+    if elegido is not None:
+        elegido["ubicadas"] += 1
+        orden.save(update_fields=["plan_acomodo"])
+
+
+def a_cuarentena_desde_recepcion(sku, cantidad, referencia, actor, motivo=""):
+    """Piezas recibidas (en_putaway) que no tienen anaquel: pasan a cuarentena
+    en la zona de recepción, con kardex y evento."""
+    cantidad = _validar_cantidad(cantidad, "cuarentena")
+    with transaction.atomic():
+        en_putaway = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
+        if sum(s.cantidad for s in en_putaway) < cantidad:
+            raise ValueError(f"No hay {cantidad} piezas de {sku.codigo} en recepción.")
+        _restar(en_putaway, cantidad)
+        ubic = _ubicacion_tipo(Ubicacion.RECEPCION) or en_putaway[0].ubicacion
+        _incrementar(sku, ubic.pk, None, Saldo.CUARENTENA, cantidad)
+        _mov(sku, Movimiento.PUTAWAY, 0, origen=Saldo.EN_PUTAWAY, destino=Saldo.CUARENTENA, referencia=referencia, actor=actor)
+        registrar_evento(
+            "sku", sku.codigo, "a_cuarentena", actor=actor, cliente=sku.cliente,
+            delta={"cantidad": cantidad, "referencia": str(referencia)}, motivo=motivo[:300],
+        )
+
+
+def ubicar_pieza(orden, sku, lote, ubicacion, actor):
+    """Una pieza recién escaneada: a su anaquel (ubicar) o, sin anaquel
+    (ubicacion=None), a cuarentena por falta de espacio; avanza el plan."""
+    if ubicacion is None:
+        a_cuarentena_desde_recepcion(sku, 1, orden.folio, actor, motivo="Sin anaquel con espacio en el plan de acomodo.")
+        _avanzar_plan(orden, sku, None)
+        return None
+    ubicar(sku, 1, ubicacion, lote, actor)
+    _avanzar_plan(orden, sku, ubicacion.codigo)
+    return ubicacion
+
+
+def marcar_danada(linea_asn, actor):
+    """Una pieza ya contada como buena resulta dañada al ubicarla: sale de
+    recepción, entra a cuarentena y la línea la pasa de recibida a dañada."""
+    sku = linea_asn.sku
+    with transaction.atomic():
+        en_putaway = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
+        if sum(s.cantidad for s in en_putaway) < 1:
+            raise ValueError(f"No hay piezas de {sku.codigo} en recepción para marcar dañadas.")
+        if linea_asn.cantidad_recibida < 1:
+            raise ValueError(f"La línea de {sku.codigo} no tiene piezas recibidas que marcar.")
+        _restar(en_putaway, 1)
+        ubic = _ubicacion_tipo(Ubicacion.RECEPCION) or en_putaway[0].ubicacion
+        _incrementar(sku, ubic.pk, None, Saldo.CUARENTENA, 1)
+        _mov(sku, Movimiento.RECEPCION, 0, origen=Saldo.EN_PUTAWAY, destino=Saldo.CUARENTENA, referencia=linea_asn.orden.folio, actor=actor)
+        linea_asn.cantidad_recibida -= 1
+        linea_asn.cantidad_danada += 1
+        linea_asn.save(update_fields=["cantidad_recibida", "cantidad_danada"])
+        registrar_evento(
+            "asn", linea_asn.orden.folio, "pieza_danada", actor=actor, cliente=linea_asn.orden.cliente,
+            delta={"sku": sku.codigo}, motivo="Marcada dañada al ubicar: de recibida a dañada, va a cuarentena.",
+        )
+    return linea_asn

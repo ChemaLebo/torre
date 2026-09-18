@@ -1156,6 +1156,8 @@ def recepciones(request):
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
+    if request.method == "POST" and request.POST.get("accion") == "replanear":
+        return _recepciones_replanear(request)
 
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
     cliente = None
@@ -1362,6 +1364,20 @@ def recepciones_plantilla(request):
     escritor.writerow(COLUMNAS_PLANTILLA_ASN)
     escritor.writerows(filas_plantilla_asn(cliente, request.GET.getlist("sku")))
     return respuesta
+
+
+def _recepciones_replanear(request):
+    """Rehace el plan de acomodo de una orden abierta (inventario.planear_acomodo)."""
+    from apps.inventario.models import OrdenEntrada
+    from apps.inventario.services import planear_acomodo
+
+    orden = get_object_or_404(OrdenEntrada, pk=request.POST.get("orden_id"))
+    if orden.estado == OrdenEntrada.CERRADA:
+        messages.error(request, f"{orden.folio} ya está cerrada; no hay nada que planear.")
+    else:
+        plan = planear_acomodo(orden, request.user)
+        messages.success(request, f"Plan de acomodo de {orden.folio} rehecho: {len(plan['pasos'])} paso(s).")
+    return redirect(reverse("mesa:recepciones") + f"?cliente={orden.cliente.slug}")
 
 
 def _recepciones_decidir_reingreso(request):

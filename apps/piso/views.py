@@ -457,6 +457,10 @@ def recepcion_detalle(request, pk):
 
     if request.method == "POST":
         accion = request.POST.get("accion")
+        if accion == "escanear":
+            return _recepcion_escanear(request, orden)
+        if accion == "foto":
+            return _recepcion_foto(request, orden)
         if accion == "recibir":
             return _recepcion_recibir(request, orden)
         if accion == "ubicar":
@@ -465,6 +469,11 @@ def recepcion_detalle(request, pk):
             return _recepcion_cerrar(request, orden)
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:recepcion_detalle", pk=orden.pk)
+
+    # Plan de acomodo de toda la orden (una vez; Mesa lo rehace si hace falta).
+    if orden.estado != OrdenEntrada.CERRADA and not (orden.plan_acomodo or {}).get("pasos"):
+        from apps.inventario.services import planear_acomodo  # lazy por contrato
+        planear_acomodo(orden, request.user)
 
     lineas = list(orden.lineas.select_related("sku"))
     putaway = dict(
@@ -481,19 +490,164 @@ def recepcion_detalle(request, pk):
         # Plan de acomodo: el primer paso prellena anaquel y cantidad; el resto se lee.
         linea.sugerencia = sugerir_anaquel(linea.sku, linea.por_ubicar) if linea.por_ubicar else []
     sla_texto, sla_tono = _sla_recepcion(orden)
+    fotos_llegada = EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio)
     contexto = {
         "seccion": "recepcion",
         "orden": orden,
         "lineas": lineas,
         "pendiente_putaway": sum(putaway.values()),
+        "tiene_foto": fotos_llegada.filter(tipo="llegada").exists(),
         "sla_texto": sla_texto,
         "sla_tono": sla_tono,
         "ubicaciones_destino": Ubicacion.objects.filter(
             tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA], activo=True
         ),
-        "fotos_llegada": EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio),
+        "fotos_llegada": fotos_llegada,
     }
     return render(request, "piso/recepcion_detalle.html", contexto)
+
+
+def _recepcion_foto(request, orden):
+    """Foto de llegada (camión/tarimas) ligada al ASN: obligatoria antes del primer escaneo (SOP RE-01)."""
+    destino = redirect("piso:recepcion_detalle", pk=orden.pk)
+    foto = request.FILES.get("foto_llegada")
+    if foto is None:
+        messages.error(request, "Tómale foto al camión/tarimas antes de empezar a escanear.")
+        return destino
+    EvidenciaFoto.objects.create(
+        entidad="asn", entidad_id=orden.folio, tipo="llegada", archivo=foto, tomada_por=request.user.username,
+    )
+    messages.success(request, "Foto de llegada guardada. Ya puedes escanear.")
+    return destino
+
+
+def _linea_por_codigo(orden, valor):
+    """Línea de la orden cuyo SKU tiene ese código de barras o código; None si no es de la orden."""
+    valor = (valor or "").strip()
+    if not valor:
+        return None
+    for linea in orden.lineas.select_related("sku"):
+        if valor in (linea.sku.codigo_barras, linea.sku.codigo) or valor.upper() == linea.sku.codigo.upper():
+            return linea
+    return None
+
+
+def _recepcion_escanear(request, orden):
+    """Un escaneo = UNA pieza recibida al instante; pasa a la pantalla de ubicar.
+    Exige la foto de llegada antes del primer escaneo (SOP RE-01)."""
+    destino = redirect("piso:recepcion_detalle", pk=orden.pk)
+    linea = _linea_por_codigo(orden, request.POST.get("codigo"))
+    if linea is None:
+        messages.error(request, "Ese código no es de un producto de esta orden. Revisa la etiqueta.")
+        return destino
+    if not EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio, tipo="llegada").exists():
+        messages.error(request, "Tómale foto al camión/tarimas antes de registrar la primera línea.")
+        return destino
+    from apps.inventario.services import recibir  # lazy por contrato
+    try:
+        recibir(linea, 1, 0, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return destino
+    return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={linea.sku_id}")
+
+
+@rol_requerido("piso", "mesa")
+def recepcion_ubicar(request, pk):
+    """Pantalla de ubicar UNA pieza recién escaneada: el anaquel que le toca
+    según el plan de la orden (o cuarentena si no hay espacio), el lote si
+    hace falta elegirlo o capturarlo, y las salidas: ubicada, otro anaquel,
+    o llega dañada."""
+    from apps.inventario.services import _suma, planear_acomodo, siguiente_paso  # lazy por contrato
+
+    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
+    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
+    sku_id = request.POST.get("sku_id") or request.GET.get("sku")
+    lineas = [l for l in orden.lineas.select_related("sku") if str(l.sku_id) == str(sku_id)]
+    if not lineas:
+        messages.error(request, "Escanea un producto de la orden para ubicarlo.")
+        return volver
+    sku = lineas[0].sku
+    if request.method == "POST":
+        return _recepcion_ubicar_pieza(request, orden, sku, lineas)
+
+    if _suma(sku, Saldo.EN_PUTAWAY) <= 0:
+        messages.info(request, f"No hay piezas de {sku.codigo} en recepción por ubicar.")
+        return volver
+    paso = siguiente_paso(orden, sku)
+    if paso is None:
+        planear_acomodo(orden, request.user)
+        paso = siguiente_paso(orden, sku)
+    lotes = []
+    for l in lineas:
+        codigo = (l.lote_codigo or "").strip()
+        if codigo and codigo not in [x["codigo"] for x in lotes]:
+            lotes.append({"codigo": codigo, "caducidad": l.fecha_caducidad.isoformat() if l.fecha_caducidad else ""})
+    if len(lotes) == 1:
+        modo_lote = "fijo"
+    elif len(lotes) > 1:
+        modo_lote = "elegir"
+    elif sku.requiere_lote:
+        modo_lote = "capturar"
+    else:
+        modo_lote = "ninguno"
+    from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
+    contexto = {
+        "seccion": "recepcion", "orden": orden, "sku": sku, "paso": paso,
+        "lotes": lotes, "modo_lote": modo_lote,
+        "lotes_sugeridos": lotes_sugeridos(sku, orden) if modo_lote == "capturar" else [],
+        "por_ubicar": _suma(sku, Saldo.EN_PUTAWAY),
+        "ubicaciones_destino": Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True).order_by("codigo"),
+    }
+    return render(request, "piso/recepcion_ubicar.html", contexto)
+
+
+def _recepcion_ubicar_pieza(request, orden, sku, lineas):
+    """POST de la pantalla de ubicar: ubicar (al anaquel elegido o a cuarentena
+    si viene vacío) o marcar la pieza dañada."""
+    from apps.inventario.services import marcar_danada, ubicar_pieza  # lazy por contrato
+
+    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
+    accion = request.POST.get("accion")
+    if accion == "danada":
+        linea = next((l for l in lineas if l.cantidad_recibida > 0), lineas[0])
+        try:
+            marcar_danada(linea, request.user)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return volver
+        messages.warning(request, f"{sku.codigo}: pieza marcada dañada, va a cuarentena. Escanea la siguiente.")
+        return volver
+    codigo_ubicacion = (request.POST.get("ubicacion") or "").strip()
+    ubicacion = None
+    if codigo_ubicacion:
+        ubicacion = Ubicacion.objects.filter(codigo__iexact=codigo_ubicacion).first()
+        if ubicacion is None:
+            messages.error(request, f"No existe la ubicación {codigo_ubicacion}. Escanea la etiqueta del anaquel, no la del producto.")
+            return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
+    lote = None
+    lote_codigo = (request.POST.get("lote") or "").strip()
+    if lote_codigo:
+        fecha_caducidad = None
+        crudo = (request.POST.get("fecha_caducidad") or "").strip()
+        if crudo:
+            try:
+                fecha_caducidad = date.fromisoformat(crudo)
+            except ValueError:
+                messages.error(request, "La fecha de caducidad no es válida. Usa el calendario.")
+                return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
+        from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+        lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
+    try:
+        destino = ubicar_pieza(orden, sku, lote, ubicacion, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
+    if destino is None:
+        messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, la pieza fue a cuarentena. Escanea la siguiente.")
+    else:
+        messages.success(request, f"{sku.codigo} ubicada en {destino.codigo}. Escanea la siguiente.")
+    return volver
 
 
 def _recepcion_recibir(request, orden):

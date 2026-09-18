@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Ubicar · {{ orden.folio }}{% endblock %}
+{% block content %}
+{# Ubicar UNA pieza recién escaneada: anaquel del plan de la orden (o cuarentena), lote si aplica, y salidas. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
+    <h1>Ubicar 1 pieza</h1>
+    <div class="small"><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }} · {{ por_ubicar }} en recepción por ubicar</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Volver al escáner</a>
+</div>
+
+<form method="post" class="card" id="form-ubicar">{% csrf_token %}
+  <input type="hidden" name="accion" value="ubicar">
+  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
+
+  {% if paso and paso.ubicacion %}
+  <div class="eyebrow">Ve a</div>
+  <div class="pick-ubicacion" id="anaquel-sugerido">{{ paso.ubicacion }}</div>
+  <div class="small muted">{{ paso.motivo }} · pieza {{ paso.ubicadas|add:1 }} de {{ paso.cantidad }} en este anaquel</div>
+  {% elif paso %}
+  <div class="eyebrow">Sin anaquel con espacio</div>
+  <div class="pick-ubicacion">CUARENTENA</div>
+  <div class="small muted">{{ paso.motivo }}. Llévala a la zona de cuarentena; Mesa decide dónde acomodarla.</div>
+  {% else %}
+  <div class="banner warn"><span class="foco"></span>El plan de la orden no contempla este producto. Elige un anaquel a mano o avisa a Mesa para rehacer el plan.</div>
+  {% endif %}
+
+  <label for="ubicacion" class="mt">Anaquel (cámbialo si lo acomodaste en otro; vacío = cuarentena)</label>
+  <input type="text" name="ubicacion" id="ubicacion" class="mono" autocomplete="off" list="ubicaciones-destino"
+         value="{% if paso and paso.ubicacion %}{{ paso.ubicacion }}{% endif %}" placeholder="PIC-1-I-F-1">
+  <datalist id="ubicaciones-destino">
+    {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
+  </datalist>
+
+  {% if modo_lote == "fijo" %}
+  <input type="hidden" name="lote" value="{{ lotes.0.codigo }}">
+  <input type="hidden" name="fecha_caducidad" value="{{ lotes.0.caducidad }}">
+  <p class="small mt">Lote <span class="mono">{{ lotes.0.codigo }}</span>{% if lotes.0.caducidad %} · caduca {{ lotes.0.caducidad }}{% endif %} (anunciado en la orden)</p>
+  {% elif modo_lote == "elegir" %}
+  <div class="mt"><b>¿De qué lote es esta pieza?</b></div>
+  {% for l in lotes %}
+  <label class="small" style="display:block">
+    <input type="radio" name="lote" value="{{ l.codigo }}" required{% if forloop.first %} checked{% endif %}>
+    <span class="mono">{{ l.codigo }}</span>{% if l.caducidad %} · caduca {{ l.caducidad }}{% endif %}
+  </label>
+  {% endfor %}
+  {% elif modo_lote == "capturar" %}
+  <div class="grid g2 mt">
+    <div>
+      <label for="lote">Lote (el producto lo pide)</label>
+      <input type="text" name="lote" id="lote" class="mono" autocomplete="off" required list="lotes-sku">
+      <datalist id="lotes-sku">
+        {% for l in lotes_sugeridos %}<option value="{{ l.codigo }}" data-caducidad="{{ l.caducidad }}">{% if l.caducidad %}cad {{ l.caducidad }}{% endif %}</option>{% endfor %}
+      </datalist>
+    </div>
+    <div>
+      <label for="fecha_caducidad">Caducidad del lote</label>
+      <input type="date" name="fecha_caducidad" id="fecha_caducidad">
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADA · siguiente pieza</button></div>
+</form>
+
+<form method="post" class="mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="danada">
+  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
+  <button class="btn bloque" type="submit">Esta pieza llega dañada → cuarentena</button>
+</form>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var inputLote = document.getElementById("lote");
+  var inputCad = document.getElementById("fecha_caducidad");
+  var lista = document.getElementById("lotes-sku");
+  if (inputLote && inputCad && lista) {
+    var rellena = function () {
+      var o = Array.prototype.slice.call(lista.options).filter(function (x) { return x.value === inputLote.value.trim(); })[0];
+      if (o && o.dataset.caducidad) inputCad.value = o.dataset.caducidad;
+    };
+    inputLote.addEventListener("change", rellena);
+    inputLote.addEventListener("input", rellena);
+  }
+});
+</script>
+{% endblock %}

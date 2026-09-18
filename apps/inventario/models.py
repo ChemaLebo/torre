@@ -159,6 +159,11 @@ class OrdenEntrada(models.Model):
     tarimas_recibidas = models.PositiveSmallIntegerField(default=0)
     ts_descarga_fin = models.DateTimeField(null=True, blank=True)
     ts_vendible = models.DateTimeField(null=True, blank=True, help_text="Cuándo quedó todo ubicado")
+    # Plan de acomodo de TODA la orden (inventario.services.planear_acomodo):
+    # {"generado": iso, "pasos": [{sku_id, sku, ubicacion (None = cuarentena,
+    # sin espacio), cantidad, ubicadas, motivo}]}. La pantalla de ubicar del
+    # piso sigue el plan pieza por pieza; Mesa lo ve y lo rehace.
+    plan_acomodo = models.JSONField(default=dict, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:
