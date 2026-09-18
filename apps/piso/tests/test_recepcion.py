@@ -311,6 +311,32 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         por_lote = {p["lote"]: p["ubicacion"] for p in pasos}
         self.assertEqual(por_lote, {"L-ASN": "PIC-1-I-F-2", "L-OTRO": "PIC-1-I-B-2"})
 
+    def test_rehacer_el_plan_respeta_lo_ya_ubicado(self):
+        from apps.inventario.models import OrdenEntrada
+        from apps.inventario.services import planear_acomodo
+
+        self._foto()
+        self.client.get(self.url)
+        for _ in range(2):  # dos piezas escaneadas y ubicadas por el plan
+            self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        orden = OrdenEntrada.objects.get(pk=self.orden.pk)
+        self.assertEqual(orden.plan_acomodo["pasos"][0]["ubicadas"], 2)
+        # Un plan viejo SIN lote (versión anterior) también se acredita.
+        orden.plan_acomodo["pasos"][0].pop("lote")
+        orden.save(update_fields=["plan_acomodo"])
+        plan = planear_acomodo(orden)
+        self.assertEqual([(p["lote"], p["cantidad"], p["ubicadas"]) for p in plan["pasos"]], [("L-ASN", 3, 0)])
+        self.assertEqual(plan["ubicadas"], {f"{self.sku.pk}|L-ASN": 2})
+        # Ubicar a mano fuera del plan tampoco se replanea: el tope es lo físico que falta.
+        from apps.catalogo.models import Lote
+        from apps.inventario.services import recibir, ubicar
+        self.linea.refresh_from_db()
+        recibir(self.linea, 3, 0, self.operador)
+        ubicar(self.sku, 2, self.anaquel, Lote.objects.get(codigo="L-ASN"), self.operador)
+        plan = planear_acomodo(orden)
+        self.assertEqual([p["cantidad"] for p in plan["pasos"]], [1])
+
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada
 

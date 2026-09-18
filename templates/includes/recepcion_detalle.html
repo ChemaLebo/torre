@@ -58,6 +58,7 @@
       </tbody>
     </table>
   </div>
+  {% if orden.plan_acomodo.ubicadas %}<p class="small muted">Ya ubicadas antes de este plan: {% for clave, n in orden.plan_acomodo.ubicadas.items %}{{ n }} de {{ clave }}{% if not forloop.last %} · {% endif %}{% endfor %} (SKU|lote). Rehacer el plan no mueve inventario.</p>{% endif %}
   {% else %}<p class="small muted">Sin plan todavía: se arma al abrir la recepción en piso, o aquí con el botón.</p>{% endif %}
   {% endif %}
   <div class="mt"><b>Evidencias de llegada</b></div>

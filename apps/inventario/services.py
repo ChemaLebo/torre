@@ -1760,16 +1760,46 @@ def planear_acomodo(orden, actor=None):
     clases = clases_rotacion(orden.cliente)
     lineas = list(orden.lineas.select_related("sku"))
     lineas.sort(key=lambda l: (clases.get(l.sku_id, "C"), l.sku.codigo, l.lote_codigo or ""))
-    # Lo ya ubicado según el plan anterior, por (sku, lote): no se vuelve a planear.
-    ubicadas_previas = {}
-    for p in (orden.plan_acomodo or {}).get("pasos", []):
-        clave = (p["sku_id"], p.get("lote") or "")
+    # Lo ya ubicado según el plan anterior, por (sku, lote): no se vuelve a
+    # planear. Un plan viejo sin lote acredita sus ubicadas a las líneas del
+    # SKU en orden. Y el total por SKU se limita a lo que FÍSICAMENTE falta
+    # (anunciado no llegado + en recepción): lo ubicado a mano tampoco se
+    # replanea aunque el plan no lo haya visto.
+    previo = orden.plan_acomodo or {}
+    ubicadas_previas = dict(previo.get("ubicadas", {}))
+    for p in previo.get("pasos", []):
+        clave = f"{p['sku_id']}|{p.get('lote') or ''}"
         ubicadas_previas[clave] = ubicadas_previas.get(clave, 0) + p.get("ubicadas", 0)
-    reservas, pasos = {}, []
+    sin_lote = {}
+    for clave, n in list(ubicadas_previas.items()):
+        sku_id, lote = clave.split("|", 1)
+        if not lote and n:
+            sin_lote[int(sku_id)] = sin_lote.get(int(sku_id), 0) + n
+            ubicadas_previas.pop(clave)
+    fisico = {}
+    for linea in lineas:
+        f = fisico.setdefault(linea.sku_id, {"anunciadas": 0, "recibidas": 0})
+        f["anunciadas"] += linea.cantidad_anunciada
+        f["recibidas"] += linea.cantidad_recibida
+    tope = {
+        sku_id: max(f["anunciadas"] - f["recibidas"], 0) + _suma(SKU_por_id(sku_id, lineas), Saldo.EN_PUTAWAY)
+        for sku_id, f in fisico.items()
+    }
+    reservas, pasos, acreditadas = {}, [], {}
     for linea in lineas:
         sku = linea.sku
         lote = (linea.lote_codigo or "").strip()
-        pendientes = max(linea.cantidad_anunciada - ubicadas_previas.get((sku.pk, lote), 0), 0)
+        clave = f"{sku.pk}|{lote}"
+        previas = ubicadas_previas.get(clave, 0)
+        if sin_lote.get(sku.pk):  # plan viejo sin lote: se acredita en orden
+            extra = min(sin_lote[sku.pk], max(linea.cantidad_anunciada - previas, 0))
+            previas += extra
+            sin_lote[sku.pk] -= extra
+        pendientes = max(linea.cantidad_anunciada - previas, 0)
+        pendientes = min(pendientes, max(tope.get(sku.pk, 0) - sum(
+            p["cantidad"] for p in pasos if p["sku_id"] == sku.pk
+        ), 0))
+        acreditadas[clave] = previas
         if pendientes <= 0:
             continue
         plan = sugerir_anaquel(sku, pendientes, reservas, lote=lote or None)
@@ -1784,7 +1814,10 @@ def planear_acomodo(orden, actor=None):
                 "sku_id": sku.pk, "sku": sku.codigo, "lote": lote, "ubicacion": u.codigo if u else None,
                 "cantidad": paso["cantidad"], "ubicadas": 0, "motivo": motivo,
             })
-    orden.plan_acomodo = {"generado": timezone.now().isoformat(), "pasos": pasos}
+    orden.plan_acomodo = {
+        "generado": timezone.now().isoformat(), "pasos": pasos,
+        "ubicadas": {clave: n for clave, n in acreditadas.items() if n},  # ya ubicadas antes de este plan
+    }
     orden.save(update_fields=["plan_acomodo"])
     registrar_evento(
         "asn", orden.folio, "plan_acomodo", actor=actor, cliente=orden.cliente,
@@ -1792,6 +1825,11 @@ def planear_acomodo(orden, actor=None):
         motivo=f"Plan de acomodo de {orden.folio}: {len(pasos)} paso(s).",
     )
     return orden.plan_acomodo
+
+
+def SKU_por_id(sku_id, lineas):
+    """El SKU de las líneas de la orden por id (evita otra consulta)."""
+    return next(l.sku for l in lineas if l.sku_id == sku_id)
 
 
 def siguiente_paso(orden, sku, lote=None):
