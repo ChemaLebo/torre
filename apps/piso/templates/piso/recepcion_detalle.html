@@ -205,6 +205,9 @@ document.addEventListener("DOMContentLoaded", function () {
         var o = opciones[i];
         if (valor && (o.dataset.barras === valor || o.dataset.codigo === valor)) {
           select.value = o.value;
+          // Cambiar el valor por programa no dispara "change": se avisa a mano
+          // para que lotes y acomodo sugerido sigan al producto escaneado.
+          select.dispatchEvent(new Event("change"));
           pego = true;
           break;
         }
