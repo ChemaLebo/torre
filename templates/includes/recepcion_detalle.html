@@ -40,11 +40,19 @@
       <button class="btn chico" type="submit">{% if orden.plan_acomodo.pasos %}Rehacer plan{% else %}Planear acomodo{% endif %}</button>
     </form>
     {% if orden.plan_acomodo.pasos %}
-    {# Reinicio físico: todo lo que la orden ya acomodó (plan, a mano y cuarentena por falta de espacio) vuelve a recepción para reacomodarse con el plan nuevo. #}
-    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar el acomodo de {{ orden.folio }}? Todo lo que esta orden ya acomodó regresa a recepción (anaqueles del plan, acomodado a mano y cuarentena por falta de espacio) y el piso lo vuelve a acomodar. Las dañadas se quedan en cuarentena.');">{% csrf_token %}
+    {# Reinicio del acomodo: todo lo que la orden ya acomodó (plan, a mano y cuarentena por falta de espacio) vuelve a recepción; los conteos se quedan. #}
+    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar el acomodo de {{ orden.folio }}? Todo lo que esta orden ya acomodó regresa a recepción (anaqueles del plan, acomodado a mano y cuarentena por falta de espacio) y el piso lo vuelve a acomodar desde Por ubicar, SIN volver a escanear: los conteos se quedan. Las dañadas se quedan en cuarentena.');">{% csrf_token %}
       <input type="hidden" name="accion" value="reiniciar_acomodo">
       <input type="hidden" name="orden_id" value="{{ orden.pk }}">
       <button class="btn chico" type="submit">Reiniciar acomodo</button>
+    </form>
+    {% endif %}
+    {% if orden.estado != 'ANUNCIADA' %}
+    {# Reinicio total: además los conteos vuelven a cero (recibidas y dañadas) para volver a escanear todas las piezas. #}
+    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar la recepción de {{ orden.folio }} COMPLETA? Todo lo acomodado regresa a recepción y los conteos vuelven a cero (recibidas y dañadas): el piso vuelve a escanear TODAS las piezas desde cero. La foto de llegada se queda.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="reiniciar_recepcion">
+      <input type="hidden" name="orden_id" value="{{ orden.pk }}">
+      <button class="btn chico" type="submit">Reiniciar recepción (conteos a cero)</button>
     </form>
     {% endif %}
   </div>

@@ -416,6 +416,57 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual(r["regresadas"], 0)
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
 
+    def test_reiniciar_recepcion_pone_los_conteos_en_cero_para_volver_a_escanear(self):
+        from apps.inventario.models import Movimiento, OrdenEntrada, Saldo
+        from apps.inventario.services import reiniciar_recepcion
+
+        self._foto()
+        self.client.get(self.url)
+
+        def escanear():
+            self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+
+        for _ in range(2):  # 2 al anaquel del plan
+            escanear()
+            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        escanear()  # 1 a cuarentena por falta de espacio
+        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"})
+        escanear()  # 1 dañada
+        self.client.post(self.url_ubicar, {"accion": "danada", "sku_id": self.sku.pk})
+        escanear()  # 1 se queda en recepción: 4 recibidas + 1 dañada = línea completa
+        orden = OrdenEntrada.objects.get(pk=self.orden.pk)
+        self.assertEqual(orden.estado, OrdenEntrada.RECIBIDA)
+
+        r = reiniciar_recepcion(orden, self.operador)
+        self.assertEqual(r["acomodo"]["regresadas"], 3)  # 2 del plan + 1 de cuarentena
+        self.assertEqual((r["recibidas"], r["danadas"], r["siguen_contadas"]), (4, 1, {"recibidas": 0, "danadas": 0}))
+        self.assertFalse(Saldo.objects.filter(sku=self.sku).exists())  # ni en recepción, ni en anaquel, ni en cuarentena
+        self.linea.refresh_from_db()
+        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (0, 0))
+        orden.refresh_from_db()
+        self.assertEqual((orden.estado, orden.ts_descarga_fin), (OrdenEntrada.EN_RECEPCION, None))
+        paso = orden.plan_acomodo["pasos"][0]
+        self.assertEqual((paso["ubicacion"], paso["cantidad"], paso["ubicadas"]), ("PIC-1-I-F-2", 5, 0))
+        self.assertEqual(Movimiento.objects.filter(sku=self.sku, tipo=Movimiento.RECEPCION, delta__lt=0).count(), 2)
+        # Se vuelve a escanear desde cero; la foto de llegada se queda.
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, 'id="form-escanear"')
+        escanear()
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 1)
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
+
+    def test_reiniciar_recepcion_deja_contado_lo_que_no_encuentra(self):
+        from apps.inventario.models import OrdenEntrada, Saldo
+        from apps.inventario.services import recibir, reiniciar_recepcion
+
+        recibir(self.linea, 3, 1, self.operador)
+        Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).update(cantidad=2)  # una ya no está (vendida, apartada…)
+        r = reiniciar_recepcion(OrdenEntrada.objects.get(pk=self.orden.pk), self.operador)
+        self.assertEqual((r["recibidas"], r["danadas"], r["siguen_contadas"]), (2, 1, {"recibidas": 1, "danadas": 0}))
+        self.linea.refresh_from_db()
+        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (1, 0))
+
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada
 
@@ -438,3 +489,14 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "reiniciar_acomodo", "orden_id": self.orden.pk}, follow=True)
         self.assertContains(respuesta, "regresaron a recepción")
         self.assertTrue(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"])
+        self.assertNotContains(respuesta, 'value="reiniciar_recepcion"')  # sin nada recibido no hay qué reiniciar
+        self.client.logout()
+        self.login_piso()
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+        self.client.logout()
+        self.client.force_login(mesa)
+        respuesta = self.client.get(reverse("mesa:recepciones"), {"cliente": self.cliente.slug})
+        self.assertContains(respuesta, 'value="reiniciar_recepcion"')
+        respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "reiniciar_recepcion", "orden_id": self.orden.pk}, follow=True)
+        self.assertContains(respuesta, "recepción reiniciada")
+        self.assertContains(respuesta, "los conteos bajaron 1 recibida(s)")

@@ -1156,7 +1156,7 @@ def recepciones(request):
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
-    if request.method == "POST" and request.POST.get("accion") in ("replanear", "reiniciar_acomodo"):
+    if request.method == "POST" and request.POST.get("accion") in ("replanear", "reiniciar_acomodo", "reiniciar_recepcion"):
         return _recepciones_replanear(request)
 
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
@@ -1367,7 +1367,10 @@ def recepciones_plantilla(request):
 
 
 def _recepciones_replanear(request):
-    """Rehace el plan de acomodo de una orden abierta (inventario.planear_acomodo)."""
+    """Rehace el plan de acomodo de una orden abierta (planear_acomodo), o lo
+    reinicia: reiniciar_acomodo (lo acomodado vuelve a recepción, conteos se
+    quedan) o reiniciar_recepcion (además los conteos a cero: se escanea todo
+    otra vez)."""
     from apps.inventario.models import OrdenEntrada
     from apps.inventario.services import planear_acomodo
 
@@ -1395,6 +1398,21 @@ def _recepciones_replanear(request):
                 + (" (" + "; ".join(desglose) + ")" if desglose else "")
                 + (f"; {r['no_encontradas']} no se encontraron (apartadas, vendidas o ya no estaban)" if r["no_encontradas"] else "")
                 + ". El plan se rehizo: el piso vuelve a ubicar desde 'Por ubicar'.",
+            )
+    elif request.POST.get("accion") == "reiniciar_recepcion":
+        from apps.inventario.services import reiniciar_recepcion
+        try:
+            r = reiniciar_recepcion(orden, request.user)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            quedan = r["siguen_contadas"]
+            messages.warning(
+                request,
+                f"{orden.folio}: recepción reiniciada. {r['acomodo']['regresadas']} pieza(s) acomodadas regresaron a recepción "
+                f"y los conteos bajaron {r['recibidas']} recibida(s) y {r['danadas']} dañada(s): el piso vuelve a escanear TODO desde cero"
+                + (f"; siguen contadas {quedan['recibidas']} recibida(s) y {quedan['danadas']} dañada(s) que no se encontraron (apartadas, vendidas o dictaminadas)" if quedan["recibidas"] or quedan["danadas"] else "")
+                + ". El plan se rehizo con toda la orden.",
             )
     else:
         plan = planear_acomodo(orden, request.user)

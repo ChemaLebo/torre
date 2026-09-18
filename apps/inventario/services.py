@@ -1987,87 +1987,154 @@ def _regresar_a_recepcion(sku, saldos, cantidad, ubic_recepcion, origen, folio, 
     return mover
 
 
+def _regresar_acomodado(orden, actor, ubic_recepcion, lineas):
+    """Regresa a recepción (en_putaway) TODO lo que esta orden ya acomodó: lo
+    ubicado por el plan, lo acomodado a mano en otro anaquel y lo mandado a
+    cuarentena por falta de espacio (decisión de Chema 2026-09-18). Se quedan
+    donde están las dañadas (cuarentena), lo apartado para pedidos y lo que ya
+    salió; eso se reporta como no encontrado. Por SKU debe regresar lo
+    recibido menos lo que sigue en recepción, y se busca en este orden:
+    anaqueles del plan (con su lote), cuarentena de recepción (hasta lo que la
+    orden mandó ahí, ver _cuarentena_por_orden) y cualquier anaquel donde viva
+    el SKU con un lote de la orden. Corre dentro de la transacción del
+    llamador. Regresa {"regresadas", "del_plan", "de_cuarentena", "a_mano":
+    {anaquel: n}, "no_encontradas"}."""
+    r = {"regresadas": 0, "del_plan": 0, "de_cuarentena": 0, "a_mano": {}, "no_encontradas": 0}
+    pasos = (orden.plan_acomodo or {}).get("pasos", [])
+    for sku in sorted({l.sku for l in lineas}, key=lambda s: s.codigo):
+        recibidas = sum(l.cantidad_recibida for l in lineas if l.sku_id == sku.pk)
+        faltan = max(recibidas - _suma(sku, Saldo.EN_PUTAWAY), 0)
+        if faltan <= 0:
+            continue
+        lotes_orden = {(l.lote_codigo or "").strip() for l in lineas if l.sku_id == sku.pk} - {""}
+        salio_vendible = False
+        # 1) Los anaqueles del plan, con el lote del paso.
+        for paso in pasos:
+            if faltan <= 0:
+                break
+            if paso["sku_id"] != sku.pk or not paso.get("ubicacion") or not paso.get("ubicadas"):
+                continue
+            anaquel = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
+            if anaquel is None:
+                continue
+            filtro = {"sku": sku, "ubicacion": anaquel, "estado": Saldo.UBICADO_VENDIBLE}
+            if paso.get("lote"):
+                filtro["lote"] = Lote.objects.filter(sku=sku, codigo=paso["lote"]).first()
+            saldos = list(Saldo.objects.select_for_update().filter(**filtro))
+            n = _regresar_a_recepcion(sku, saldos, min(paso["ubicadas"], faltan), ubic_recepcion, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
+            faltan -= n
+            r["del_plan"] += n
+            salio_vendible = salio_vendible or n > 0
+        # 2) Cuarentena de recepción: solo lo que esta orden mandó por falta de espacio.
+        tope = min(_cuarentena_por_orden(sku, orden.folio), faltan)
+        if tope > 0:
+            zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
+            saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
+            n = _regresar_a_recepcion(sku, saldos, tope, ubic_recepcion, Saldo.CUARENTENA, orden.folio, actor)
+            if n:
+                registrar_evento(
+                    "sku", sku.codigo, "cuarentena_regresada", actor=actor, cliente=sku.cliente,
+                    delta={"cantidad": n, "referencia": orden.folio},
+                    motivo="Reinicio del acomodo: de cuarentena (sin espacio) vuelve a recepción para reacomodarse.",
+                )
+            faltan -= n
+            r["de_cuarentena"] += n
+        # 3) Acomodo a mano: donde viva el SKU con un lote de la orden, en cualquier anaquel.
+        if faltan > 0:
+            anaqueles = dict(Ubicacion.objects.filter(tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA)).values_list("pk", "codigo"))
+            consulta = Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE, ubicacion_id__in=list(anaqueles))
+            if lotes_orden:
+                consulta = consulta.filter(lote_id__in=list(Lote.objects.filter(sku=sku, codigo__in=lotes_orden).values_list("pk", flat=True)))
+            for saldo in sorted(consulta, key=lambda s: anaqueles[s.ubicacion_id]):
+                if faltan <= 0:
+                    break
+                n = _regresar_a_recepcion(sku, [saldo], faltan, ubic_recepcion, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
+                if n:
+                    codigo = anaqueles[saldo.ubicacion_id]
+                    r["a_mano"][codigo] = r["a_mano"].get(codigo, 0) + n
+                    faltan -= n
+                    salio_vendible = True
+        if salio_vendible:
+            _notificar_cambio_disponible(sku)
+        r["no_encontradas"] += faltan
+    r["regresadas"] = r["del_plan"] + r["de_cuarentena"] + sum(r["a_mano"].values())
+    return r
+
+
 def reiniciar_acomodo(orden, actor=None):
-    """Regresa a recepción (en_putaway) TODO lo que esta orden ya acomodó,
-    para volver a acomodarlo con el plan nuevo: lo ubicado por el plan, lo
-    acomodado a mano en otro anaquel y lo mandado a cuarentena por falta de
-    espacio (decisión de Chema 2026-09-18). Se quedan donde están las dañadas
-    (cuarentena), lo apartado para pedidos y lo que ya salió; eso se reporta
-    como no encontrado. Por SKU debe regresar lo recibido menos lo que sigue
-    en recepción, y se busca en este orden: anaqueles del plan (con su lote),
-    cuarentena de recepción (hasta lo que la orden mandó ahí, ver
-    _cuarentena_por_orden) y cualquier anaquel donde viva el SKU con un lote
-    de la orden. Pone el plan en cero, lo rehace y audita. Regresa
-    {"regresadas", "del_plan", "de_cuarentena", "a_mano": {anaquel: n}, "no_encontradas"}."""
+    """Regresa a recepción TODO lo que esta orden ya acomodó para volver a
+    acomodarlo con el plan nuevo (ver _regresar_acomodado); los conteos de la
+    orden se quedan: el piso NO vuelve a escanear, ubica desde "Por ubicar".
+    Pone el plan en cero, lo rehace y audita."""
     ubic_recepcion = _ubicacion_tipo(Ubicacion.RECEPCION)
     if ubic_recepcion is None:
         raise ValueError("No hay ubicación de recepción activa.")
-    lineas = list(orden.lineas.select_related("sku"))
-    r = {"regresadas": 0, "del_plan": 0, "de_cuarentena": 0, "a_mano": {}, "no_encontradas": 0}
     with transaction.atomic():
-        pasos = (orden.plan_acomodo or {}).get("pasos", [])
-        for sku in sorted({l.sku for l in lineas}, key=lambda s: s.codigo):
-            recibidas = sum(l.cantidad_recibida for l in lineas if l.sku_id == sku.pk)
-            faltan = max(recibidas - _suma(sku, Saldo.EN_PUTAWAY), 0)
-            if faltan <= 0:
-                continue
-            lotes_orden = {(l.lote_codigo or "").strip() for l in lineas if l.sku_id == sku.pk} - {""}
-            salio_vendible = False
-            # 1) Los anaqueles del plan, con el lote del paso.
-            for paso in pasos:
-                if faltan <= 0:
-                    break
-                if paso["sku_id"] != sku.pk or not paso.get("ubicacion") or not paso.get("ubicadas"):
-                    continue
-                anaquel = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
-                if anaquel is None:
-                    continue
-                filtro = {"sku": sku, "ubicacion": anaquel, "estado": Saldo.UBICADO_VENDIBLE}
-                if paso.get("lote"):
-                    filtro["lote"] = Lote.objects.filter(sku=sku, codigo=paso["lote"]).first()
-                saldos = list(Saldo.objects.select_for_update().filter(**filtro))
-                n = _regresar_a_recepcion(sku, saldos, min(paso["ubicadas"], faltan), ubic_recepcion, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
-                faltan -= n
-                r["del_plan"] += n
-                salio_vendible = salio_vendible or n > 0
-            # 2) Cuarentena de recepción: solo lo que esta orden mandó por falta de espacio.
-            tope = min(_cuarentena_por_orden(sku, orden.folio), faltan)
-            if tope > 0:
-                zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
-                saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
-                n = _regresar_a_recepcion(sku, saldos, tope, ubic_recepcion, Saldo.CUARENTENA, orden.folio, actor)
-                if n:
-                    registrar_evento(
-                        "sku", sku.codigo, "cuarentena_regresada", actor=actor, cliente=sku.cliente,
-                        delta={"cantidad": n, "referencia": orden.folio},
-                        motivo="Reinicio del acomodo: de cuarentena (sin espacio) vuelve a recepción para reacomodarse.",
-                    )
-                faltan -= n
-                r["de_cuarentena"] += n
-            # 3) Acomodo a mano: donde viva el SKU con un lote de la orden, en cualquier anaquel.
-            if faltan > 0:
-                anaqueles = dict(Ubicacion.objects.filter(tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA)).values_list("pk", "codigo"))
-                consulta = Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE, ubicacion_id__in=list(anaqueles))
-                if lotes_orden:
-                    consulta = consulta.filter(lote_id__in=list(Lote.objects.filter(sku=sku, codigo__in=lotes_orden).values_list("pk", flat=True)))
-                for saldo in sorted(consulta, key=lambda s: anaqueles[s.ubicacion_id]):
-                    if faltan <= 0:
-                        break
-                    n = _regresar_a_recepcion(sku, [saldo], faltan, ubic_recepcion, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
-                    if n:
-                        codigo = anaqueles[saldo.ubicacion_id]
-                        r["a_mano"][codigo] = r["a_mano"].get(codigo, 0) + n
-                        faltan -= n
-                        salio_vendible = True
-            if salio_vendible:
-                _notificar_cambio_disponible(sku)
-            r["no_encontradas"] += faltan
-        r["regresadas"] = r["del_plan"] + r["de_cuarentena"] + sum(r["a_mano"].values())
+        r = _regresar_acomodado(orden, actor, ubic_recepcion, list(orden.lineas.select_related("sku")))
         registrar_evento(
             "asn", orden.folio, "acomodo_reiniciado", actor=actor, cliente=orden.cliente, delta=r,
             motivo="Reinicio del acomodo: lo que la orden ya acomodó (plan, a mano y cuarentena sin espacio) vuelve a recepción.",
         )
         orden.plan_acomodo = {}
         orden.save(update_fields=["plan_acomodo"])
+        planear_acomodo(orden, actor)
+    return r
+
+
+def reiniciar_recepcion(orden, actor=None):
+    """La recepción vuelve a cero para recontar todo escaneando (decisión de
+    Chema 2026-09-18): primero lo acomodado regresa a recepción
+    (_regresar_acomodado) y luego se deshacen los conteos: lo recibido de
+    cada línea sale de recepción (en_putaway) y lo dañado sale de cuarentena,
+    con kardex en negativo; la línea baja solo en lo que sí se retiró (lo que
+    no se encuentra, apartado, vendido o dictaminado, sigue contado para que
+    el cierre no lo reclame como faltante). Una orden RECIBIDA vuelve a
+    EN_RECEPCION (no hay transición hacia atrás: es un deshacer explícito y se
+    audita), la foto de llegada se queda y el plan se rehace con toda la
+    orden. Regresa {"acomodo", "recibidas", "danadas", "siguen_contadas":
+    {"recibidas", "danadas"}}."""
+    if orden.estado == OrdenEntrada.CERRADA:
+        raise ValueError(f"La orden {orden.folio} ya está cerrada; no se puede reiniciar.")
+    ubic_recepcion = _ubicacion_tipo(Ubicacion.RECEPCION)
+    if ubic_recepcion is None:
+        raise ValueError("No hay ubicación de recepción activa.")
+    lineas = list(orden.lineas.select_related("sku").order_by("pk"))
+    r = {"acomodo": None, "recibidas": 0, "danadas": 0, "siguen_contadas": {"recibidas": 0, "danadas": 0}}
+    with transaction.atomic():
+        r["acomodo"] = _regresar_acomodado(orden, actor, ubic_recepcion, lineas)
+        zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
+        for linea in lineas:
+            sku = linea.sku
+            quitar_ok = quitar_danadas = 0
+            if linea.cantidad_recibida:
+                saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
+                quitar_ok = min(sum(s.cantidad for s in saldos), linea.cantidad_recibida)
+                if quitar_ok:
+                    _restar(saldos, quitar_ok)
+                    _mov(sku, Movimiento.RECEPCION, -quitar_ok, origen=Saldo.EN_PUTAWAY, referencia=orden.folio, actor=actor)
+            if linea.cantidad_danada:
+                saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
+                quitar_danadas = min(sum(s.cantidad for s in saldos), linea.cantidad_danada)
+                if quitar_danadas:
+                    _restar(saldos, quitar_danadas)
+                    _mov(sku, Movimiento.RECEPCION, -quitar_danadas, origen=Saldo.CUARENTENA, referencia=orden.folio, actor=actor)
+            r["siguen_contadas"]["recibidas"] += linea.cantidad_recibida - quitar_ok
+            r["siguen_contadas"]["danadas"] += linea.cantidad_danada - quitar_danadas
+            r["recibidas"] += quitar_ok
+            r["danadas"] += quitar_danadas
+            linea.cantidad_recibida -= quitar_ok
+            linea.cantidad_danada -= quitar_danadas
+            linea.save(update_fields=["cantidad_recibida", "cantidad_danada"])
+        estado_anterior = orden.estado
+        if orden.estado == OrdenEntrada.RECIBIDA:
+            orden.estado = OrdenEntrada.EN_RECEPCION
+            orden.ts_descarga_fin = None
+        orden.plan_acomodo = {}
+        orden.save(update_fields=["estado", "ts_descarga_fin", "plan_acomodo"])
+        registrar_evento(
+            "asn", orden.folio, "recepcion_reiniciada", actor=actor, cliente=orden.cliente,
+            delta={**r, "estado": [estado_anterior, orden.estado]},
+            motivo="Reinicio de la recepción: lo acomodado vuelve a recepción y los conteos a cero para volver a escanear todo.",
+        )
         planear_acomodo(orden, actor)
     return r
