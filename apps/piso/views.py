@@ -634,9 +634,11 @@ def recepcion_ubicar(request, pk):
 
 
 def _recepcion_ubicar_pieza(request, orden, sku, lineas):
-    """POST de la pantalla de ubicar: ubicar (al anaquel elegido o a cuarentena
-    si viene vacío) o marcar la pieza dañada."""
-    from apps.inventario.services import marcar_danada, ubicar_pieza  # lazy por contrato
+    """POST de la pantalla de ubicar: ubicar N (al anaquel elegido o a
+    cuarentena si viene vacío) o marcar la pieza dañada. Ubicar N cuenta N:
+    se usan las escaneadas sin ubicar y, si N es mayor, la diferencia se
+    recibe primero en la línea del lote elegido (decisión de Chema 2026-09-18)."""
+    from apps.inventario.services import _suma, marcar_danada, recibir, ubicar_pieza  # lazy por contrato
 
     volver = redirect("piso:recepcion_detalle", pk=orden.pk)
     accion = request.POST.get("accion")
@@ -673,11 +675,18 @@ def _recepcion_ubicar_pieza(request, orden, sku, lineas):
         cantidad = _entero(request.POST.get("cantidad") or 1, "Captura cuántas piezas ubicas, en número entero.")
         if cantidad < 1:
             raise ValueError("La cantidad a ubicar es mínimo 1.")
-        destino = ubicar_pieza(orden, sku, lote, ubicacion, request.user, cantidad)
+        with transaction.atomic():
+            contadas = max(cantidad - _suma(sku, Saldo.EN_PUTAWAY), 0)
+            if contadas:
+                linea = next((l for l in lineas if (l.lote_codigo or "").strip() == lote_codigo), lineas[0])
+                recibir(linea, contadas, 0, request.user)
+            destino = ubicar_pieza(orden, sku, lote, ubicacion, request.user, cantidad)
     except ValueError as exc:
         messages.error(request, str(exc))
         return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
     piezas = "1 pieza" if cantidad == 1 else f"{cantidad} piezas"
+    if contadas:
+        piezas += f" ({contadas} contada{'s' if contadas > 1 else ''} como recibida{'s' if contadas > 1 else ''} ahora)"
     if destino is None:
         messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, {piezas} a cuarentena. Escanea la siguiente.")
     else:

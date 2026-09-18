@@ -94,8 +94,8 @@
   </datalist>
 
   <label for="cantidad" class="mt">¿Cuántas ubicas ahora?</label>
-  <input type="number" name="cantidad" id="cantidad" min="1" max="{{ por_ubicar }}" inputmode="numeric" value="1" autocomplete="off">
-  <div class="small muted">Tienes {{ por_ubicar }} en recepción{% if paso and paso.ubicacion %}; en este anaquel van {{ faltan_paso }}: si pones más, el sobrante lo cuenta en el siguiente anaquel del plan{% endif %}.</div>
+  <input type="number" name="cantidad" id="cantidad" min="1" inputmode="numeric" value="1" autocomplete="off">
+  <div class="small muted">Ubicar N cuenta N: tienes {{ por_ubicar }} escaneada{{ por_ubicar|pluralize }} sin ubicar; si ubicas más, la diferencia se cuenta como recibida ahora{% if paso and paso.ubicacion %}. En este anaquel van {{ faltan_paso }}: si pones más, el sobrante lo cuenta en el siguiente anaquel del plan{% endif %}.</div>
 
   <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADAS · siguiente</button></div>
 </form>

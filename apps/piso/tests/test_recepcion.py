@@ -358,7 +358,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
             self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
         self.assertContains(respuesta, 'id="faltan-paso">5</b>')
-        self.assertContains(respuesta, 'name="cantidad" id="cantidad" min="1" max="3"')
+        self.assertContains(respuesta, "tienes 3 escaneadas sin ubicar")
         respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "3"}, follow=True)
         self.assertContains(respuesta, "3 piezas en PIC-1-I-F-2")
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 3)
@@ -371,6 +371,20 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertContains(respuesta, "<td class=\"derecha num\">3")
         respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "0"}, follow=True)
         self.assertContains(respuesta, "mínimo 1")
+
+    def test_ubicar_mas_de_las_escaneadas_cuenta_la_diferencia(self):
+        from apps.inventario.models import OrdenEntrada, Saldo
+
+        self._foto()
+        self.client.get(self.url)
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})  # 1 escaneada
+        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "4"}, follow=True)
+        self.assertContains(respuesta, "4 piezas (3 contadas como recibidas ahora) en PIC-1-I-F-2")
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 4)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 4)
+        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]["ubicadas"], 4)
 
     def test_reiniciar_acomodo_regresa_todo_menos_danadas_y_stock_ajeno(self):
         from apps.catalogo.models import Lote, Ubicacion
