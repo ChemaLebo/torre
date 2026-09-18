@@ -343,3 +343,16 @@ el conteo cíclico lo corrige.
    → [(anaquel, cantidad, motivo)], prellenado en Recepción y Cuarentena,
    marca de lleno/con espacio en Conteos, reporte "Reacomodo sugerido" en
    apps/reportes.
+
+## Recepción pieza por pieza — hecho 2026-09-17
+
+Recepción y acomodo separados en dos pantallas (pedido de Chema el mismo
+día): Recepción = foto de llegada + escáner (1 escaneo = 1 pieza recibida),
+Ubicar = el anaquel del plan de la orden, lote y salidas (ubicada, otro
+anaquel, dañada → cuarentena). El plan se arma por ORDEN completa
+(`OrdenEntrada.plan_acomodo`, `inventario.planear_acomodo`), no por pieza;
+sin espacio → cuarentena; la reserva no se usa. Mesa ve y rehace el plan.
+
+**Queda:** capturar cantidad ("y N más iguales") para productos chicos en
+volumen, si escanear uno por uno resulta lento; la pantalla vieja de recibir
+con cantidades sigue en el backend por compatibilidad y se puede retirar.
