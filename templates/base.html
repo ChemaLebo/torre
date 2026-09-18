@@ -132,6 +132,8 @@ window.addEventListener("load", function () {
           var clave = "torre-nav-" + grupo.dataset.grupo, guardado = null;
           try { guardado = localStorage.getItem(clave); } catch (e) {}
           grupo.open = grupo.querySelector(".nav-link.activo") !== null || guardado !== "0";
+          // En pantalla chica el menú es una tira de chips: todos los grupos abiertos.
+          if (window.matchMedia("(max-width: 768px)").matches) { grupo.open = true; }
           grupo.addEventListener("toggle", function () {
             try { localStorage.setItem(clave, grupo.open ? "1" : "0"); } catch (e) {}
           });

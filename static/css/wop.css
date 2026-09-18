@@ -207,19 +207,25 @@ small, .small { font-size: 12.5px; color: var(--ink-50); }
   .sidebar-cabeza { flex: none; }
   .brand { font-size: 17px; margin-bottom: 0; }
   .brand-sub, .nav-sec, .usuario-info, .nav-grupo > summary { display: none; }
-  .nav-grupo { display: contents; }  /* en móvil los grupos se aplanan en la tira de chips */
+  /* En móvil los grupos se aplanan en UNA tira horizontal de chips. Safari en
+     iPhone ignora display:contents en <details> (cada grupo salía como columna
+     y la barra crecía hasta encimarse con la marca), así que cada grupo es un
+     bloque en línea sin salto y sus links van inline; base.html los abre. */
+  .nav-grupo { display: block; flex: none; white-space: nowrap; }
   .nav-links {
     flex: 1 1 auto; min-width: 0;
-    flex-direction: row; gap: 6px;
+    flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px;
     overflow-x: auto; -webkit-overflow-scrolling: touch;
     scrollbar-width: none; padding: 2px 0;
   }
   .nav-links::-webkit-scrollbar { display: none; }
   .nav-link {
-    flex: none; white-space: nowrap;
+    display: inline-flex; align-items: center; vertical-align: middle;
+    flex: none; white-space: nowrap; margin-right: 6px;
     border: 1px solid var(--hair-2); border-radius: var(--r-pill);
     padding: 8px 14px;
   }
+  .nav-grupo > .nav-link:last-child { margin-right: 0; }
   .nav-link.activo { box-shadow: none; border-color: var(--accent); }
   .abajo { margin-top: 0; padding-top: 0; border-top: none; flex: none; }
   .main { padding: 18px 14px 48px; }
