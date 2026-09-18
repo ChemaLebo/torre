@@ -348,6 +348,27 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual(plan["pasos"], [])
         self.assertEqual(plan["completas"], [{"sku": "COLIMITA-SIX", "lote": "L-ASN", "anunciadas": 5, "recibidas": 5, "danadas": 0, "diferencia": 0}])
 
+    def test_reiniciar_acomodo_regresa_lo_ubicado_por_el_plan(self):
+        from apps.inventario.models import OrdenEntrada, Saldo
+        from apps.inventario.services import reiniciar_acomodo
+
+        self._foto()
+        self.client.get(self.url)
+        for _ in range(2):
+            self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})  # una más, sin ubicar
+        orden = OrdenEntrada.objects.get(pk=self.orden.pk)
+        r = reiniciar_acomodo(orden, self.operador)
+        self.assertEqual(r, {"regresadas": 2, "no_movidas": 0})
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).exists())
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 3)
+        orden.refresh_from_db()
+        paso = orden.plan_acomodo["pasos"][0]
+        self.assertEqual((paso["ubicacion"], paso["cantidad"], paso["ubicadas"]), ("PIC-1-I-F-2", 5, 0))
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 3)  # recibidas no cambian
+
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada
 
@@ -366,4 +387,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertContains(respuesta, 'value="replanear"')
         respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "replanear", "orden_id": self.orden.pk}, follow=True)
         self.assertContains(respuesta, "rehecho")
+        self.assertContains(respuesta, 'value="reiniciar_acomodo"')
+        respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "reiniciar_acomodo", "orden_id": self.orden.pk}, follow=True)
+        self.assertContains(respuesta, "regresaron a recepción")
         self.assertTrue(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"])

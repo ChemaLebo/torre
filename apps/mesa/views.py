@@ -1156,7 +1156,7 @@ def recepciones(request):
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
-    if request.method == "POST" and request.POST.get("accion") == "replanear":
+    if request.method == "POST" and request.POST.get("accion") in ("replanear", "reiniciar_acomodo"):
         return _recepciones_replanear(request)
 
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
@@ -1374,6 +1374,19 @@ def _recepciones_replanear(request):
     orden = get_object_or_404(OrdenEntrada, pk=request.POST.get("orden_id"))
     if orden.estado == OrdenEntrada.CERRADA:
         messages.error(request, f"{orden.folio} ya está cerrada; no hay nada que planear.")
+    elif request.POST.get("accion") == "reiniciar_acomodo":
+        from apps.inventario.services import reiniciar_acomodo
+        try:
+            r = reiniciar_acomodo(orden, request.user)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.warning(
+                request,
+                f"{orden.folio}: {r['regresadas']} pieza(s) regresaron a recepción para reacomodarse"
+                + (f"; {r['no_movidas']} no se movieron (apartadas o ya no estaban ahí)" if r["no_movidas"] else "")
+                + ". El plan se rehizo: el piso vuelve a ubicar desde 'Por ubicar'.",
+            )
     else:
         plan = planear_acomodo(orden, request.user)
         messages.success(request, f"Plan de acomodo de {orden.folio} rehecho: {len(plan['pasos'])} paso(s).")

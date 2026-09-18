@@ -39,6 +39,14 @@
       <input type="hidden" name="orden_id" value="{{ orden.pk }}">
       <button class="btn chico" type="submit">{% if orden.plan_acomodo.pasos %}Rehacer plan{% else %}Planear acomodo{% endif %}</button>
     </form>
+    {% if orden.plan_acomodo.pasos %}
+    {# Reinicio físico: lo ubicado por el plan vuelve a recepción para reacomodarse con el plan nuevo. #}
+    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar el acomodo de {{ orden.folio }}? Lo que el plan ubicó en anaqueles regresa a recepción y el piso lo vuelve a acomodar. No mueve lo enviado a cuarentena ni lo acomodado a mano.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="reiniciar_acomodo">
+      <input type="hidden" name="orden_id" value="{{ orden.pk }}">
+      <button class="btn chico" type="submit">Reiniciar acomodo</button>
+    </form>
+    {% endif %}
   </div>
   {% if orden.plan_acomodo.pasos %}
   <div class="tabla-wrap">

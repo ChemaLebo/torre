@@ -48,7 +48,14 @@ class SugerirAnaquelTests(TestCase):
         for p in (3, 4, 5):
             marcar_anaquel(self.anaqueles[p], True)
         plan = sugerir_anaquel(self.lata, 40)
-        self.assertEqual([(p["ubicacion"].codigo if p["ubicacion"] else None, p["cantidad"]) for p in plan], [("PIC-P6", 30), (None, 10)])
+        # P6 vacío primero; el resto comparte P1 con el otro producto (le caben 29).
+        self.assertEqual([(p["ubicacion"].codigo if p["ubicacion"] else None, p["cantidad"]) for p in plan], [("PIC-P6", 30), ("PIC-P1", 10)])
+        self.assertIn("comparte anaquel", plan[-1]["motivo"])
+        # Sin ningún anaquel con espacio, el sobrante queda sin lugar.
+        marcar_anaquel(self.anaqueles[1], True)
+        marcar_anaquel(self.anaqueles[6], True)
+        plan = sugerir_anaquel(self.lata, 40)
+        self.assertEqual([(p["ubicacion"], p["cantidad"]) for p in plan], [(None, 40)])
         self.assertEqual(plan[-1]["motivo"], "sin anaquel con espacio")
         self.assertTrue(EventoAuditoria.objects.filter(entidad="ubicacion", entidad_id="PIC-P2", accion="anaquel_lleno").exists())
         self.assertTrue(marcar_anaquel(self.anaqueles[2], False))
@@ -69,6 +76,29 @@ class SugerirAnaquelTests(TestCase):
         self.assertEqual(sugerir_anaquel(self.lata, 5, reservas, lote="LB")[0]["ubicacion"].codigo, "PIC-P2")
         # El mismo lote se consolida donde ya está apartado (P1, mejor prioridad) antes que donde vive (P3).
         self.assertEqual(sugerir_anaquel(self.lata, 5, reservas, lote="LA")[0]["ubicacion"].codigo, "PIC-P1")
+
+    def test_comparte_celda_con_otros_productos_sin_mezclar_lotes(self):
+        from django.conf import settings
+        from django.test import override_settings
+
+        from apps.catalogo.models import Lote
+
+        # Todos los anaqueles ocupados: P1 con otro producto a medias, P2 con el mismo SKU lote A,
+        # P3 con tres productos (tope), el resto marcados llenos.
+        Saldo.objects.create(sku=self.lenta, ubicacion=self.anaqueles[1], estado=Saldo.UBICADO_VENDIBLE, cantidad=15)  # 50 %
+        lote_a = Lote.objects.create(sku=self.lata, codigo="LA")
+        Saldo.objects.create(sku=self.lata, ubicacion=self.anaqueles[2], lote=lote_a, estado=Saldo.UBICADO_VENDIBLE, cantidad=1)
+        for codigo in ("X1", "X2", "X3"):
+            otro = SKU.objects.create(cliente=self.cliente, codigo=codigo, descripcion=codigo, largo_cm=36, ancho_cm=24, alto_cm=17, precio_declarado=Decimal(1))
+            Saldo.objects.create(sku=otro, ubicacion=self.anaqueles[3], estado=Saldo.UBICADO_VENDIBLE, cantidad=1)
+        for p in (4, 5, 6):
+            marcar_anaquel(self.anaqueles[p], True)
+        plan = sugerir_anaquel(self.lata, 10, lote="LB")
+        # P2 tiene el mismo SKU con otro lote: prohibido; P3 ya trae 3 productos: tope; P1 comparte.
+        self.assertEqual([(p["ubicacion"].codigo if p["ubicacion"] else None, p["cantidad"]) for p in plan], [("PIC-P1", 10)])
+        self.assertIn("comparte anaquel", plan[0]["motivo"])
+        with override_settings(TORRE={**settings.TORRE, "SKUS_POR_CELDA_MAX": 1}):
+            self.assertIsNone(sugerir_anaquel(self.lata, 10, lote="LB")[0]["ubicacion"])
 
     def test_sin_medidas_no_hay_plan(self):
         self.assertEqual(sugerir_anaquel(self.pin, 10), [])

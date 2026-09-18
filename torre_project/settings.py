@@ -228,6 +228,9 @@ TORRE = {
     "RACK_MEDIDAS": {"largo_cm": 180, "ancho_cm": 58, "alto_por_piso": {1: 52, 2: 52, 3: 44}},
     "RACK_ORDEN_PISOS": [2, 3, 1],
     "APILADO_MAX": 6,
+    # Productos distintos que pueden compartir una celda (cada uno en su pila);
+    # los lotes de un mismo producto nunca se mezclan.
+    "SKUS_POR_CELDA_MAX": 3,
     # Ocupación estimada de un anaquel: umbrales de "medio" y "lleno" (%).
     "OCUPACION_MEDIO_PCT": 60,
     "OCUPACION_LLENO_PCT": 90,

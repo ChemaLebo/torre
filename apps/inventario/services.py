@@ -1685,7 +1685,11 @@ def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
     [(sku, piezas, lote)]} ya apartadas por un plan en curso (planear_acomodo).
     `lote` (código): los lotes de un mismo SKU no se mezclan en un anaquel —
     "ya vive el SKU" exige el mismo lote, y un anaquel con otro lote del SKU no
-    es candidato (Chema 2026-09-17)."""
+    es candidato (Chema 2026-09-17). 3) Si no alcanzó, un anaquel ocupado por
+    OTROS productos con espacio también recibe (cada producto en su pila),
+    hasta TORRE["SKUS_POR_CELDA_MAX"] productos distintos por celda: con
+    muchas combinaciones producto-lote chicas, una celda por combinación
+    dejaba la bodega "llena" de aire (Chema 2026-09-17)."""
     from apps.catalogo.services import clase_rotacion  # lazy por contrato
 
     if cantidad <= 0 or not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
@@ -1694,8 +1698,8 @@ def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
         Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True, prioridad__isnull=False, lleno_manual=False)
         .exclude(largo_cm=0).exclude(ancho_cm=0).exclude(alto_cm=0).order_by("prioridad", "codigo")
     )
-    if not anaqueles:
-        return []
+    if not anaqueles:  # todo lleno o sin medidas: hay piezas, no hay lugar
+        return [{"ubicacion": None, "cantidad": cantidad, "motivo": "sin anaquel con espacio"}]
     ocup = ocupaciones(anaqueles, reservas)
     plan, restante = [], cantidad
 
@@ -1727,6 +1731,31 @@ def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
                 break
             cap = capacidad_sku_en(u, sku)
             agrega(u, min(cap, restante), f"anaquel libre para clase {clase} · caben {cap}")
+    if restante > 0:
+        # 3) Compartir celda con otros productos (nunca con otro lote del mismo SKU).
+        tope_skus = int(settings.TORRE.get("SKUS_POR_CELDA_MAX", 3))
+        compartidos = []
+        for u in anaqueles:
+            filas = ocup[u.codigo]["por_sku"]
+            if not filas or u in con_sku:
+                continue
+            if any(f["sku"].pk == sku.pk for f in filas):  # mismo SKU con otro lote: no
+                continue
+            if len(filas) >= tope_skus:
+                continue
+            libre = espacio_para(u, sku, ocup[u.codigo])
+            if libre > 0:
+                compartidos.append((u, libre))
+        clase = clase_rotacion(sku)
+        if clase == "C":
+            compartidos.reverse()
+        elif clase == "B":
+            mitad = len(compartidos) // 2
+            compartidos = compartidos[mitad:] + compartidos[:mitad]
+        for u, libre in compartidos:
+            if restante <= 0:
+                break
+            agrega(u, min(libre, restante), f"comparte anaquel con otro producto · caben {libre}")
     if restante > 0:
         plan.append({"ubicacion": None, "cantidad": restante, "motivo": "sin anaquel con espacio"})
     return plan
@@ -1916,3 +1945,51 @@ def marcar_danada(linea_asn, actor):
             delta={"sku": sku.codigo}, motivo="Marcada dañada al ubicar: de recibida a dañada, va a cuarentena.",
         )
     return linea_asn
+
+
+def reiniciar_acomodo(orden, actor=None):
+    """Regresa a recepción (en_putaway) las piezas que el plan de esta orden
+    registró como ubicadas en un anaquel, para volver a acomodarlas con el
+    plan nuevo; lo mandado a cuarentena y lo acomodado a mano fuera del plan
+    se queda donde está. Solo mueve lo vendible (lo apartado para pedidos no
+    se toca y se reporta). Pone el plan en cero y lo rehace. Regresa
+    {"regresadas", "no_movidas"}."""
+    from apps.catalogo.models import Lote  # lazy por contrato
+
+    regresadas, no_movidas = 0, 0
+    ubic_recepcion = _ubicacion_tipo(Ubicacion.RECEPCION)
+    if ubic_recepcion is None:
+        raise ValueError("No hay ubicación de recepción activa.")
+    with transaction.atomic():
+        for paso in (orden.plan_acomodo or {}).get("pasos", []):
+            if not paso.get("ubicacion") or not paso.get("ubicadas"):
+                continue
+            sku = SKU_por_id(paso["sku_id"], list(orden.lineas.select_related("sku")))
+            anaquel = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
+            if anaquel is None:
+                no_movidas += paso["ubicadas"]
+                continue
+            filtro = {"sku": sku, "ubicacion": anaquel, "estado": Saldo.UBICADO_VENDIBLE}
+            if paso.get("lote"):
+                filtro["lote"] = Lote.objects.filter(sku=sku, codigo=paso["lote"]).first()
+            saldos = list(Saldo.objects.select_for_update().filter(**filtro))
+            disponible = sum(s.cantidad for s in saldos)
+            mover = min(disponible, paso["ubicadas"])
+            if mover <= 0:
+                no_movidas += paso["ubicadas"]
+                continue
+            _restar(saldos, mover)
+            _incrementar(sku, ubic_recepcion.pk, None, Saldo.EN_PUTAWAY, mover)
+            _mov(sku, Movimiento.PUTAWAY, 0, origen=Saldo.UBICADO_VENDIBLE, destino=Saldo.EN_PUTAWAY, referencia=orden.folio, actor=actor)
+            _notificar_cambio_disponible(sku)
+            regresadas += mover
+            no_movidas += paso["ubicadas"] - mover
+        registrar_evento(
+            "asn", orden.folio, "acomodo_reiniciado", actor=actor, cliente=orden.cliente,
+            delta={"regresadas": regresadas, "no_movidas": no_movidas},
+            motivo="Reinicio del acomodo: lo ubicado por el plan vuelve a recepción para reacomodarse.",
+        )
+        orden.plan_acomodo = {}
+        orden.save(update_fields=["plan_acomodo"])
+        planear_acomodo(orden, actor)
+    return {"regresadas": regresadas, "no_movidas": no_movidas}
