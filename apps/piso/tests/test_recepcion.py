@@ -249,6 +249,11 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 1)
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
+        # La pieza contada y sin anaquel sale en la tabla "Por ubicar" con su botón.
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "<h2>Por ubicar</h2>")
+        self.assertContains(respuesta, f'href="{self.url_ubicar}?sku={self.sku.pk}">Ubicar 1</a>')
+        self.assertContains(respuesta, "1 pieza(s) en recepción")
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
         self.assertContains(respuesta, 'id="anaquel-sugerido">PIC-1-I-F-2')
         self.assertContains(respuesta, "pieza 1 de 5")

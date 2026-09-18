@@ -40,12 +40,29 @@
     <input type="text" name="codigo" id="codigo" class="mono crece" placeholder="código de barras o SKU" autocomplete="off" autofocus>
     <button class="btn primario" type="submit">Recibir 1</button>
   </form>
-  {% if pendiente_putaway %}
-  <p class="small mt">Piezas en recepción por ubicar: <b>{{ pendiente_putaway }}</b>
-    {% for linea in lineas %}{% if linea.por_ubicar %} · <a href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ linea.sku_id }}">ubicar {{ linea.sku.codigo }}</a>{% endif %}{% endfor %}
-  </p>
-  {% endif %}
 </div>
+
+{% if pendiente_putaway %}
+{# Contadas y sin anaquel: una fila por producto con su botón de ubicar (una pieza por clic, con el plan). #}
+<div class="card mt">
+  <div class="titulo"><h2>Por ubicar</h2><span class="pill warn">{{ pendiente_putaway }} pieza(s) en recepción</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Producto</th><th>SKU</th><th class="derecha">Por ubicar</th><th></th></tr></thead>
+      <tbody>
+        {% for linea in lineas %}{% if linea.por_ubicar %}
+        <tr>
+          <td>{{ linea.sku.descripcion }}</td>
+          <td class="mono">{{ linea.sku.codigo }}</td>
+          <td class="derecha num">{{ linea.por_ubicar }}</td>
+          <td class="derecha"><a class="btn primario chico" href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ linea.sku_id }}">Ubicar 1</a></td>
+        </tr>
+        {% endif %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% endif %}
 
 <div class="card mt">
