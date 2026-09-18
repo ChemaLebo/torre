@@ -372,26 +372,49 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "0"}, follow=True)
         self.assertContains(respuesta, "mínimo 1")
 
-    def test_reiniciar_acomodo_regresa_lo_ubicado_por_el_plan(self):
+    def test_reiniciar_acomodo_regresa_todo_menos_danadas_y_stock_ajeno(self):
+        from apps.catalogo.models import Lote, Ubicacion
         from apps.inventario.models import OrdenEntrada, Saldo
         from apps.inventario.services import reiniciar_acomodo
 
+        # Otro anaquel con stock previo del mismo SKU pero de otro lote: no es de la orden, no se toca.
+        otro = Ubicacion.objects.create(codigo="PIC-1-I-B-2", tipo=Ubicacion.PICKING, largo_cm=180, ancho_cm=58, alto_cm=52, prioridad=2)
+        viejo = Lote.objects.create(sku=self.sku, codigo="L-VIEJO")
+        Saldo.objects.create(sku=self.sku, ubicacion=otro, lote=viejo, estado=Saldo.UBICADO_VENDIBLE, cantidad=4)
         self._foto()
         self.client.get(self.url)
-        for _ in range(2):
+
+        def escanear():
             self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+
+        for _ in range(2):  # 2 al anaquel del plan
+            escanear()
             self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
-        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})  # una más, sin ubicar
+        escanear()  # 1 a mano en otro anaquel
+        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-B-2", "lote": "L-ASN"})
+        escanear()  # 1 a cuarentena por falta de espacio (anaquel vacío)
+        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"})
+        escanear()  # 1 dañada
+        self.client.post(self.url_ubicar, {"accion": "danada", "sku_id": self.sku.pk})
+        escanear()  # 1 se queda en recepción sin ubicar
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 2)
+
         orden = OrdenEntrada.objects.get(pk=self.orden.pk)
         r = reiniciar_acomodo(orden, self.operador)
-        self.assertEqual(r, {"regresadas": 2, "no_movidas": 0})
-        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).exists())
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 3)
+        self.assertEqual(r, {"regresadas": 4, "del_plan": 2, "de_cuarentena": 1, "a_mano": {"PIC-1-I-B-2": 1}, "no_encontradas": 0})
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 5)
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)  # la dañada se queda
+        vendible = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
+        self.assertEqual((vendible.ubicacion.codigo, vendible.lote.codigo, vendible.cantidad), ("PIC-1-I-B-2", "L-VIEJO", 4))
         orden.refresh_from_db()
         paso = orden.plan_acomodo["pasos"][0]
         self.assertEqual((paso["ubicacion"], paso["cantidad"], paso["ubicadas"]), ("PIC-1-I-F-2", 5, 0))
         self.linea.refresh_from_db()
-        self.assertEqual(self.linea.cantidad_recibida, 3)  # recibidas no cambian
+        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (5, 1))  # la línea no cambia
+        # Reiniciar otra vez sin haber acomodado nada: no mueve nada ni vuelve a sacar de cuarentena.
+        r = reiniciar_acomodo(OrdenEntrada.objects.get(pk=self.orden.pk), self.operador)
+        self.assertEqual(r["regresadas"], 0)
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
 
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada

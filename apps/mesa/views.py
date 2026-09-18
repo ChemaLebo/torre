@@ -1381,10 +1381,19 @@ def _recepciones_replanear(request):
         except ValueError as exc:
             messages.error(request, str(exc))
         else:
+            desglose = []
+            if r["del_plan"]:
+                desglose.append(f"{r['del_plan']} de anaqueles del plan")
+            if r["de_cuarentena"]:
+                desglose.append(f"{r['de_cuarentena']} de cuarentena")
+            if r["a_mano"]:
+                anaqueles = ", ".join(f"{codigo}: {n}" for codigo, n in sorted(r["a_mano"].items()))
+                desglose.append(f"{sum(r['a_mano'].values())} acomodadas a mano ({anaqueles})")
             messages.warning(
                 request,
                 f"{orden.folio}: {r['regresadas']} pieza(s) regresaron a recepción para reacomodarse"
-                + (f"; {r['no_movidas']} no se movieron (apartadas o ya no estaban ahí)" if r["no_movidas"] else "")
+                + (" (" + "; ".join(desglose) + ")" if desglose else "")
+                + (f"; {r['no_encontradas']} no se encontraron (apartadas, vendidas o ya no estaban)" if r["no_encontradas"] else "")
                 + ". El plan se rehizo: el piso vuelve a ubicar desde 'Por ubicar'.",
             )
     else:
