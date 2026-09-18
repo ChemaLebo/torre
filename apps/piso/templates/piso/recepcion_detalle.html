@@ -43,7 +43,7 @@
 </div>
 
 {% if pendiente_putaway %}
-{# Contadas y sin anaquel: una fila por producto con su botón de ubicar (una pieza por clic, con el plan). #}
+{# Contadas y sin anaquel: una fila por producto con su botón de ubicar (una o varias piezas, con el plan). #}
 <div class="card mt">
   <div class="titulo"><h2>Por ubicar</h2><span class="pill warn">{{ pendiente_putaway }} pieza(s) en recepción</span></div>
   <div class="tabla-wrap">
@@ -55,7 +55,7 @@
           <td>{{ linea.sku.descripcion }}</td>
           <td class="mono">{{ linea.sku.codigo }}</td>
           <td class="derecha num">{{ linea.por_ubicar }}</td>
-          <td class="derecha"><a class="btn primario chico" href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ linea.sku_id }}">Ubicar 1</a></td>
+          <td class="derecha"><a class="btn primario chico" href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ linea.sku_id }}">Ubicar</a></td>
         </tr>
         {% endif %}{% endfor %}
       </tbody>

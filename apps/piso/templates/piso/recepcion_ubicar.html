@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Ubicar · {{ orden.folio }}{% endblock %}
 {% block content %}
-{# Ubicar UNA pieza recién escaneada. Paso 1: lote (si hay que elegirlo o capturarlo). Paso 2: anaquel del plan de la orden para ese SKU y lote (o cuarentena) y salidas. #}
+{# Ubicar piezas recibidas (una recién escaneada o varias). Paso 1: lote (si hay que elegirlo o capturarlo). Paso 2: anaquel del plan para ese SKU y lote (o cuarentena), cuántas van ahí, qué más vive en el anaquel, cantidad y salidas. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
-    <h1>Ubicar 1 pieza</h1>
+    <h1>Ubicar</h1>
     <div class="small"><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }} · {{ por_ubicar }} en recepción por ubicar</div>
   </div>
   <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Volver al escáner</a>
@@ -53,7 +53,29 @@
   {% if paso and paso.ubicacion %}
   <div class="eyebrow">Ve a</div>
   <div class="pick-ubicacion" id="anaquel-sugerido">{{ paso.ubicacion }}</div>
-  <div class="small muted">{{ paso.motivo }} · pieza {{ paso.ubicadas|add:1 }} de {{ paso.cantidad }} en este anaquel</div>
+  <div class="small muted">{{ paso.motivo }} · van <b id="faltan-paso">{{ faltan_paso }}</b> de {{ paso.cantidad }} en este anaquel según el plan</div>
+  <div class="mt" id="vecinos">
+    <div class="eyebrow">Ya hay en {{ paso.ubicacion }}{% if ocupacion_anaquel.pct != None %} · {{ ocupacion_anaquel.pct }} % ocupado{% endif %}</div>
+    {% if vecinos %}
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Producto</th><th>SKU</th><th class="derecha">Piezas</th><th>Lote</th></tr></thead>
+        <tbody>
+        {% for v in vecinos %}
+        <tr>
+          <td>{{ v.sku.descripcion }}{% if v.sku.pk == sku.pk %} <span class="pill">este</span>{% endif %}</td>
+          <td class="mono">{{ v.sku.codigo }}</td>
+          <td class="derecha num">{{ v.piezas }}{% if v.capacidad %} <span class="muted">/ caben {{ v.capacidad }} solo</span>{% endif %}</td>
+          <td class="mono">{{ v.lotes|join:", " }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="small muted">Anaquel vacío.</div>
+    {% endif %}
+  </div>
   {% elif paso %}
   <div class="eyebrow">Sin anaquel con espacio</div>
   <div class="pick-ubicacion">CUARENTENA</div>
@@ -71,7 +93,11 @@
     {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
   </datalist>
 
-  <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADA · siguiente pieza</button></div>
+  <label for="cantidad" class="mt">¿Cuántas ubicas ahora?</label>
+  <input type="number" name="cantidad" id="cantidad" min="1" max="{{ por_ubicar }}" inputmode="numeric" value="1" autocomplete="off">
+  <div class="small muted">Tienes {{ por_ubicar }} en recepción{% if paso and paso.ubicacion %}; en este anaquel van {{ faltan_paso }}: si pones más, el sobrante lo cuenta en el siguiente anaquel del plan{% endif %}.</div>
+
+  <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADAS · siguiente</button></div>
 </form>
 
 <form method="post" class="mt">{% csrf_token %}

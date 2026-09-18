@@ -252,14 +252,15 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         # La pieza contada y sin anaquel sale en la tabla "Por ubicar" con su botón.
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "<h2>Por ubicar</h2>")
-        self.assertContains(respuesta, f'href="{self.url_ubicar}?sku={self.sku.pk}">Ubicar 1</a>')
+        self.assertContains(respuesta, f'href="{self.url_ubicar}?sku={self.sku.pk}">Ubicar</a>')
         self.assertContains(respuesta, "1 pieza(s) en recepción")
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
         self.assertContains(respuesta, 'id="anaquel-sugerido">PIC-1-I-F-2')
-        self.assertContains(respuesta, "pieza 1 de 5")
+        self.assertContains(respuesta, 'id="faltan-paso">5</b>')
+        self.assertContains(respuesta, "Anaquel vacío")
         self.assertContains(respuesta, 'name="lote" value="L-ASN"')  # lote fijo: el anunciado
         respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "fecha_caducidad": "2027-01-31"}, follow=True)
-        self.assertContains(respuesta, "ubicada en PIC-1-I-F-2")
+        self.assertContains(respuesta, "1 pieza en PIC-1-I-F-2")
         saldo = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
         self.assertEqual((saldo.ubicacion.codigo, saldo.lote.codigo, saldo.cantidad), ("PIC-1-I-F-2", "L-ASN", 1))
         orden.refresh_from_db()
@@ -301,7 +302,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertContains(respuesta, "CUARENTENA")
         self.assertContains(respuesta, 'name="lote" value="L-ASN"')
         respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"}, follow=True)
-        self.assertContains(respuesta, "fue a cuarentena")
+        self.assertContains(respuesta, "1 pieza a cuarentena")
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
 
     def test_el_plan_separa_lotes_en_anaqueles_distintos(self):
@@ -347,6 +348,29 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         plan = planear_acomodo(orden)
         self.assertEqual(plan["pasos"], [])
         self.assertEqual(plan["completas"], [{"sku": "COLIMITA-SIX", "lote": "L-ASN", "anunciadas": 5, "recibidas": 5, "danadas": 0, "diferencia": 0}])
+
+    def test_ubicar_varias_de_una_vez_con_la_referencia_del_plan(self):
+        from apps.inventario.models import OrdenEntrada, Saldo
+
+        self._foto()
+        self.client.get(self.url)
+        for _ in range(3):
+            self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
+        self.assertContains(respuesta, 'id="faltan-paso">5</b>')
+        self.assertContains(respuesta, 'name="cantidad" id="cantidad" min="1" max="3"')
+        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "3"}, follow=True)
+        self.assertContains(respuesta, "3 piezas en PIC-1-I-F-2")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 3)
+        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]["ubicadas"], 3)
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
+        self.assertContains(respuesta, 'id="faltan-paso">2</b>')
+        self.assertContains(respuesta, "Ya hay en PIC-1-I-F-2")
+        self.assertContains(respuesta, '<span class="pill">este</span>')
+        self.assertContains(respuesta, "<td class=\"derecha num\">3")
+        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "0"}, follow=True)
+        self.assertContains(respuesta, "mínimo 1")
 
     def test_reiniciar_acomodo_regresa_lo_ubicado_por_el_plan(self):
         from apps.inventario.models import OrdenEntrada, Saldo

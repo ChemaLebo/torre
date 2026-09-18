@@ -1877,18 +1877,25 @@ def siguiente_paso(orden, sku, lote=None):
     return None
 
 
-def _avanzar_plan(orden, sku, codigo_ubicacion, lote=None):
-    """Marca una pieza ubicada en el paso que corresponde (el del anaquel
-    elegido si existe y le faltan; si no, el siguiente del SKU y lote)."""
+def _avanzar_plan(orden, sku, codigo_ubicacion, lote=None, cantidad=1):
+    """Marca `cantidad` piezas ubicadas en el plan: primero en el paso del
+    anaquel elegido si le faltan, y el resto en los siguientes pasos del SKU y
+    lote (las piezas ya están en su anaquel; esto solo lleva la cuenta)."""
     lote = (lote or "").strip()
     pasos = (orden.plan_acomodo or {}).get("pasos", [])
     candidatos = [
         p for p in pasos
         if p["sku_id"] == sku.pk and (p.get("lote") or "") == lote and p["ubicadas"] < p["cantidad"]
     ]
-    elegido = next((p for p in candidatos if p["ubicacion"] == codigo_ubicacion), None) or (candidatos[0] if candidatos else None)
-    if elegido is not None:
-        elegido["ubicadas"] += 1
+    candidatos.sort(key=lambda p: p["ubicacion"] != codigo_ubicacion)
+    restante = cantidad
+    for paso in candidatos:
+        if restante <= 0:
+            break
+        toma = min(paso["cantidad"] - paso["ubicadas"], restante)
+        paso["ubicadas"] += toma
+        restante -= toma
+    if restante != cantidad:
         orden.save(update_fields=["plan_acomodo"])
 
 
@@ -1910,16 +1917,18 @@ def a_cuarentena_desde_recepcion(sku, cantidad, referencia, actor, motivo=""):
         )
 
 
-def ubicar_pieza(orden, sku, lote, ubicacion, actor):
-    """Una pieza recién escaneada: a su anaquel (ubicar) o, sin anaquel
-    (ubicacion=None), a cuarentena por falta de espacio; avanza el plan."""
+def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
+    """`cantidad` piezas (default una, la recién escaneada): a su anaquel
+    (ubicar) o, sin anaquel (ubicacion=None), a cuarentena por falta de
+    espacio; avanza el plan."""
+    cantidad = _validar_cantidad(cantidad, "ubicar")
     codigo_lote = lote.codigo if lote is not None else None
     if ubicacion is None:
-        a_cuarentena_desde_recepcion(sku, 1, orden.folio, actor, motivo="Sin anaquel con espacio en el plan de acomodo.")
-        _avanzar_plan(orden, sku, None, codigo_lote)
+        a_cuarentena_desde_recepcion(sku, cantidad, orden.folio, actor, motivo="Sin anaquel con espacio en el plan de acomodo.")
+        _avanzar_plan(orden, sku, None, codigo_lote, cantidad)
         return None
-    ubicar(sku, 1, ubicacion, lote, actor)
-    _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote)
+    ubicar(sku, cantidad, ubicacion, lote, actor)
+    _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote, cantidad)
     return ubicacion
 
 

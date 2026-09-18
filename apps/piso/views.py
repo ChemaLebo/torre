@@ -549,10 +549,11 @@ def _recepcion_escanear(request, orden):
 
 @rol_requerido("piso", "mesa")
 def recepcion_ubicar(request, pk):
-    """Pantalla de ubicar UNA pieza recién escaneada: el anaquel que le toca
-    según el plan de la orden (o cuarentena si no hay espacio), el lote si
-    hace falta elegirlo o capturarlo, y las salidas: ubicada, otro anaquel,
-    o llega dañada."""
+    """Pantalla de ubicar piezas recibidas (una recién escaneada o varias de
+    una vez): el anaquel que le toca según el plan de la orden (o cuarentena
+    si no hay espacio), cuántas van ahí y qué más vive en ese anaquel, el lote
+    si hace falta elegirlo o capturarlo, y las salidas: ubicadas, otro
+    anaquel, o llega dañada."""
     from apps.inventario.services import _suma, planear_acomodo, siguiente_paso  # lazy por contrato
 
     orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
@@ -613,8 +614,20 @@ def recepcion_ubicar(request, pk):
             u = ad_hoc[0]["ubicacion"]
             paso = {"ubicacion": u.codigo if u else None, "cantidad": 1, "ubicadas": 0,
                     "motivo": ad_hoc[0]["motivo"] + " (fuera del plan)"}
+    # 3) Qué vive ya en ese anaquel (producto, piezas, lotes) y qué tan lleno
+    #    está, para acomodar con toda la información.
+    anaquel, vecinos, ocupacion_anaquel = None, [], None
+    if paso and paso["ubicacion"]:
+        from apps.inventario.services import ocupacion  # lazy por contrato
+        anaquel = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
+        if anaquel is not None:
+            ocupacion_anaquel = ocupacion(anaquel)
+            vecinos = sorted(ocupacion_anaquel["por_sku"], key=lambda f: (f["sku"].pk != sku.pk, f["sku"].codigo))
     contexto.update({
         "paso": paso,
+        # Cuántas del SKU van todavía en ese anaquel según el plan: la referencia para no meter de más.
+        "faltan_paso": (paso["cantidad"] - paso["ubicadas"]) if paso else 0,
+        "anaquel": anaquel, "vecinos": vecinos, "ocupacion_anaquel": ocupacion_anaquel,
         "ubicaciones_destino": Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True).order_by("codigo"),
     })
     return render(request, "piso/recepcion_ubicar.html", contexto)
@@ -657,14 +670,18 @@ def _recepcion_ubicar_pieza(request, orden, sku, lineas):
         from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
         lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
     try:
-        destino = ubicar_pieza(orden, sku, lote, ubicacion, request.user)
+        cantidad = _entero(request.POST.get("cantidad") or 1, "Captura cuántas piezas ubicas, en número entero.")
+        if cantidad < 1:
+            raise ValueError("La cantidad a ubicar es mínimo 1.")
+        destino = ubicar_pieza(orden, sku, lote, ubicacion, request.user, cantidad)
     except ValueError as exc:
         messages.error(request, str(exc))
         return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
+    piezas = "1 pieza" if cantidad == 1 else f"{cantidad} piezas"
     if destino is None:
-        messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, la pieza fue a cuarentena. Escanea la siguiente.")
+        messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, {piezas} a cuarentena. Escanea la siguiente.")
     else:
-        messages.success(request, f"{sku.codigo} ubicada en {destino.codigo}. Escanea la siguiente.")
+        messages.success(request, f"{sku.codigo}: {piezas} en {destino.codigo}. Escanea la siguiente.")
     return volver
 
 
