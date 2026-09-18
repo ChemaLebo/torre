@@ -197,8 +197,12 @@ small, .small { font-size: 12.5px; color: var(--ink-50); }
 
 /* ── Móvil: el sidebar se vuelve barra superior fija con chips ── */
 @media (max-width: 768px) {
-  .shell { grid-template-columns: 1fr; }
+  /* minmax(0, 1fr): la columna única no crece al ancho de la tira de chips del
+     menú (1fr solo tiene mínimo auto y la página se estiraba como escritorio). */
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .main { min-width: 0; }
   .sidebar {
+    min-width: 0;
     position: sticky; top: 0; z-index: 40; height: auto;
     flex-direction: row; align-items: center; gap: 10px;
     padding: 10px 12px; overflow: visible;
