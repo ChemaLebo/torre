@@ -58,6 +58,16 @@
       </tbody>
     </table>
   </div>
+  {% if orden.plan_acomodo.completas %}
+  <div class="small mt"><b>Sin pendientes</b> (recibido y acomodado; anunciado / recibido / dañado):</div>
+  <div class="small">
+    {% for c in orden.plan_acomodo.completas %}
+    <span class="mono">{{ c.sku }}</span>{% if c.lote %} lote {{ c.lote }}{% endif %}
+    {{ c.anunciadas }} / {{ c.recibidas }} / {{ c.danadas }}
+    {% if c.diferencia %}<span class="pill {% if c.diferencia < 0 %}crit{% else %}warn{% endif %}">{{ c.diferencia|stringformat:"+d" }}</span>{% else %}<span class="pill ok">cuadra</span>{% endif %}{% if not forloop.last %} · {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
   {% if orden.plan_acomodo.ubicadas %}<p class="small muted">Ya ubicadas antes de este plan: {% for clave, n in orden.plan_acomodo.ubicadas.items %}{{ n }} de {{ clave }}{% if not forloop.last %} · {% endif %}{% endfor %} (SKU|lote). Rehacer el plan no mueve inventario.</p>{% endif %}
   {% else %}<p class="small muted">Sin plan todavía: se arma al abrir la recepción en piso, o aquí con el botón.</p>{% endif %}
   {% endif %}

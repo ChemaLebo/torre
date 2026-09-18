@@ -1785,7 +1785,7 @@ def planear_acomodo(orden, actor=None):
         sku_id: max(f["anunciadas"] - f["recibidas"], 0) + _suma(SKU_por_id(sku_id, lineas), Saldo.EN_PUTAWAY)
         for sku_id, f in fisico.items()
     }
-    reservas, pasos, acreditadas = {}, [], {}
+    reservas, pasos, acreditadas, completas = {}, [], {}, []
     for linea in lineas:
         sku = linea.sku
         lote = (linea.lote_codigo or "").strip()
@@ -1801,6 +1801,11 @@ def planear_acomodo(orden, actor=None):
         ), 0))
         acreditadas[clave] = previas
         if pendientes <= 0:
+            completas.append({
+                "sku": sku.codigo, "lote": lote, "anunciadas": linea.cantidad_anunciada,
+                "recibidas": linea.cantidad_recibida, "danadas": linea.cantidad_danada,
+                "diferencia": linea.cantidad_recibida + linea.cantidad_danada - linea.cantidad_anunciada,
+            })
             continue
         plan = sugerir_anaquel(sku, pendientes, reservas, lote=lote or None)
         if not plan:  # sin medidas: todo a cuarentena hasta que Mesa las capture
@@ -1817,6 +1822,7 @@ def planear_acomodo(orden, actor=None):
     orden.plan_acomodo = {
         "generado": timezone.now().isoformat(), "pasos": pasos,
         "ubicadas": {clave: n for clave, n in acreditadas.items() if n},  # ya ubicadas antes de este plan
+        "completas": completas,  # líneas sin nada por ubicar (todo recibido y acomodado)
     }
     orden.save(update_fields=["plan_acomodo"])
     registrar_evento(

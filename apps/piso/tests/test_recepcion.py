@@ -336,6 +336,12 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         ubicar(self.sku, 2, self.anaquel, Lote.objects.get(codigo="L-ASN"), self.operador)
         plan = planear_acomodo(orden)
         self.assertEqual([p["cantidad"] for p in plan["pasos"]], [1])
+        # Ya todo ubicado: la línea sale como completa, no desaparece del plan.
+        self.linea.refresh_from_db()
+        ubicar(self.sku, 1, self.anaquel, Lote.objects.get(codigo="L-ASN"), self.operador)
+        plan = planear_acomodo(orden)
+        self.assertEqual(plan["pasos"], [])
+        self.assertEqual(plan["completas"], [{"sku": "COLIMITA-SIX", "lote": "L-ASN", "anunciadas": 5, "recibidas": 5, "danadas": 0, "diferencia": 0}])
 
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada
