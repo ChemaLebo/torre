@@ -866,6 +866,35 @@ def inventario_exportar_conteo(request):
 
 
 @rol_requerido("mesa")
+def inventario_reacomodo_csv(request):
+    """Plan de reacomodo TOTAL del cliente (?cliente=slug) como si la bodega
+    estuviera vacía de sus productos, lote por lote: la hoja con la que el piso
+    reacomoda (sku, nombre, código de barras, lote, rack, cantidad, desde).
+    Solo planea; mover el inventario del sistema es el comando
+    replanear_acomodo --aplicar (Chema 2026-09-21)."""
+    from apps.catalogo.models import SKU
+    from apps.inventario.services import replanear_bodega
+
+    cliente = get_object_or_404(Cliente, slug=(request.GET.get("cliente") or "").strip())
+    pasos = replanear_bodega(cliente)["pasos"]
+    skus = {s.pk: s for s in SKU.objects.filter(pk__in={p["sku_id"] for p in pasos})}
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    fecha = timezone.localdate().isoformat()
+    respuesta["Content-Disposition"] = f'attachment; filename="reacomodo-{cliente.slug}-{fecha}.csv"'
+    respuesta.write("\ufeff")
+    escritor = csv.writer(respuesta)
+    escritor.writerow(["sku", "nombre", "codigo_barras", "lote", "rack", "cantidad", "desde"])
+    for p in pasos:
+        sku = skus[p["sku_id"]]
+        escritor.writerow([
+            p["sku"], sku.descripcion, sku.codigo_barras, p["lote"],
+            p["ubicacion"] or "SIN ESPACIO (se queda donde está)", p["cantidad"],
+            " · ".join(f"{codigo}: {n}" for codigo, n in p["desde"]),
+        ])
+    return respuesta
+
+
+@rol_requerido("mesa")
 def inventario_reconciliar(request):
     """Reconciliación de inventario por CSV (?cliente=slug), en dos pasos:
     subir el archivo → previa con deltas y avisos → motivo + modal de confirmación

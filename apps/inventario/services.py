@@ -1628,12 +1628,17 @@ def ocupacion(ubicacion, saldos=None, extra=None):
     return {"pct": pct, "estado": estado, "sin_medidas": sin_medidas, "no_caben": no_caben, "por_sku": por_sku}
 
 
-def ocupaciones(ubicaciones, reservas=None):
+def ocupaciones(ubicaciones, reservas=None, ignorar_cliente=None):
     """{código: ocupacion(...)} de varias ubicaciones con una sola consulta de
     saldos. `reservas` = {código: [(sku, piezas)]} apartadas de forma virtual
-    (un plan en curso) que se suman a lo físico."""
+    (un plan en curso) que se suman a lo físico. `ignorar_cliente`: sus saldos
+    no cuentan como ocupación (reacomodo total: se planea como si la bodega
+    estuviera vacía de ese cliente; lo de otros clientes sí ocupa)."""
     por_ubicacion = {u.pk: [] for u in ubicaciones}
-    for s in Saldo.objects.filter(ubicacion__in=ubicaciones, cantidad__gt=0).select_related("sku"):
+    saldos = Saldo.objects.filter(ubicacion__in=ubicaciones, cantidad__gt=0).select_related("sku")
+    if ignorar_cliente is not None:
+        saldos = saldos.exclude(sku__cliente=ignorar_cliente)
+    for s in saldos:
         por_ubicacion[s.ubicacion_id].append(s)
     reservas = reservas or {}
     return {u.codigo: ocupacion(u, por_ubicacion[u.pk], extra=reservas.get(u.codigo)) for u in ubicaciones}
@@ -1673,7 +1678,7 @@ def espacio_para(ubicacion, sku, ocup):
     return max(0, int(cap * (1 - fraccion)))
 
 
-def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
+def sugerir_anaquel(sku, cantidad, reservas=None, lote=None, ignorar_cliente=None):
     """Plan de put-away para `cantidad` piezas del SKU: [{ubicacion, cantidad,
     motivo}], en orden. Reglas (plan 2026-09-17): 1) los anaqueles donde ya
     vive el SKU y les cabe (no dispersar), por prioridad; 2) anaqueles vacíos
@@ -1700,7 +1705,7 @@ def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
     )
     if not anaqueles:  # todo lleno o sin medidas: hay piezas, no hay lugar
         return [{"ubicacion": None, "cantidad": cantidad, "motivo": "sin anaquel con espacio"}]
-    ocup = ocupaciones(anaqueles, reservas)
+    ocup = ocupaciones(anaqueles, reservas, ignorar_cliente=ignorar_cliente)
     plan, restante = [], cantidad
 
     def agrega(u, n, motivo):
@@ -1759,6 +1764,93 @@ def sugerir_anaquel(sku, cantidad, reservas=None, lote=None):
     if restante > 0:
         plan.append({"ubicacion": None, "cantidad": restante, "motivo": "sin anaquel con espacio"})
     return plan
+
+
+def replanear_bodega(cliente, actor=None, aplicar=False):
+    """Plan de reacomodo TOTAL de lo vendible de un cliente como si la bodega
+    estuviera vacía de sus productos (Chema 2026-09-21: el acomodo de ASN-0004
+    se hizo sin separar lotes y hay que rehacerlo con la hoja correcta). Junta
+    lo vendible del cliente en anaqueles de picking y reserva por SKU y lote,
+    lo planea de clase A a C con sugerir_anaquel ignorando la ocupación del
+    propio cliente (lo de otros clientes y los anaqueles marcados llenos a
+    mano sí cuentan) y regresa los pasos [{sku, lote, ubicacion|None,
+    cantidad, motivo, desde: [[anaquel, piezas]]}]. Con aplicar=True mueve el
+    inventario en el sistema a los anaqueles del plan para que quede igual a
+    lo físico cuando el piso termine: lo vendible y sus capas de reserva
+    cambian de anaquel conservando lote y estado, sin líneas de kardex (la
+    cantidad no cambia; mismo criterio que mover_ubicacion), con evento
+    reacomodo_total. Los pasos sin anaquel se quedan donde están. Regresa
+    {"pasos", "sin_espacio", "movidas"}."""
+    from apps.catalogo.services import clases_rotacion  # lazy por contrato
+
+    saldos = list(
+        Saldo.objects.filter(
+            sku__cliente=cliente, cantidad__gt=0,
+            estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO],
+            ubicacion__tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA],
+        ).select_related("sku", "lote", "ubicacion")
+    )
+    grupos = {}
+    for s in saldos:
+        if s.estado != Saldo.UBICADO_VENDIBLE:
+            continue
+        clave = (s.sku_id, s.lote.codigo if s.lote_id else "")
+        g = grupos.setdefault(clave, {"sku": s.sku, "lote": clave[1], "total": 0, "desde": {}})
+        g["total"] += s.cantidad
+        g["desde"][s.ubicacion.codigo] = g["desde"].get(s.ubicacion.codigo, 0) + s.cantidad
+    clases = clases_rotacion(cliente)
+    orden = sorted(grupos.values(), key=lambda g: (clases.get(g["sku"].pk, "C"), g["sku"].codigo, g["lote"]))
+    reservas, pasos = {}, []
+    for g in orden:
+        sku, lote = g["sku"], g["lote"]
+        plan = sugerir_anaquel(sku, g["total"], reservas, lote=lote or None, ignorar_cliente=cliente)
+        if not plan:
+            plan = [{"ubicacion": None, "cantidad": g["total"], "motivo": "sin medidas del producto"}]
+        for paso in plan:
+            u = paso["ubicacion"]
+            if u is not None:
+                reservas.setdefault(u.codigo, []).append((sku, paso["cantidad"], lote or None))
+            pasos.append({
+                "sku_id": sku.pk, "sku": sku.codigo, "lote": lote,
+                "ubicacion": u.codigo if u else None, "cantidad": paso["cantidad"],
+                "motivo": paso["motivo"], "desde": sorted(g["desde"].items()),
+            })
+    sin_espacio = sum(p["cantidad"] for p in pasos if p["ubicacion"] is None)
+    movidas = 0
+    if aplicar:
+        codigos = {p["ubicacion"] for p in pasos if p["ubicacion"]}
+        destinos = {u.codigo: u for u in Ubicacion.objects.filter(codigo__in=codigos)}
+        with transaction.atomic():
+            for g in orden:
+                sku, lote = g["sku"], g["lote"]
+                colocados = [p for p in pasos if p["sku_id"] == sku.pk and p["lote"] == lote and p["ubicacion"]]
+                a_mover = sum(p["cantidad"] for p in colocados)
+                if a_mover <= 0:
+                    continue
+                filtro = {"sku": sku, "ubicacion__tipo__in": [Ubicacion.PICKING, Ubicacion.RESERVA]}
+                filtro["lote__codigo"] = lote if lote else None
+                if not lote:
+                    filtro.pop("lote__codigo")
+                    filtro["lote__isnull"] = True
+                vendibles = list(Saldo.objects.select_for_update(of=("self",)).filter(estado=Saldo.UBICADO_VENDIBLE, **filtro))
+                lote_id = vendibles[0].lote_id if vendibles else None
+                _restar(sorted(vendibles, key=lambda s: s.pk), a_mover)
+                for p in colocados:
+                    _incrementar(sku, destinos[p["ubicacion"]].pk, lote_id, Saldo.UBICADO_VENDIBLE, p["cantidad"])
+                # Las capas de reserva viajan con el producto al primer anaquel del plan.
+                capas = list(Saldo.objects.select_for_update(of=("self",)).filter(estado=Saldo.RESERVADO, **filtro))
+                primero = destinos[colocados[0]["ubicacion"]]
+                for capa in capas:
+                    if capa.ubicacion_id != primero.pk:
+                        _incrementar(sku, primero.pk, capa.lote_id, Saldo.RESERVADO, capa.cantidad)
+                        capa.delete()
+                movidas += a_mover
+            registrar_evento(
+                "cliente", cliente.slug, "reacomodo_total", actor=actor, cliente=cliente,
+                delta={"pasos": len(pasos), "movidas": movidas, "sin_espacio": sin_espacio},
+                motivo="Reacomodo total: el inventario del sistema se movió a los anaqueles del plan nuevo.",
+            )
+    return {"pasos": pasos, "sin_espacio": sin_espacio, "movidas": movidas}
 
 
 def marcar_anaquel(ubicacion, lleno, actor=None):

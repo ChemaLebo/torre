@@ -221,6 +221,8 @@
     <div class="fila">
       <a class="btn chico" href="{% url 'mesa:inventario_exportar_conteo' %}?cliente={{ cliente_sel.slug }}">Exportar conteo</a>
       <a class="btn chico" href="{% url 'mesa:inventario_reconciliar' %}?cliente={{ cliente_sel.slug }}">Reconciliar por CSV</a>
+      {# Plan de reacomodo total, lote por lote, como si la bodega estuviera vacía de este cliente. Solo planea. #}
+      <a class="btn chico" href="{% url 'mesa:inventario_reacomodo_csv' %}?cliente={{ cliente_sel.slug }}">Plan de reacomodo (CSV)</a>
     </div>
   </div>
   <div class="tabla-wrap">
