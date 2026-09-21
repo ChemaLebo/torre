@@ -1,9 +1,13 @@
 """Cliente HTTP de la Admin API de Shopify (GraphQL para inventario, REST para polling).
-
 Semántica del push (BLUEPRINT §2.2): Torre empuja `on_hand` vía
-`inventorySetQuantities` con `compareQuantity` — un push con snapshot viejo FALLA
-en vez de pisar al nuevo. Shopify deriva `available = on_hand − committed`.
+`inventorySetQuantities` con `changeFromQuantity` (compare-and-swap, API 2026-01;
+sustituye a compareQuantity/ignoreCompareQuantity, que 2026-04 elimina): un push
+con snapshot viejo FALLA en vez de pisar al nuevo. Las mutaciones de inventario
+llevan la directiva `@idempotent(key: uuid)`, obligatoria desde 2026-04: una
+clave nueva por intento (cada intento parte de un snapshot fresco).
 """
+import uuid
+
 import requests
 from django.conf import settings
 
@@ -31,9 +35,11 @@ query inventarioPorSku($consulta: String!, $locationId: ID!) {
 }
 """
 
+# Las mutaciones de inventario llevan @idempotent(key) con la clave interpolada
+# (%(clave)s): Shopify la documenta como literal, y un uuid4 no necesita escape.
 MUTACION_SET_ON_HAND = """
 mutation fijarOnHand($input: InventorySetQuantitiesInput!) {
-  inventorySetQuantities(input: $input) {
+  inventorySetQuantities(input: $input) @idempotent(key: "%(clave)s") {
     inventoryAdjustmentGroup {
       reason
       changes { name delta }
@@ -45,7 +51,7 @@ mutation fijarOnHand($input: InventorySetQuantitiesInput!) {
 
 MUTACION_ACTIVAR_INVENTARIO = """
 mutation activarInventario($itemId: ID!, $locationId: ID!) {
-  inventoryActivate(inventoryItemId: $itemId, locationId: $locationId) {
+  inventoryActivate(inventoryItemId: $itemId, locationId: $locationId) @idempotent(key: "%(clave)s") {
     inventoryLevel { id }
     userErrors { field message }
   }
@@ -170,7 +176,7 @@ class ShopifyClient:
     def consultar_inventario_sku(self, codigo_sku):
         """Resuelve un código de SKU a (inventory_item_gid, on_hand_actual) en nuestra location.
 
-        El on_hand actual es el snapshot que va como `compareQuantity` del push.
+        El on_hand actual es el snapshot que va como `changeFromQuantity` del push.
         """
         datos = self.graphql(CONSULTA_INVENTARIO_SKU, {
             "consulta": f'sku:"{codigo_sku}"',
@@ -192,18 +198,20 @@ class ShopifyClient:
             return item["id"], on_hand_actual
         raise ShopifyError(f"SKU '{codigo_sku}' no encontrado en {self.tienda.dominio} (location {self.tienda.location_id}).")
 
-    def set_on_hand(self, inventory_item_gid, cantidad, compare_quantity):
-        """Fija on_hand con concurrencia optimista: si el snapshot ya no coincide, falla."""
-        datos = self.graphql(MUTACION_SET_ON_HAND, {
+    def set_on_hand(self, inventory_item_gid, cantidad, change_from_quantity, clave=None):
+        """Fija on_hand con concurrencia optimista: `change_from_quantity` es el
+        snapshot esperado y si ya no coincide, Shopify falla en vez de pisar;
+        None = sin comparación (null explícito, el opt-out que exige 2026-04).
+        `clave`: idempotencia del intento; por default un uuid4 nuevo."""
+        datos = self.graphql(MUTACION_SET_ON_HAND % {"clave": clave or str(uuid.uuid4())}, {
             "input": {
                 "name": "on_hand",
                 "reason": "correction",
-                "ignoreCompareQuantity": False,
                 "quantities": [{
                     "inventoryItemId": inventory_item_gid,
                     "locationId": self.location_gid,
                     "quantity": int(cantidad),
-                    "compareQuantity": int(compare_quantity),
+                    "changeFromQuantity": int(change_from_quantity) if change_from_quantity is not None else None,
                 }],
             },
         })
@@ -215,9 +223,10 @@ class ShopifyClient:
             raise ShopifyError(f"inventorySetQuantities {self.tienda.dominio}: {errores}")
         return resultado
 
-    def activar_inventario(self, inventory_item_gid):
-        """Stockea el item en nuestra location (cura ITEM_NOT_STOCKED_AT_LOCATION)."""
-        datos = self.graphql(MUTACION_ACTIVAR_INVENTARIO, {
+    def activar_inventario(self, inventory_item_gid, clave=None):
+        """Stockea el item en nuestra location (cura ITEM_NOT_STOCKED_AT_LOCATION).
+        `clave`: idempotencia del intento; por default un uuid4 nuevo."""
+        datos = self.graphql(MUTACION_ACTIVAR_INVENTARIO % {"clave": clave or str(uuid.uuid4())}, {
             "itemId": inventory_item_gid,
             "locationId": self.location_gid,
         })

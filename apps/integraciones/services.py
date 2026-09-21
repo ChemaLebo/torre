@@ -291,14 +291,14 @@ def _push_a_tienda(tienda, sku, on_hand):
         api = ShopifyClient(tienda)
         item_gid, on_hand_actual = api.consultar_inventario_sku(sku.codigo)
         try:
-            api.set_on_hand(item_gid, on_hand, compare_quantity=on_hand_actual)
+            api.set_on_hand(item_gid, on_hand, change_from_quantity=on_hand_actual)
         except ErrorItemNoStockeado:
             # Producto creado/reactivado después del alta masiva: recibirlo =
             # lo fulfilleamos. Se activa en nuestra location y se reintenta;
             # tras activar el on_hand es 0 (una carrera falla el compare y el
             # siguiente drenado trae snapshot fresco).
             api.activar_inventario(item_gid)
-            api.set_on_hand(item_gid, on_hand, compare_quantity=0)
+            api.set_on_hand(item_gid, on_hand, change_from_quantity=0)
             activado = True
             on_hand_actual = 0
     except Exception as exc:  # noqa: BLE001 — un push caído (ShopifyError, red) no tumba el drenado
@@ -310,7 +310,7 @@ def _push_a_tienda(tienda, sku, on_hand):
     SyncLog.objects.create(
         tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
         detalle=(
-            f"{sku.codigo} on_hand={on_hand} (compareQuantity={on_hand_actual})"
+            f"{sku.codigo} on_hand={on_hand} (changeFromQuantity={on_hand_actual})"
             + (" · item activado en la location" if activado else "")
         ),
     )
@@ -323,7 +323,7 @@ def push_inventario():
     todas las tiendas quedaron ok (si no, se queda para el siguiente drenado).
 
     Idempotente: correrlo dos veces con la cola vacía es no-op; con token real,
-    compareQuantity evita pisar un snapshot más nuevo.
+    changeFromQuantity evita pisar un snapshot más nuevo.
     """
     resumen = {"skus": 0, "pushes_ok": 0, "pushes_error": 0}
     pendientes = list(

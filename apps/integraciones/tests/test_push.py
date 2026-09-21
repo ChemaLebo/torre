@@ -128,7 +128,7 @@ class AutoActivarInventarioTests(TestCase):
         self.assertEqual(resumen["pushes_ok"], 1)
         api.activar_inventario.assert_called_once_with("gid://shopify/InventoryItem/1")
         self.assertEqual(api.set_on_hand.call_count, 2)
-        self.assertEqual(api.set_on_hand.call_args_list[1].kwargs["compare_quantity"], 0)
+        self.assertEqual(api.set_on_hand.call_args_list[1].kwargs["change_from_quantity"], 0)
         self.assertEqual(PushInventarioPendiente.objects.count(), 0)
         log = SyncLog.objects.latest("ts")
         self.assertEqual(log.resultado, SyncLog.RESULTADO_OK)
@@ -180,6 +180,47 @@ class SetOnHandClasificaErroresTests(TestCase):
             with self.assertRaises(ShopifyError) as ctx:
                 api.set_on_hand("gid://shopify/InventoryItem/1", 5, 0)
         self.assertNotIsInstance(ctx.exception, ErrorItemNoStockeado)
+
+
+class MutacionesInventario2604Tests(TestCase):
+    """API 2026-04: compareQuantity/ignoreCompareQuantity desaparecen, changeFromQuantity
+    es obligatorio (null = sin comparación) y las mutaciones de inventario llevan
+    @idempotent(key). Se verifica lo que realmente sale hacia Shopify."""
+
+    def _api(self):
+        tienda = Tienda(dominio="x.myshopify.com", token="shpat_x", location_id="1")
+        return ShopifyClient(tienda)
+
+    def test_set_on_hand_manda_change_from_quantity_e_idempotent(self):
+        api = self._api()
+        with patch.object(api, "graphql", return_value={"inventorySetQuantities": {}}) as graphql:
+            api.set_on_hand("gid://shopify/InventoryItem/1", 5, 7, clave="4f5b6ebf-143c-4da5-8d0f-fb8553bfd85d")
+        query, variables = graphql.call_args.args
+        self.assertIn('inventorySetQuantities(input: $input) @idempotent(key: "4f5b6ebf-143c-4da5-8d0f-fb8553bfd85d")', query)
+        cantidad = variables["input"]["quantities"][0]
+        self.assertEqual((cantidad["quantity"], cantidad["changeFromQuantity"], cantidad["locationId"]), (5, 7, "gid://shopify/Location/1"))
+        self.assertNotIn("compareQuantity", cantidad)
+        self.assertNotIn("ignoreCompareQuantity", variables["input"])
+
+    def test_sin_snapshot_manda_null_explicito_y_clave_nueva_por_intento(self):
+        api = self._api()
+        with patch.object(api, "graphql", return_value={"inventorySetQuantities": {}}) as graphql:
+            api.set_on_hand("gid://shopify/InventoryItem/1", 5, None)
+            api.set_on_hand("gid://shopify/InventoryItem/1", 5, None)
+        primera, segunda = (llamada.args for llamada in graphql.call_args_list)
+        cantidad = primera[1]["input"]["quantities"][0]
+        self.assertIn("changeFromQuantity", cantidad)
+        self.assertIsNone(cantidad["changeFromQuantity"])
+        self.assertRegex(primera[0], r'@idempotent\(key: "[0-9a-f-]{36}"\)')
+        self.assertNotEqual(primera[0], segunda[0])  # uuid4 distinto en cada intento
+
+    def test_activar_inventario_lleva_idempotent(self):
+        api = self._api()
+        with patch.object(api, "graphql", return_value={"inventoryActivate": {}}) as graphql:
+            api.activar_inventario("gid://shopify/InventoryItem/1", clave="abc-123")
+        query, variables = graphql.call_args.args
+        self.assertIn('inventoryActivate(inventoryItemId: $itemId, locationId: $locationId) @idempotent(key: "abc-123")', query)
+        self.assertEqual(variables, {"itemId": "gid://shopify/InventoryItem/1", "locationId": "gid://shopify/Location/1"})
 
 
 @override_settings(DEBUG=True)  # el modo mock (tienda sin token) solo existe en dev

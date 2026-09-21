@@ -1,6 +1,6 @@
 """Job: drena la cola de push de inventario hacia Shopify.
 
-Idempotente: cola vacía = no-op; con token real, compareQuantity impide pisar
+Idempotente: cola vacía = no-op; con token real, changeFromQuantity impide pisar
 un snapshot más nuevo (nada de last-writer-wins).
 """
 from django.core.management.base import BaseCommand
