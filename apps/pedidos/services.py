@@ -141,6 +141,17 @@ def reintentar_reservas_pedido(pedido, actor):
     )
 
 
+def _incidencias_auto_pausadas(cliente):
+    """True si el cliente pausó las incidencias automáticas (incidencias.auto_pausadas);
+    False si el módulo no existe. Con pausa, el pedido tampoco se marca incidencia_activa
+    (no habría incidencia que cerrar para desmarcarlo)."""
+    try:
+        from apps.incidencias.services import auto_pausadas  # lazy
+    except ImportError:
+        return False
+    return auto_pausadas(cliente)
+
+
 def _abrir_incidencia_faltante(pedido, faltantes):
     """Sin stock suficiente al dar de alta el pedido → incidencia FAL automática."""
     texto = "Faltante al ingerir la orden: " + "; ".join(faltantes)
@@ -398,7 +409,7 @@ def _aumentar_linea(pedido, filas, codigo, delta, aumentadas, conflictos, faltan
 def _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos):
     """FAL si la edición agregó piezas sin stock; CAN si tocó piezas en proceso.
     Con una incidencia ya activa no se duplica (la pelota ya está en juego)."""
-    if not (faltantes_stock or conflictos) or pedido.incidencia_activa:
+    if not (faltantes_stock or conflictos) or pedido.incidencia_activa or _incidencias_auto_pausadas(pedido.cliente):
         return
     pedido.incidencia_activa = True
     pedido.save(update_fields=["incidencia_activa", "actualizado"])
@@ -741,7 +752,7 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
         # El total_price ampara la orden completa; lo declarado es solo lo nuestro.
         pedido.valor_declarado = valor_nuestro
         campos.append("valor_declarado")
-    if faltantes and not cancelada:
+    if faltantes and not cancelada and not _incidencias_auto_pausadas(cliente):
         pedido.incidencia_activa = True
         campos.append("incidencia_activa")
     pedido.save(update_fields=campos + ["actualizado"])
@@ -865,7 +876,7 @@ def crear_pedido_manual(cliente, *, comprador_nombre, comprador_tel="",
 
     pedido.peso_esperado_gr = peso_esperado
     campos = ["peso_esperado_gr"]
-    if faltantes:
+    if faltantes and not _incidencias_auto_pausadas(cliente):
         pedido.incidencia_activa = True
         campos.append("incidencia_activa")
     pedido.save(update_fields=campos + ["actualizado"])

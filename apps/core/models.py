@@ -45,6 +45,13 @@ class Cliente(models.Model):
     naked_packing_local = models.BooleanField(default=True)
     guia_de_voz = models.TextField(blank=True, help_text="Reglas de tono para mensajes al comprador final")
     umbral_visto_bueno_mxn = models.DecimalField(max_digits=8, decimal_places=2, default=2000)
+    incidencias_auto_pausadas_hasta = models.DateField(
+        null=True, blank=True,
+        help_text=(
+            "Hasta esta fecha (inclusive) el sistema NO abre incidencias automáticas "
+            "(FAL, CAN, RF, RET, DES); las manuales y las del comprador siguen. Vacío = activas."
+        ),
+    )
     branding = models.JSONField(
         default=dict, blank=True,
         help_text="Identidad para páginas públicas de rastreo: color_primario, color_fondo, logo_url, nombre_publico, whatsapp_soporte, dominio_tienda",

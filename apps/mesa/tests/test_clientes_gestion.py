@@ -133,6 +133,25 @@ class EdicionClienteTests(BaseGestionClientes):
         self.assertEqual(evento.delta["buffer_stock"], [0, 5])
         self.assertEqual(evento.delta["contacto_nombre"], ["", "Karina Fuentes"])
 
+    def test_edicion_pausa_incidencias_automaticas_hasta_una_fecha(self):
+        from datetime import date
+
+        url = reverse("mesa:cliente_editar", args=[self.colima.pk])
+        respuesta = self.client.post(url, datos_form_cliente(
+            nombre="Cervecería Colima", incidencias_auto_pausadas_hasta="2026-09-27",
+        ))
+        self.assertRedirects(respuesta, reverse("mesa:cliente_detalle", args=[self.colima.pk]))
+        self.colima.refresh_from_db()
+        self.assertEqual(self.colima.incidencias_auto_pausadas_hasta, date(2026, 9, 27))
+        evento = EventoAuditoria.objects.get(entidad="cliente", entidad_id="colima", accion="edicion")
+        self.assertEqual(evento.delta["incidencias_auto_pausadas_hasta"], [None, "2026-09-27"])
+        respuesta = self.client.get(reverse("mesa:incidencias"))
+        self.assertContains(respuesta, "Incidencias automáticas pausadas: Cervecería Colima hasta 27/Sep/2026")
+        # Vacío = se reactivan.
+        self.client.post(url, datos_form_cliente(nombre="Cervecería Colima"))
+        self.colima.refresh_from_db()
+        self.assertIsNone(self.colima.incidencias_auto_pausadas_hasta)
+
     def test_edicion_no_cambia_el_slug(self):
         url = reverse("mesa:cliente_editar", args=[self.colima.pk])
         self.client.post(url, datos_form_cliente(nombre="Cervecería Colima", slug="hackeado"))

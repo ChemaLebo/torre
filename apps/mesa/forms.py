@@ -113,6 +113,16 @@ class FormCliente(forms.Form):
             "min_value": "El umbral de visto bueno no puede ser negativo.",
         },
     )
+    incidencias_auto_pausadas_hasta = forms.DateField(
+        label="Pausar incidencias automáticas hasta",
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date"}),
+        help_text=(
+            "Inclusive. Hasta esa fecha el sistema no abre FAL, CAN, RF, RET ni DES por sí solo; "
+            "las manuales y las del comprador siguen. Vacío = activas."
+        ),
+        error_messages={"invalid": "La fecha de pausa no es válida. Usa el calendario."},
+    )
     guia_de_voz = forms.CharField(
         label="Guía de voz",
         required=False,
@@ -243,6 +253,7 @@ class FormCliente(forms.Form):
             "integracion_envios": d["integracion_envios"],
             "naked_packing_local": d.get("naked_packing_local", False),
             "umbral_visto_bueno_mxn": d["umbral_visto_bueno_mxn"],
+            "incidencias_auto_pausadas_hasta": d.get("incidencias_auto_pausadas_hasta"),
             "guia_de_voz": (d.get("guia_de_voz") or "").strip(),
             "activo": d.get("activo", False),
         }

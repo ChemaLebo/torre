@@ -10,6 +10,11 @@
   <div class="quien"><b>{{ abiertas_n }}</b> abiertas de {{ incidencias|length }} en la vista</div>
 </div>
 
+{% if pausas %}
+{# Pausa por cliente: las automáticas (FAL, CAN, RF, RET, DES) no nacen hasta esa fecha; queda rastro en la auditoría. #}
+<div class="banner warn mb"><span class="foco"></span>Incidencias automáticas pausadas: {% for c in pausas %}{{ c.nombre }} hasta {{ c.incidencias_auto_pausadas_hasta|date:"d/M/Y" }}{% if not forloop.last %} · {% endif %}{% endfor %}. Las manuales siguen. Se cambia en Clientes → editar.</div>
+{% endif %}
+
 <div class="card mb">
   <form method="get" class="fila">
     <div style="flex:1;min-width:160px">

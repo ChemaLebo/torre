@@ -9,7 +9,7 @@ queden siempre consistentes. Cross-app: modelos y servicios se importan lazy
 import csv
 import io
 import secrets
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
@@ -351,6 +351,8 @@ def incidencias(request):
         "clientes_filtro": Cliente.objects.all(),
         "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id},
         "abiertas_n": sum(1 for i in filas if i.abierta),
+        # Clientes con las automáticas pausadas hoy: se avisa arriba para que nadie busque lo que no nació.
+        "pausas": Cliente.objects.filter(incidencias_auto_pausadas_hasta__gte=timezone.localdate()).order_by("nombre"),
     })
 
 
@@ -1591,9 +1593,11 @@ def cliente_detalle(request, pk):
 
 
 def _serializar_delta(valor):
-    """Valores del delta de auditoría: Decimal como str, el resto tal cual."""
+    """Valores del delta de auditoría: Decimal como str, fechas en ISO, el resto tal cual."""
     if isinstance(valor, Decimal):
         return str(valor)
+    if isinstance(valor, (date, datetime)):
+        return valor.isoformat()
     return valor
 
 
@@ -1664,6 +1668,7 @@ def cliente_editar(request, pk):
         "integracion_envios": cliente.integracion_envios,
         "naked_packing_local": cliente.naked_packing_local,
         "umbral_visto_bueno_mxn": cliente.umbral_visto_bueno_mxn,
+        "incidencias_auto_pausadas_hasta": cliente.incidencias_auto_pausadas_hasta,
         "guia_de_voz": cliente.guia_de_voz,
         "activo": cliente.activo,
         **{f"peso_{carrier}": peso for carrier, peso in (cliente.reparto_pesos or {}).items()},

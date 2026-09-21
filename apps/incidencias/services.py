@@ -63,9 +63,19 @@ def _congelar_evidencia_pedido(pedido):
     ).update(congelada=True)
 
 
+def auto_pausadas(cliente):
+    """True si hoy el cliente tiene pausadas las incidencias automáticas
+    (Cliente.incidencias_auto_pausadas_hasta, inclusive). Las manuales, las del
+    cliente y las del comprador nunca se pausan."""
+    hasta = getattr(cliente, "incidencias_auto_pausadas_hasta", None)
+    return bool(hasta) and timezone.localdate() <= hasta
+
+
 def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None, orden=None):
     """Abre una incidencia con folio y relojes SLA. N por pedido permitidas.
     `orden`: la recepción (OrdenEntrada) de la que nace, para las DES de recepción.
+    Con las automáticas pausadas (auto_pausadas) una de origen "auto" NO nace:
+    regresa None, no toca el pedido y deja el evento "auto_omitida" con el texto.
 
     - SLA de primera respuesta: 30 min si origen=comprador, 2 h en los demás
       casos (valores canónicos de settings.TORRE).
@@ -73,6 +83,23 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
     - Congela la evidencia del pedido y marca pedido.incidencia_activa.
     - Notifica al cliente vía mensajeria (lazy; tolera módulo ausente).
     """
+    if origen == Incidencia.ORIGEN_AUTO and auto_pausadas(cliente):
+        referencia = (
+            getattr(pedido, "folio", None) or getattr(orden, "folio", None)
+            or getattr(sku, "codigo", None) or cliente.slug
+        )
+        registrar_evento(
+            "incidencia", referencia, "auto_omitida", cliente=cliente,
+            delta={
+                "tipo": tipo,
+                "pedido": getattr(pedido, "folio", None) if pedido else None,
+                "sku": getattr(sku, "codigo", None) if sku else None,
+                "orden": getattr(orden, "folio", None) if orden else None,
+                "pausadas_hasta": cliente.incidencias_auto_pausadas_hasta.isoformat(),
+            },
+            motivo=texto[:300],
+        )
+        return None
     ahora = timezone.now()
     torre = settings.TORRE
     if origen == Incidencia.ORIGEN_COMPRADOR:

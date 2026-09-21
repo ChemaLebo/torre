@@ -197,3 +197,38 @@ class PushEnOnCommitTests(TestCase):
                 abrir_incidencia(cliente, Incidencia.TIPO_DAN, Incidencia.ORIGEN_MANUAL)
                 enviar.assert_not_called()  # dentro de la transacción: nada
         enviar.assert_called_once()  # tras el commit: sale el aviso
+
+
+class PausaAutomaticasTests(TestCase):
+    """Cliente.incidencias_auto_pausadas_hasta: hasta esa fecha (inclusive) las
+    automáticas no nacen y dejan el evento auto_omitida; manuales y comprador
+    siguen; pasada la fecha vuelven solas."""
+
+    def setUp(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        self.cliente = crear_cliente()
+        self.cliente.incidencias_auto_pausadas_hasta = timezone.localdate()
+        self.cliente.save()
+        self.ayer = timezone.localdate() - timedelta(days=1)
+
+    def test_automatica_pausada_no_nace_y_deja_evento(self):
+        pedido = crear_pedido(self.cliente)
+        resultado = abrir_incidencia(self.cliente, "FAL", "auto", pedido=pedido, texto="Sin stock")
+        self.assertIsNone(resultado)
+        self.assertEqual(Incidencia.objects.count(), 0)
+        pedido.refresh_from_db()
+        self.assertFalse(pedido.incidencia_activa)
+        evento = EventoAuditoria.objects.get(entidad="incidencia", accion="auto_omitida")
+        self.assertEqual((evento.entidad_id, evento.delta["tipo"], evento.delta["pedido"]), (pedido.folio, "FAL", pedido.folio))
+        self.assertEqual(evento.motivo, "Sin stock")
+
+    def test_manual_y_comprador_siguen_y_la_pausa_vence(self):
+        self.assertIsNotNone(abrir_incidencia(self.cliente, "RET", "manual", texto="a mano"))
+        self.assertIsNotNone(abrir_incidencia(self.cliente, "RET", "comprador", texto="comprador"))
+        self.cliente.incidencias_auto_pausadas_hasta = self.ayer
+        self.cliente.save()
+        self.assertIsNotNone(abrir_incidencia(self.cliente, "DES", "auto", texto="vencida"))
+        self.assertEqual(Incidencia.objects.count(), 3)

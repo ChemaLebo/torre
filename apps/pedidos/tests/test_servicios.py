@@ -177,6 +177,22 @@ class IngestaTests(BaseServicios):
         abrir.assert_called_once()
         self.assertEqual(abrir.call_args[0][1], "FAL")
 
+    def test_sin_stock_con_incidencias_automaticas_pausadas_no_marca_ni_abre(self):
+        from django.utils import timezone
+
+        from apps.incidencias.models import Incidencia
+
+        self.cliente.incidencias_auto_pausadas_hasta = timezone.localdate()
+        self.cliente.save()
+        with patch("apps.inventario.services.reservar", return_value=False), \
+             patch("apps.mensajeria.services.enviar_confirmacion"), \
+             self.captureOnCommitCallbacks(execute=True):
+            pedido = services.ingerir_pedido_shopify(self.tienda, payload_shopify())
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+        self.assertFalse(pedido.incidencia_activa)
+        self.assertFalse(pedido.lineas.get().reservada)
+        self.assertEqual(Incidencia.objects.count(), 0)
+
     def test_es_local_por_cp_cdmx(self):
         # Bodega en Olivar de los Padres (01780): local = CDMX (prefijos 00-16).
         local, *_ = self._ingerir(payload_shopify(order_id=1001, cp="06700"))
