@@ -1527,37 +1527,56 @@ def generar_guia(pedido):
     return guia
 
 
-def despachar_a_corral(pedido, actor):
-    """Guía + impresión de etiquetas en el MISMO POST del empaque (carril único).
-
-    Encadena generar_guia (idempotente; transiciona a GUIA_GENERADA) y por
-    cada guía activa manda su etiqueta a la térmica BEST-EFFORT: una falla de
-    impresora se acumula en `mensajes` y JAMÁS revierte la guía (la
-    reimpresión vive en Salida). Regresa {"guias": [...], "mensajes": [...]}.
-    """
-    generar_guia(pedido)
+def imprimir_guias_activas(pedido):
+    """Manda a imprimir, BEST-EFFORT, la etiqueta del carrier y la interna
+    (folio + QR) de cada guía activa del pedido: una falla de impresora se
+    acumula en mensajes y jamás toca la guía (la reimpresión vive en Salida).
+    Regresa (guias, mensajes)."""
     from apps.envios.models import Guia  # lazy: modelo de otra app
+    from apps.piso.etiquetas import imprimir_etiqueta  # lazy por contrato
+
     guias = list(
         pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
     )
-    from apps.piso.etiquetas import imprimir_etiqueta  # lazy por contrato
     mensajes = []
     for guia in guias:
         try:
             mensajes.append(imprimir_etiqueta(guia))
-        except Exception as exc:  # best-effort: la guía ya existe y NUNCA se revierte
+        except Exception as exc:  # noqa: BLE001 — best-effort: la guía ya existe y NUNCA se revierte
             mensajes.append(f"No se imprimió la etiqueta de la guía {guia.numero}: {exc}")
-        # La etiqueta INTERNA (folio + QR) sale JUNTO con la del carrier:
-        # identidad de la caja en una cara, ruteo en la otra. Mismo best-effort.
+        # La etiqueta INTERNA sale JUNTO con la del carrier: identidad de la
+        # caja en una cara, ruteo en la otra. Mismo best-effort.
         try:
             mensajes.append(imprimir_etiqueta(guia, interna=True))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             mensajes.append(f"No se imprimió la etiqueta interna de {guia.numero}: {exc}")
+    return guias, mensajes
+
+
+def despachar_a_corral(pedido, actor):
+    """Guía + impresión de etiquetas en el MISMO POST del empaque (carril único).
+
+    Encadena generar_guia (idempotente; transiciona a GUIA_GENERADA) y manda
+    a imprimir las guías activas (imprimir_guias_activas, best-effort). Si una
+    caja falla con el carrier, las guías que SÍ salieron se imprimen igual
+    antes de propagar el error (Chema 2026-09-21: antes la excepción cortaba
+    antes de imprimir y ninguna etiqueta salía); la caja caída se genera desde
+    Salida. Regresa {"guias": [...], "mensajes": [...]}.
+    """
+    error = None
+    try:
+        generar_guia(pedido)
+    except Exception as exc:  # noqa: BLE001 — ErrorCarrier/ValueError: se imprime lo que sí salió y luego se propaga
+        error = exc
+    guias, mensajes = imprimir_guias_activas(pedido)
     registrar_evento(
         "pedido", pedido.pk, "despachado_a_corral", actor=actor, cliente=pedido.cliente,
-        delta={"guias": [g.numero for g in guias], "mensajes_impresion": mensajes},
+        delta={"guias": [g.numero for g in guias], "mensajes_impresion": mensajes,
+               "error": str(error)[:200] if error else None},
         motivo="Guía(s) e impresión encadenadas al empaque: el pedido va directo a su corral.",
     )
+    if error is not None:
+        raise error
     return {"guias": guias, "mensajes": mensajes}
 
 

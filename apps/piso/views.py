@@ -1397,10 +1397,13 @@ def _render_cierre_o_exito(request, pedido):
         if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)
     ]
     por_cerrar = [c for c in cajas_empacadas if not _caja_cerrada(c)]
+    con_guia = {g.paquete_id for g in guias}
     contexto.update({
         "paso": "cierre",
         "guias": guias,
         "tiene_guia": bool(guias),
+        # Cajas del plan sin guía activa (el carrier falló en esa caja): se generan desde Salida.
+        "cajas_sin_guia": [c for c in cajas_empacadas if c.pk not in con_guia],
         "cajas_empacadas": cajas_empacadas,
         "por_cerrar": por_cerrar,
         "caja_cierre": por_cerrar[0] if por_cerrar else None,
@@ -1429,6 +1432,14 @@ def _despachar_y_avisar(request, pedido, destino):
             f"El carrier no respondió al generar la guía de {pedido.folio}: {exc}. "
             "Genera la guía desde Salida en un momento o avisa a Mesa de Control.",
         )
+        from apps.envios.models import Guia  # lazy: modelo de otra app
+        con_guia = pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).count()
+        if con_guia:
+            messages.info(
+                request,
+                f"Las {con_guia} caja(s) que sí tienen guía ya se mandaron a imprimir; "
+                "la que falló se genera desde Salida y su etiqueta sale ahí.",
+            )
     else:
         numeros = ", ".join(g.numero for g in resultado["guias"])
         messages.success(

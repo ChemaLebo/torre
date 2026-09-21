@@ -216,7 +216,7 @@ class EmpaquePisoTests(PisoTestCase):
 
         # GET: paso de cierre con las guías impresas.
         respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, "Etiquetas imprimiéndose")
+        self.assertContains(respuesta, "etiquetas enviadas a la impresora")
         self.assertContains(respuesta, "cerrar_legacy")
 
         # POST cierre sin foto → error claro, nada se guarda.

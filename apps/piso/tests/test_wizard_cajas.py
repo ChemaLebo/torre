@@ -74,6 +74,35 @@ class WizardCajasTests(PisoTestCase):
         self.assertNotContains(respuesta, 'data-t="0"')
         self.assertContains(respuesta, 'id="dim-largo" min="1" value="40"')
 
+    def test_si_una_caja_falla_con_el_carrier_la_otra_se_imprime_y_se_avisa(self):
+        from apps.envios.adapters import ErrorCarrier
+
+        self.client.post(self.url, {
+            "accion": "empacar_caja", "paquete_id": self.caja1.pk,
+            "peso_real_gr": "12100", "foto_contenido": self.foto("c1.jpg"),
+        })
+        original = MockAdapter.generar
+
+        def generar(self_, pedido, carrier, servicio, paquete=None):
+            if paquete is not None and paquete.numero == 1:
+                raise ErrorCarrier("envia.com regresó error: 1300")
+            return original(self_, pedido, carrier, servicio, paquete=paquete)
+
+        with patch.object(MockAdapter, "generar", autospec=True, side_effect=generar), \
+             patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)") as imprimir:
+            respuesta = self.client.post(self.url, {
+                "accion": "empacar_caja", "paquete_id": self.caja2.pk,
+                "peso_real_gr": "8100", "foto_contenido": self.foto("c2.jpg"),
+            }, follow=True)
+        self.assertEqual(Guia.objects.filter(pedido=self.pedido).count(), 1)  # solo la caja 2
+        self.assertEqual(imprimir.call_count, 2)  # carrier + interna de la que sí salió
+        self.assertContains(respuesta, "El carrier no respondió")
+        self.assertContains(respuesta, "que sí tienen guía ya se mandaron a imprimir")
+        self.assertContains(respuesta, "Sin guía: caja 1")
+        self.assertContains(respuesta, "(caja 2)")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)  # recuperable desde Salida
+
     @override_settings(TORRE_PESO_MODO="bloquear")
     def test_peso_fuera_de_rango_no_toca_nada(self):
         respuesta = self.client.post(self.url, {
@@ -122,7 +151,7 @@ class WizardCajasTests(PisoTestCase):
         self.assertEqual(len(guias), 2)  # una guía por caja
         self.assertEqual(imprimir.call_count, 4)  # (carrier + interna) × 2 cajas
         # Paso de cierre: etiquetas impresas + foto de caja cerrada por caja.
-        self.assertContains(r2, "Etiquetas imprimiéndose")
+        self.assertContains(r2, "etiquetas enviadas a la impresora")
         self.assertContains(r2, 'value="cerrar_caja"')
 
         # Cierre caja 1 → sigue la 2 (auto-siguiente).

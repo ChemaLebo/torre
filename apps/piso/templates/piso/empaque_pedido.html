@@ -30,12 +30,19 @@
 {% if tiene_guia %}
 <div class="banner ok"><span class="foco"></span>
   <div>
-    <b>🖨 Etiquetas imprimiéndose — pégalas.</b>
-    Guía{{ guias|length|pluralize }}:
-    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
+    <b>🖨 Guía{{ guias|length|pluralize }} lista{{ guias|length|pluralize }} — etiquetas enviadas a la impresora.</b>
+    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if g.paquete_id %} (caja {{ g.paquete.numero }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
+    <div class="small">Si alguna etiqueta no salió, reimprímela desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>.</div>
   </div>
 </div>
-{% else %}
+{% endif %}
+{% if cajas_sin_guia and tiene_guia %}
+<div class="banner warn"><span class="foco"></span>
+  Sin guía: caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+  El carrier falló en esa caja; genérala en <a href="{% url 'piso:salida' %}"><b>Salida</b></a> (Generar guía), pega su etiqueta y regresa por su foto de cierre.
+</div>
+{% endif %}
+{% if not tiene_guia %}
 <div class="banner warn"><span class="foco"></span>
   Este pedido aún no tiene guía (excepción). Génerala en
   <a href="{% url 'piso:salida' %}"><b>Salida</b></a>, pega la etiqueta y regresa por la foto de cierre.
