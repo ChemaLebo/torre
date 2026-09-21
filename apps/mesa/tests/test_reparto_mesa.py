@@ -1,6 +1,7 @@
 """Reparto de carriers por porcentajes desde Mesa: pesos en la ficha del
 cliente (validación, bloque, base al cambiar) y el reporte mensual."""
-from django.test import TestCase
+from django.conf import settings
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.core.models import Cliente, EventoAuditoria
@@ -17,6 +18,15 @@ def datos_reparto(**pesos):
     return datos
 
 
+# La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);
+# estas pruebas ejercitan el mecanismo con los carriers que conoce la tabla mock.
+TORRE_CARRIERS_CLASICOS = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
+}
+
+
+@override_settings(TORRE=TORRE_CARRIERS_CLASICOS)
 class FichaRepartoTests(TestCase):
     @classmethod
     def setUpTestData(cls):

@@ -7,6 +7,7 @@ por caja (cerrar_caja) y pantalla de éxito con SIGUIENTE PEDIDO ▶.
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.conf import settings
 from django.test import override_settings
 from django.urls import reverse
 
@@ -18,6 +19,15 @@ from apps.pedidos.models import Pedido
 from .base import PisoTestCase
 
 
+# La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);
+# estas pruebas ejercitan el mecanismo con los carriers que conoce la tabla mock.
+TORRE_CARRIERS_CLASICOS = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
+}
+
+
+@override_settings(TORRE=TORRE_CARRIERS_CLASICOS)
 class WizardCajasTests(PisoTestCase):
     def setUp(self):
         self.login_piso()

@@ -42,6 +42,15 @@ def datos_form_cliente(**extra):
     return datos
 
 
+# La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);
+# estas pruebas ejercitan el mecanismo con los carriers que conoce la tabla mock.
+TORRE_CARRIERS_CLASICOS = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
+}
+
+
+@override_settings(TORRE=TORRE_CARRIERS_CLASICOS)
 class BaseGestionClientes(TestCase):
     @classmethod
     def setUpTestData(cls):

@@ -331,7 +331,15 @@ class IntegracionClienteRoutingTests(TestCase):
         )
 
 
-@override_settings(ENVIA_API_KEY="")
+# La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);
+# estas pruebas ejercitan el mecanismo con los carriers que conoce la tabla mock.
+TORRE_CARRIERS_CLASICOS = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
+}
+
+
+@override_settings(ENVIA_API_KEY="", TORRE=TORRE_CARRIERS_CLASICOS)
 class ReplanAlGenerarTests(TestCase):
     """Un plan viejo con un carrier que la config vigente ya no permite se
     re-cotiza AL GENERAR (fix #10, sep-2026): el plan no ata — quitar un

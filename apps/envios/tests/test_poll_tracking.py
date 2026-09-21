@@ -2,6 +2,7 @@
 from datetime import timedelta
 from unittest.mock import patch
 
+from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -156,6 +157,15 @@ class PollTrackingTests(TestCase):
         self.assertFalse(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
 
 
+# La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);
+# estas pruebas ejercitan el mecanismo con los carriers que conoce la tabla mock.
+TORRE_CARRIERS_CLASICOS = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
+}
+
+
+@override_settings(TORRE=TORRE_CARRIERS_CLASICOS)
 class MultiGuiaTests(TestCase):
     """El pedido se mueve por el CONJUNTO de sus guías: una caja entregada
     no entrega el pedido, una caja regresada no lo retorna, y mientras queden
