@@ -78,6 +78,22 @@ propuesta" existe pero no depende del monto.
 **Decisión pendiente:** conectarlo a compensaciones e incidencias, o quitarlo del
 formulario para no confundir.
 
+## Corte contractual por cliente (Chema, 2026-09-20)
+
+**Estado:** el corte es global (`TORRE["CORTE_CONTRACTUAL"]`, env `TORRE_CORTE`,
+14:00 por contrato / 15:30 por adéndum) y lo leen ingesta de pedidos
+(`corte_vigente_al_ingreso`), mensajería (promesa al comprador), portal, Mesa,
+piso y el context processor. Colima promete en el checkout (ShipX) "siguiente
+día hábil pidiendo antes de las 4 pm": un pedido de las 3:45 vería esa promesa
+y saldría al día siguiente.
+
+**Por hacer:** `Cliente.corte` (TimeField, default el global) editable en Mesa →
+Clientes; helper `corte_de(cliente)` que sustituya cada lectura del setting; el
+pedido sigue guardando `corte_vigente_al_ingreso` con el del cliente; digest,
+portal y piso muestran el del cliente. El global queda como default para
+clientes sin corte propio. Alinear el texto de ShipX con el corte que se
+configure.
+
 ## Carrier preferente ignorado bajo integración 99minutos
 
 **Estado (2026-09-14):** con `integracion_envios = 99minutos` el carrier
