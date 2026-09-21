@@ -127,6 +127,29 @@ la comparte cuando la tenga. Reparto acordado con Diego para Colima: 75% iMile /
 25% 99minutos, al azar por pedido y configurable por cliente, para medir
 incidencias por carrier (y después por estado destino); revisar mensualmente.
 
+**Hallazgos (2026-09-21, ciudad por CP; PED-00030 y PED-00034):** iMile valida
+el par CP↔ciudad contra su catálogo y el conector de envia NO lo traduce: pasa la
+ciudad tal como la tecleó el comprador en Shopify y rebota con error 1300
+`The Consignee Zip Code [72830] does not match city [Puebla]` (72830 es San
+Andrés Cholula) y `consignee city [CHETUMAL] not exist`. Los conectores de
+Estafeta, FedEx y Paquetexpress no validan ciudad; amPm exige el número
+exterior en su campo `number` (`424 - El numero exterior es requerido`) aunque
+venga en la calle — resuelto en `EnviaAdapter._numero_exterior`. Envia SÍ tiene
+catálogo: `GET https://geocodes.envia.com/zipcode/MX/<cp>` con el mismo Bearer
+(`queries.envia.com` no tiene ruta `/zipcode`, regresa 404). Respuesta: lista
+con `locality` (72830 → "San Andrés Cholula"; 77049 → "Chetumal"),
+`regions.region_2` = municipio (77049 → "Othón P. Blanco"), `state.code.2digit`
+en el vocabulario de envia ("PU", "QR"), `suburbs` = colonias válidas del CP,
+`coordinates`. Parche vigente: `envios.localidades.localidad_por_cp` consulta
+una vez por CP y guarda `LocalidadCP` (localidad, municipio, estado, colonias);
+`EnviaAdapter._destino` manda la localidad y el estado del catálogo en vez de
+lo de Shopify cuando el CP se conoce (sin llave, modo off o sin respuesta,
+conserva Shopify; fallo auditado como `localidad_cp_fallo`). Pendiente de
+confirmar con la primera compra si iMile quiere la localidad ("Chetumal") o el
+municipio ("Othón P. Blanco"); la fila guarda los dos, cambiar es una línea.
+Para la integración directa: la API de iMile validará ciudad igual, así que
+este catálogo (o el suyo, si lo publican) es parte del adapter.
+
 **Por hacer:** adapter `AdapterImile` en `apps/envios/adapters.py` con el mismo
 contrato que `Adapter99Minutos` (cotizar, generar, rastrear, cancelar,
 recolección si la API lo da), credenciales y modo por env (`IMILE_API_KEY`,

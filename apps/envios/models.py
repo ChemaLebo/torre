@@ -425,3 +425,30 @@ class EventoGuia(models.Model):
     def __str__(self):
         return f"{self.guia_id} · {self.estado or self.crudo} · {self.ts_carrier or self.ts_visto}"
 
+
+class LocalidadCP(models.Model):
+    """Localidad, municipio y estado de un CP según el catálogo de envia (geocodes).
+
+    Caché de envios.localidades.localidad_por_cp: una consulta por CP y de ahí
+    se lee. iMile valida el par CP↔ciudad contra su catálogo y el conector de
+    envia no lo traduce, así que el destino de la guía toma de aquí la ciudad
+    (y el estado, ya en el código de 2 letras de envia) en vez de lo que
+    tecleó el comprador en Shopify. `colonias` guarda los suburbs del CP por
+    si algún carrier exige colonia válida. Localidad vacía = el catálogo no
+    conoce el CP; se guarda igual para no volver a preguntar.
+    """
+
+    cp = models.CharField(max_length=5, unique=True)
+    localidad = models.CharField(max_length=120, blank=True)
+    municipio = models.CharField(max_length=120, blank=True)
+    estado = models.CharField(max_length=2, blank=True, help_text="code_2_digits de envia (CX, PU, QR)")
+    colonias = models.JSONField(default=list, blank=True)
+    ts = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "localidad por CP"
+        verbose_name_plural = "localidades por CP"
+
+    def __str__(self):
+        return f"{self.cp} · {self.localidad or 'desconocido'} ({self.estado or '--'})"
+

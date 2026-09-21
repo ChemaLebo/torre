@@ -331,6 +331,8 @@ if "test" in sys.argv:
     ENVIA_MODO = "off"  # los tests jamás tocan la API real
 ENVIA_API_BASE = os.environ.get("ENVIA_API_BASE", "https://api.envia.com")
 ENVIA_QUERIES_BASE = os.environ.get("ENVIA_QUERIES_BASE", "https://queries.envia.com")
+# Catálogo de CP de envia (localidad, municipio, estado, colonias): envios.localidades.
+ENVIA_GEOCODES_BASE = os.environ.get("ENVIA_GEOCODES_BASE", "https://geocodes.envia.com")
 # 99minutos directo (proveedor "99minutos"). Sin key o modo != "full" → nada
 # real; sandbox: NOVENTA9_API_BASE=https://sandbox.99minutos.com.
 NOVENTA9_API_KEY = os.environ.get("NOVENTA9_API_KEY", "")  # client_id:client_secret

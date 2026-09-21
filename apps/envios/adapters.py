@@ -292,6 +292,14 @@ class EnviaAdapter(CarrierAdapter):
             return marcado.group(1)
         return "S/N"
 
+    @staticmethod
+    def _localidad(cp):
+        """LocalidadCP del catálogo de envia para el CP; None si no se conoce."""
+        if not cp:
+            return None
+        from .localidades import localidad_por_cp  # lazy: modelo + HTTP
+        return localidad_por_cp(cp)
+
     @classmethod
     def _destino(cls, pedido):
         from .cotizador import CP_ESTADO, estado_envia  # lazy: la misma tabla que usa el cotizador
@@ -310,12 +318,21 @@ class EnviaAdapter(CarrierAdapter):
             or d.get("estado", "")
         )
         estado = estado_envia(estado)
+        ciudad = d.get("city") or d.get("ciudad", "")
+        # Ciudad y estado del catálogo de envia para el CP cuando lo conoce:
+        # iMile valida CP↔ciudad contra SU catálogo y rechaza lo que tecleó el
+        # comprador ("Zip Code [72830] does not match city [Puebla]",
+        # "city [CHETUMAL] not exist"; PED-00030/00034). Sin catálogo, Shopify.
+        localidad = cls._localidad(cp)
+        if localidad is not None and localidad.localidad:
+            ciudad = localidad.localidad
+            estado = localidad.estado or estado
         return {
             "name": pedido.comprador_nombre or d.get("name", ""),
             "street": d.get("address1") or d.get("street") or d.get("calle", ""),
             "number": cls._numero_exterior(d),
             "district": d.get("address2") or d.get("colonia", ""),
-            "city": d.get("city") or d.get("ciudad", ""),
+            "city": ciudad,
             "state": estado,
             "country": "MX",
             "postalCode": cp,
