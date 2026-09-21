@@ -405,7 +405,7 @@ def marcar_fulfillment(pedido):
 
     try:
         from apps.rastreo.services import url_publica  # lazy por contrato
-        url_rastreo = url_publica(pedido)
+        url_rastreo = url_publica(pedido) if numeros else ""  # sin guía (entrega en bodega): sin rastreo
     except ImportError:
         url_rastreo = ""
 

@@ -1657,6 +1657,89 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     return pedido
 
 
+def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
+    """Entrega en mano / recolección en bodega (Chema 2026-09-21): el pedido
+    sale sin carrier ni guía y queda ENTREGADO. Vale desde PENDIENTE,
+    EN_PICKING o EMPACADO; con guía generada primero se cancela la guía por
+    el flujo normal, y de la calle en adelante ya no aplica. Todo en una
+    transacción: 1) PENDIENTE pasa por iniciar_picking (exige reservas) y en
+    picking se confirma lo que falte de cada línea (confirmar_linea_pick sin
+    escaneo); 2) el físico sale del kardex: en picking confirmar_pick +
+    despachar por línea (reservado → en_empaque → despachado); ya EMPACADO
+    solo despachar, porque empacar ya confirmó el pick; los kits no tienen
+    stock propio; 3) las cajas del plan quedan DESPACHADO; 4) el pedido pasa
+    a ENTREGADO estampando empacado, recolectado y entregado, y se libera del
+    operador de piso (asignado_a). No hay transición directa en la máquina de
+    estados: es un atajo explícito, auditado como entregado_sin_guia con
+    quién recibió. 5) Shopify: fulfillment sin rastreo, best-effort en
+    on_commit, para que el admin lo vea Fulfilled y el cliente reciba su
+    aviso. Sin "va en camino" de WhatsApp: nunca viajó. Regresa el pedido."""
+    if pedido.estado == Pedido.GUIA_GENERADA:
+        raise ValueError(
+            f"{pedido.folio} ya tiene guía generada: cancela la guía primero y vuelve a intentar."
+        )
+    if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO):
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display()}: la entrega sin guía "
+            "solo aplica antes de generar la guía."
+        )
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.inventario.services import confirmar_pick, despachar  # lazy
+
+    with transaction.atomic():
+        pedido = Pedido.objects.select_for_update().select_related("cliente", "tienda").get(pk=pedido.pk)
+        estado_inicial = pedido.estado
+        if pedido.estado == Pedido.PENDIENTE:
+            iniciar_picking(pedido, actor)
+        lineas = list(pedido.lineas.select_related("sku"))
+        if pedido.estado == Pedido.EN_PICKING:
+            for linea in lineas:
+                faltan = linea.cantidad - linea.cantidad_pickeada
+                if faltan > 0:
+                    confirmar_linea_pick(linea, faltan, actor)
+        for linea in lineas:
+            if linea.sku.es_kit or not linea.cantidad_pickeada:
+                continue
+            if estado_inicial != Pedido.EMPACADO:
+                confirmar_pick(linea.sku, linea.cantidad_pickeada, pedido.folio)
+            despachar(linea.sku, linea.cantidad_pickeada, pedido.folio)
+        for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero"):
+            if caja.estado != Paquete.EMPACADO:
+                caja.transicionar(Paquete.EMPACADO, actor=actor, motivo=f"Entrega sin guía de {pedido.folio}.")
+            caja.transicionar(
+                Paquete.DESPACHADO, actor=actor,
+                motivo=f"Entrega sin guía de {pedido.folio}: la caja {caja.numero} se entregó en bodega.",
+            )
+        ahora = timezone.now()
+        anterior = pedido.estado
+        pedido.estado = Pedido.ENTREGADO
+        pedido.asignado_a = None
+        campos = ["estado", "asignado_a", "actualizado"]
+        for estado in (Pedido.EMPACADO, Pedido.RECOLECTADO, Pedido.ENTREGADO):
+            campo = Pedido.TIMESTAMPS_TRANSICION[estado]
+            if getattr(pedido, campo) is None:
+                setattr(pedido, campo, ahora)
+                campos.append(campo)
+        pedido.save(update_fields=campos)
+        registrar_evento(
+            "pedido", pedido.pk, "entregado_sin_guia", actor=actor, cliente=pedido.cliente,
+            delta={
+                "de": anterior, "estado_inicial": estado_inicial, "recibio": recibio,
+                "lineas": [[l.sku.codigo, l.cantidad_pickeada] for l in lineas],
+            },
+            motivo=(motivo or "Entrega en bodega sin guía.")[:300],
+        )
+
+        def _fulfillment():
+            try:
+                from apps.integraciones.services import marcar_fulfillment  # lazy
+                marcar_fulfillment(pedido)
+            except Exception:  # noqa: BLE001, S110 — best-effort: Shopify caído no deshace la entrega
+                pass
+        transaction.on_commit(_fulfillment)
+    return pedido
+
+
 # ── Cancelación ──
 
 def cancelar(pedido, actor, motivo=""):

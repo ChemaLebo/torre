@@ -312,15 +312,15 @@ class ShopifyClient:
             tracking["number"] = numeros[0]
         elif numeros:
             tracking["numbers"] = numeros
-        datos = self.graphql(MUTACION_CREAR_FULFILLMENT, {
-            "fulfillment": {
-                "lineItemsByFulfillmentOrder": [
-                    {"fulfillmentOrderId": fid} for fid in fulfillment_order_ids
-                ],
-                "notifyCustomer": bool(notificar),
-                "trackingInfo": tracking,
-            },
-        })
+        fulfillment = {
+            "lineItemsByFulfillmentOrder": [
+                {"fulfillmentOrderId": fid} for fid in fulfillment_order_ids
+            ],
+            "notifyCustomer": bool(notificar),
+        }
+        if numeros or url_rastreo:  # entrega sin guía: fulfillment sin trackingInfo
+            fulfillment["trackingInfo"] = tracking
+        datos = self.graphql(MUTACION_CREAR_FULFILLMENT, {"fulfillment": fulfillment})
         resultado = datos.get("fulfillmentCreate") or {}
         errores = resultado.get("userErrors") or []
         if errores:

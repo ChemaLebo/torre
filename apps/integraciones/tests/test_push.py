@@ -214,6 +214,16 @@ class MutacionesInventario2604Tests(TestCase):
         self.assertRegex(primera[0], r'@idempotent\(key: "[0-9a-f-]{36}"\)')
         self.assertNotEqual(primera[0], segunda[0])  # uuid4 distinto en cada intento
 
+    def test_fulfillment_sin_guia_va_sin_tracking_info(self):
+        api = self._api()
+        with patch.object(api, "graphql", return_value={"fulfillmentCreate": {}}) as graphql:
+            api.crear_fulfillment(["gid://shopify/FulfillmentOrder/1"], [], "", "")
+            api.crear_fulfillment(["gid://shopify/FulfillmentOrder/1"], ["ETQ-1"], "https://t/r/x/", "imile")
+        sin_guia, con_guia = (llamada.args[1]["fulfillment"] for llamada in graphql.call_args_list)
+        self.assertNotIn("trackingInfo", sin_guia)
+        self.assertTrue(sin_guia["notifyCustomer"])
+        self.assertEqual(con_guia["trackingInfo"], {"company": "imile", "url": "https://t/r/x/", "number": "ETQ-1"})
+
     def test_activar_inventario_lleva_idempotent(self):
         api = self._api()
         with patch.object(api, "graphql", return_value={"inventoryActivate": {}}) as graphql:
