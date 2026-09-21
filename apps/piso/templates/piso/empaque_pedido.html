@@ -313,23 +313,23 @@ function agregarRenglonKit(kitPk) {
     {% if paso == "caja" %}
     <label class="mt" for="caja_id">3 · Caja usada (opcional — prellena las medidas)</label>
     <select name="caja_id" id="caja_id">
-      <option value="">Sin caja del catálogo (caja propia del producto / bulto especial)</option>
+      <option value=""{% if dims_producto %} data-l="{{ dims_producto.0 }}" data-a="{{ dims_producto.1 }}" data-h="{{ dims_producto.2 }}" data-t="0"{% endif %}>Sin caja del catálogo (caja propia del producto{% if dims_producto %}: {{ dims_producto.0 }}×{{ dims_producto.1 }}×{{ dims_producto.2 }} cm{% endif %} / bulto especial)</option>
       {% for c in cajas_cliente %}
       <option value="{{ c.pk }}" data-l="{{ c.largo_cm }}" data-a="{{ c.ancho_cm }}" data-h="{{ c.alto_cm }}" data-t="{{ c.peso_gr }}">{{ c.nombre }} · {{ c.largo_cm }}×{{ c.ancho_cm }}×{{ c.alto_cm }} cm · tara {{ c.peso_gr }} g</option>
       {% endfor %}
     </select>
     <div class="fila mt">
-      <input type="number" name="largo_cm" id="dim-largo" min="1" value="{{ caja.largo_cm }}" aria-label="Largo en centímetros" style="max-width:100px">
+      <input type="number" name="largo_cm" id="dim-largo" min="1" value="{{ dims_iniciales.0 }}" aria-label="Largo en centímetros" style="max-width:100px">
       <span class="muted">×</span>
-      <input type="number" name="ancho_cm" id="dim-ancho" min="1" value="{{ caja.ancho_cm }}" aria-label="Ancho en centímetros" style="max-width:100px">
+      <input type="number" name="ancho_cm" id="dim-ancho" min="1" value="{{ dims_iniciales.1 }}" aria-label="Ancho en centímetros" style="max-width:100px">
       <span class="muted">×</span>
-      <input type="number" name="alto_cm" id="dim-alto" min="1" value="{{ caja.alto_cm }}" aria-label="Alto en centímetros" style="max-width:100px">
+      <input type="number" name="alto_cm" id="dim-alto" min="1" value="{{ dims_iniciales.2 }}" aria-label="Alto en centímetros" style="max-width:100px">
       <span class="muted">cm</span>
       <span class="muted">· tara</span>
       <input type="number" name="tara_gr" id="tara-gr" min="0" placeholder="Tara (g)" aria-label="Tara de la caja en gramos" style="max-width:110px">
       <span class="muted">g</span>
     </div>
-    <p class="small muted">Medidas SIEMPRE editables (3 cajas encintadas = un bulto con sus medidas). Van tal cual a la guía.</p>
+    <p class="small muted">Sin caja del catálogo, las medidas son las del producto{% if dims_producto and caja.lineas.count > 1 %} (altos apilados){% endif %}. Medidas SIEMPRE editables (3 cajas encintadas = un bulto con sus medidas). Van tal cual a la guía.</p>
     {% endif %}
 
     <p class="small muted mt">

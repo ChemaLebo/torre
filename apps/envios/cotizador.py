@@ -120,6 +120,20 @@ def dims_para(peso_kg):
     return (28, 19, 18) if Decimal(peso_kg) < 6 else (40, 30, 26)
 
 
+def dims_de_unidades(unidades_bin):
+    """Medidas reales cuando la caja es el producto mismo: un bin con UNA pieza
+    entera de un SKU con medidas regresa (largo, ancho, alto) del SKU (Chema,
+    2026-09-21: el 12 pack viaja en su propia caja). Cualquier otro caso, None:
+    el llamador cae a dims_para (estimado por peso)."""
+    if len(unidades_bin) != 1:
+        return None
+    linea, _peso, fraccion = unidades_bin[0]
+    sku = linea.sku
+    if fraccion != 1 or not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
+        return None
+    return (sku.largo_cm, sku.ancho_cm, sku.alto_cm)
+
+
 def _redondear_peso(peso_kg):
     """Al 0.5 superior, mínimo 0.5 — la llave del caché."""
     medio = (Decimal(str(peso_kg)) * 2).to_integral_value(rounding="ROUND_CEILING") / Decimal(2)
@@ -334,8 +348,10 @@ def _planificar(pedido, force, carriers):
         paquetes = []
         for i, unidades_bin in enumerate(bins, start=1):
             peso = _peso_bin(unidades_bin) if unidades_bin else _peso_total(pedido)
+            largo, ancho, alto = (unidades_bin and dims_de_unidades(unidades_bin)) or dims_para(peso)
             paquete = Paquete.objects.create(
                 pedido=pedido, numero=i, peso_kg=peso,
+                largo_cm=largo, ancho_cm=ancho, alto_cm=alto,
                 carrier="local", servicio="entrega_local",
                 precio_cotizado=tarifa_local,
                 fuera_de_meta=tarifa_local > meta,
@@ -381,7 +397,7 @@ def _planificar(pedido, force, carriers):
     paquetes = []
     for i, (unidades_bin, opcion) in enumerate(zip(bins_elegidos, opciones), start=1):
         peso = _peso_bin(unidades_bin)
-        largo, ancho, alto = dims_para(peso)
+        largo, ancho, alto = dims_de_unidades(unidades_bin) or dims_para(peso)
         paquete = Paquete.objects.create(
             pedido=pedido, numero=i, peso_kg=peso,
             largo_cm=largo, ancho_cm=ancho, alto_cm=alto,

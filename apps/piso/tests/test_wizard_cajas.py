@@ -59,6 +59,21 @@ class WizardCajasTests(PisoTestCase):
         # Contenido de ESA caja (texto_para_piso).
         self.assertContains(respuesta, "6 ×")
 
+    def test_sin_caja_del_catalogo_prellena_las_medidas_del_producto(self):
+        self.sku.largo_cm, self.sku.ancho_cm, self.sku.alto_cm = 26, 20, 25
+        self.sku.save()
+        respuesta = self.client.get(self.url)
+        # Caja 1 lleva 6 piezas: largo y ancho del producto, altos apilados.
+        self.assertContains(respuesta, 'data-l="26" data-a="20" data-h="150" data-t="0"')
+        self.assertContains(respuesta, 'id="dim-largo" min="1" value="26"')
+        self.assertContains(respuesta, 'id="dim-alto" min="1" value="150"')
+        # Sin medidas del producto: la opción no prellena y quedan las del plan.
+        self.sku.largo_cm = 0
+        self.sku.save()
+        respuesta = self.client.get(self.url)
+        self.assertNotContains(respuesta, 'data-t="0"')
+        self.assertContains(respuesta, 'id="dim-largo" min="1" value="40"')
+
     @override_settings(TORRE_PESO_MODO="bloquear")
     def test_peso_fuera_de_rango_no_toca_nada(self):
         respuesta = self.client.post(self.url, {

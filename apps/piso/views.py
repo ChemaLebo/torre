@@ -1233,6 +1233,24 @@ def _recordar_peso_empaque(request, pedido):
     ).strip()
 
 
+def _dims_producto(paquete):
+    """Medidas de "la caja es el producto" para ESTA caja del plan: largo y
+    ancho del producto más grande y los altos apilados por pieza. None si
+    alguna línea va fraccionada (media caja) o un producto no tiene medidas.
+    Prellena la opción "Sin caja del catálogo" del empaque (Chema 2026-09-21)."""
+    largo = ancho = alto = 0
+    lineas = list(paquete.lineas.select_related("linea_pedido__sku"))
+    if not lineas:
+        return None
+    for pl in lineas:
+        sku = pl.linea_pedido.sku
+        if pl.fraccion_de > 1 or not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
+            return None
+        largo, ancho = max(largo, sku.largo_cm), max(ancho, sku.ancho_cm)
+        alto += sku.alto_cm * pl.cantidad
+    return (largo, ancho, alto)
+
+
 def _render_paso_empacar(request, pedido):
     """Paso 1-2 del wizard: CAJA i de N (o caja única legacy) — foto + peso."""
     checklist, naked = _checklist_empaque(pedido)
@@ -1290,9 +1308,18 @@ def _render_paso_empacar(request, pedido):
         caja = pendientes[0]
         plan_gr = int(caja.peso_kg * 1000) if caja.peso_kg else 0
         peso_min, peso_max, tolerancia = _rango_peso(plan_gr)
+        dims_producto = _dims_producto(caja)
+        # Medidas iniciales: la caja del catálogo si ya se eligió; si no, las
+        # del producto; si no hay, lo que estimó el plan.
+        if caja.caja_id:
+            dims_iniciales = (caja.caja.largo_cm, caja.caja.ancho_cm, caja.caja.alto_cm)
+        else:
+            dims_iniciales = dims_producto or (caja.largo_cm, caja.ancho_cm, caja.alto_cm)
         contexto.update({
             "paso": "caja",
             "caja": caja,
+            "dims_producto": dims_producto,
+            "dims_iniciales": dims_iniciales,
             "total_cajas": len(cajas),
             "cajas_listas": len(cajas) - len(pendientes),
             "cajas_cliente": _cajas_cliente(pedido),

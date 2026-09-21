@@ -124,6 +124,19 @@ class TestPlanificarEnvio(BaseCotizador):
         self.assertEqual(unidades[self.caja12.pk], 2)
         self.assertEqual(unidades[self.six.pk], 3)
 
+    def test_caja_de_una_sola_pieza_nace_con_las_medidas_del_producto(self):
+        self.caja12.largo_cm, self.caja12.ancho_cm, self.caja12.alto_cm = 29, 22, 28
+        self.caja12.save()
+        pedido = self.pedido_con("06600", [(self.caja12, 1)])
+        (paquete,) = cotizador.planificar_envio(pedido)
+        self.assertEqual((paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm), (29, 22, 28))
+        # Con dos piezas (o un SKU sin medidas) sigue el estimado por peso.
+        pedido2 = self.pedido_con("06600", [(self.caja12, 2)])
+        for p in cotizador.planificar_envio(pedido2):
+            self.assertIn((p.largo_cm, p.ancho_cm, p.alto_cm), [(28, 19, 18), (40, 30, 26), (29, 22, 28)])
+            if p.lineas.get().cantidad == 2:
+                self.assertNotEqual((p.largo_cm, p.ancho_cm, p.alto_cm), (29, 22, 28))
+
     def test_idempotente_sin_force(self):
         pedido = self.pedido_con("06600", [(self.caja12, 2)])
         primera = cotizador.planificar_envio(pedido)
