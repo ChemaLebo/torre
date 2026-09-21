@@ -7,7 +7,7 @@
 | **Frecuencia / disparador** | Cada recepción. **El pallet se desarma el MISMO día, siempre** (cláusula de contrato) |
 | **Tiempo estándar** | 30–45 min por tarima (desestiba + conteo + captura) |
 | **EPP requerido** | Botas con casquillo + guantes anticorte. Faja recomendada. Lentes si aparece vidrio roto |
-| **Pantallas de Torre** | Piso → **Recepción** → **"Trabajar"** en la orden → tarjeta **"1 · Recibir"** → botón **"Registrar recepción"** |
+| **Pantallas de Torre** | Piso → **Recepción** → **"Trabajar"** en la orden → escanear el producto → **Contar** (por lote) → **Ubicar** |
 
 Una tarima sin desarmar es inventario fantasma: producto que existe pero no se puede vender, no se puede pickear y nadie sabe si llegó completo. Por eso la regla es brutal y simple: **lo que se descargó hoy, se cuenta hoy**. Y se cuenta **a ciegas**: tú no sabes cuánto anunció el cliente, así que tu número es un dato real, no una confirmación de dedo.
 
@@ -29,13 +29,13 @@ Una tarima sin desarmar es inventario fantasma: producto que existe pero no se p
 
 7. **Entiende por qué es ciego**: en el detalle de la orden, Torre te lo dice: *"Cuenta lo que llegó sin ver lo anunciado: aquí solo aparece lo que TÚ has capturado."* Si vieras el número anunciado, tu cerebro contaría "hasta llegar" a ese número. El conteo ciego es lo que hace que nuestro inventario valga: tu número contra el del cliente, sin copiarse.
 8. **Cuenta una columna (un SKU) completa**: piezas en buen estado por un lado, dañadas por otro. Cuenta dos veces si el número no te salió redondo a la primera.
-9. **Captura la línea en Torre**: en la tarjeta **"1 · Recibir"**:
-   - **Producto**: elige el SKU en el selector.
-   - **"En buen estado"**: tu conteo de piezas sanas.
+9. **Captura en Torre**: escanea el código de barras del producto (o tecléalo y pulsa **"Contar"**). Torre abre la cuenta de ESE producto:
+   - **Lote**: un botón por lote anunciado; con un solo lote viene marcado. Elige el que estás contando.
+   - **"¿Cuántas cuentas ahora?"**: tu conteo de piezas sanas de esa tanda. Acepta cero.
    - **"Dañadas"**: tu conteo de dañadas (Torre las manda solas a cuarentena).
-   - **"Foto de llegada"**: obligatoria si es la primera línea de la orden (SOP-02 paso 7); en líneas siguientes es opcional, pero toma foto SIEMPRE que registres dañadas.
-   - Pulsa **"Registrar recepción"**. Torre confirma: *"Recibido [SKU]: N en buen estado y N dañadas (van a cuarentena). Ahora ubícalo para que sea vendible."*
-10. **Puedes registrar la misma línea varias veces** (por tandas, conforme desestibas): Torre acumula. La tabla "Líneas de la orden" te muestra Recibido / Dañado / Por ubicar de lo que TÚ has capturado.
+   - La **foto de llegada** es obligatoria antes de la primera cuenta de la orden (SOP-02 paso 7).
+   - Pulsa **"Contado · ir a ubicar"**. Torre confirma: *"[SKU]: N contadas (lote X). Ahora ubícalas."* y te lleva a Ubicar con ese lote ya elegido.
+10. **Puedes contar el mismo producto varias veces** (por tandas, conforme desestibas): Torre acumula. Reescanear y poner **cero** no suma nada: solo te regresa a Ubicar lo que ya está contado. Ubicar ya no cuenta: deja ubicar hasta lo contado sin ubicar, ni una más. La tabla "Líneas de la orden" te muestra Recibido / Dañado / Por ubicar de lo que TÚ has capturado.
 11. **Repite** columna por columna hasta terminar la tarima, y tarima por tarima hasta terminar la orden. Ve mandando producto contado a put-away (SOP-04) sin esperar a terminar todo: el reloj de "vendible" corre.
 
 ## C. Cierre de la orden
@@ -89,7 +89,7 @@ DESESTIBA
 
 CONTEO CIEGO
 [ ] Conté SIN ver lo anunciado
-[ ] Cada tanda capturada en "1 · Recibir" → "Registrar recepción"
+[ ] Cada tanda contada en "Contar" (por lote) → "Contado · ir a ubicar"
 [ ] Buenas: ______  Dañadas: ______ (van a cuarentena)
 [ ] Producto contado enviado a put-away (SOP-04) sin esperar
 

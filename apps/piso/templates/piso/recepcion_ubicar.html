@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Ubicar · {{ orden.folio }}{% endblock %}
 {% block content %}
-{# Ubicar piezas recibidas (una recién escaneada o varias). Paso 1: lote (si hay que elegirlo o capturarlo). Paso 2: anaquel del plan para ese SKU y lote (o cuarentena), cuántas van ahí, qué más vive en el anaquel, cantidad y salidas. #}
+{# Ubicar las piezas contadas en Contar. Paso 1: lote (si no vino de Contar y hay que elegirlo o capturarlo). Paso 2: anaquel del plan para ese SKU y lote (o cuarentena), cuántas van ahí, qué más vive en el anaquel, cantidad (hasta lo contado sin ubicar) y salidas. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
@@ -94,8 +94,8 @@
   </datalist>
 
   <label for="cantidad" class="mt">¿Cuántas ubicas ahora?</label>
-  <input type="number" name="cantidad" id="cantidad" min="1" inputmode="numeric" value="1" autocomplete="off">
-  <div class="small muted">Ubicar N cuenta N: tienes {{ por_ubicar }} escaneada{{ por_ubicar|pluralize }} sin ubicar; si ubicas más, la diferencia se cuenta como recibida ahora{% if paso and paso.ubicacion %}. En este anaquel van {{ faltan_paso }}: si pones más, el sobrante lo cuenta en el siguiente anaquel del plan{% endif %}.</div>
+  <input type="number" name="cantidad" id="cantidad" min="1" max="{{ por_ubicar }}" inputmode="numeric" value="{{ cantidad_default }}" autocomplete="off">
+  <div class="small muted">Tienes {{ por_ubicar }} contada{{ por_ubicar|pluralize }} sin ubicar (es el máximo; ubicar ya no cuenta: para sumar, <a href="{% url 'piso:recepcion_contar' orden.pk %}?sku={{ sku.pk }}">cuenta más</a>){% if paso and paso.ubicacion %}. En este anaquel van {{ faltan_paso }} según el plan; si pones más, el sobrante sigue en el siguiente anaquel del plan{% endif %}.</div>
 
   <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADAS · siguiente</button></div>
 </form>

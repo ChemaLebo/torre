@@ -8,6 +8,7 @@ contrato) — el piso jamás toca Saldo, Movimiento ni estados directo.
 import re
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib import messages
@@ -559,8 +560,9 @@ def _linea_por_codigo(orden, valor):
 
 
 def _recepcion_escanear(request, orden):
-    """Un escaneo = UNA pieza recibida al instante; pasa a la pantalla de ubicar.
-    Exige la foto de llegada antes del primer escaneo (SOP RE-01)."""
+    """Un escaneo identifica el producto y abre su cuenta por lote (Contar);
+    ya no suma piezas por sí solo: el "1" automático quedaba aislado y contaba
+    de más (Chema, 2026-09-21). Exige la foto de llegada (SOP RE-01)."""
     destino = redirect("piso:recepcion_detalle", pk=orden.pk)
     linea = _linea_por_codigo(orden, request.POST.get("codigo"))
     if linea is None:
@@ -569,13 +571,78 @@ def _recepcion_escanear(request, orden):
     if not EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio, tipo="llegada").exists():
         messages.error(request, "Tómale foto al camión/tarimas antes de registrar la primera línea.")
         return destino
+    return redirect(f"{reverse('piso:recepcion_contar', args=[orden.pk])}?sku={linea.sku_id}")
+
+
+@rol_requerido("piso", "mesa")
+def recepcion_contar(request, pk):
+    """Cuenta de UN producto de la orden, por lote: un radio por línea (lote
+    anunciado, sin cantidades anunciadas: conteo ciego), cuántas cuentas
+    ahora (acepta cero) y cuántas dañadas; al confirmar se recibe en esa
+    línea y se pasa a Ubicar con el lote ya elegido. Cero = solo volver a
+    Ubicar lo ya contado (reescanear para acomodar)."""
+    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
+    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
+    if orden.estado == OrdenEntrada.CERRADA:
+        messages.error(request, f"La orden {orden.folio} ya está cerrada; no acepta más conteos.")
+        return volver
+    sku_id = request.POST.get("sku_id") or request.GET.get("sku")
+    lineas = [l for l in orden.lineas.select_related("sku") if str(l.sku_id) == str(sku_id)]
+    if not lineas:
+        messages.error(request, "Escanea un producto de la orden para contarlo.")
+        return volver
+    sku = lineas[0].sku
+    if request.method == "POST":
+        return _recepcion_contar_registrar(request, orden, sku, lineas)
+    from apps.inventario.services import _suma  # lazy por contrato
+    return render(request, "piso/recepcion_contar.html", {
+        "seccion": "recepcion", "orden": orden, "sku": sku, "lineas": lineas,
+        "por_ubicar": _suma(sku, Saldo.EN_PUTAWAY),
+        "linea_unica": lineas[0] if len(lineas) == 1 else None,
+    })
+
+
+def _recepcion_contar_registrar(request, orden, sku, lineas):
+    """POST de Contar: recibe lo contado (buenas y dañadas) en la línea del
+    lote elegido y manda a Ubicar con ese lote. Nada contado = directo a Ubicar."""
     from apps.inventario.services import recibir  # lazy por contrato
+    reintentar = redirect(f"{reverse('piso:recepcion_contar', args=[orden.pk])}?sku={sku.pk}")
+    linea = next((l for l in lineas if str(l.pk) == str(request.POST.get("linea_id") or "")), None)
+    if linea is None:
+        messages.error(request, "Elige el lote que estás contando.")
+        return reintentar
     try:
-        recibir(linea, 1, 0, request.user)
+        cantidad = _entero(
+            request.POST.get("cantidad") or 0,
+            "Captura cuántas cuentas, en número entero (cero si solo vas a ubicar).",
+        )
+        danadas = _entero(request.POST.get("danadas") or 0, "Captura las dañadas en número entero.")
+        if cantidad < 0 or danadas < 0:
+            raise ValueError("Las cantidades no pueden ser negativas.")
+        if (cantidad or danadas) and not EvidenciaFoto.objects.filter(
+            entidad="asn", entidad_id=orden.folio, tipo="llegada",
+        ).exists():
+            raise ValueError("Tómale foto al camión/tarimas antes de registrar la primera línea.")
+        if cantidad or danadas:
+            recibir(linea, cantidad, danadas, request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
-        return destino
-    return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={linea.sku_id}")
+        return reintentar
+    partes = []
+    if cantidad:
+        partes.append(f"{cantidad} contada{'s' if cantidad != 1 else ''}")
+    if danadas:
+        partes.append(f"{danadas} dañada{'s' if danadas != 1 else ''} a cuarentena")
+    lote = (linea.lote_codigo or "").strip()
+    if partes:
+        de_lote = f" (lote {lote})" if lote else ""
+        messages.success(request, f"{sku.codigo}: {' y '.join(partes)}{de_lote}. Ahora ubícalas.")
+    destino = f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}"
+    if lote:
+        destino += f"&lote={quote(lote)}"
+        if linea.fecha_caducidad:
+            destino += f"&fecha_caducidad={linea.fecha_caducidad.isoformat()}"
+    return redirect(destino)
 
 
 @rol_requerido("piso", "mesa")
@@ -598,7 +665,8 @@ def recepcion_ubicar(request, pk):
     if request.method == "POST":
         return _recepcion_ubicar_pieza(request, orden, sku, lineas)
 
-    if _suma(sku, Saldo.EN_PUTAWAY) <= 0:
+    por_ubicar = _suma(sku, Saldo.EN_PUTAWAY)
+    if por_ubicar <= 0:
         messages.info(request, f"No hay piezas de {sku.codigo} en recepción por ubicar.")
         return volver
     # 1) El lote va ANTES del anaquel: fijo si la orden anuncia uno, a elegir si
@@ -627,7 +695,10 @@ def recepcion_ubicar(request, pk):
         "seccion": "recepcion", "orden": orden, "sku": sku,
         "lotes": lotes, "modo_lote": modo_lote, "lote": lote_elegido, "caducidad": caducidad_elegida,
         "lotes_sugeridos": lotes_sugeridos(sku, orden) if modo_lote == "capturar" else [],
-        "por_ubicar": _suma(sku, Saldo.EN_PUTAWAY),
+        "por_ubicar": por_ubicar,
+        # Prellenado con lo contado sin ubicar: el operador lo baja si acomoda
+        # en tandas; el tope es lo contado, no el paso del plan (Chema 2026-09-21).
+        "cantidad_default": por_ubicar,
         "pedir_lote": modo_lote in ("elegir", "capturar") and not lote_elegido,
     }
     if contexto["pedir_lote"]:
@@ -666,10 +737,10 @@ def recepcion_ubicar(request, pk):
 
 def _recepcion_ubicar_pieza(request, orden, sku, lineas):
     """POST de la pantalla de ubicar: ubicar N (al anaquel elegido o a
-    cuarentena si viene vacío) o marcar la pieza dañada. Ubicar N cuenta N:
-    se usan las escaneadas sin ubicar y, si N es mayor, la diferencia se
-    recibe primero en la línea del lote elegido (decisión de Chema 2026-09-18)."""
-    from apps.inventario.services import _suma, marcar_danada, recibir, ubicar_pieza  # lazy por contrato
+    cuarentena si viene vacío) o marcar la pieza dañada. Ubicar ya no cuenta:
+    N no puede pasar de lo contado sin ubicar (la cuenta vive en Contar,
+    Chema 2026-09-21); el sobrante del paso del plan sigue al siguiente anaquel."""
+    from apps.inventario.services import _suma, marcar_danada, ubicar_pieza  # lazy por contrato
 
     volver = redirect("piso:recepcion_detalle", pk=orden.pk)
     accion = request.POST.get("accion")
@@ -706,18 +777,18 @@ def _recepcion_ubicar_pieza(request, orden, sku, lineas):
         cantidad = _entero(request.POST.get("cantidad") or 1, "Captura cuántas piezas ubicas, en número entero.")
         if cantidad < 1:
             raise ValueError("La cantidad a ubicar es mínimo 1.")
+        contadas = _suma(sku, Saldo.EN_PUTAWAY)
+        if cantidad > contadas:
+            raise ValueError(
+                f"Solo tienes {contadas} contada{'s' if contadas != 1 else ''} sin ubicar de {sku.codigo}. "
+                "Ubicar ya no cuenta: escanea el producto y captura las que faltan en Contar."
+            )
         with transaction.atomic():
-            contadas = max(cantidad - _suma(sku, Saldo.EN_PUTAWAY), 0)
-            if contadas:
-                linea = next((l for l in lineas if (l.lote_codigo or "").strip() == lote_codigo), lineas[0])
-                recibir(linea, contadas, 0, request.user)
             destino = ubicar_pieza(orden, sku, lote, ubicacion, request.user, cantidad)
     except ValueError as exc:
         messages.error(request, str(exc))
         return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
     piezas = "1 pieza" if cantidad == 1 else f"{cantidad} piezas"
-    if contadas:
-        piezas += f" ({contadas} contada{'s' if contadas > 1 else ''} como recibida{'s' if contadas > 1 else ''} ahora)"
     if destino is None:
         messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, {piezas} a cuarentena. Escanea la siguiente.")
     else:

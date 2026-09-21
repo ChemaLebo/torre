@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Contar · {{ orden.folio }}{% endblock %}
+{% block content %}
+{# Cuenta de UN producto por lote: un radio por lote anunciado (sin cantidades anunciadas: conteo ciego), cuántas cuentas ahora (acepta cero: solo pasar a ubicar) y dañadas. Al confirmar, Ubicar con el lote ya elegido. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
+    <h1>Contar</h1>
+    <div class="small"><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }} · {{ por_ubicar }} contada{{ por_ubicar|pluralize }} sin ubicar</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Volver al escáner</a>
+</div>
+
+<form method="post" class="card" id="form-contar">{% csrf_token %}
+  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
+  <div class="eyebrow">¿De qué lote es lo que cuentas?</div>
+  {% for l in lineas %}
+  <label style="display:block" class="mt">
+    <input type="radio" name="linea_id" value="{{ l.pk }}" required{% if linea_unica %} checked{% endif %}>
+    {% if l.lote_codigo %}<span class="mono">{{ l.lote_codigo }}</span>{% if l.fecha_caducidad %} · caduca {{ l.fecha_caducidad|date:"Y-m-d" }}{% endif %}{% else %}Sin lote anunciado{% endif %}
+    <span class="small muted">· contadas hasta ahora {{ l.cantidad_recibida }}{% if l.cantidad_danada %} · dañadas {{ l.cantidad_danada }}{% endif %}</span>
+  </label>
+  {% endfor %}
+
+  <div id="campos-conteo" class="mt"{% if not linea_unica %} hidden{% endif %}>
+    <label for="cantidad">¿Cuántas cuentas ahora?</label>
+    <input type="number" name="cantidad" id="cantidad" min="0" inputmode="numeric" value="0" autocomplete="off">
+    <div class="small muted">Cero = no sumas nada y pasas a ubicar lo que ya está contado.</div>
+    <label for="danadas" class="mt">Dañadas (van a cuarentena)</label>
+    <input type="number" name="danadas" id="danadas" min="0" inputmode="numeric" value="0" autocomplete="off">
+    <div class="mt"><button class="btn primario gigante bloque" type="submit">Contado · ir a ubicar</button></div>
+  </div>
+</form>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var campos = document.getElementById("campos-conteo");
+  var cantidad = document.getElementById("cantidad");
+  var radios = document.querySelectorAll('input[name="linea_id"]');
+  function muestra() { campos.hidden = false; cantidad.focus(); cantidad.select(); }
+  radios.forEach(function (r) { r.addEventListener("change", muestra); });
+  if (document.querySelector('input[name="linea_id"]:checked')) muestra();
+  cantidad.addEventListener("focus", function () { cantidad.select(); });
+});
+</script>
+{% endblock %}

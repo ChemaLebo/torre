@@ -31,14 +31,14 @@
 </div>
 {% else %}
 <div class="card mt">
-  <div class="titulo"><h2>Escanea una pieza</h2><span class="pill accent">1 escaneo = 1 pieza</span></div>
-  <p class="small">Apunta al código de barras del producto. Torre la cuenta como recibida y te dice dónde ubicarla.</p>
+  <div class="titulo"><h2>Escanea un producto</h2><span class="pill accent">escanear · contar · ubicar</span></div>
+  <p class="small">Apunta al código de barras. Torre abre la cuenta de ese producto por lote: capturas cuántas y te dice dónde ubicarlas. Reescanea para volver a ubicar lo ya contado.</p>
   <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
   {# Sin cámara: teclea el código y confirma. #}
   <form method="post" class="fila mt" id="form-escanear">{% csrf_token %}
     <input type="hidden" name="accion" value="escanear">
     <input type="text" name="codigo" id="codigo" class="mono crece" placeholder="código de barras o SKU" autocomplete="off" autofocus>
-    <button class="btn primario" type="submit">Recibir 1</button>
+    <button class="btn primario" type="submit">Contar</button>
   </form>
 </div>
 
@@ -67,7 +67,7 @@
 
 <div class="card mt">
   <div class="titulo"><h2>Líneas de la orden</h2><span class="pill accent">conteo ciego</span></div>
-  <p class="small">Cada escaneo cuenta UNA pieza recibida y te lleva a ubicarla. Aquí solo aparece lo que TÚ has capturado.</p>
+  <p class="small">Escanea el producto, captura cuántas cuentas por lote y ubícalas. Aquí solo aparece lo que TÚ has capturado.</p>
   {% for linea in lineas %}
   <div class="corral-fila">
     <div class="crece">

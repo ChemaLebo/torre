@@ -135,7 +135,7 @@
   "titulo": "Desarmado de tarimas y conteo ciego",
   "emoji": "📦",
   "resumen": "Una tarima sin desarmar es inventario fantasma: producto que existe pero no se puede vender, no se puede pickear y nadie sabe si llegó completo. Por eso la regla es brutal y simple: lo que se descargó hoy, se cuenta hoy. Y se cuenta a ciegas: tú no sabes cuánto anunció el cliente, así que tu número es un dato real, no una confirmación de dedo.",
-  "palabras": 1336,
+  "palabras": 1388,
   "minutos": 7,
   "grupo": "Operación diaria",
   "version": "v1.0 · Agosto 2026",
@@ -158,7 +158,7 @@
    ],
    [
     "Pantallas de Torre",
-    "Piso → <strong>Recepción</strong> → <strong>&quot;Trabajar&quot;</strong> en la orden → tarjeta <strong>&quot;1 · Recibir&quot;</strong> → botón <strong>&quot;Registrar recepción&quot;</strong>"
+    "Piso → <strong>Recepción</strong> → <strong>&quot;Trabajar&quot;</strong> en la orden → escanear el producto → <strong>Contar</strong> (por lote) → <strong>Ubicar</strong>"
    ]
   ],
   "toc": [
