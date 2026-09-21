@@ -55,6 +55,37 @@ class DestinoEnviaTests(TestCase):
         destino = EnviaAdapter._destino(self._pedido("97000", "YU"))
         self.assertEqual(destino["state"], "YU")
 
+    def _numero(self, address1, address2=None, **extra):
+        from types import SimpleNamespace
+
+        from apps.envios.adapters import EnviaAdapter
+        direccion = {"address1": address1, "city": "X", "zip": "72830", "province_code": "PUE"}
+        if address2 is not None:
+            direccion["address2"] = address2
+        direccion.update(extra)
+        pedido = SimpleNamespace(
+            cp="72830", direccion=direccion,
+            comprador_nombre="Prueba", comprador_tel="", comprador_email="",
+        )
+        return EnviaAdapter._destino(pedido)["number"]
+
+    def test_numero_exterior_viaja_en_su_campo(self):
+        # amPm rechaza "424 - El numero exterior es requerido" aunque el número
+        # venga en la calle: PED-00030 y PED-00034 (2026-09-21).
+        self.assertEqual(self._numero("Lomas de Angelopolis 1 , La Isla 1, Chipre 139"), "139")
+        self.assertEqual(self._numero("ICHPAATUM 129", " Col. Fovissste V etapa (Estatuto Jurídico)"), "129")
+        self.assertEqual(self._numero("Calle 5 de Mayo 12 Int 3"), "12")
+        self.assertEqual(self._numero("Calle 10 No. 25, Depto 4"), "25")
+        self.assertEqual(self._numero("Blvd Atlixco #45-B"), "45-B")
+        self.assertEqual(self._numero("Av. Torres de Ixtapantongo 380, Local E"), "380")
+        self.assertEqual(self._numero("1234 Main St"), "1234")
+        self.assertEqual(self._numero("Retorno 3 Mz 5 Lt 12"), "3")
+        self.assertEqual(self._numero("Camino Real", "#12"), "12")
+        self.assertEqual(self._numero("Camino Real", "Sección 2"), "S/N")
+        self.assertEqual(self._numero("Carretera a Comala km 5"), "S/N")
+        self.assertEqual(self._numero("Conocida"), "S/N")
+        self.assertEqual(self._numero("Calle 10 No. 25", number="7"), "7")  # explícito manda
+
     def test_diccionario_cubre_los_32_estados(self):
         from apps.envios.cotizador import ESTADO_ENVIA, ESTADOS_MX, estado_envia
         self.assertEqual(len(ESTADOS_MX), 32)

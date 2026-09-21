@@ -246,8 +246,54 @@ class EnviaAdapter(CarrierAdapter):
         """
         return dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
 
-    @staticmethod
-    def _destino(pedido):
+    # Número exterior: los conectores de envia lo piden en SU campo — amPm
+    # rechaza con "424 - El numero exterior es requerido" aunque venga en la
+    # calle (PED-00030/00034, 2026-09-21). Shopify lo trae dentro de address1.
+    _RE_NUMERO_MARCADO = re.compile(
+        r"(?:#|\bn[úu]m(?:ero)?\b\.?|\bno\b\.?)\s*:?\s*([0-9]{1,6}(?:-?[A-Za-z]{1,2})?)\b",
+        re.IGNORECASE,
+    )
+    _RE_NUMERO_SUELTO = re.compile(r"(?<![A-Za-z0-9])([0-9]{1,6}(?:-?[A-Za-z]{1,2})?)(?![A-Za-z0-9])")
+    _MARCAS_NO_EXTERIOR = frozenset({
+        "int", "interior", "depto", "dpto", "departamento", "piso", "local", "oficina",
+        "of", "edif", "edificio", "torre", "mz", "manzana", "lt", "lote", "casa", "km",
+    })
+
+    @classmethod
+    def _numero_exterior(cls, direccion):
+        """Número exterior de la dirección, para el campo `number` de envia.
+
+        Manda el dato explícito (`number`) si viene. Si no, se busca en
+        address1: primero con marcador ("No. 25", "#45-B", "Núm. 12"); luego
+        el ÚLTIMO número suelto que no sea de interior/depto/piso/local ni de
+        manzana/lote/km ("Chipre 139" → 139, "5 de Mayo 12 Int 3" → 12,
+        "1234 Main St" → 1234). En address2 solo cuenta con marcador (ahí va
+        la colonia, y "Sección 2" no es un número de casa). Sin nada, "S/N":
+        el conector exige algo y esa es la convención mexicana.
+        """
+        explicito = str(direccion.get("number") or "").strip()
+        if explicito:
+            return explicito
+        calle = str(direccion.get("address1") or direccion.get("street") or direccion.get("calle") or "")
+        marcado = cls._RE_NUMERO_MARCADO.search(calle)
+        if marcado:
+            return marcado.group(1)
+        candidatos = []
+        for m in cls._RE_NUMERO_SUELTO.finditer(calle):
+            previa = re.search(r"([A-Za-zÁÉÍÓÚáéíóúñÑ]+)\.?\s*$", calle[: m.start()])
+            if previa and previa.group(1).lower() in cls._MARCAS_NO_EXTERIOR:
+                continue
+            candidatos.append(m.group(1))
+        if candidatos:
+            return candidatos[-1]
+        segunda = str(direccion.get("address2") or "")
+        marcado = cls._RE_NUMERO_MARCADO.search(segunda)
+        if marcado:
+            return marcado.group(1)
+        return "S/N"
+
+    @classmethod
+    def _destino(cls, pedido):
         from .cotizador import CP_ESTADO, estado_envia  # lazy: la misma tabla que usa el cotizador
 
         d = pedido.direccion or {}
@@ -267,7 +313,7 @@ class EnviaAdapter(CarrierAdapter):
         return {
             "name": pedido.comprador_nombre or d.get("name", ""),
             "street": d.get("address1") or d.get("street") or d.get("calle", ""),
-            "number": str(d.get("number") or ""),
+            "number": cls._numero_exterior(d),
             "district": d.get("address2") or d.get("colonia", ""),
             "city": d.get("city") or d.get("ciudad", ""),
             "state": estado,
