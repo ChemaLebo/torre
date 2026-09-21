@@ -40,6 +40,8 @@
       <button class="btn chico" type="submit">{% if orden.plan_acomodo.pasos %}Rehacer plan{% else %}Planear acomodo{% endif %}</button>
     </form>
     {% if orden.plan_acomodo.pasos %}
+    {# La hoja del piso: el plan tal cual (sin descontar ubicadas), SKU, nombre, código de barras, lote, rack y cantidad. #}
+    <a class="btn chico" href="{% url 'mesa:recepcion_plan_csv' orden.pk %}">Exportar plan (CSV)</a>
     {# Reinicio del acomodo: todo lo que la orden ya acomodó (plan, a mano y cuarentena por falta de espacio) vuelve a recepción; los conteos se quedan. #}
     <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar el acomodo de {{ orden.folio }}? Todo lo que esta orden ya acomodó regresa a recepción (anaqueles del plan, acomodado a mano y cuarentena por falta de espacio) y el piso lo vuelve a acomodar desde Por ubicar, SIN volver a escanear: los conteos se quedan. Las dañadas se quedan en cuarentena.');">{% csrf_token %}
       <input type="hidden" name="accion" value="reiniciar_acomodo">
@@ -53,6 +55,14 @@
       <input type="hidden" name="accion" value="reiniciar_recepcion">
       <input type="hidden" name="orden_id" value="{{ orden.pk }}">
       <button class="btn chico" type="submit">Reiniciar recepción (conteos a cero)</button>
+    </form>
+    {% endif %}
+    {% if orden.plan_acomodo.pasos %}
+    {# Cierre exprés: cada línea se completa a lo anunciado, todo se ubica según el plan y la orden se cierra; el piso acomoda después con el plan exportado. #}
+    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Completar la recepción de {{ orden.folio }} con lo anunciado? Cada línea queda recibida como se anunció, todo se ubica en el sistema según el plan vigente (exporta el plan antes) y la orden se cierra: el producto queda vendible ya. El piso acomoda físicamente después con el plan exportado.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="completar_anunciado">
+      <input type="hidden" name="orden_id" value="{{ orden.pk }}">
+      <button class="btn chico primario" type="submit">Completar recepción con lo anunciado</button>
     </form>
     {% endif %}
   </div>

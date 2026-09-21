@@ -481,6 +481,56 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.linea.refresh_from_db()
         self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (1, 0))
 
+    def test_completar_con_lo_anunciado_recibe_lo_que_falta_ubica_segun_plan_y_cierra(self):
+        from apps.inventario.models import OrdenEntrada, Saldo
+        from apps.inventario.services import completar_recepcion_con_lo_anunciado
+
+        self._foto()
+        self.client.get(self.url)
+        for _ in range(2):  # 2 ubicadas por el plan
+            self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})  # 1 en recepción
+        orden = OrdenEntrada.objects.get(pk=self.orden.pk)
+        r = completar_recepcion_con_lo_anunciado(orden, self.operador)
+        self.assertEqual(r, {"recibidas": 2, "ubicadas": 3, "a_cuarentena": 0})
+        self.linea.refresh_from_db()
+        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (5, 0))
+        vendible = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
+        self.assertEqual((vendible.ubicacion.codigo, vendible.lote.codigo, vendible.cantidad), ("PIC-1-I-F-2", "L-ASN", 5))
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        orden.refresh_from_db()
+        self.assertEqual(orden.estado, OrdenEntrada.CERRADA)
+        self.assertEqual(orden.plan_acomodo["pasos"][0]["ubicadas"], 5)
+        with self.assertRaises(ValueError):
+            completar_recepcion_con_lo_anunciado(orden, self.operador)  # ya cerrada
+
+    def test_mesa_exporta_el_plan_tal_cual_y_completa_con_lo_anunciado(self):
+        from django.contrib.auth import get_user_model
+
+        from apps.core.models import PerfilUsuario
+        from apps.inventario.models import OrdenEntrada
+
+        self._foto()
+        self.client.get(self.url)
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        self.client.logout()
+        mesa = get_user_model().objects.create_user("mesa-plan-csv", password="x12345678")
+        PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
+        self.client.force_login(mesa)
+        respuesta = self.client.get(reverse("mesa:recepciones"), {"cliente": self.cliente.slug})
+        self.assertContains(respuesta, "Exportar plan (CSV)")
+        self.assertContains(respuesta, 'value="completar_anunciado"')
+        respuesta = self.client.get(reverse("mesa:recepcion_plan_csv", args=[self.orden.pk]))
+        self.assertEqual(respuesta["Content-Type"], "text/csv; charset=utf-8")
+        cuerpo = respuesta.content.decode("utf-8-sig")
+        self.assertEqual(cuerpo.splitlines()[0], "sku,nombre,codigo_barras,lote,rack,cantidad")
+        self.assertIn(f"{self.sku.codigo},{self.sku.descripcion},7500000000017,L-ASN,PIC-1-I-F-2,5", cuerpo)  # el plan sin descontar la ubicada
+        respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "completar_anunciado", "orden_id": self.orden.pk}, follow=True)
+        self.assertContains(respuesta, "cerrada con lo anunciado: 4 pieza(s) recibidas")
+        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).estado, OrdenEntrada.CERRADA)
+
     def test_mesa_ve_el_plan_y_lo_rehace(self):
         from apps.inventario.models import OrdenEntrada
 

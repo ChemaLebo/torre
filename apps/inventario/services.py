@@ -2081,6 +2081,72 @@ def reiniciar_acomodo(orden, actor=None):
     return r
 
 
+def _ejecutar_plan_acomodo(orden, lineas, actor, resumen):
+    """Ubica (o manda a cuarentena) lo pendiente de cada paso del plan vigente,
+    hasta lo que haya en recepción del SKU; el lote sale del código del paso
+    (con la caducidad de la línea). Un paso cuyo anaquel ya no existe se salta:
+    lo recoge el replan. Suma a `resumen` ubicadas y a_cuarentena."""
+    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+
+    for paso in list((orden.plan_acomodo or {}).get("pasos", [])):
+        pendiente = paso["cantidad"] - paso["ubicadas"]
+        if pendiente <= 0:
+            continue
+        sku = SKU_por_id(paso["sku_id"], lineas)
+        n = min(pendiente, _suma(sku, Saldo.EN_PUTAWAY))
+        if n <= 0:
+            continue
+        lote = None
+        if paso.get("lote"):
+            linea = next((l for l in lineas if l.sku_id == sku.pk and (l.lote_codigo or "").strip() == paso["lote"]), None)
+            lote = obtener_o_crear_lote(sku, paso["lote"], linea.fecha_caducidad if linea else None)
+        ubicacion = None
+        if paso.get("ubicacion"):
+            ubicacion = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
+            if ubicacion is None:
+                continue
+        if ubicar_pieza(orden, sku, lote, ubicacion, actor, n) is None:
+            resumen["a_cuarentena"] += n
+        else:
+            resumen["ubicadas"] += n
+
+
+def completar_recepcion_con_lo_anunciado(orden, actor=None):
+    """Cierre exprés (Chema 2026-09-20): la recepción queda como se anunció y
+    acomodada según el plan, sin escanear pieza por pieza; el piso acomoda
+    físicamente después con el plan exportado. 1) Cada línea recibe lo que le
+    falta para llegar a lo anunciado (las dañadas cuentan como llegadas).
+    2) Se ejecuta el plan vigente paso por paso (_ejecutar_plan_acomodo); si
+    no había plan se planea, y si algo queda en recepción sin paso se rehace
+    una vez y se ejecuta. 3) Cierra la recepción (cerrar_recepcion). Todo en
+    una transacción: si un paso falla (p. ej. SKU que exige lote y la línea no
+    lo anunció) no cambia nada. Regresa {"recibidas", "ubicadas", "a_cuarentena"}."""
+    if orden.estado == OrdenEntrada.CERRADA:
+        raise ValueError(f"La orden {orden.folio} ya está cerrada.")
+    resumen = {"recibidas": 0, "ubicadas": 0, "a_cuarentena": 0}
+    with transaction.atomic():
+        lineas = list(orden.lineas.select_related("sku").order_by("pk"))
+        for linea in lineas:
+            faltante = linea.cantidad_anunciada - linea.cantidad_recibida - linea.cantidad_danada
+            if faltante > 0:
+                recibir(linea, faltante, 0, actor)
+                resumen["recibidas"] += faltante
+        if not (orden.plan_acomodo or {}).get("pasos"):
+            planear_acomodo(orden, actor)
+        for intento in range(2):
+            _ejecutar_plan_acomodo(orden, lineas, actor, resumen)
+            if not any(_suma(l.sku, Saldo.EN_PUTAWAY) for l in lineas):
+                break
+            if intento == 0:
+                planear_acomodo(orden, actor)
+        registrar_evento(
+            "asn", orden.folio, "completada_con_lo_anunciado", actor=actor, cliente=orden.cliente,
+            delta=dict(resumen), motivo="Cierre exprés: recibida como se anunció y acomodada según el plan; el piso acomoda con el plan exportado.",
+        )
+        cerrar_recepcion(orden, actor)
+    return resumen
+
+
 def reiniciar_recepcion(orden, actor=None):
     """La recepción vuelve a cero para recontar todo escaneando (decisión de
     Chema 2026-09-18): primero lo acomodado regresa a recepción

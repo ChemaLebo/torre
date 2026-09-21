@@ -1158,7 +1158,7 @@ def recepciones(request):
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
-    if request.method == "POST" and request.POST.get("accion") in ("replanear", "reiniciar_acomodo", "reiniciar_recepcion"):
+    if request.method == "POST" and request.POST.get("accion") in ("replanear", "reiniciar_acomodo", "reiniciar_recepcion", "completar_anunciado"):
         return _recepciones_replanear(request)
 
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
@@ -1401,6 +1401,20 @@ def _recepciones_replanear(request):
                 + (f"; {r['no_encontradas']} no se encontraron (apartadas, vendidas o ya no estaban)" if r["no_encontradas"] else "")
                 + ". El plan se rehizo: el piso vuelve a ubicar desde 'Por ubicar'.",
             )
+    elif request.POST.get("accion") == "completar_anunciado":
+        from apps.inventario.services import completar_recepcion_con_lo_anunciado
+        try:
+            r = completar_recepcion_con_lo_anunciado(orden, request.user)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(
+                request,
+                f"{orden.folio} cerrada con lo anunciado: {r['recibidas']} pieza(s) recibidas para completar las líneas, "
+                f"{r['ubicadas']} ubicadas según el plan"
+                + (f" y {r['a_cuarentena']} a cuarentena (sin anaquel en el plan)" if r["a_cuarentena"] else "")
+                + ". Todo el producto quedó vendible; el piso acomoda físicamente con el plan exportado.",
+            )
     elif request.POST.get("accion") == "reiniciar_recepcion":
         from apps.inventario.services import reiniciar_recepcion
         try:
@@ -1420,6 +1434,31 @@ def _recepciones_replanear(request):
         plan = planear_acomodo(orden, request.user)
         messages.success(request, f"Plan de acomodo de {orden.folio} rehecho: {len(plan['pasos'])} paso(s).")
     return redirect(reverse("mesa:recepciones") + f"?cliente={orden.cliente.slug}")
+
+
+@rol_requerido("mesa")
+def recepcion_plan_csv(request, pk):
+    """El plan de acomodo de la orden tal cual está guardado, sin descontar
+    ubicadas: SKU, nombre, código de barras, lote, rack y cantidad por paso.
+    Es la hoja con la que el piso acomoda físicamente (Chema 2026-09-20)."""
+    from apps.catalogo.models import SKU
+    from apps.inventario.models import OrdenEntrada
+
+    orden = get_object_or_404(OrdenEntrada, pk=pk)
+    pasos = (orden.plan_acomodo or {}).get("pasos", [])
+    skus = {s.pk: s for s in SKU.objects.filter(pk__in={p["sku_id"] for p in pasos})}
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    respuesta["Content-Disposition"] = f'attachment; filename="plan-acomodo-{orden.folio}.csv"'
+    respuesta.write("\ufeff")  # BOM: Excel abre los acentos bien
+    escritor = csv.writer(respuesta)
+    escritor.writerow(["sku", "nombre", "codigo_barras", "lote", "rack", "cantidad"])
+    for p in pasos:
+        sku = skus.get(p["sku_id"])
+        escritor.writerow([
+            p["sku"], sku.descripcion if sku else "", sku.codigo_barras if sku else "",
+            p.get("lote") or "", p["ubicacion"] or "CUARENTENA", p["cantidad"],
+        ])
+    return respuesta
 
 
 def _recepciones_decidir_reingreso(request):
