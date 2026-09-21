@@ -1687,7 +1687,9 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
     from apps.inventario.services import confirmar_pick, despachar  # lazy
 
     with transaction.atomic():
-        pedido = Pedido.objects.select_for_update().select_related("cliente", "tienda").get(pk=pedido.pk)
+        # Sin select_related: tienda es nullable y Postgres no admite FOR UPDATE
+        # sobre el lado nulo de un outer join (SQLite lo ignora y no lo delata).
+        pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
         estado_inicial = pedido.estado
         if pedido.estado == Pedido.PENDIENTE:
             iniciar_picking(pedido, actor)
