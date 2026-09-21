@@ -363,3 +363,19 @@ sin espacio → cuarentena; la reserva no se usa. Mesa ve y rehace el plan.
 **Queda:** capturar cantidad ("y N más iguales") para productos chicos en
 volumen, si escanear uno por uno resulta lento; la pantalla vieja de recibir
 con cantidades sigue en el backend por compatibilidad y se puede retirar.
+
+**ANTES DE LA PRÓXIMA RECEPCIÓN — el conteo debe suceder al ubicar, no al
+escanear (Chema, 2026-09-20).** En ASN-0004 hubo conteos de más porque cada
+escaneo suma 1 recibida al instante (`_recepcion_escanear` → `recibir(linea,
+1, 0)`): una pieza escaneada y no ubicada, o escaneada dos veces, o escaneada
+y luego ubicada en lote con "cantidad", queda contada aunque no exista. Y el
+plan solo planea hasta lo anunciado, así que lo de más se quedaba en recepción
+y atoraba el cierre (por eso "Completar recepción con lo anunciado" ahora
+descuenta lo de más). Cambio: el escaneo solo identifica el producto y abre
+Ubicar sin contar; la cuenta se registra al confirmar "UBICADAS" (recibir +
+ubicar en la misma transacción, que es lo que ya hace Ubicar N para la
+diferencia), incluida la salida "dañada". Consecuencias: "Por ubicar" deja de
+existir como estado (nada queda contado sin anaquel), `Saldo.EN_PUTAWAY` se
+vuelve transitorio dentro de la transacción, `_recepcion_escanear` no llama a
+`recibir`, y la tabla "Por ubicar" de Recepción se retira. Revisar tests de
+`apps/piso/tests/test_recepcion.py` que asumen recibida=1 tras el escaneo.
