@@ -76,6 +76,26 @@ class TestCotizarLane(BaseCotizador):
         self.assertEqual(mejor_merida["carrier"], "estafeta")
 
 
+@override_settings(TORRE={**TORRE_POOL_LEGADO, "CARRIER_PRIORITARIO": "estafeta"})
+class TestCarrierPrioritario(BaseCotizador):
+    """El prioritario gana si cotiza aunque sea más caro; si no cubre el lane,
+    manda el precio; y todo el plan viaja con él cuando cotiza todos los bins."""
+
+    def test_gana_aunque_sea_mas_caro(self):
+        mejor = cotizador.mejor_opcion("06600", 8)  # puntopost $91 < estafeta $177
+        self.assertEqual(mejor["carrier"], "estafeta")
+
+    def test_sin_cobertura_del_prioritario_manda_el_precio(self):
+        with override_settings(TORRE={**TORRE_POOL_LEGADO, "CARRIER_PRIORITARIO": "puntopost"}):
+            self.assertEqual(cotizador.mejor_opcion("06600", 8)["carrier"], "puntopost")
+            self.assertEqual(cotizador.mejor_opcion("97000", 8)["carrier"], "estafeta")  # Mérida: sin puntopost
+
+    def test_el_plan_completo_va_con_el_prioritario(self):
+        pedido = self.pedido_con("06600", [(self.caja12, 2)])
+        paquetes = cotizador.planificar_envio(pedido)
+        self.assertTrue(all(p.carrier == "estafeta" for p in paquetes))
+
+
 class TestPlanificarEnvio(BaseCotizador):
     def test_16kg_se_divide_en_dos_puntopost(self):
         # 2 cajas de 12 (16 kg) a CDMX: 2×8.4 kg puntopost ($182) < 16.8 kg estafeta (~$230)

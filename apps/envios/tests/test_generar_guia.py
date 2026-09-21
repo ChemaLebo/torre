@@ -339,6 +339,41 @@ TORRE_CARRIERS_CLASICOS = {
 }
 
 
+@override_settings(ENVIA_API_KEY="", TORRE={**TORRE_CARRIERS_CLASICOS, "CARRIER_PRIORITARIO": "estafeta"})
+class PrioritarioFallaAlGenerarTests(TestCase):
+    """El carrier prioritario falla al comprar la guía → el paquete se re-cotiza
+    sin él, se compra con el mejor por precio y queda auditado."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.cliente = crear_cliente()
+        self.tienda = crear_tienda(self.cliente)
+
+    def test_reintenta_por_precio_y_audita(self):
+        from unittest.mock import patch
+
+        from apps.envios.adapters import ErrorCarrier
+        from apps.envios.models import Paquete
+
+        pedido = crear_pedido(self.cliente, self.tienda)
+        paquete = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal(3), carrier="estafeta", servicio="ground")
+        original = MockAdapter.generar
+
+        def generar(self_, pedido_, carrier, servicio, paquete=None):
+            if carrier == "estafeta":
+                raise ErrorCarrier("envia.com regresó error: 1300 sin cobertura de origen")
+            return original(self_, pedido_, carrier, servicio, paquete=paquete)
+
+        with patch.object(MockAdapter, "generar", autospec=True, side_effect=generar):
+            guia = services.generar_guia(pedido)
+        self.assertNotEqual(guia.carrier, "estafeta")
+        paquete.refresh_from_db()
+        self.assertEqual((paquete.carrier, guia.paquete_id), (guia.carrier, paquete.pk))
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="carrier_prioritario_fallo")
+        self.assertEqual((evento.delta["prioritario"], evento.delta["ahora"]), ("estafeta", guia.carrier))
+        self.assertIn("1300", evento.motivo)
+
+
 @override_settings(ENVIA_API_KEY="", TORRE=TORRE_CARRIERS_CLASICOS)
 class ReplanAlGenerarTests(TestCase):
     """Un plan viejo con un carrier que la config vigente ya no permite se

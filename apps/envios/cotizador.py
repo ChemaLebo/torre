@@ -189,13 +189,34 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
     ]
 
 
+def carrier_prioritario():
+    """TORRE["CARRIER_PRIORITARIO"]: el carrier que gana siempre que cotice,
+    sin importar el precio (iMile por acuerdo con Colima, 2026-09-21). "" =
+    el más barato manda."""
+    return settings.TORRE.get("CARRIER_PRIORITARIO") or ""
+
+
+def elegir_entre(opciones):
+    """La opción que manda entre cotizaciones válidas: la del carrier
+    prioritario si está, si no la más barata. None sin opciones."""
+    if not opciones:
+        return None
+    prioritario = carrier_prioritario()
+    if prioritario:
+        for f in opciones:
+            if f["carrier"] == prioritario:
+                return f
+    return min(opciones, key=lambda f: f["precio"])
+
+
 def mejor_opcion(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
-    """La tarifa más barata que sí cotiza, o None si nadie cubre el lane."""
+    """La opción que manda entre las que sí cotizan (elegir_entre: el carrier
+    prioritario si cotiza, si no la más barata), o None si nadie cubre el lane."""
     opciones = [
         f for f in cotizar_lane(cp_destino, peso_kg, dims, cliente=cliente, carriers=carriers)
         if f["ok"] and f["precio"] is not None
     ]
-    return min(opciones, key=lambda f: f["precio"]) if opciones else None
+    return elegir_entre(opciones)
 
 
 # ── Particionado ──────────────────────────────────────────────────────
@@ -301,10 +322,15 @@ def _costo_particion(cp_destino, bins, cliente=None, carriers=None):
         comunes &= set(filas)
     if not comunes:
         return None, None
-    total, carrier = min(
-        (sum((filas[c]["precio"] for filas in cotizaciones), Decimal(0)), c)
-        for c in comunes
-    )
+    prioritario = carrier_prioritario()
+    if prioritario in comunes:  # cotiza todos los bins: gana aunque sea más caro
+        carrier = prioritario
+        total = sum((filas[carrier]["precio"] for filas in cotizaciones), Decimal(0))
+    else:
+        total, carrier = min(
+            (sum((filas[c]["precio"] for filas in cotizaciones), Decimal(0)), c)
+            for c in comunes
+        )
     return total, [filas[carrier] for filas in cotizaciones]
 
 

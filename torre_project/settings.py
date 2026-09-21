@@ -201,14 +201,23 @@ TORRE = {
     # imile FUERA el mismo día: no cubría CDMX como origen (lo decía el
     # dashboard de envia) pero su conector SÍ regresaba tarifa en /ship/rate/ y
     # ganaba el plan; al generar, envia fallaba con 1300 (PED-00021).
-    # 2026-09-20 (Chema): SOLO imile — acuerdo con Colima. Si envia vuelve a
-    # fallar al generar, regresar aquí la lista anterior: estafeta,
-    # paquetexpress, fedex, noventa9Minutos, amPm.
+    # 2026-09-21 (Chema): imile vuelve a la lista completa como carrier
+    # PRIORITARIO (CARRIER_PRIORITARIO): si cotiza el lane gana aunque sea más
+    # caro; si no cotiza, o falla al comprar la guía, el resto compite por
+    # precio (cotizador.elegir_entre y services._reintentar_sin_prioritario).
     # noventa9Minutos no tiene "ground" en envia (local_next_day / next_day):
     # jamás usarlo de carrier_preferente en un cliente envia.
     "CARRIERS_COTIZAR": [
         "imile",
+        "estafeta",
+        "paquetexpress",
+        "fedex",
+        "noventa9Minutos",
+        "amPm",
     ],
+    # Carrier que gana siempre que cotice, sin importar el precio; vacío = el
+    # más barato manda. Acuerdo con Colima (2026-09-21): iMile mientras se pueda.
+    "CARRIER_PRIORITARIO": "imile",
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.
     "PROVEEDOR_POR_CARRIER": {},

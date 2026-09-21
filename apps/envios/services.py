@@ -289,7 +289,7 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
     GENERAR y el paquete se reasigna a la mejor opción permitida. El plan se
     conserva como plan (división, corral, precio de referencia); la config
     manda a la hora de comprar la guía."""
-    from .cotizador import cotizar_lane  # lazy: evita ciclo en carga
+    from .cotizador import cotizar_lane, elegir_entre  # lazy: evita ciclo en carga
 
     dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
     filas = [
@@ -303,7 +303,7 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
             f"permitido) y ningún carrier vigente cotiza CP {pedido.cp}. "
             "Revisar con Mesa de Control."
         )
-    mejor = min(filas, key=lambda f: f["precio"])
+    mejor = elegir_entre(filas)
     paquete.carrier = mejor["carrier"]
     paquete.servicio = mejor["servicio"]
     paquete.precio_cotizado = mejor["precio"]
@@ -334,6 +334,38 @@ def _carrier_de_paquete(pedido, paquete):
         # Plan viejo vs config nueva (#10): la config vigente manda al generar.
         carrier, servicio = _replan_paquete(pedido, paquete, carrier)
     return carrier, servicio
+
+
+def _reintentar_sin_prioritario(pedido, paquete, exc):
+    """El carrier prioritario (TORRE["CARRIER_PRIORITARIO"]) falló al comprar la
+    guía de este paquete (p. ej. envia sin cobertura de origen para iMile): se
+    re-cotiza el lane SIN él entre los carriers vigentes, el paquete se reasigna
+    a la mejor opción por precio y se compra una vez más (Chema 2026-09-21: iMile
+    siempre que se pueda; si no, precio). Auditado como carrier_prioritario_fallo.
+    Sin alternativa que cotice, se propaga el error original."""
+    from .cotizador import cotizar_lane  # lazy: evita ciclo en carga
+
+    prioritario = paquete.carrier
+    permitidos = [c for c in carriers_del_pedido(pedido) if c != prioritario]
+    dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
+    filas = [
+        f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente, carriers=permitidos)
+        if f["ok"] and f["precio"] is not None
+    ] if permitidos else []
+    if not filas:
+        raise exc
+    mejor = min(filas, key=lambda f: f["precio"])
+    registrar_evento(
+        "pedido", pedido.pk, "carrier_prioritario_fallo", cliente=pedido.cliente,
+        delta={"paquete": paquete.numero, "prioritario": prioritario,
+               "ahora": mejor["carrier"], "precio": float(mejor["precio"])},
+        motivo=f"{prioritario} falló al generar la guía: {str(exc)[:200]}",
+    )
+    with transaction.atomic():
+        Paquete.objects.select_for_update().get(pk=paquete.pk)
+        paquete.carrier, paquete.servicio, paquete.precio_cotizado = mejor["carrier"], mejor["servicio"], mejor["precio"]
+        paquete.save(update_fields=["carrier", "servicio", "precio_cotizado"])
+        return _crear_guia(pedido, mejor["carrier"], mejor["servicio"], paquete=paquete)
 
 
 def generar_guias(pedido):
@@ -401,6 +433,14 @@ def generar_guias(pedido):
                     carrier, servicio = _carrier_de_paquete(pedido, paquete)
                     guias.append(_crear_guia(pedido, carrier, servicio, paquete=paquete))
             except ErrorCarrier as exc:
+                prioritario = settings.TORRE.get("CARRIER_PRIORITARIO") or ""
+                if prioritario and paquete.carrier == prioritario:
+                    # iMile siempre que se pueda; si no se puede, por precio.
+                    try:
+                        guias.append(_reintentar_sin_prioritario(pedido, paquete, exc))
+                        continue
+                    except ErrorCarrier as exc2:
+                        exc = exc2
                 # El atomic del paquete se revirtió (y con él su evento
                 # interno): se re-registra aquí para que la falla quede
                 # auditada aunque las demás guías sí hayan salido.

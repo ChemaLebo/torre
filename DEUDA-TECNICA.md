@@ -109,12 +109,15 @@ cuando la integración sea 99minutos; considerar default envia.com.
 `CARRIERS_COTIZAR` porque envia cotiza pero falla al generar (no cubre CDMX
 como origen, error 1300, PED-00021). No hay adapter propio.
 
-**2026-09-20 (Chema):** `CARRIERS_COTIZAR = ["imile"]`: se cotiza y compra solo
-iMile vía envia.com, por acuerdo con Colima. Si envia vuelve a fallar al
-generar (1300), regresar la lista anterior en settings (estafeta,
-paquetexpress, fedex, noventa9Minutos, amPm) y desplegar. La tabla mock de dev
-no tiene tarifa de imile; las pruebas que ejercitan el mecanismo pinean la
-lista clásica con `override_settings` (TORRE_CARRIERS_CLASICOS).
+**2026-09-21 (Chema):** lista completa otra vez con iMile como carrier
+PRIORITARIO (`TORRE["CARRIER_PRIORITARIO"] = "imile"`): si cotiza el lane gana
+aunque sea más caro (`cotizador.elegir_entre`, también en `_costo_particion` y
+en el replan al generar); si no cotiza, o falla al comprar la guía (p. ej.
+error 1300 de envia), el paquete se re-cotiza sin él y se compra con el mejor
+por precio (`services._reintentar_sin_prioritario`, evento
+`carrier_prioritario_fallo`). Vacío = el más barato manda. La tabla mock de dev
+no tiene tarifa de imile; las pruebas pinean la lista clásica
+(TORRE_CARRIERS_CLASICOS) y usan otro carrier como prioritario.
 
 **Hallazgos (2026-09-14):** imileexpress.com NO es la API del courier en México:
 es una empresa socia en Hong Kong para envíos transfronterizos. La plataforma
