@@ -1342,7 +1342,6 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
     return fresco
 
 
-@transaction.atomic
 def _peso_esperado_caja(paquete, tara_gr=None):
     """Gramos esperados de UNA caja para la báscula.
 
@@ -1367,6 +1366,7 @@ def _peso_esperado_caja(paquete, tara_gr=None):
     return int(paquete.peso_kg * 1000) if paquete.peso_kg else 0
 
 
+@transaction.atomic
 def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=None, tara_gr=None):
     """Empaque POR CAJA (wizard del carril único): peso contra SU plan + foto contenido.
 
