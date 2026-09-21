@@ -91,6 +91,36 @@ class TestAcceso(BasePortal):
         self.assertNotContains(respuesta, "tiempo real")  # prohibido en el portal
 
 
+class TestLinkShopify(BasePortal):
+    """La sección de pedidos del portal enlaza la orden en el admin de Shopify,
+    el mismo link que Mesa; un pedido manual no lo trae."""
+
+    def _pedido_shopify(self):
+        return Pedido.objects.create(
+            cliente=self.colima, tienda=self.tienda, shopify_order_id="8396980125858",
+            comprador_nombre="Enrique Lopez", cp="72830",
+        )
+
+    def test_lista_enlaza_la_orden_de_shopify(self):
+        pedido = self._pedido_shopify()
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:pedidos") + "?ver=todos")
+        self.assertContains(respuesta, "https://colima-mx.myshopify.com/admin/orders/8396980125858")
+        self.assertContains(respuesta, "#8396980125858 ↗")
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, self.pedido.folio)  # el manual sigue listado, sin link
+        self.assertEqual(respuesta.content.decode().count("/admin/orders/"), 1)
+
+    def test_detalle_enlaza_la_orden_y_el_manual_no(self):
+        pedido = self._pedido_shopify()
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:pedido_detalle", args=[pedido.pk]))
+        self.assertContains(respuesta, "https://colima-mx.myshopify.com/admin/orders/8396980125858")
+        self.assertContains(respuesta, "Orden #8396980125858 en Shopify")
+        respuesta = self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk]))
+        self.assertNotContains(respuesta, "/admin/orders/")
+
+
 class TestAislamientoTenant(BasePortal):
     def test_pedido_ajeno_es_404(self):
         self.entrar()

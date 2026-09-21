@@ -40,7 +40,9 @@
     <tbody>
       {% for p in pedidos_lista %}
         <tr class="fila-link">
-          <td class="mono"><a href="{% url 'portal:pedido_detalle' p.pk %}">{{ p.folio }}</a></td>
+          <td class="mono"><a href="{% url 'portal:pedido_detalle' p.pk %}">{{ p.folio }}</a>
+            {% if p.url_shopify %}<br><a class="small" href="{{ p.url_shopify }}" target="_blank" rel="noopener" title="Abrir la orden en el admin de Shopify">#{{ p.shopify_order_id }} ↗</a>{% endif %}
+          </td>
           <td class="small">{{ p.creado|date:"d/M H:i" }}</td>
           <td>{{ p.comprador_nombre|default:"—" }}</td>
           <td><span class="pill">{{ p.get_canal_display }}</span></td>

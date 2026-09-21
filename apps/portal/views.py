@@ -25,6 +25,7 @@ from apps.incidencias.models import Incidencia, MensajeIncidencia
 from apps.integraciones.models import SyncLog
 from apps.inventario.models import Movimiento, OrdenEntrada
 from apps.pedidos.models import Pedido
+from apps.pedidos.reportes import url_orden_shopify
 
 from .forms import (
     FormAnuncioASN, FormNuevaIncidencia, FormRespuestaIncidencia, FormSugerenciaManual,
@@ -353,7 +354,7 @@ def dashboard(request):
 @portal_requerido
 def pedidos(request):
     ver = request.GET.get("ver", "proceso")
-    qs = Pedido.objects.filter(cliente=request.cliente)
+    qs = Pedido.objects.filter(cliente=request.cliente).select_related("tienda")
     if ver == "entregados":
         qs = qs.filter(estado__in=[Pedido.ENTREGADO, Pedido.ENTREGA_PRESUNTA])
     elif ver == "incidencias":
@@ -369,6 +370,7 @@ def pedidos(request):
     lista = list(qs.annotate(piezas=Sum("lineas__cantidad"))[:200])
     for pedido in lista:
         pedido.pill = _PILL_PEDIDO.get(pedido.estado, "")
+        pedido.url_shopify = url_orden_shopify(pedido)  # la orden en el admin de Shopify, como en Mesa
     return render(request, "portal/pedidos.html", {
         "seccion": "pedidos",
         "ver": ver,
@@ -410,7 +412,7 @@ def _pipeline(pedido):
 @portal_requerido
 def pedido_detalle(request, pk):
     pedido = get_object_or_404(
-        Pedido.objects.prefetch_related("lineas__sku", "incidencias", "guias"),
+        Pedido.objects.select_related("tienda").prefetch_related("lineas__sku", "incidencias", "guias"),
         pk=pk, cliente=request.cliente,
     )
     especial = _ESTADO_ESPECIAL.get(pedido.estado)
@@ -432,6 +434,7 @@ def pedido_detalle(request, pk):
         "paquetes": paquetes,
         "ahorro_division": ahorro_division,
         "pill": _PILL_PEDIDO.get(pedido.estado, ""),
+        "url_shopify": url_orden_shopify(pedido),
         "pasos": _pipeline(pedido),
         "especial": especial,
         "guia": guia,
