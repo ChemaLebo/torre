@@ -106,10 +106,24 @@ class ContenidoPorCarrierTests(TestCase):
         self.assertLessEqual(len(corte), 25)
         self.assertEqual(corte, "2x Black Tea Punch")  # ni a media palabra ni con ':' colgando
 
+    def test_acentos_y_enies_viajan_en_ascii_y_el_corte_cuenta_bytes(self):
+        from apps.envios.adapters import EnviaAdapter
+        texto = "2x 24 PACK CERVEZA RÍO DE LUMBRE WEST COAST IPA · Añejo"
+        estafeta = EnviaAdapter._recortar_contenido(texto, "estafeta")
+        self.assertEqual(estafeta, "2x 24 PACK CERVEZA RIO DE")
+        self.assertLessEqual(len(estafeta.encode("utf-8")), 25)
+        self.assertEqual(
+            EnviaAdapter._recortar_contenido(texto, "imile"),
+            "2x 24 PACK CERVEZA RIO DE LUMBRE WEST COAST IPA Anejo",
+        )
+        self.assertEqual(EnviaAdapter._recortar_contenido("Ñ·¿?", "imile"), "N?")
+
     def test_otros_carriers_conservan_el_texto_completo(self):
         from apps.envios.adapters import EnviaAdapter
-        self.assertEqual(EnviaAdapter._recortar_contenido(self.TEXTO, "fedex"), self.TEXTO)
-        self.assertEqual(EnviaAdapter._recortar_contenido(self.TEXTO, "paquetexpress"), self.TEXTO)
+        # Completo, pero en ASCII: los acentos se transliteran para todos los carriers.
+        ascii_ = "2x Black Tea Punch: Tisana Ponche Navideno, 2x Tropical Bloom: Tisana de Melocoton"
+        self.assertEqual(EnviaAdapter._recortar_contenido(self.TEXTO, "fedex"), ascii_)
+        self.assertEqual(EnviaAdapter._recortar_contenido(self.TEXTO, "paquetexpress"), ascii_)
         largo = ", ".join(["1x Producto de prueba"] * 10)  # 228 chars → tope general 120
         self.assertLessEqual(len(EnviaAdapter._recortar_contenido(largo, "fedex")), 120)
 
@@ -145,7 +159,7 @@ class ContenidoPorCarrierTests(TestCase):
         fedex = adapter._payload(pedido, "fedex", "ground", paquete=paquete)["packages"][0]["content"]
         self.assertLessEqual(len(estafeta), 25)
         self.assertGreater(len(fedex), 25)
-        self.assertTrue(fedex.startswith("2x Black Tea Punch: Tisana Ponche Navideño, 2x Tropical"))
+        self.assertTrue(fedex.startswith("2x Black Tea Punch: Tisana Ponche Navideno, 2x Tropical"))
 
 
 TORRE_99MIN_DIRECTO = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}

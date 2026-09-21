@@ -287,8 +287,16 @@ class EnviaAdapter(CarrierAdapter):
         corte respeta el limite de palabra para que la guia no termine a media
         palabra (salvo una sola palabra mas larga que el tope). Nunca vacio:
         sin texto viaja "Mercancia".
+
+        Solo ASCII: acentos y enies se transliteran (RIO, PARAMO, ANEJO) y lo
+        que no tenga equivalente se quita. Envia cuenta bytes: "RÍO" recortado
+        a 25 caracteres mide 26 y Estafeta lo rechaza; y el conector de iMile
+        firma la peticion con el contenido y con un caracter no ASCII la firma
+        sale nula ("sign NotNull"). PED-00031, 2026-09-21.
         """
-        texto = " ".join(str(texto or "").split())
+        texto = str(texto or "")
+        texto = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+        texto = " ".join(texto.split())
         topes = settings.TORRE.get("CONTENIDO_MAX_POR_CARRIER") or {}
         tope = int(topes.get(carrier or "", CONTENIDO_MAX_DEFAULT))
         if len(texto) > tope:
