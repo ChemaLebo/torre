@@ -1,9 +1,11 @@
-"""Navegación entre cajas del wizard de empaque y cambio de una foto que salió mal.
+"""Navegación entre cajas del wizard de empaque; cambio de una foto y de la báscula.
 
 Chips arriba (?caja=N): la caja pendiente se empaca ella, la empacada sin
-cierre abre su paso de cierre (con su foto de contenido cambiable) y la
-cerrada se revisa con sus dos fotos. reemplazar_foto_pedido mete la foto
-nueva, re-apunta la caja, borra la vieja y deja el evento foto_reemplazada.
+cierre abre su paso de cierre (con su foto de contenido y su báscula a la
+mano) y la cerrada se revisa con sus dos fotos y su peso.
+reemplazar_foto_pedido mete la foto nueva, re-apunta la caja, borra la vieja
+y deja el evento foto_reemplazada; corregir_peso_caja cambia la báscula sin
+reabrir nada y recalcula el peso del pedido si ya quedó empacado.
 """
 from decimal import Decimal
 from unittest.mock import patch
@@ -26,7 +28,7 @@ TORRE_CARRIERS_CLASICOS = {
 
 
 @override_settings(TORRE=TORRE_CARRIERS_CLASICOS)
-class FotosPorCajaTests(PisoTestCase):
+class RevisarCajaTests(PisoTestCase):
     def setUp(self):
         self.login_piso()
         MockAdapter.reiniciar()
@@ -127,6 +129,7 @@ class FotosPorCajaTests(PisoTestCase):
         self.assertContains(respuesta, 'value="cerrar_caja"')
         self.assertContains(respuesta, f'name="paquete_id" value="{self.caja2.pk}"')
         self.assertContains(respuesta, f'name="evidencia_id" value="{self.caja2.foto_contenido_id}"')
+        self.assertContains(respuesta, 'value="corregir_peso"')
         self.assertContains(respuesta, "Faltan después:")
         self.assertContains(respuesta, "caja 1")
 
@@ -222,3 +225,66 @@ class FotosPorCajaTests(PisoTestCase):
         evento = EventoAuditoria.objects.get(accion="foto_reemplazada")
         self.assertEqual((evento.entidad, evento.entidad_id), ("pedido", str(pedido.pk)))
         self.assertEqual(evento.delta["cajas"], [])
+
+    def _corregir(self, caja, peso):
+        return self.client.post(self.url, {
+            "accion": "corregir_peso", "paquete_id": caja.pk, "peso_real_gr": peso,
+        }, follow=True)
+
+    def test_corregir_la_bascula_de_una_caja_empacada_en_picking(self):
+        self._empacar(self.caja1, "12100", "c1.jpg")
+        respuesta = self.client.get(self.url + "?caja=1")
+        self.assertContains(respuesta, 'value="corregir_peso"')
+        self.assertContains(respuesta, "12100 g")
+
+        respuesta = self._corregir(self.caja1, "11900")
+        self.assertContains(respuesta, "Caja 1: báscula corregida a 11900 g")
+        self.assertContains(respuesta, "11900 g")  # regresa a la revisión de la caja
+        self.caja1.refresh_from_db()
+        self.assertEqual(self.caja1.peso_real_gr, 11900)
+        self.assertEqual(self.caja1.estado, Paquete.EMPACADO)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+        self.assertIsNone(self.pedido.peso_real_gr)  # aún no empacado entero
+        evento = EventoAuditoria.objects.get(accion="peso_corregido")
+        self.assertEqual((evento.entidad, evento.entidad_id), ("paquete", str(self.caja1.pk)))
+        self.assertEqual((evento.delta["de_gr"], evento.delta["a_gr"]), (12100, 11900))
+
+    def test_corregir_tras_la_guia_recalcula_el_pedido_sin_tocar_cierre_ni_guias(self):
+        self._empacar(self.caja1, "12100", "c1.jpg")
+        self._empacar(self.caja2, "8100", "c2.jpg")
+        self._cerrar(self.caja1, "z1.jpg")
+        self.pedido.refresh_from_db()
+        self.caja1.refresh_from_db()
+        self.assertEqual(self.pedido.peso_real_gr, 12100 + 8100)
+        ts_cierre, guias = self.caja1.ts_cierre, self.pedido.guias.count()
+
+        respuesta = self._corregir(self.caja1, "12500")
+        self.assertContains(respuesta, "báscula corregida a 12500 g")
+        self.assertContains(respuesta, "viaja con el peso anterior")
+        self.caja1.refresh_from_db()
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.caja1.peso_real_gr, 12500)
+        self.assertEqual(self.pedido.peso_real_gr, 12500 + 8100)
+        self.assertEqual(self.caja1.ts_cierre, ts_cierre)
+        self.assertEqual(self.pedido.guias.count(), guias)
+        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
+
+    @override_settings(TORRE_PESO_MODO="bloquear")
+    def test_corregir_fuera_de_rango_en_modo_bloquear_no_cambia_nada(self):
+        self._empacar(self.caja1, "12100", "c1.jpg")
+        respuesta = self._corregir(self.caja1, "20000")
+        self.assertContains(respuesta, "no cuadra")
+        self.caja1.refresh_from_db()
+        self.assertEqual(self.caja1.peso_real_gr, 12100)
+        self.assertFalse(EventoAuditoria.objects.filter(accion="peso_corregido").exists())
+
+    def test_corregir_rechaza_caja_sin_pesar_peso_invalido_y_mismo_peso(self):
+        self._empacar(self.caja1, "12100", "c1.jpg")
+        self.assertContains(self._corregir(self.caja2, "8000"), "todavía no se ha pesado")
+        self.assertContains(self._corregir(self.caja1, "abc"), "Captura el peso")
+        self.assertContains(self._corregir(self.caja1, "0"), "Captura el peso")
+        self.assertContains(self._corregir(self.caja1, "12100"), "no hay nada que corregir")
+        self.caja1.refresh_from_db()
+        self.assertEqual(self.caja1.peso_real_gr, 12100)
+        self.assertFalse(EventoAuditoria.objects.filter(accion="peso_corregido").exists())

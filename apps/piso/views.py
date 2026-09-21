@@ -1142,7 +1142,8 @@ def empaque_pedido(request, pk):
 
     ?caja=N navega entre las cajas del pedido (chips arriba): la pendiente
     se empaca, la que falta cerrar abre su cierre y la cerrada se revisa con
-    sus fotos, que se pueden cambiar (accion reemplazar_foto).
+    sus fotos y su báscula, que se pueden cambiar (acciones reemplazar_foto
+    y corregir_peso).
     """
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
 
@@ -1161,6 +1162,8 @@ def empaque_pedido(request, pk):
             return redirect("piso:empaque_pedido", pk=pedido.pk)
         if accion == "reemplazar_foto":
             return _empaque_reemplazar_foto(request, pedido)
+        if accion == "corregir_peso":
+            return _empaque_corregir_peso(request, pedido)
         _reclamar_si_libre(pedido, request)
         if accion == "empacar_caja":
             return _empaque_caja(request, pedido)
@@ -1322,11 +1325,24 @@ def _fotos_sueltas(pedido, cajas):
     )
 
 
+def _contexto_peso(caja):
+    """Rango de báscula de una caja para la pantalla: plan ± tolerancia, como al empacar."""
+    plan_gr = int(caja.peso_kg * 1000) if caja.peso_kg else 0
+    peso_min, peso_max, tolerancia = _rango_peso(plan_gr)
+    return {
+        "peso_esperado": plan_gr,
+        "peso_min": peso_min,
+        "peso_max": peso_max,
+        "tolerancia": tolerancia,
+        "peso_modo": settings.TORRE_PESO_MODO,
+    }
+
+
 def _render_revisar_caja(request, pedido, caja):
-    """Una caja ya empacada: contenido, báscula, guía y sus fotos, con cambio de foto."""
+    """Una caja ya empacada: contenido, guía, báscula (corregible) y fotos (cambiables)."""
     cajas = _paquetes_con_lineas(pedido)
     caja = next((c for c in cajas if c.pk == caja.pk), caja)
-    return render(request, "piso/empaque_pedido.html", {
+    contexto = {
         "seccion": "empaque",
         "pedido": pedido,
         "paso": "revisar",
@@ -1334,7 +1350,9 @@ def _render_revisar_caja(request, pedido, caja):
         "total_cajas": len(cajas),
         "guia": caja.guia_activa,
         "chips": _chips_cajas(cajas, actual=caja.numero),
-    })
+    }
+    contexto.update(_contexto_peso(caja))
+    return render(request, "piso/empaque_pedido.html", contexto)
 
 
 def _render_paso_empacar(request, pedido, elegida=None):
@@ -1400,8 +1418,6 @@ def _render_paso_empacar(request, pedido, elegida=None):
         caja = pendientes[0]
         if elegida is not None:
             caja = next((c for c in pendientes if c.pk == elegida.pk), caja)
-        plan_gr = int(caja.peso_kg * 1000) if caja.peso_kg else 0
-        peso_min, peso_max, tolerancia = _rango_peso(plan_gr)
         dims_producto = _dims_producto(caja)
         # Medidas iniciales: la caja del catálogo si ya se eligió; si no, las
         # del producto; si no hay, lo que estimó el plan.
@@ -1418,12 +1434,8 @@ def _render_paso_empacar(request, pedido, elegida=None):
             "cajas_listas": len(cajas) - len(pendientes),
             "chips": _chips_cajas(cajas, actual=caja.numero),
             "cajas_cliente": _cajas_cliente(pedido),
-            "tolerancia": tolerancia,
-            "peso_modo": settings.TORRE_PESO_MODO,
-            "peso_esperado": plan_gr,
-            "peso_min": peso_min,
-            "peso_max": peso_max,
         })
+        contexto.update(_contexto_peso(caja))
         return render(request, "piso/empaque_pedido.html", contexto)
 
     # Legacy sin plan de paquetes (o plan ya empacado por fuera): 1 caja.
@@ -1494,6 +1506,8 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         "total_cierres": max(len(cajas_empacadas), 1),
         "cierres_hechos": max(len(cajas_empacadas), 1) - (len(por_cerrar) or 1),
     })
+    if caja_cierre is not None:
+        contexto.update(_contexto_peso(caja_cierre))
     return render(request, "piso/empaque_pedido.html", contexto)
 
 
@@ -1619,6 +1633,23 @@ def _empaque_reemplazar_foto(request, pedido):
     que = "del contenido" if nueva.tipo == "contenido" else "de la caja cerrada"
     donde = f" (caja {numero})" if numero.isdigit() else ""
     messages.success(request, f"Foto {que} cambiada{donde}. La anterior ya no existe.")
+    return destino
+
+
+def _empaque_corregir_peso(request, pedido):
+    """Corrige la báscula de una caja ya empacada y regresa a esa caja."""
+    paquete = get_object_or_404(Paquete, pk=request.POST.get("paquete_id"), pedido=pedido)
+    url = reverse("piso:empaque_pedido", args=[pedido.pk])
+    destino = redirect(f"{url}?caja={paquete.numero}")
+    from apps.pedidos.services import corregir_peso_caja  # lazy por contrato
+    try:
+        corregir_peso_caja(paquete, request.user, request.POST.get("peso_real_gr"))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return destino
+    messages.success(
+        request, f"Caja {paquete.numero}: báscula corregida a {paquete.peso_real_gr} g.",
+    )
     return destino
 
 

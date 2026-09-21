@@ -1,0 +1,13 @@
+{# Báscula de una caja ya empacada, con su corrección (se capturó el peso de otra caja o de otro pedido). #}
+<div class="card mt">
+  <div class="titulo"><h2>Báscula · caja {{ caja.numero }}</h2>{% if peso_modo != "off" %}<span class="pill accent">±{{ tolerancia }}%</span>{% endif %}</div>
+  <p class="small">Capturado: <b class="mono">{{ caja.peso_real_gr|default:"—" }} g</b>{% if peso_modo != "off" %} · el plan marca <span class="mono">{{ peso_esperado }} g</span> ({{ peso_min }}–{{ peso_max }} g){% endif %}.</p>
+  <form method="post" class="fila">{% csrf_token %}
+    <input type="hidden" name="accion" value="corregir_peso">
+    <input type="hidden" name="paquete_id" value="{{ caja.pk }}">
+    <input type="number" name="peso_real_gr" min="1" inputmode="numeric" autocomplete="off" required
+           placeholder="Peso real (g)" aria-label="Peso real de la caja {{ caja.numero }} en gramos" style="max-width:170px">
+    <button class="btn chico" type="submit">Corregir peso</button>
+  </form>
+  {% if caja.guia_activa %}<p class="small muted mt">La guía ya está comprada: viaja con el peso anterior. La corrección queda para costos y reportes.</p>{% endif %}
+</div>

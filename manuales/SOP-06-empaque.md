@@ -48,7 +48,7 @@ Aquí es donde la rotura se gana o se pierde: el 59.8% de las incidencias del pr
 - **"Cuadrar" el peso metiendo relleno o capturando el esperado en vez del real.** Se ve cuando el comprador reporta pieza faltante y la foto muestra una caja "que pesaba bien". Captura SIEMPRE el número real del display; si no cuadra, recuenta.
 - **Prueba de agitado tímida** (dos palmaditas). Se ve como incidencia DAN a los 4 días. Agita como paquetería: con ganas.
 - **Foto 2 sin el display legible o sin guía/folio.** La evidencia pierde su valor de disputa. Reacomoda y repite la foto: display + guía en el MISMO cuadro.
-- **Foto equivocada o movida, ya confirmada.** Arriba de la pantalla de empaque están las cajas del pedido (Caja 1 · Caja 2 …): toca la caja, verás sus fotos y el botón **"Cambiar foto"**. La nueva sustituye a la anterior (que se borra); el peso y el cierre de la caja no se tocan.
+- **Foto equivocada o peso de otra caja, ya confirmados.** Arriba de la pantalla de empaque están las cajas del pedido (Caja 1 · Caja 2 …): toca la caja, verás sus fotos con **"Cambiar foto"** y su báscula con **"Corregir peso"**. La foto nueva sustituye a la anterior (que se borra); el cierre de la caja no se toca y, si la guía ya se compró, viaja con el peso anterior.
 - **Cambiar etiquetas entre cajas de un pedido dividido.** Se ve como dos compradores recibiendo la caja del otro. Guía y paquete se cotejan uno a uno antes de pegar.
 - **Empacar un pedido con líneas incompletas** "porque ya casi". Torre te frena (*"Faltan piezas por pickear"*), pero el intento ya te costó tiempo: la tarjeta con botón "Empacar" es la única lista de pedidos empacables.
 

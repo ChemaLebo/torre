@@ -1343,6 +1343,30 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
 
 
 @transaction.atomic
+def _peso_esperado_caja(paquete, tara_gr=None):
+    """Gramos esperados de UNA caja para la báscula.
+
+    Esperado HONESTO cuando hay desglose: productos de ESTA caja + tara. La
+    tara manual (bulto especial / caja propia) manda; si no, la de la caja
+    elegida del catálogo; sin ninguna, 0 y el esperado es solo neto. Sin
+    desglose o con fracciones (medias cajas) cae al plan (peso_kg, que trae
+    el margen de empaque como proxy).
+    """
+    lineas_caja = list(paquete.lineas.select_related("linea_pedido__sku"))
+    neto = 0
+    if lineas_caja and not any(pl.fraccion_de > 1 for pl in lineas_caja):
+        neto = sum(
+            (pl.linea_pedido.sku.peso_gr or 0) * pl.cantidad for pl in lineas_caja
+        )
+    if tara_gr is not None:
+        tara = tara_gr
+    else:
+        tara = paquete.caja.peso_gr if paquete.caja_id else 0
+    if neto:
+        return neto + tara
+    return int(paquete.peso_kg * 1000) if paquete.peso_kg else 0
+
+
 def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=None, tara_gr=None):
     """Empaque POR CAJA (wizard del carril único): peso contra SU plan + foto contenido.
 
@@ -1398,22 +1422,7 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
         fresco.caja = caja
     if dims:
         fresco.largo_cm, fresco.ancho_cm, fresco.alto_cm = dims
-    # Esperado HONESTO cuando hay desglose: productos de ESTA caja + tara de
-    # la caja elegida. Sin desglose o con fracciones (medias cajas) cae al
-    # plan (peso_kg, que trae el margen de empaque como proxy).
-    lineas_caja = list(fresco.lineas.select_related("linea_pedido__sku"))
-    neto = 0
-    if lineas_caja and not any(pl.fraccion_de > 1 for pl in lineas_caja):
-        neto = sum(
-            (pl.linea_pedido.sku.peso_gr or 0) * pl.cantidad for pl in lineas_caja
-        )
-    # Tara: la manual (bulto especial / caja propia) manda; si no, la de la
-    # caja elegida del catálogo; sin ninguna, 0 y el esperado es solo neto.
-    if tara_gr is not None:
-        tara = tara_gr
-    else:
-        tara = fresco.caja.peso_gr if fresco.caja_id else 0
-    esperado = (neto + tara) if neto else (int(fresco.peso_kg * 1000) if fresco.peso_kg else 0)
+    esperado = _peso_esperado_caja(fresco, tara_gr)
     _verificar_peso(pedido, peso_real, esperado, caja=fresco.numero)
     if foto_contenido is None:
         raise ValueError(
@@ -1512,6 +1521,59 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
         delta={"pedido": pedido.folio, "caja": fresco.numero, "evidencia_id": evidencia.pk},
         motivo=f"Caja {fresco.numero} de {pedido.folio} cerrada con la etiqueta pegada.",
     )
+    return fresco
+
+
+@transaction.atomic
+def corregir_peso_caja(paquete, actor, peso_real_gr):
+    """Corrige la báscula de una caja ya empacada (se capturó el peso de otra caja o pedido).
+
+    Misma verificación que al empacar (_verificar_peso contra el esperado de
+    ESA caja, según TORRE_PESO_MODO); guarda Paquete.peso_real_gr y, si el
+    pedido ya quedó empacado, recalcula Pedido.peso_real_gr = Σ cajas. No
+    reabre nada: estado, fotos y cierre de la caja siguen igual. Si la guía
+    ya se compró, viaja con el peso anterior (el carrier re-pesa de todos
+    modos): la corrección sirve a costos y reportes, y a la guía solo si aún
+    no existe. Evento peso_corregido con el de/a. Caja sin pesar
+    (PLANEADO/EN_EMPAQUE) o mismo peso: ValueError.
+    """
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    fresco = Paquete.objects.select_for_update().get(pk=paquete.pk)
+    pedido = Pedido.objects.select_for_update().get(pk=fresco.pedido_id)
+    if fresco.estado not in (Paquete.EMPACADO, Paquete.DESPACHADO):
+        raise ValueError(
+            f"La caja {fresco.numero} de {pedido.folio} todavía no se ha pesado; "
+            "pásala por su paso de empaque."
+        )
+    try:
+        peso_real = int(peso_real_gr)
+    except (TypeError, ValueError):
+        peso_real = 0
+    if peso_real <= 0:
+        raise ValueError(
+            f"Captura el peso de la báscula de la caja {fresco.numero}, en gramos."
+        )
+    anterior = fresco.peso_real_gr
+    if peso_real == anterior:
+        raise ValueError(
+            f"La caja {fresco.numero} ya tiene {anterior} g; no hay nada que corregir."
+        )
+    esperado = _peso_esperado_caja(fresco)
+    _verificar_peso(pedido, peso_real, esperado, caja=fresco.numero)
+    fresco.peso_real_gr = peso_real
+    fresco.save(update_fields=["peso_real_gr"])
+    if pedido.peso_real_gr is not None:
+        pedido.peso_real_gr = sum(c.peso_real_gr or 0 for c in pedido.paquetes.all())
+        pedido.save(update_fields=["peso_real_gr", "actualizado"])
+    registrar_evento(
+        "paquete", fresco.pk, "peso_corregido", actor=actor, cliente=pedido.cliente,
+        delta={"pedido": pedido.folio, "caja": fresco.numero, "de_gr": anterior,
+               "a_gr": peso_real, "plan_gr": esperado},
+        motivo=(f"Báscula de la caja {fresco.numero} de {pedido.folio} corregida: "
+                f"{anterior} g → {peso_real} g."),
+    )
+    paquete.peso_real_gr = peso_real
     return fresco
 
 
