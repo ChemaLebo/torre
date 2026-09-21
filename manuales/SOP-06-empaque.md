@@ -37,7 +37,7 @@ Aquí es donde la rotura se gana o se pierde: el 59.8% de las incidencias del pr
    - **"Foto 1 · Contenido de la caja (obligatoria)"**: caja abierta, contenido acomodado con divisores visibles.
    - **"Foto 2 · Caja cerrada con guía y display de báscula visibles (obligatoria)"**: caja cerrada SOBRE la báscula, display encendido con el peso legible, y la guía visible en el mismo cuadro. Regla de la casa mientras la guía se imprime después (en Salida): si aún no tienes la etiqueta impresa, el folio del pedido debe quedar legible en la foto, y **pegas la guía en cuanto salga de la impresora — ninguna caja entra al corral sin su guía pegada**.
 8. **Pulsa "Empacado".** El botón se enciende solo cuando hay peso + 2 fotos. Torre valida el rango ±3% al confirmar; si todo cuadra: *"[folio] empacado y verificado. Llévalo a su corral de salida."* En pedidos divididos: *"empacado y verificado en N paquetes. Llévalos a su corral de salida — cada caja lleva su propia guía."*
-9. **Etiqueta: una guía por caja.** En cuanto la(s) guía(s) existan (SOP-07 → **"Generar guía"**), imprime y pega **una etiqueta por caja**, sobre cara plana, sin tapar sellos del cliente, y verifica que el número de guía de la etiqueta corresponde a ESE paquete (en divididos es el error clásico).
+9. **Etiqueta: una guía por caja.** Torre genera e imprime las guías al confirmar la última caja; si el carrier falló, el paso de cierre trae **"Reintentar guía"** (el pedido queda en Mi turno → *"Completar empaquetado"* hasta que salga). Pega **una etiqueta por caja**, sobre cara plana, sin tapar sellos del cliente, y verifica que el número de guía de la etiqueta corresponde a ESE paquete (en divididos es el error clásico).
 10. **Lleva la caja a su corral** (`SAL-PQX`, `SAL-LOCAL` o `SAL-OTRO` según carrier — SOP-07) y toma el siguiente pedido.
 
 ---
@@ -57,7 +57,7 @@ Aquí es donde la rotura se gana o se pierde: el 59.8% de las incidencias del pr
 - NUNCA uses cinta o insumos que no sean los oficiales del cliente (local: cero cinta plástica — naked packing).
 - NUNCA marques "Empacado" con un peso que no es el del display.
 - NUNCA cierres una caja que tintinea.
-- NUNCA dejes una caja sin guía pegada entrar al corral.
+- NUNCA dejes una caja sin guía pegada entrar al corral. Salida no lista pedidos sin guía y foto de cierre en todas sus cajas: se terminan en Empaque.
 - NUNCA menciones el precio en pedidos con nota de regalo (ni en la nota ni en papeles dentro de la caja).
 - NUNCA empaques sin certificación de la biblia del cliente (FLEX: solo asistido).
 

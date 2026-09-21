@@ -169,7 +169,16 @@ class VistaImprimirTests(EtiquetaTestCase):
         self.assertContains(respuesta, 'name="accion" value="imprimir"')
 
     def test_salida_muestra_ambos_botones_de_impresion_por_guia_activa(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.core.models import EvidenciaFoto
+
         guia = self.crear_guia()  # pedido queda GUIA_GENERADA
+        # Salida solo lista empaque completo: guía + foto de cierre.
+        EvidenciaFoto.objects.create(
+            entidad="pedido", entidad_id=str(guia.pedido_id), tipo="caja_cerrada",
+            archivo=SimpleUploadedFile("z.jpg", b"foto", content_type="image/jpeg"),
+        )
         respuesta = self.client.get(reverse("piso:salida"))
         self.assertContains(respuesta, "🖨 carrier")
         self.assertContains(respuesta, "🖨 interna")

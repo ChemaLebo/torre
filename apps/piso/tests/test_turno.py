@@ -39,7 +39,7 @@ class MiTurnoCardTests(PisoTestCase):
         self.crear_pedido(cantidad=1)
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "por pickear")
-        self.assertContains(respuesta, "por empacar")
+        self.assertContains(respuesta, "en empaque")
         self.assertContains(respuesta, "en salida")
         self.assertContains(respuesta, "Corte")
 

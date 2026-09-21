@@ -55,7 +55,7 @@
     <h1 class="mono">{{ pedido.folio }}</h1>
     <div class="small">{{ pedido.cliente.nombre }} · cierre {{ cierres_hechos|add:1 }} de {{ total_cierres }}</div>
   </div>
-  <a class="btn chico" href="{% url 'piso:salida' %}">Ir a salida</a>
+  <a class="btn chico" href="{% url 'piso:home' %}">Mi turno</a>
 </div>
 {% include "piso/_chips_cajas.html" %}
 
@@ -71,14 +71,19 @@
 {% if cajas_sin_guia and tiene_guia %}
 <div class="banner warn"><span class="foco"></span>
   Sin guía: caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}.
-  El carrier falló en esa caja; genérala en <a href="{% url 'piso:salida' %}"><b>Salida</b></a> (Generar guía), pega su etiqueta y regresa por su foto de cierre.
+  El carrier falló en esa caja: reintenta aquí, pega su etiqueta y toma su foto de cierre. Sin guía y foto, no llega al corral.
 </div>
 {% endif %}
 {% if not tiene_guia %}
 <div class="banner warn"><span class="foco"></span>
-  Este pedido aún no tiene guía (excepción). Génerala en
-  <a href="{% url 'piso:salida' %}"><b>Salida</b></a>, pega la etiqueta y regresa por la foto de cierre.
+  Este pedido aún no tiene guía. Reintenta aquí, pega la etiqueta y toma la foto de cierre. Sin guía y foto, no llega al corral.
 </div>
+{% endif %}
+{% if puede_reintentar_guia %}
+<form method="post" class="mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="generar_guia">
+  <button class="btn primario" type="submit">Reintentar guía{% if cajas_sin_guia and tiene_guia %} · caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</button>
+</form>
 {% endif %}
 
 {% if cierre_legacy %}

@@ -12,7 +12,7 @@
 <div class="banner {{ corte_tono }}">
   <span class="foco"></span>
   <div>
-    <b>{{ num_por_pickear }} por pickear · {{ por_empacar|length }} por empacar · {{ staging|length }} en salida</b>
+    <b>{{ num_por_pickear }} por pickear · {{ por_completar|length }} en empaque · {{ staging|length }} en salida</b>
     <div class="small">Corte {{ corte_hora }} · {{ corte_texto }}</div>
   </div>
 </div>
@@ -104,6 +104,21 @@
       <li><span class="mono">{{ t.sku.codigo }}</span> · {{ t.sku.descripcion }} <span class="small">({{ t.sku.cliente.nombre }})</span></li>
       {% endfor %}
     </ul>
+  </div>
+  {% endif %}
+
+  {% if por_completar %}
+  <div class="card">
+    <div class="titulo"><h2>Completar empaquetado</h2><span class="pill accent">{{ por_completar|length }}</span></div>
+    <p class="small">Nada llega al corral sin guía y foto de cierre. Esto sigue en la mesa de empaque{% if not es_mesa %}, a tu nombre{% endif %}.</p>
+    {% for p in por_completar %}
+    <div class="corral-fila">
+      <div class="crece"><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}
+        <div class="small muted">{{ p.falta }}{% if es_mesa and p.asignado_a %} · {{ p.asignado_a.username }}{% endif %}</div>
+      </div>
+      <a class="btn chico" href="{% url 'piso:empaque_pedido' p.pk %}">Continuar</a>
+    </div>
+    {% endfor %}
   </div>
   {% endif %}
 

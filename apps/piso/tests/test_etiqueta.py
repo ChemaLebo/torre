@@ -159,7 +159,16 @@ class ContenidoEtiquetaTests(EtiquetaTestCase):
 
 class BotonEtiquetaEnSalidaTests(EtiquetaTestCase):
     def test_salida_muestra_el_boton_etiqueta_por_guia_activa(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.core.models import EvidenciaFoto
+
         guia = self.crear_guia()
+        # Salida solo lista empaque completo: guía + foto de cierre.
+        EvidenciaFoto.objects.create(
+            entidad="pedido", entidad_id=str(guia.pedido_id), tipo="caja_cerrada",
+            archivo=SimpleUploadedFile("z.jpg", b"foto", content_type="image/jpeg"),
+        )
         self.login_piso()
         respuesta = self.client.get(reverse("piso:salida"))
         self.assertContains(respuesta, "Etiqueta")

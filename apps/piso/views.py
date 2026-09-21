@@ -371,10 +371,21 @@ def home(request):
         en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
     por_pickear = [p for p in en_picking if not p.lineas_completas]
     por_empacar = [p for p in en_picking if p.lineas_completas]
-    staging = list(
-        Pedido.objects.filter(estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA])
-        .select_related("cliente")
+    # Etapa de empaque después del picking: nada llega al corral sin guía y
+    # foto de cierre (Pedido.empaque_completo). Lo incompleto sigue en la
+    # mesa, a nombre de quien lo tiene: "Completar empaquetado".
+    en_empaque = list(
+        Pedido.objects.filter(
+            estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO],
+        ).select_related("cliente", "asignado_a").prefetch_related("paquetes__guias", "guias")
     )
+    staging = [p for p in en_empaque if p.estado != Pedido.EMPACADO and p.empaque_completo]
+    incompletos = [p for p in en_empaque if not p.empaque_completo]
+    if not _es_mesa(request):
+        incompletos = [p for p in incompletos if _pedido_libre_o_mio(p, request.user)]
+    por_completar = por_empacar + incompletos
+    for pedido in por_completar:
+        pedido.falta = _que_falta_empaque(pedido)
     flota = _flota_propia()
     entregas_locales = []
     if flota:
@@ -408,17 +419,19 @@ def home(request):
     corte_hora, corte_texto, corte_tono = _reloj_corte()
     todo_al_dia = (
         siguiente is None and not recepciones_abiertas and not conteos_pendientes
-        and not restocks and not staging and not por_empacar
+        and not restocks and not staging and not por_completar
     )
 
     contexto = {
         "seccion": "home",
+        "es_mesa": _es_mesa(request),
         "todo_al_dia": todo_al_dia,
         "siguiente": siguiente,
         "transferencias": transferencias,
         "recepciones_abiertas": recepciones_abiertas,
         "num_por_pickear": total_picking,
         "por_empacar": por_empacar,
+        "por_completar": por_completar,
         "staging": staging,
         "conteos_pendientes": conteos_pendientes,
         "entregas_locales": entregas_locales,
@@ -1114,6 +1127,26 @@ def _caja_cerrada(paquete):
     return paquete.ts_cierre is not None
 
 
+def _que_falta_empaque(pedido):
+    """Qué le falta a un pedido para salir de la mesa de empaque, en corto (Mi turno)."""
+    cajas = list(pedido.paquetes.all())
+    if pedido.estado == Pedido.EN_PICKING:
+        pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
+        if cajas and len(pendientes) < len(cajas):
+            return "sin empacar: caja " + ", ".join(str(c.numero) for c in pendientes)
+        return "por empacar"
+    empacadas = [c for c in cajas if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
+    sin_guia = [c for c in empacadas if c.guia_activa is None]
+    if sin_guia:
+        return "sin guía: caja " + ", ".join(str(c.numero) for c in sin_guia)
+    if not empacadas and not any(g.es_activa for g in pedido.guias.all()):
+        return "sin guía"
+    sin_cierre = [c for c in empacadas if c.ts_cierre is None]
+    if sin_cierre:
+        return "falta foto de cierre: caja " + ", ".join(str(c.numero) for c in sin_cierre)
+    return "falta foto de cierre"
+
+
 def _cajas_cliente(pedido):
     """Cajas de empaque activas del cliente (selector del wizard)."""
     from apps.catalogo.models import Caja  # lazy por contrato
@@ -1165,6 +1198,8 @@ def empaque_pedido(request, pk):
         if accion == "corregir_peso":
             return _empaque_corregir_peso(request, pedido)
         _reclamar_si_libre(pedido, request)
+        if accion == "generar_guia":
+            return _empaque_generar_guia(request, pedido)
         if accion == "empacar_caja":
             return _empaque_caja(request, pedido)
         if accion == "cerrar_caja":
@@ -1505,6 +1540,9 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         "cierre_legacy": not cajas_empacadas,  # 1 caja implícita
         "total_cierres": max(len(cajas_empacadas), 1),
         "cierres_hechos": max(len(cajas_empacadas), 1) - (len(por_cerrar) or 1),
+        # La guía que falló con el carrier se reintenta AQUÍ (antes vivía en
+        # Salida): nada llega al corral sin guía y foto de cierre.
+        "puede_reintentar_guia": pedido.estado == Pedido.EMPACADO,
     })
     if caja_cierre is not None:
         contexto.update(_contexto_peso(caja_cierre))
@@ -1514,9 +1552,9 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
 def _despachar_y_avisar(request, pedido, destino):
     """MISMO POST del empaque: guía + impresión automáticas (best-effort).
 
-    Un error del carrier deja el pedido EMPACADO y recuperable desde Salida
-    (botón Generar guía); un error de impresora avisa y el flujo continúa
-    (la reimpresión vive en Salida).
+    Un error del carrier deja el pedido EMPACADO y recuperable desde el propio
+    paso de cierre (botón Reintentar guía); un error de impresora avisa y el
+    flujo continúa (la reimpresión vive en Salida).
     """
     from apps.pedidos.services import despachar_a_corral  # lazy por contrato
     try:
@@ -1527,7 +1565,7 @@ def _despachar_y_avisar(request, pedido, destino):
         messages.error(
             request,
             f"El carrier no respondió al generar la guía de {pedido.folio}: {exc}. "
-            "Genera la guía desde Salida en un momento o avisa a Mesa de Control.",
+            "Reintenta en un momento con 'Reintentar guía' o avisa a Mesa de Control.",
         )
         from apps.envios.models import Guia  # lazy: modelo de otra app
         con_guia = pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).count()
@@ -1535,7 +1573,7 @@ def _despachar_y_avisar(request, pedido, destino):
             messages.info(
                 request,
                 f"Las {con_guia} caja(s) que sí tienen guía ya se mandaron a imprimir; "
-                "la que falló se genera desde Salida y su etiqueta sale ahí.",
+                "la que falló se reintenta aquí mismo con 'Reintentar guía'.",
             )
     else:
         numeros = ", ".join(g.numero for g in resultado["guias"])
@@ -1600,6 +1638,19 @@ def _empaque_caja(request, pedido):
     messages.success(
         request, f"{pedido.folio} empacado y verificado: todas las cajas pesadas y con foto.",
     )
+    return _despachar_y_avisar(request, pedido, destino)
+
+
+def _empaque_generar_guia(request, pedido):
+    """Reintento de guía desde el paso de cierre: el pedido EMPACADO cuya guía
+    falló con el carrier se vuelve a intentar aquí (antes vivía en Salida)."""
+    destino = redirect("piso:empaque_pedido", pk=pedido.pk)
+    if pedido.estado != Pedido.EMPACADO:
+        messages.error(
+            request,
+            f"{pedido.folio} no está esperando guía (está {pedido.get_estado_display().lower()}).",
+        )
+        return destino
     return _despachar_y_avisar(request, pedido, destino)
 
 
@@ -1793,8 +1844,6 @@ def _contenido_salida(pedido):
 def salida(request):
     if request.method == "POST":
         accion = request.POST.get("accion")
-        if accion == "generar_guia":
-            return _salida_generar_guia(request)
         if accion == "manifiesto":
             return _salida_manifiesto(request)
         if accion == "recoleccion":
@@ -1805,36 +1854,33 @@ def salida(request):
     orden_corrales = corrales_activos()
     mapa = _mapa_corrales()
     grupos = {
-        codigo: {"codigo": codigo, "nombre": nombre, "sin_guia": [], "listos": []}
+        codigo: {"codigo": codigo, "nombre": nombre, "listos": []}
         for codigo, nombre in orden_corrales
     }
 
     def _grupo(carrier):
         corral = _corral_de_carrier(carrier, mapa)
         if corral not in grupos:  # corral sin ubicación viva (p. ej. SAL-LOCAL viejo)
-            grupos[corral] = {"codigo": corral, "nombre": corral, "sin_guia": [], "listos": []}
+            grupos[corral] = {"codigo": corral, "nombre": corral, "listos": []}
             orden_corrales.append((corral, corral))
         return grupos[corral]
 
     prefetch_contenido = ("lineas__sku", "paquetes__lineas__linea_pedido__sku")
-    for pedido in (
-        Pedido.objects.filter(estado=Pedido.EMPACADO)
-        .select_related("cliente").prefetch_related(*prefetch_contenido)
-    ):
-        pedido.contenido = _contenido_salida(pedido)
-        _grupo(_carrier_probable(pedido))["sin_guia"].append(pedido)
     from apps.pedidos.services import cajas_por_salir  # lazy por contrato
+    # Al corral solo llega lo que terminó en la mesa: todas las cajas con guía
+    # y foto de cierre (Pedido.empaque_completo). Lo demás se termina en el
+    # wizard de empaque, desde "Completar empaquetado" en Mi turno.
     for pedido in (
         Pedido.objects.filter(estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO])
-        .select_related("cliente").prefetch_related(*prefetch_contenido, "paquetes__guias")
+        .select_related("cliente").prefetch_related(*prefetch_contenido, "paquetes__guias", "guias")
     ):
+        if not pedido.empaque_completo:
+            continue
         pedido.contenido = _contenido_salida(pedido)
         # Cajas que siguen en bodega (empaque por caja): cada una se palomea
-        # sola en el manifiesto y necesita SU foto de cierre. Vacío = el
-        # pedido se empacó entero y sale completo.
+        # sola en el manifiesto. Vacío = el pedido se empacó entero y sale completo.
         pedido.cajas_salida = cajas_por_salir(pedido)
         for caja in pedido.cajas_salida:
-            caja.cierre_ok = caja.ts_cierre is not None
             caja.guia = caja.guia_activa
         pedido.por_caja = _por_caja(pedido)
         # Todas las guías vigentes de lo que sigue aquí: una etiqueta por guía.
@@ -1844,16 +1890,10 @@ def salida(request):
         ]
         guia = pedido.guias_activas[-1] if pedido.guias_activas else None
         pedido.guia = guia
-        # Sin foto de cierre el manifiesto lo deja fuera: se avisa desde antes.
-        if pedido.por_caja:
-            pedido.cierre_ok = any(c.cierre_ok for c in pedido.cajas_salida)
-        else:
-            pedido.cierre_ok = pedido.cajas_cerradas_completas
         carrier = guia.carrier if guia else _carrier_probable(pedido)
         _grupo(carrier)["listos"].append(pedido)
     for grupo in grupos.values():
-        grupo["firman"] = sum(1 for p in grupo["listos"] if p.cierre_ok)
-        grupo["sin_cierre"] = [p for p in grupo["listos"] if not p.cierre_ok]
+        grupo["firman"] = len(grupo["listos"])
         # El manifiesto se firma POR CARRIER, no por corral: SAL-OTRO junta
         # estafeta+puntopost+fedex y cada chofer se lleva SOLO lo suyo — firmar
         # el corral entero mandaría "va en camino" a compradores cuyo paquete
@@ -1863,12 +1903,7 @@ def salida(request):
             clave = (p.guia.carrier if p.guia else _carrier_probable(p)) or "?"
             por_carrier.setdefault(clave, []).append(p)
         grupo["carriers"] = [
-            {
-                "carrier": clave,
-                "listos": pedidos,
-                "firman": sum(1 for p in pedidos if p.cierre_ok),
-                "sin_cierre": [p for p in pedidos if not p.cierre_ok],
-            }
+            {"carrier": clave, "listos": pedidos, "firman": len(pedidos)}
             for clave, pedidos in sorted(por_carrier.items())
         ]
 
@@ -1893,38 +1928,6 @@ def salida(request):
         "flota_propia": _flota_propia(),
     }
     return render(request, "piso/salida.html", contexto)
-
-
-def _salida_generar_guia(request):
-    """Genera la guía que falta para un pedido empacado (vía pedidos → envios)."""
-    pedido = get_object_or_404(Pedido, pk=request.POST.get("pedido_id"))
-    from apps.pedidos.services import generar_guia  # lazy por contrato
-    try:
-        guia = generar_guia(pedido)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return redirect("piso:salida")
-    except Exception as exc:  # ErrorCarrier u otra falla del adapter: el piso debe saberlo
-        messages.error(
-            request,
-            f"El carrier no respondió al generar la guía de {pedido.folio}: {exc}. "
-            "Reintenta en un momento o avisa a Mesa de Control.",
-        )
-        return redirect("piso:salida")
-    activas = [g for g in pedido.guias.all() if g.es_activa]
-    if len(activas) > 1:
-        numeros = ", ".join(g.numero for g in activas)
-        messages.success(
-            request,
-            f"{len(activas)} guías listas para {pedido.folio} ({numeros}). "
-            "Imprime una etiqueta por caja: cada paquete viaja con la suya.",
-        )
-    else:
-        messages.success(
-            request,
-            f"Guía {guia.numero} lista para {pedido.folio}. Imprime la etiqueta y pégala en la caja.",
-        )
-    return redirect("piso:salida")
 
 
 def _salida_recoleccion(request):

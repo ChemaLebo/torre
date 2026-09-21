@@ -7,7 +7,7 @@
 | **Frecuencia / disparador** | 2 recolecciones diarias de paquetería ([COMPLETAR: horas pactadas]) + salida de ruta local |
 | **Tiempo estándar** | 10–20 min por recolección |
 | **EPP requerido** | Botas con casquillo; chaleco si la carga al camión se hace en banqueta |
-| **Pantallas de Torre** | Piso → **Salida** (`/piso/salida/`): botones **"Generar guía"** y **"Manifiesto firmado · salen N"** |
+| **Pantallas de Torre** | Piso → **Salida** (`/piso/salida/`): botón **"Manifiesto firmado · salen N"**. La guía y la foto de cierre se terminan en Empaque (SOP-06) |
 
 La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de la casa: *"El 'va en camino' al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino."* El proveedor anterior marcaba "enviado" paquetes que dormían en su bodega; nosotros jamás. **El botón del manifiesto se toca con la firma del chofer ya en la mano. Nunca antes.**
 
@@ -24,9 +24,9 @@ La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de l
    | `SAL-OTRO` | Otros carriers (Estafeta/DHL/FedEx por cobertura) |
 
 2. **Coloca cada caja empacada en su corral**. Torre te dice a qué corral pertenece cada pedido: en la pantalla de Salida, cada pedido aparece dentro del panel de su corral. Dentro del corral: botellas paradas, máximo 2 cajas de vidrio apiladas, guías hacia arriba/al frente para el cotejo.
-3. **Genera las guías que falten**: los pedidos del corral sin guía aparecen bajo *"Sin guía todavía — genérala aquí"*. Pulsa **"Generar guía"** por pedido. Torre confirma *"Guía [número] lista para [folio]. Imprime la etiqueta y pégala en la caja."* (en divididos: *"N guías listas… Imprime una etiqueta por caja: cada paquete viaja con la suya."*).
-   - Si el carrier no responde, Torre te lo dice tal cual: *"El carrier no respondió al generar la guía… Reintenta en un momento o avisa a Mesa de Control."* Reintenta una vez; si sigue, Mesa.
-   - **No dejes la generación de guías para cuando el chofer ya está tocando el timbre.** Guías generadas e impresas = corral listo. La meta: todo pedido del corte empacado, con guía y en staging **antes de las 14:00** — así se mide nuestro SLA de salida, con evidencia propia.
+3. **Al corral solo llega lo terminado.** Torre no lista en Salida ningún pedido al que le falte guía o foto de cierre en alguna caja. Si el carrier falló o faltó una foto, el pedido aparece en Mi turno → *"Completar empaquetado"* del operador que lo empacó (Mesa ve todos) y se termina en la pantalla de empaque: **"Reintentar guía"** en el paso de cierre, etiqueta pegada, foto de cierre. Es responsabilidad de Piso saber dónde está su trabajo: una caja sin etiqueta no se lleva al corral.
+   - Si el carrier no responde, Torre te lo dice tal cual: *"El carrier no respondió al generar la guía… Reintenta en un momento con 'Reintentar guía' o avisa a Mesa de Control."* Reintenta una vez; si sigue, Mesa.
+   - **No dejes guías pendientes para cuando el chofer ya está tocando el timbre.** La meta: todo pedido del corte empacado, con guía, con foto y en staging **antes de las 14:00** — así se mide nuestro SLA de salida, con evidencia propia.
 
 ## B. Llegada del repartidor (por cada recolección)
 
@@ -52,7 +52,7 @@ La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de l
 
 - **Firmar el manifiesto en Torre "mientras llega el chofer".** Los compradores reciben "va en camino" de paquetes que siguen en el corral. Es la falla más grave de proceso que existe en esta casa; el botón se pulsa DESPUÉS de la firma en papel.
 - **Dejar que el chofer cuente solo.** Se ve como guía manifestada sin caja (retorno falso instantáneo) o caja de más sin guía. El cotejo es tuyo, caja por caja contra la pantalla.
-- **Generar guías a las 13:55.** Un error del carrier a esa hora te deja sin margen. Guías se generan al llegar cada caja al corral.
+- **Dejar pedidos en "Completar empaquetado" hasta las 13:55.** Un error del carrier a esa hora te deja sin margen. La guía sale al confirmar la última caja; si falló, se reintenta en ese momento, no al final del día.
 - **Paquete de SAL-OTRO subido al camión de PQX** "porque igual es paquetería". Se ve como extravío sin rastro: la guía de un carrier viajando con otro no existe para nadie.
 - **Escalar a las 17:00 "porque seguro ya viene".** A esa hora ya no hay plan B posible y el SLA de salida se perdió. 16:00 es el límite, y avisado se resuelve.
 
@@ -66,7 +66,7 @@ La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de l
 
 ## Qué queda registrado
 
-- Cada **"Generar guía"**: número de guía ligado al pedido, con usuario y hora.
+- Cada guía generada (al confirmar la última caja en Empaque o con **"Reintentar guía"**): número de guía ligado al pedido, con usuario y hora.
 - Cada **"Manifiesto firmado"**: evento de auditoría del corral con la lista de folios recolectados, usuario y timestamp — el paso a RECOLECTADO en lote.
 - El disparo del WhatsApp **"va en camino"** al comprador (plantilla B, con guía y rastreo) — sale de esta acción y de ninguna otra.
 - El manifiesto en papel firmado por el chofer, archivado 12 meses — es NUESTRA evidencia de entrega al carrier (el escaneo del hub puede tardar 12–24 h y no dependemos de él).
@@ -81,8 +81,8 @@ FECHA: ______  CORRAL: SAL-______  RECOLECCIÓN: 1ª / 2ª
 
 ANTES DEL CHOFER
 [ ] Todas las cajas en su corral correcto · máx 2 apiladas, paradas
-[ ] "Generar guía" hecho para todo el corral · etiquetas pegadas
-    (una guía por caja)
+[ ] Todas las cajas del corral con guía y foto de cierre · etiquetas pegadas
+    (una guía por caja; Torre no lista en Salida lo incompleto)
 [ ] Corral del corte listo ANTES de las 14:00
 
 CON EL CHOFER

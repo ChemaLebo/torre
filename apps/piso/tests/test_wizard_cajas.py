@@ -100,8 +100,22 @@ class WizardCajasTests(PisoTestCase):
         self.assertContains(respuesta, "que sí tienen guía ya se mandaron a imprimir")
         self.assertContains(respuesta, "Sin guía: caja 1")
         self.assertContains(respuesta, "(caja 2)")
+        self.assertContains(respuesta, 'value="generar_guia"')  # el reintento vive aquí
+        self.assertContains(respuesta, "Reintentar guía · caja 1")
         self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)  # recuperable desde Salida
+        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)
+        # Sin guía en la caja 1 el pedido no llega a Salida: sigue en la mesa.
+        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
+        self.assertContains(self.client.get(reverse("piso:home")), "sin guía: caja 1")
+
+        # Reintentar guía desde el cierre: ahora el carrier responde y sale la que faltaba.
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
+            respuesta = self.client.post(self.url, {"accion": "generar_guia"}, follow=True)
+        self.assertContains(respuesta, "listas para")
+        self.assertEqual(Guia.objects.filter(pedido=self.pedido).count(), 2)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
+        self.assertNotContains(respuesta, 'value="generar_guia"')
 
     @override_settings(TORRE_PESO_MODO="bloquear")
     def test_peso_fuera_de_rango_no_toca_nada(self):

@@ -283,6 +283,23 @@ class Pedido(models.Model):
             entidad="pedido", entidad_id=str(self.pk), tipo="caja_cerrada",
         ).exists()
 
+    @property
+    def empaque_completo(self):
+        """True cuando en la mesa de empaque ya no falta nada: cada caja
+        EMPACADO/DESPACHADO con guía activa y su foto de cierre (ts_cierre);
+        sin plan de cajas, una guía activa del pedido y su foto de cierre.
+
+        Salida solo lista pedidos con esto en True: nada llega al corral sin
+        guía y foto. Lo que falte se termina en el wizard de empaque, desde
+        "Completar empaquetado" en Mi turno (Chema, 2026-09-21).
+        """
+        cajas = [c for c in self.paquetes.all() if c.estado in ("EMPACADO", "DESPACHADO")]
+        if cajas:
+            return all(c.ts_cierre is not None and c.guia_activa is not None for c in cajas)
+        if not any(g.es_activa for g in self.guias.all()):
+            return False
+        return self.cajas_cerradas_completas
+
 
 class LineaPedido(models.Model):
     """Renglón del pedido: SKU, cantidad pedida y avance de pick."""

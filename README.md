@@ -34,6 +34,7 @@ Abrir <http://127.0.0.1:8380>
 ## Reglas de oro implementadas (anti-Melonn)
 
 - "En camino" se dispara **solo al RECOLECTADO** (manifiesto firmado), jamás al etiquetar.
+- **Nada llega al corral sin guía y foto de cierre**: Salida solo lista pedidos con el empaque completo; lo que falte se termina en Empaque ("Completar empaquetado" en Mi turno).
 - El botón **Empacado no existe sin 2 fotos** y peso dentro de tolerancia.
 - Naked packing en pedidos locales: el checklist lo marca y avisa "JAMÁS cinta del 3PL".
 - Toda incidencia **notifica al cliente al abrirse** — el cliente siempre se entera.

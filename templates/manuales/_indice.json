@@ -324,8 +324,8 @@
   "titulo": "Empaque",
   "emoji": "📸",
   "resumen": "Aquí es donde la rotura se gana o se pierde: el 59.8% de las incidencias del proveedor anterior fueron roturas. Nuestra apuesta es que la prevención es el seguro: divisores, prueba de agitado, báscula ±3% y dos fotos. La pantalla no te deja marcar \"Empacado\" sin peso y sin las 2 fotos — y eso es a propósito: *\"Sin las 2 fotos y el peso, el botón no se enciende.\"",
-  "palabras": 1388,
-  "minutos": 7,
+  "palabras": 1501,
+  "minutos": 8,
   "grupo": "Operación diaria",
   "version": "v1.0 · Agosto 2026",
   "propiedades": [
@@ -379,8 +379,8 @@
   "titulo": "Salida y manifiesto",
   "emoji": "🚀",
   "resumen": "La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de la casa: *\"El 'va en camino' al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino.\"* El proveedor anterior marcaba \"enviado\" paquetes que dormían en su bodega; nosotros jamás. El botón del manifiesto se toca con la firma del chofer ya en la mano. Nunca antes.",
-  "palabras": 1266,
-  "minutos": 6,
+  "palabras": 1331,
+  "minutos": 7,
   "grupo": "Operación diaria",
   "version": "v1.0 · Agosto 2026",
   "propiedades": [
@@ -402,7 +402,7 @@
    ],
    [
     "Pantallas de Torre",
-    "Piso → <strong>Salida</strong> (<code>/piso/salida/</code>): botones <strong>&quot;Generar guía&quot;</strong> y <strong>&quot;Manifiesto firmado · salen N&quot;</strong>"
+    "Piso → <strong>Salida</strong> (<code>/piso/salida/</code>): botón <strong>&quot;Manifiesto firmado · salen N&quot;</strong>. La guía y la foto de cierre se terminan en Empaque (SOP-06)"
    ]
   ],
   "toc": [
