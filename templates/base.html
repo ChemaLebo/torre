@@ -181,6 +181,7 @@ window.addEventListener("load", function () {
 {% if rol_actual == "piso" %}
 {# Tab bar inferior fija del carril único (solo móvil ≤860px vía CSS). #}
 <div class="hoja-mas" id="hoja-mas" hidden>
+  <a href="{% url 'piso:picking' %}">Picking · lista por cliente</a>
   <a href="{% url 'piso:conteos' %}">Conteos</a>
   <a href="{% url 'piso:cuarentena' %}">Cuarentena</a>
   <a href="{% url 'piso:empaque' %}">Empaque · lista</a>
