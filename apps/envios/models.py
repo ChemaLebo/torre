@@ -207,6 +207,12 @@ class Paquete(models.Model):
     foto_cierre = models.ForeignKey(
         "core.EvidenciaFoto", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
     )
+    # Foto del contenido de ESTA caja (la estampa pedidos.services.empacar_caja;
+    # reemplazar_foto_pedido la re-apunta). Igual que foto_cierre es estado, no
+    # historia: el wizard de empaque la muestra por caja y permite cambiarla.
+    foto_contenido = models.ForeignKey(
+        "core.EvidenciaFoto", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:

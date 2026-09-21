@@ -1,0 +1,29 @@
+{# Una foto de empaque (contenido o caja cerrada) de una caja — o suelta, del cierre único legacy — con su cambio: miniatura + form reemplazar_foto. #}
+<div class="card mt">
+  <div class="titulo">
+    <h2>{% if clase == "contenido" %}Foto del contenido{% else %}Foto de la caja cerrada{% endif %}{% if caja %} · caja {{ caja.numero }}{% endif %}</h2>
+    {% if foto %}<span class="pill ok">tomada</span>{% else %}<span class="pill accent">pendiente</span>{% endif %}
+  </div>
+  {% if foto %}
+  <div class="fotos">
+    <a href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="{{ foto.ts|date:'d/M H:i' }}">
+      <img src="{% url 'core:evidencia' foto.pk %}" alt="Foto de empaque de {{ pedido.folio }}" loading="lazy">
+    </a>
+  </div>
+  <p class="small muted">{{ foto.ts|date:"d/M H:i" }}{% if foto.tomada_por %} · {{ foto.tomada_por }}{% endif %}</p>
+  {% if foto.congelada %}
+  <p class="small">Esta foto forma parte del expediente de una incidencia: no se puede cambiar.</p>
+  {% else %}
+  <form method="post" enctype="multipart/form-data">{% csrf_token %}
+    <input type="hidden" name="accion" value="reemplazar_foto">
+    <input type="hidden" name="evidencia_id" value="{{ foto.pk }}">
+    <input type="hidden" name="caja" value="{% if caja %}{{ caja.numero }}{% endif %}">
+    <label for="foto-nueva-{{ foto.pk }}">¿Salió mal? Toma otra y reemplázala</label>
+    <input type="file" name="foto" id="foto-nueva-{{ foto.pk }}" accept="image/*" capture="environment" required>
+    <button class="btn chico mt" type="submit">Cambiar foto</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="small muted">{% if clase == "contenido" %}Se toma al empacar la caja.{% else %}Se toma en el paso de cierre, con la etiqueta pegada.{% endif %}</p>
+  {% endif %}
+</div>

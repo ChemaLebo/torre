@@ -9,12 +9,42 @@
   <h1 class="mono">{{ pedido.folio }} listo</h1>
   <p>Déjalo en el corral <b class="mono">{{ corral }}</b>. Cajas cerradas con evidencia completa.</p>
 </div>
+{% include "piso/_chips_cajas.html" %}
+{% if chips %}<p class="small muted centro mt">¿Una foto salió mal? Toca su caja y cámbiala ahí.</p>{% endif %}
+{% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
 <form method="post" action="{% url 'piso:home' %}" class="accion-fija">{% csrf_token %}
   <input type="hidden" name="accion" value="siguiente">
   <button class="btn primario gigante" type="submit">SIGUIENTE PEDIDO ▶</button>
 </form>
 <p class="centro mt"><a class="small" href="{% url 'piso:home' %}">ir a Mi turno</a></p>
 <script>document.addEventListener("DOMContentLoaded", function () { Feedback.ok(); });</script>
+
+{% elif paso == "revisar" %}
+{# ── Revisión de una caja ya empacada: contenido, báscula, guía y sus fotos (cambiables) ── #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Empaque · Revisar caja</div>
+    <h1>Caja {{ caja.numero }} de {{ total_cajas }}</h1>
+    <div class="small mono">{{ pedido.folio }} · {{ pedido.cliente.nombre }}</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:empaque_pedido' pedido.pk %}">Volver al paso actual</a>
+</div>
+{% include "piso/_chips_cajas.html" %}
+<div class="card mt">
+  <div class="titulo"><h2>Qué va en esta caja</h2>
+    {% if caja.ts_cierre %}<span class="pill ok">cerrada</span>{% else %}<span class="pill accent">{{ caja.get_estado_display|lower }}</span>{% endif %}
+  </div>
+  <ul class="timeline">
+    {% for pl in caja.lineas.all %}
+    <li>{{ pl.texto_para_piso }}</li>
+    {% empty %}
+    <li class="muted">Caja sin desglose.</li>
+    {% endfor %}
+  </ul>
+  <p class="small muted">Báscula: <span class="mono">{{ caja.peso_real_gr|default:"—" }} g</span>{% if guia %} · guía <span class="mono">{{ guia.numero }}</span> ({{ guia.carrier }}){% endif %}</p>
+</div>
+{% include "piso/_foto_caja.html" with foto=caja.foto_contenido clase="contenido" %}
+{% include "piso/_foto_caja.html" with foto=caja.foto_cierre clase="caja_cerrada" %}
 
 {% elif paso == "cierre" %}
 {# ── Paso 3-4: etiquetas impresas → foto de CAJA CERRADA por caja ── #}
@@ -26,6 +56,7 @@
   </div>
   <a class="btn chico" href="{% url 'piso:salida' %}">Ir a salida</a>
 </div>
+{% include "piso/_chips_cajas.html" %}
 
 {% if tiene_guia %}
 <div class="banner ok"><span class="foco"></span>
@@ -79,13 +110,15 @@
       <button class="btn primario gigante" type="submit">Caja {{ caja_cierre.numero }} cerrada ✓</button>
     </div>
   </form>
-  {% if por_cerrar|length > 1 %}
+  {% if otras_por_cerrar %}
   <p class="small muted mt">Faltan después:
-    {% for c in por_cerrar|slice:"1:" %}caja {{ c.numero }}{% if not forloop.last %} · {% endif %}{% endfor %}
+    {% for c in otras_por_cerrar %}caja {{ c.numero }}{% if not forloop.last %} · {% endif %}{% endfor %}
   </p>
   {% endif %}
 </div>
+{% include "piso/_foto_caja.html" with caja=caja_cierre foto=caja_cierre.foto_contenido clase="contenido" %}
 {% endif %}
+{% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
 
 {% else %}
 {# ── Paso 1-2: CAJA i de N (o caja única legacy) — foto CONTENIDO + peso ── #}
@@ -118,7 +151,7 @@
   {% endif %}
 </details>
 {% endif %}
-
+{% include "piso/_chips_cajas.html" %}
 
 {% if naked %}
 <div class="banner crit"><span class="foco"></span>

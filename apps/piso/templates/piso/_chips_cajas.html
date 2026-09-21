@@ -1,0 +1,8 @@
+{# Navegación del wizard de empaque entre las cajas del pedido (?caja=N); la abierta va marcada. #}
+{% if chips %}
+<div class="chips mt" aria-label="Cajas del pedido">
+  {% for c in chips %}
+  <a class="chip{% if c.activa %} activo{% endif %}" href="{% url 'piso:empaque_pedido' pedido.pk %}?caja={{ c.caja.numero }}">Caja {{ c.caja.numero }} · {{ c.estado }}</a>
+  {% endfor %}
+</div>
+{% endif %}

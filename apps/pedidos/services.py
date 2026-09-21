@@ -1349,7 +1349,8 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
     Valida el peso de la báscula contra el plan de la caja
     (paquete.peso_kg ± settings.TORRE["TOLERANCIA_PESO_PCT"], mismo criterio
     que empacar), guarda Paquete.peso_real_gr, adjunta la foto de contenido
-    al pedido (el evento lleva el número de caja) y transiciona el paquete
+    al pedido y la estampa en Paquete.foto_contenido (el evento lleva el
+    número de caja) y transiciona el paquete
     PLANEADO/EN_EMPAQUE → EMPACADO. Cuando TODAS las cajas del pedido quedan
     EMPACADO, encadena empacar() con peso = Σ pesos reales por caja (las
     fotos de contenido ya están ligadas al pedido). Cualquier ValueError
@@ -1424,7 +1425,10 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
         archivo=foto_contenido, tomada_por=_actor_nombre(actor),
     )
     fresco.peso_real_gr = peso_real
-    fresco.save(update_fields=["peso_real_gr", "caja", "largo_cm", "ancho_cm", "alto_cm"])
+    fresco.foto_contenido = evidencia
+    fresco.save(update_fields=[
+        "peso_real_gr", "foto_contenido", "caja", "largo_cm", "ancho_cm", "alto_cm",
+    ])
     fresco.transicionar(
         Paquete.EMPACADO, actor=actor,
         motivo=f"Caja {fresco.numero}: báscula {peso_real} g contra plan de {esperado} g.",
@@ -1450,6 +1454,7 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
     if fresco is not paquete:
         paquete.estado = fresco.estado
         paquete.peso_real_gr = fresco.peso_real_gr
+        paquete.foto_contenido = evidencia
     return fresco
 
 
@@ -1508,6 +1513,89 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
         motivo=f"Caja {fresco.numero} de {pedido.folio} cerrada con la etiqueta pegada.",
     )
     return fresco
+
+
+@transaction.atomic
+def reemplazar_foto_pedido(pedido, actor, evidencia_id, foto):
+    """Cambia una foto de empaque (contenido o caja cerrada) que salió mal.
+
+    La foto nueva entra como EvidenciaFoto del mismo tipo y las cajas que
+    apuntaban a la vieja (Paquete.foto_contenido / foto_cierre) quedan
+    apuntando a la nueva, con ts_cierre y peso intactos: cambiar la foto no
+    reabre ni re-pesa nada. La vieja se borra, registro y archivo — no es
+    evidencia de nada (era la caja equivocada, salió movida) y seguiría
+    saliendo en el portal del cliente y en el reporte del día. El evento
+    foto_reemplazada (entidad "paquete" si la foto era de UNA caja, "pedido"
+    en el cierre único legacy) guarda id, SHA-256 y hora de la que se fue y
+    el id de la nueva: la bitácora no pierde el rastro. Una foto congelada
+    (expediente de incidencia) no se toca: ValueError. Ligada a otro pedido
+    o de otro tipo: ValueError, sin filtrar existencia. El archivo viejo se
+    borra al confirmar la transacción (on_commit), nunca antes.
+    """
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    if foto is None:
+        raise ValueError("Toma la foto nueva antes de confirmar el cambio.")
+    try:
+        evidencia_id = int(evidencia_id)
+    except (TypeError, ValueError):
+        evidencia_id = 0
+    vieja = EvidenciaFoto.objects.filter(
+        pk=evidencia_id, entidad="pedido", entidad_id=str(pedido.pk),
+        tipo__in=(TIPO_FOTO_CONTENIDO, TIPO_FOTO_CIERRE),
+    ).first()
+    if vieja is None:
+        raise ValueError(
+            f"Esa foto no es de empaque de {pedido.folio}; no hay nada que cambiar."
+        )
+    if vieja.congelada:
+        raise ValueError(
+            f"La foto forma parte del expediente de una incidencia de {pedido.folio}; "
+            "no se puede reemplazar."
+        )
+    cajas = list(
+        Paquete.objects.select_for_update()
+        .filter(Q(foto_contenido=vieja) | Q(foto_cierre=vieja), pedido=pedido)
+        .order_by("numero")
+    )
+    nueva = EvidenciaFoto.objects.create(
+        entidad="pedido", entidad_id=str(pedido.pk), tipo=vieja.tipo,
+        archivo=foto, tomada_por=_actor_nombre(actor),
+    )
+    for caja in cajas:
+        campos = []
+        if caja.foto_contenido_id == vieja.pk:
+            caja.foto_contenido = nueva
+            campos.append("foto_contenido")
+        if caja.foto_cierre_id == vieja.pk:
+            caja.foto_cierre = nueva
+            campos.append("foto_cierre")
+        caja.save(update_fields=campos)
+    anterior = {"id": vieja.pk, "sha256": vieja.hash_sha256, "ts": vieja.ts.isoformat()}
+    archivo_viejo = vieja.archivo
+    vieja.delete()
+    que = "del contenido" if nueva.tipo == TIPO_FOTO_CONTENIDO else "de la caja cerrada"
+    numeros = [c.numero for c in cajas]
+    if len(cajas) == 1:
+        entidad, entidad_id, donde = "paquete", cajas[0].pk, f"caja {numeros[0]}"
+    else:
+        entidad, entidad_id = "pedido", pedido.pk
+        donde = "cajas " + ", ".join(str(n) for n in numeros) if numeros else "cierre único"
+    registrar_evento(
+        entidad, entidad_id, "foto_reemplazada", actor=actor, cliente=pedido.cliente,
+        delta={"pedido": pedido.folio, "cajas": numeros, "tipo": nueva.tipo,
+               "evidencia_anterior": anterior, "evidencia_id": nueva.pk},
+        motivo=f"Foto {que} de {pedido.folio} ({donde}) reemplazada: la anterior salió mal.",
+    )
+
+    def borrar_archivo_viejo():
+        try:
+            archivo_viejo.delete(save=False)
+        except OSError:
+            pass
+
+    transaction.on_commit(borrar_archivo_viejo)
+    return nueva
 
 
 # ── Guía y salida ──

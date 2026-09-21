@@ -1139,6 +1139,10 @@ def empaque_pedido(request, pk):
     (cerrar_caja) → pantalla de éxito con SIGUIENTE PEDIDO ▶. El pedido
     legacy sin plan de paquetes corre el mismo wizard con 1 caja (empacar
     clásico + cierre implícito).
+
+    ?caja=N navega entre las cajas del pedido (chips arriba): la pendiente
+    se empaca, la que falta cerrar abre su cierre y la cerrada se revisa con
+    sus fotos, que se pueden cambiar (accion reemplazar_foto).
     """
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
 
@@ -1155,6 +1159,8 @@ def empaque_pedido(request, pk):
         if accion == "transferir":
             _pedido_transferir(request, pedido)
             return redirect("piso:empaque_pedido", pk=pedido.pk)
+        if accion == "reemplazar_foto":
+            return _empaque_reemplazar_foto(request, pedido)
         _reclamar_si_libre(pedido, request)
         if accion == "empacar_caja":
             return _empaque_caja(request, pedido)
@@ -1170,8 +1176,9 @@ def empaque_pedido(request, pk):
 
     # PARCIALMENTE_DESPACHADO: ya salió alguna caja; las que siguen en bodega
     # toman aquí su foto de cierre para poder subir al siguiente manifiesto.
+    elegida = _caja_elegida(request, pedido)
     if pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
-        return _render_cierre_o_exito(request, pedido)
+        return _render_cierre_o_exito(request, pedido, elegida)
     if pedido.estado != Pedido.EN_PICKING:
         messages.error(
             request,
@@ -1184,7 +1191,7 @@ def empaque_pedido(request, pk):
             f"Faltan piezas por pickear en {pedido.folio}. Termina el escaneo antes de empacar.",
         )
         return redirect("piso:picking_pedido", pk=pedido.pk)
-    return _render_paso_empacar(request, pedido)
+    return _render_paso_empacar(request, pedido, elegida)
 
 
 _INDICE_KIT = re.compile(r"^sku_(\d+)$")
@@ -1281,8 +1288,63 @@ def _dims_producto(paquete):
     return (largo, ancho, alto)
 
 
-def _render_paso_empacar(request, pedido):
-    """Paso 1-2 del wizard: CAJA i de N (o caja única legacy) — foto + peso."""
+def _caja_elegida(request, pedido):
+    """Caja pedida con ?caja=N (navegación del wizard); None si no viene o no existe."""
+    crudo = (request.GET.get("caja") or "").strip()
+    if not crudo.isdigit():
+        return None
+    return pedido.paquetes.filter(numero=int(crudo)).first()
+
+
+def _chips_cajas(cajas, actual=None):
+    """Chips de navegación del wizard: cada caja con su estado corto y si es la abierta."""
+    chips = []
+    for caja in cajas:
+        if caja.ts_cierre is not None:
+            estado = "cerrada"
+        elif caja.estado == Paquete.DESPACHADO:
+            estado = "despachada"
+        elif caja.estado == Paquete.EMPACADO:
+            estado = "empacada"
+        else:
+            estado = "pendiente"
+        chips.append({"caja": caja, "estado": estado, "activa": caja.numero == actual})
+    return chips
+
+
+def _fotos_sueltas(pedido, cajas):
+    """Fotos de empaque del pedido sin caja (cierre único legacy), para poder cambiarlas."""
+    ligadas = {c.foto_contenido_id for c in cajas} | {c.foto_cierre_id for c in cajas}
+    return list(
+        EvidenciaFoto.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), tipo__in=("contenido", "caja_cerrada"),
+        ).exclude(pk__in=[i for i in ligadas if i]).order_by("ts")
+    )
+
+
+def _render_revisar_caja(request, pedido, caja):
+    """Una caja ya empacada: contenido, báscula, guía y sus fotos, con cambio de foto."""
+    cajas = _paquetes_con_lineas(pedido)
+    caja = next((c for c in cajas if c.pk == caja.pk), caja)
+    return render(request, "piso/empaque_pedido.html", {
+        "seccion": "empaque",
+        "pedido": pedido,
+        "paso": "revisar",
+        "caja": caja,
+        "total_cajas": len(cajas),
+        "guia": caja.guia_activa,
+        "chips": _chips_cajas(cajas, actual=caja.numero),
+    })
+
+
+def _render_paso_empacar(request, pedido, elegida=None):
+    """Paso 1-2 del wizard: CAJA i de N (o caja única legacy) — foto + peso.
+
+    ?caja=N (elegida): si sigue pendiente se empaca ella — el orden del plan
+    es sugerencia, no candado; si ya está empacada, se revisa con sus fotos.
+    """
+    if elegida is not None and elegida.estado in (Paquete.EMPACADO, Paquete.DESPACHADO):
+        return _render_revisar_caja(request, pedido, elegida)
     checklist, naked = _checklist_empaque(pedido)
     cajas = _paquetes_con_lineas(pedido)
     pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
@@ -1336,6 +1398,8 @@ def _render_paso_empacar(request, pedido):
     contexto["duenio"] = pedido.asignado_a
     if cajas and pendientes:
         caja = pendientes[0]
+        if elegida is not None:
+            caja = next((c for c in pendientes if c.pk == elegida.pk), caja)
         plan_gr = int(caja.peso_kg * 1000) if caja.peso_kg else 0
         peso_min, peso_max, tolerancia = _rango_peso(plan_gr)
         dims_producto = _dims_producto(caja)
@@ -1352,6 +1416,7 @@ def _render_paso_empacar(request, pedido):
             "dims_iniciales": dims_iniciales,
             "total_cajas": len(cajas),
             "cajas_listas": len(cajas) - len(pendientes),
+            "chips": _chips_cajas(cajas, actual=caja.numero),
             "cajas_cliente": _cajas_cliente(pedido),
             "tolerancia": tolerancia,
             "peso_modo": settings.TORRE_PESO_MODO,
@@ -1379,24 +1444,40 @@ def _render_paso_empacar(request, pedido):
     return render(request, "piso/empaque_pedido.html", contexto)
 
 
-def _render_cierre_o_exito(request, pedido):
-    """Paso 3-5 del wizard: etiquetas impresas → foto de cierre → éxito."""
-    contexto = {"seccion": "empaque", "pedido": pedido}
+def _render_cierre_o_exito(request, pedido, elegida=None):
+    """Paso 3-5 del wizard: etiquetas impresas → foto de cierre → éxito.
+
+    ?caja=N (elegida): si le falta el cierre, abre SU paso de cierre aunque no
+    sea la primera; si ya está cerrada, la revisión con sus fotos (cambiables).
+    """
+    cajas = _paquetes_con_lineas(pedido)
+    if (
+        elegida is not None
+        and elegida.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)
+        and _caja_cerrada(elegida)
+    ):
+        return _render_revisar_caja(request, pedido, elegida)
+    contexto = {
+        "seccion": "empaque",
+        "pedido": pedido,
+        "fotos_sueltas": _fotos_sueltas(pedido, cajas),
+    }
     if pedido.cajas_cerradas_completas:
         contexto.update({
             "paso": "exito",
             "corral": _corral_de_carrier(_carrier_probable(pedido)),
+            "chips": _chips_cajas(cajas),
         })
         return render(request, "piso/empaque_pedido.html", contexto)
 
     guias = list(
         pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
     )
-    cajas_empacadas = [
-        c for c in pedido.paquetes.order_by("numero")
-        if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)
-    ]
+    cajas_empacadas = [c for c in cajas if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
     por_cerrar = [c for c in cajas_empacadas if not _caja_cerrada(c)]
+    caja_cierre = por_cerrar[0] if por_cerrar else None
+    if elegida is not None:
+        caja_cierre = next((c for c in por_cerrar if c.pk == elegida.pk), caja_cierre)
     con_guia = {g.paquete_id for g in guias}
     contexto.update({
         "paso": "cierre",
@@ -1406,7 +1487,9 @@ def _render_cierre_o_exito(request, pedido):
         "cajas_sin_guia": [c for c in cajas_empacadas if c.pk not in con_guia],
         "cajas_empacadas": cajas_empacadas,
         "por_cerrar": por_cerrar,
-        "caja_cierre": por_cerrar[0] if por_cerrar else None,
+        "caja_cierre": caja_cierre,
+        "otras_por_cerrar": [c for c in por_cerrar if caja_cierre and c.pk != caja_cierre.pk],
+        "chips": _chips_cajas(cajas, actual=caja_cierre.numero if caja_cierre else None),
         "cierre_legacy": not cajas_empacadas,  # 1 caja implícita
         "total_cierres": max(len(cajas_empacadas), 1),
         "cierres_hechos": max(len(cajas_empacadas), 1) - (len(por_cerrar) or 1),
@@ -1517,6 +1600,25 @@ def _empaque_cerrar_caja(request, pedido):
         messages.error(request, str(exc))
         return destino
     messages.success(request, f"Caja {paquete.numero} cerrada con su etiqueta.")
+    return destino
+
+
+def _empaque_reemplazar_foto(request, pedido):
+    """Cambia una foto de empaque que salió mal y regresa a la caja de donde vino."""
+    numero = (request.POST.get("caja") or "").strip()
+    url = reverse("piso:empaque_pedido", args=[pedido.pk])
+    destino = redirect(f"{url}?caja={numero}" if numero.isdigit() else url)
+    from apps.pedidos.services import reemplazar_foto_pedido  # lazy por contrato
+    try:
+        nueva = reemplazar_foto_pedido(
+            pedido, request.user, request.POST.get("evidencia_id"), request.FILES.get("foto"),
+        )
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return destino
+    que = "del contenido" if nueva.tipo == "contenido" else "de la caja cerrada"
+    donde = f" (caja {numero})" if numero.isdigit() else ""
+    messages.success(request, f"Foto {que} cambiada{donde}. La anterior ya no existe.")
     return destino
 
 
