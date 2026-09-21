@@ -2111,26 +2111,75 @@ def _ejecutar_plan_acomodo(orden, lineas, actor, resumen):
             resumen["ubicadas"] += n
 
 
+def _retirar_conteo_de_mas(orden, sku, lote_codigo, cantidad, actor, retiradas):
+    """Quita del stock `cantidad` piezas del SKU que se contaron de más contra
+    lo anunciado (el ASN es la cuenta real, Chema 2026-09-20): primero de
+    recepción (en_putaway), luego de lo vendible con ese lote, empezando por
+    los anaqueles del plan. Kardex RECEPCION en negativo. Lo que no se
+    encuentra se reporta. Suma a `retiradas`; regresa cuántas retiró."""
+    restante = cantidad
+    saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
+    n = min(sum(s.cantidad for s in saldos), restante)
+    if n > 0:
+        _restar(saldos, n)
+        _mov(sku, Movimiento.RECEPCION, -n, origen=Saldo.EN_PUTAWAY, referencia=orden.folio, actor=actor)
+        retiradas["recepcion"] += n
+        restante -= n
+    if restante > 0:
+        del_plan = {
+            p["ubicacion"] for p in (orden.plan_acomodo or {}).get("pasos", [])
+            if p["sku_id"] == sku.pk and p.get("ubicacion") and (p.get("lote") or "") == (lote_codigo or "")
+        }
+        consulta = Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE)
+        if lote_codigo:
+            consulta = consulta.filter(lote__codigo=lote_codigo)
+        codigos = dict(Ubicacion.objects.filter(pk__in={s.ubicacion_id for s in consulta}).values_list("pk", "codigo"))
+        saldos = sorted(consulta, key=lambda s: (codigos[s.ubicacion_id] not in del_plan, codigos[s.ubicacion_id]))
+        n = min(sum(s.cantidad for s in saldos), restante)
+        if n > 0:
+            _restar(saldos, n)
+            _mov(sku, Movimiento.RECEPCION, -n, origen=Saldo.UBICADO_VENDIBLE, referencia=orden.folio, actor=actor)
+            _notificar_cambio_disponible(sku)
+            retiradas["anaqueles"] += n
+            restante -= n
+    retiradas["no_encontradas"] += restante
+    return cantidad - restante
+
+
 def completar_recepcion_con_lo_anunciado(orden, actor=None):
-    """Cierre exprés (Chema 2026-09-20): la recepción queda como se anunció y
-    acomodada según el plan, sin escanear pieza por pieza; el piso acomoda
-    físicamente después con el plan exportado. 1) Cada línea recibe lo que le
-    falta para llegar a lo anunciado (las dañadas cuentan como llegadas).
-    2) Se ejecuta el plan vigente paso por paso (_ejecutar_plan_acomodo); si
-    no había plan se planea, y si algo queda en recepción sin paso se rehace
-    una vez y se ejecuta. 3) Cierra la recepción (cerrar_recepcion). Todo en
-    una transacción: si un paso falla (p. ej. SKU que exige lote y la línea no
-    lo anunció) no cambia nada. Regresa {"recibidas", "ubicadas", "a_cuarentena"}."""
+    """Cierre exprés (Chema 2026-09-20): la recepción queda EXACTAMENTE como
+    se anunció, acomodada según el plan y cerrada, sin escanear pieza por
+    pieza; el piso acomoda físicamente después con el plan exportado. El ASN
+    es la cuenta final y real: 1) cada línea recibe lo que le falta para
+    llegar a lo anunciado (las dañadas cuentan como llegadas) y lo contado de
+    más se descuenta de la línea y se retira del stock (_retirar_conteo_de_mas:
+    de recepción y, si no alcanza, de lo vendible de ese lote). 2) Se ejecuta
+    el plan vigente paso por paso (_ejecutar_plan_acomodo); sin plan se
+    planea, y si algo queda en recepción sin paso se rehace una vez. 3) Lo
+    que aun así siga en recepción no está en el ASN: se retira igual. 4)
+    Cierra (cerrar_recepcion). Todo en una transacción: si un paso falla no
+    cambia nada. Regresa {"recibidas", "descontadas", "retiradas": {"recepcion",
+    "anaqueles", "no_encontradas"}, "ubicadas", "a_cuarentena"}."""
     if orden.estado == OrdenEntrada.CERRADA:
         raise ValueError(f"La orden {orden.folio} ya está cerrada.")
-    resumen = {"recibidas": 0, "ubicadas": 0, "a_cuarentena": 0}
+    resumen = {
+        "recibidas": 0, "descontadas": 0,
+        "retiradas": {"recepcion": 0, "anaqueles": 0, "no_encontradas": 0},
+        "ubicadas": 0, "a_cuarentena": 0,
+    }
     with transaction.atomic():
         lineas = list(orden.lineas.select_related("sku").order_by("pk"))
         for linea in lineas:
-            faltante = linea.cantidad_anunciada - linea.cantidad_recibida - linea.cantidad_danada
-            if faltante > 0:
-                recibir(linea, faltante, 0, actor)
-                resumen["recibidas"] += faltante
+            diferencia = linea.cantidad_anunciada - linea.cantidad_recibida - linea.cantidad_danada
+            if diferencia > 0:
+                recibir(linea, diferencia, 0, actor)
+                resumen["recibidas"] += diferencia
+            elif diferencia < 0:
+                exceso = min(-diferencia, linea.cantidad_recibida)  # lo de más se contó como bueno
+                _retirar_conteo_de_mas(orden, linea.sku, (linea.lote_codigo or "").strip(), exceso, actor, resumen["retiradas"])
+                linea.cantidad_recibida -= exceso
+                linea.save(update_fields=["cantidad_recibida"])
+                resumen["descontadas"] += exceso
         if not (orden.plan_acomodo or {}).get("pasos"):
             planear_acomodo(orden, actor)
         for intento in range(2):
@@ -2139,9 +2188,14 @@ def completar_recepcion_con_lo_anunciado(orden, actor=None):
                 break
             if intento == 0:
                 planear_acomodo(orden, actor)
+        for sku in sorted({l.sku for l in lineas}, key=lambda s: s.codigo):
+            sobra = _suma(sku, Saldo.EN_PUTAWAY)
+            if sobra > 0:  # el plan ya cubrió lo anunciado: esto no está en el ASN
+                _retirar_conteo_de_mas(orden, sku, "", sobra, actor, resumen["retiradas"])
+                resumen["descontadas"] += sobra
         registrar_evento(
             "asn", orden.folio, "completada_con_lo_anunciado", actor=actor, cliente=orden.cliente,
-            delta=dict(resumen), motivo="Cierre exprés: recibida como se anunció y acomodada según el plan; el piso acomoda con el plan exportado.",
+            delta=dict(resumen), motivo="Cierre exprés: la orden queda exactamente como se anunció y acomodada según el plan; el piso acomoda con el plan exportado.",
         )
         cerrar_recepcion(orden, actor)
     return resumen

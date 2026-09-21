@@ -1408,10 +1408,14 @@ def _recepciones_replanear(request):
         except ValueError as exc:
             messages.error(request, str(exc))
         else:
+            retiradas = r["retiradas"]
             messages.success(
                 request,
-                f"{orden.folio} cerrada con lo anunciado: {r['recibidas']} pieza(s) recibidas para completar las líneas, "
-                f"{r['ubicadas']} ubicadas según el plan"
+                f"{orden.folio} cerrada exactamente con lo anunciado: {r['recibidas']} pieza(s) recibidas para completar las líneas, "
+                f"{r['descontadas']} descontadas por conteo de más"
+                + (f" ({retiradas['recepcion']} retiradas de recepción, {retiradas['anaqueles']} de anaqueles"
+                   + (f", {retiradas['no_encontradas']} sin stock que retirar" if retiradas["no_encontradas"] else "") + ")" if r["descontadas"] else "")
+                + f", {r['ubicadas']} ubicadas según el plan"
                 + (f" y {r['a_cuarentena']} a cuarentena (sin anaquel en el plan)" if r["a_cuarentena"] else "")
                 + ". Todo el producto quedó vendible; el piso acomoda físicamente con el plan exportado.",
             )

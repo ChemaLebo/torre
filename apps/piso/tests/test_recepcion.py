@@ -493,7 +493,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})  # 1 en recepción
         orden = OrdenEntrada.objects.get(pk=self.orden.pk)
         r = completar_recepcion_con_lo_anunciado(orden, self.operador)
-        self.assertEqual(r, {"recibidas": 2, "ubicadas": 3, "a_cuarentena": 0})
+        self.assertEqual(r, {"recibidas": 2, "descontadas": 0, "retiradas": {"recepcion": 0, "anaqueles": 0, "no_encontradas": 0}, "ubicadas": 3, "a_cuarentena": 0})
         self.linea.refresh_from_db()
         self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (5, 0))
         vendible = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
@@ -504,6 +504,40 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual(orden.plan_acomodo["pasos"][0]["ubicadas"], 5)
         with self.assertRaises(ValueError):
             completar_recepcion_con_lo_anunciado(orden, self.operador)  # ya cerrada
+
+    def test_completar_descuenta_lo_contado_de_mas_hasta_dejar_el_asn_exacto(self):
+        from apps.inventario.models import Movimiento, OrdenEntrada, Saldo
+        from apps.inventario.services import completar_recepcion_con_lo_anunciado
+
+        self._foto()
+        self.client.get(self.url)
+        for _ in range(7):  # 7 escaneadas contra 5 anunciadas
+            self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "4"})
+        r = completar_recepcion_con_lo_anunciado(OrdenEntrada.objects.get(pk=self.orden.pk), self.operador)
+        self.assertEqual((r["recibidas"], r["descontadas"], r["retiradas"], r["ubicadas"]), (0, 2, {"recepcion": 2, "anaqueles": 0, "no_encontradas": 0}, 1))
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 5)
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 5)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).estado, OrdenEntrada.CERRADA)
+        self.assertEqual(Movimiento.objects.filter(sku=self.sku, tipo=Movimiento.RECEPCION, delta=-2).count(), 1)
+
+    def test_completar_retira_de_anaqueles_si_lo_de_mas_ya_estaba_ubicado(self):
+        from apps.inventario.models import OrdenEntrada, Saldo
+        from apps.inventario.services import completar_recepcion_con_lo_anunciado
+
+        self._foto()
+        self.client.get(self.url)
+        self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"})
+        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "6"})  # 6 contadas y ubicadas
+        r = completar_recepcion_con_lo_anunciado(OrdenEntrada.objects.get(pk=self.orden.pk), self.operador)
+        self.assertEqual((r["descontadas"], r["retiradas"]), (1, {"recepcion": 0, "anaqueles": 1, "no_encontradas": 0}))
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 5)
+        vendible = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
+        self.assertEqual((vendible.ubicacion.codigo, vendible.cantidad), ("PIC-1-I-F-2", 5))
+        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).estado, OrdenEntrada.CERRADA)
 
     def test_mesa_exporta_el_plan_tal_cual_y_completa_con_lo_anunciado(self):
         from django.contrib.auth import get_user_model
@@ -528,7 +562,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual(cuerpo.splitlines()[0], "sku,nombre,codigo_barras,lote,rack,cantidad")
         self.assertIn(f"{self.sku.codigo},{self.sku.descripcion},7500000000017,L-ASN,PIC-1-I-F-2,5", cuerpo)  # el plan sin descontar la ubicada
         respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "completar_anunciado", "orden_id": self.orden.pk}, follow=True)
-        self.assertContains(respuesta, "cerrada con lo anunciado: 4 pieza(s) recibidas")
+        self.assertContains(respuesta, "cerrada exactamente con lo anunciado: 4 pieza(s) recibidas")
         self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).estado, OrdenEntrada.CERRADA)
 
     def test_mesa_ve_el_plan_y_lo_rehace(self):
