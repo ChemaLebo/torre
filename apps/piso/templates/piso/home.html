@@ -57,6 +57,7 @@
   {% if siguiente.ya_empezado %}<input type="hidden" name="empezado" value="1">{% endif %}
   <button class="btn primario gigante" type="submit">EMPEZAR ▶</button>
 </form>
+<p class="small centro mt"><a href="{% url 'piso:picking' %}">O elige otro pedido de la lista por cliente</a></p>
 {% else %}
 <div class="card centro">
   <h1>Todo al día 🍺</h1>

@@ -24,6 +24,60 @@ class PickingPisoTests(PisoTestCase):
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
         self.assertIsNotNone(self.pedido.ts_picking)
 
+    def test_soltar_pedido_lo_deja_libre_con_su_avance_y_otro_lo_toma(self):
+        from django.contrib.auth.models import User
+
+        from apps.core.models import EventoAuditoria, PerfilUsuario
+
+        self._iniciar()
+        self.client.post(self.url_detalle, {"codigo": "7501234567890", "cantidad": "1"})
+        self.assertEqual(self.pedido.asignado_a, self.operador)
+        respuesta = self.client.post(self.url_detalle, {"accion": "soltar", "motivo": "Faltante de producto"}, follow=True)
+        self.assertRedirects(respuesta, reverse("piso:picking"), fetch_redirect_response=False)
+        self.assertContains(respuesta, "liberado con su avance")
+        self.pedido.refresh_from_db()
+        self.assertIsNone(self.pedido.asignado_a)
+        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)  # el avance no se pierde
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.pedido.pk), accion="pedido_soltado")
+        self.assertEqual((evento.delta["de"], evento.delta["motivo"]), ("piso1", "Faltante de producto"))
+        # Otro operador lo ve en la lista, lo abre y al escanear se vuelve su dueño.
+        otro = User.objects.create_user("piso2", password="pin-piso")
+        PerfilUsuario.objects.create(usuario=otro, rol=PerfilUsuario.ROL_PISO, pin="2222")
+        self.client.force_login(otro)
+        respuesta = self.client.get(reverse("piso:picking"))
+        self.assertContains(respuesta, self.pedido.folio)
+        self.client.post(self.url_detalle, {"codigo": "7501234567890", "cantidad": "1"})
+        self.pedido.refresh_from_db()
+        self.assertEqual((self.pedido.asignado_a, self.pedido.lineas.get().cantidad_pickeada), (otro, 2))
+        # Y el primero ya no puede soltar lo que no es suyo.
+        self.client.force_login(self.operador)
+        respuesta = self.client.post(self.url_detalle, {"accion": "soltar"}, follow=True)
+        self.assertContains(respuesta, "lo tiene piso2")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.asignado_a, otro)
+
+    def test_lista_agrupa_por_cliente_y_muestra_los_de_otros_sin_boton(self):
+        from django.contrib.auth.models import User
+
+        from apps.core.models import Cliente, PerfilUsuario
+        from apps.pedidos.models import Pedido as P
+
+        otro_cliente = Cliente.objects.create(nombre="Infinitea", slug="infinitea", integracion_envios="envia")
+        ajeno = self.crear_pedido(cantidad=1, reservar_stock=False)
+        P.objects.filter(pk=ajeno.pk).update(cliente=otro_cliente)
+        self._iniciar()  # el mío queda EN_PICKING conmigo
+        otro = User.objects.create_user("piso2", password="pin-piso")
+        PerfilUsuario.objects.create(usuario=otro, rol=PerfilUsuario.ROL_PISO, pin="2222")
+        self.client.force_login(otro)
+        respuesta = self.client.get(reverse("piso:picking"))
+        nombres = [c["cliente"].nombre for c in respuesta.context["clientes"]]
+        self.assertEqual(nombres, ["Cervecería Colima", "Infinitea"])
+        self.assertContains(respuesta, "lo tiene <b>piso1</b>")
+        self.assertContains(respuesta, "Lo está surtiendo piso1")
+        self.assertContains(respuesta, "Iniciar picking")  # el de Infinitea, pendiente, sí se puede tomar
+        self.assertNotContains(respuesta, f'href="{self.url_detalle}"')  # el de piso1 no se abre
+
     def test_iniciar_pedido_ya_tomado_avisa_la_carrera(self):
         # Dos tablets con la misma lista: el segundo POST de "iniciar" llega
         # cuando el pedido ya está EN_PICKING — la vista valida bajo lock y

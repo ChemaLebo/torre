@@ -211,6 +211,24 @@ def _operadores_piso(request):
     )
 
 
+def _pedido_soltar(request, pedido):
+    """Soltar el pedido en picking: queda libre con su avance para que lo tome
+    cualquier operador; el que lo soltó regresa a la lista a tomar otro."""
+    from apps.pedidos.services import soltar_pedido  # lazy por contrato
+
+    motivo = (request.POST.get("motivo") or "").strip()[:120]
+    try:
+        soltar_pedido(pedido, request.user, motivo=motivo)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("piso:picking_pedido", pk=pedido.pk)
+    messages.success(
+        request,
+        f"{pedido.folio} liberado con su avance: lo puede tomar cualquier operador desde 'En picking'.",
+    )
+    return redirect("piso:picking")
+
+
 def _pedido_transferir(request, pedido):
     from django.contrib.auth.models import User
 
@@ -868,21 +886,31 @@ def picking(request):
         messages.success(request, f"Picking de {pedido.folio} iniciado. Escanea línea por línea.")
         return redirect("piso:picking_pedido", pk=pedido.pk)
 
+    # Todos los pedidos por surtir, agrupados por cliente, para elegir el que se
+    # quiera (Chema 2026-09-21). Los que tiene otro operador se ven pero no se
+    # abren: se sabe quién los tiene; si los suelta, aparecen con botón.
     pendientes = list(
         Pedido.objects.filter(estado=Pedido.PENDIENTE)
-        .select_related("cliente").prefetch_related("lineas__sku")
+        .select_related("cliente").prefetch_related("lineas__sku").order_by("creado")
     )
     for pedido in pendientes:
         pedido.total_piezas = _piezas(pedido)
     en_picking = list(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
-        .select_related("cliente").prefetch_related("lineas__sku")
+        .select_related("cliente", "asignado_a").prefetch_related("lineas__sku").order_by("creado")
     )
-    if not _es_mesa(request):
-        en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
     for pedido in en_picking:
         pedido.pickeadas, pedido.total_piezas, pedido.avance_pct = _avance(pedido)
-    contexto = {"seccion": "picking", "pendientes": pendientes, "en_picking": en_picking}
+        pedido.puedo_abrir = _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
+    clientes = {}
+    for pedido in pendientes:
+        clientes.setdefault(pedido.cliente_id, {"cliente": pedido.cliente, "pendientes": [], "en_picking": []})["pendientes"].append(pedido)
+    for pedido in en_picking:
+        clientes.setdefault(pedido.cliente_id, {"cliente": pedido.cliente, "pendientes": [], "en_picking": []})["en_picking"].append(pedido)
+    contexto = {
+        "seccion": "picking", "pendientes": pendientes, "en_picking": en_picking,
+        "clientes": sorted(clientes.values(), key=lambda c: c["cliente"].nombre),
+    }
     return render(request, "piso/picking.html", contexto)
 
 
@@ -945,6 +973,8 @@ def picking_pedido(request, pk):
         if request.POST.get("accion") == "transferir":
             _pedido_transferir(request, pedido)
             return redirect("piso:picking_pedido", pk=pedido.pk)
+        if request.POST.get("accion") == "soltar":
+            return _pedido_soltar(request, pedido)
         _reclamar_si_libre(pedido, request)
         return _picking_escanear(request, pedido)
 

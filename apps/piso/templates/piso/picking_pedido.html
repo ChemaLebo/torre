@@ -12,6 +12,16 @@
   </div>
   <a class="btn chico" href="{% url 'piso:home' %}">Pausar pedido</a>
 </div>
+{# Soltar: el pedido se queda en picking con su avance y sin dueño (faltante, otra prioridad); lo toma quien siga. #}
+<form method="post" class="fila mt" onsubmit="return confirm('¿Soltar {{ pedido.folio }}? Se queda en picking con lo ya escaneado y lo puede tomar cualquier operador.');">{% csrf_token %}
+  <input type="hidden" name="accion" value="soltar">
+  <select name="motivo" class="crece" aria-label="Motivo">
+    <option value="Faltante de producto">Faltante de producto</option>
+    <option value="Cambio de prioridad">Cambio de prioridad</option>
+    <option value="Otro">Otro</option>
+  </select>
+  <button class="btn chico" type="submit">Soltar pedido · que lo tome otro</button>
+</form>
 {% if operadores %}
 <details class="colapsable mt">
   <summary>Enviar este pedido a otro operador</summary>

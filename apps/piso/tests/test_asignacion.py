@@ -25,12 +25,14 @@ class AsignacionTests(PisoTestCase):
         self._iniciar()
         self.assertEqual(self.pedido.asignado_a, self.operador)
 
-    def test_ajeno_no_ve_ni_abre_el_pedido(self):
+    def test_ajeno_lo_ve_sin_boton_y_no_lo_abre(self):
         self._iniciar()
         self.client.force_login(self.otro)
-        # Oculto en la lista de picking:
+        # En la lista de picking se ve, con quién lo tiene y sin botón de escanear:
         lista = self.client.get(reverse("piso:picking"))
-        self.assertNotContains(lista, self.pedido.folio)
+        self.assertContains(lista, self.pedido.folio)
+        self.assertContains(lista, f"lo tiene <b>{self.operador.username}</b>")
+        self.assertNotContains(lista, 'href="' + reverse("piso:picking_pedido", args=[self.pedido.pk]) + '"')
         # El detalle lo rechaza con el nombre del dueño:
         detalle = self.client.get(
             reverse("piso:picking_pedido", args=[self.pedido.pk]), follow=True,

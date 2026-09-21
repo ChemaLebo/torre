@@ -1,28 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Picking{% endblock %}
 {% block content %}
+{# Todos los pedidos por surtir, separados por cliente: el operador elige cuál toma. Los que tiene otro operador se ven sin botón. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Picking</div>
     <h1>Picking</h1>
+    <div class="small"><b>{{ pendientes|length }}</b> por iniciar · <b>{{ en_picking|length }}</b> en picking</div>
   </div>
-  <div class="quien">La cola manda: en <a href="{% url 'piso:home' %}"><b>Mi turno</b></a> el botón EMPEZAR elige por ti.</div>
+  <div class="quien">Si prefieres que la cola elija por ti, en <a href="{% url 'piso:home' %}"><b>Mi turno</b></a> el botón EMPEZAR lo hace.</div>
 </div>
 
-{% if pendientes %}
-<div class="card">
-  <div class="titulo"><h2>Por iniciar</h2><span class="pill">{{ pendientes|length }} pendientes</span></div>
+{% for c in clientes %}
+<div class="card mt">
+  <div class="titulo">
+    <h2>{{ c.cliente.nombre }}</h2>
+    <span class="pill">{{ c.pendientes|length }} por iniciar</span>
+    <span class="pill accent">{{ c.en_picking|length }} en picking</span>
+  </div>
   <div class="lista-cards">
-    {% for p in pendientes %}
+    {% for p in c.pendientes %}
     <div class="card">
       <div class="fila entre">
         <div>
-          <span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}
+          <span class="mono">{{ p.folio }}</span>
           <div class="small">{{ p.total_piezas }} piezas
             {% if p.es_local %}· <span class="pill warn">local</span>{% else %}· <span class="pill">foráneo</span>{% endif %}
             {% if p.incidencia_activa %}<span class="pill crit">faltante</span>{% endif %}
           </div>
         </div>
+        <span class="pill">por iniciar</span>
       </div>
       <form method="post" class="mt">{% csrf_token %}
         <input type="hidden" name="accion" value="iniciar">
@@ -31,27 +38,30 @@
       </form>
     </div>
     {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-<div class="card mt">
-  <div class="titulo"><h2>En picking</h2><span class="pill accent">{{ en_picking|length }} activos</span></div>
-  {% if en_picking %}
-  <div class="lista-cards">
-    {% for p in en_picking %}
+    {% for p in c.en_picking %}
     <div class="card">
       <div class="fila entre">
-        <div><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}</div>
+        <div>
+          <span class="mono">{{ p.folio }}</span>
+          <div class="small">{% if p.asignado_a %}lo tiene <b>{{ p.asignado_a.username }}</b>{% else %}libre, con avance{% endif %}
+            {% if p.incidencia_activa %}· <span class="pill crit">faltante</span>{% endif %}</div>
+        </div>
         <span class="num">{{ p.pickeadas }} / {{ p.total_piezas }}</span>
       </div>
       <div class="medidor mt {% if p.avance_pct == 100 %}ok{% endif %}"><span style="width:{{ p.avance_pct }}%"></span></div>
+      {% if p.puedo_abrir %}
       <a class="btn primario bloque mt" href="{% url 'piso:picking_pedido' p.pk %}">Escanear</a>
+      {% else %}
+      <p class="small muted mt">Lo está surtiendo {{ p.asignado_a.username }}. Si lo suelta o te lo envía, aquí sale el botón.</p>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
-  {% else %}
-  <p class="muted">Nadie en picking ahorita.</p>
-  {% endif %}
 </div>
+{% empty %}
+<div class="card centro mt">
+  <h2>Nada por surtir</h2>
+  <p class="muted">Sin pedidos pendientes ni en picking.</p>
+</div>
+{% endfor %}
 {% endblock %}

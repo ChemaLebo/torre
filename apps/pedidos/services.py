@@ -959,6 +959,33 @@ def transferir_pedido(pedido, de, a):
     return pedido
 
 
+def soltar_pedido(pedido, usuario, motivo=""):
+    """El dueño suelta su pedido en picking (faltante, cambio de prioridad):
+    se queda EN_PICKING con el avance intacto y sin dueño, así lo puede tomar
+    cualquier operador desde la lista o seguirlo él mismo después (Chema
+    2026-09-21: con un faltante el operador quedaba trabado). Mesa también
+    puede soltarlo. Cancela una transferencia pendiente si la había."""
+    es_mesa = getattr(getattr(usuario, "perfil", None), "rol", "") == "mesa" or getattr(usuario, "is_superuser", False)
+    if pedido.asignado_a_id != getattr(usuario, "pk", None) and not es_mesa:
+        raise ValueError(f"{pedido.folio} no es tuyo: solo su dueño (o Mesa) puede soltarlo.")
+    if pedido.estado != Pedido.EN_PICKING:
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display()}: solo se suelta un pedido en picking."
+        )
+    if pedido.asignado_a_id is None:
+        return pedido
+    anterior = pedido.asignado_a
+    pedido.asignado_a = None
+    pedido.transferencia_a = None
+    pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "pedido_soltado", actor=usuario, cliente=pedido.cliente,
+        delta={"de": _nombre_usuario(anterior), "motivo": motivo},
+        motivo=(motivo or f"{_nombre_usuario(usuario)} soltó el pedido; lo puede tomar cualquier operador.")[:300],
+    )
+    return pedido
+
+
 def aceptar_transferencia(pedido, usuario):
     """El destinatario acepta: cambia de manos con el avance INTACTO."""
     if pedido.transferencia_a_id != usuario.pk:
