@@ -96,6 +96,7 @@ query lineasDeFulfillment($id: ID!) {
           lineItems(first: 100) {
             edges {
               node {
+                id
                 totalQuantity
                 remainingQuantity
                 lineItem { id sku }
@@ -116,6 +117,32 @@ mutation crearFulfillment($fulfillment: FulfillmentInput!) {
   fulfillmentCreate(fulfillment: $fulfillment) {
     fulfillment { id status }
     userErrors { field message }
+  }
+}
+"""
+
+# Avance del envío ("Delivery status" del admin): un FulfillmentEvent por
+# cambio de estado de la guía, colgado del fulfillment (exige fulfillmentId).
+MUTACION_EVENTO_FULFILLMENT = """
+mutation eventoFulfillment($fulfillmentEvent: FulfillmentEventInput!) {
+  fulfillmentEventCreate(fulfillmentEvent: $fulfillmentEvent) {
+    fulfillmentEvent { id status }
+    userErrors { field message }
+  }
+}
+"""
+
+# Fulfillments ya escritos de una orden, con sus números de guía: para
+# recuperar ids de pedidos fulfilleados antes de guardarlos (backfill).
+CONSULTA_FULFILLMENTS_ORDEN = """
+query fulfillmentsDeOrden($id: ID!) {
+  order(id: $id) {
+    id
+    fulfillments(first: 20) {
+      id
+      status
+      trackingInfo(first: 20) { number }
+    }
   }
 }
 """
@@ -291,6 +318,7 @@ class ShopifyClient:
                     restante = linea.get("totalQuantity") or 0
                 lineas.append({
                     "line_item_id": item_gid.rsplit("/", 1)[-1],
+                    "fo_line_item_id": str(linea.get("id") or ""),
                     "sku": (item.get("sku") or "").strip(),
                     "cantidad": int(restante),
                 })
@@ -300,11 +328,16 @@ class ShopifyClient:
             })
         return resultado
 
-    def crear_fulfillment(self, fulfillment_order_ids, numeros_guia, url_rastreo, carrier, notificar=True):
+    def crear_fulfillment(self, fulfillment_order_ids, numeros_guia, url_rastreo, carrier,
+                          notificar=True, lineas=None):
         """Crea UN fulfillment sobre esas fulfillment orders, con tracking.
 
         notifyCustomer=True es el gatillo del correo nativo de envío de
         Shopify — el link de rastreo es NUESTRA página brandeada del cliente.
+        `lineas` ([{"fulfillmentOrderId", "fulfillmentOrderLineItems":
+        [{"id", "quantity"}]}]) fulfillea SOLO esas líneas/cantidades: el
+        fulfillment de UNA caja de varias. Sin él, las FOs completas. Regresa
+        el fulfillment ({id, status}) para guardar su id.
         """
         tracking = {"company": carrier or "", "url": url_rastreo or ""}
         numeros = [n for n in numeros_guia if n]
@@ -313,7 +346,7 @@ class ShopifyClient:
         elif numeros:
             tracking["numbers"] = numeros
         fulfillment = {
-            "lineItemsByFulfillmentOrder": [
+            "lineItemsByFulfillmentOrder": lineas or [
                 {"fulfillmentOrderId": fid} for fid in fulfillment_order_ids
             ],
             "notifyCustomer": bool(notificar),
@@ -326,6 +359,44 @@ class ShopifyClient:
         if errores:
             raise ShopifyError(f"fulfillmentCreate {self.tienda.dominio}: {errores}")
         return resultado.get("fulfillment") or {}
+
+    def crear_evento_fulfillment(self, fulfillment_gid, status, happened_at=None, message=""):
+        """fulfillmentEventCreate: avance del envío (CARRIER_PICKED_UP, IN_TRANSIT,
+        OUT_FOR_DELIVERY, DELIVERED, ATTEMPTED_DELIVERY, DELAYED, FAILURE…) que
+        el admin muestra como "Delivery status" y el comprador en su página de
+        estatus. `happened_at` con la hora real del carrier cuando se tiene."""
+        evento = {"fulfillmentId": fulfillment_gid, "status": status}
+        if happened_at is not None:
+            evento["happenedAt"] = happened_at.isoformat()
+        if message:
+            evento["message"] = str(message)[:255]
+        datos = self.graphql(MUTACION_EVENTO_FULFILLMENT, {"fulfillmentEvent": evento})
+        resultado = datos.get("fulfillmentEventCreate") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"fulfillmentEventCreate {self.tienda.dominio}: {errores}")
+        return resultado.get("fulfillmentEvent") or {}
+
+    def fulfillments_de_orden(self, order_id):
+        """[(gid, status, [números de guía])] de los fulfillments de la orden.
+
+        Para el backfill: recuperar el id de fulfillments escritos antes de
+        que Torre los guardara, emparejando por número de guía.
+        """
+        gid = str(order_id)
+        if not gid.startswith("gid://"):
+            gid = f"gid://shopify/Order/{gid}"
+        datos = self.graphql(CONSULTA_FULFILLMENTS_ORDEN, {"id": gid})
+        orden = datos.get("order") or {}
+        if not orden:
+            raise ShopifyError(f"Pedido {order_id} no existe en {self.tienda.dominio}.")
+        resultado = []
+        for f in orden.get("fulfillments") or []:
+            numeros = [
+                str(t.get("number") or "") for t in (f.get("trackingInfo") or []) if t.get("number")
+            ]
+            resultado.append((str(f.get("id") or ""), str(f.get("status") or ""), numeros))
+        return resultado
 
     # ── pedidos (polling de respaldo) ──
     def _paginar_pedidos(self, params):

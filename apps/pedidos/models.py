@@ -117,6 +117,10 @@ class Pedido(models.Model):
     comprador_tel = models.CharField(max_length=20, blank=True)
     comprador_email = models.EmailField(blank=True)
     direccion = models.JSONField(default=dict, blank=True)
+    # Fulfillment del pedido ENTERO en Shopify (gid) cuando no se fulfillea por
+    # caja (sin plan de cajas, entrega en bodega, líneas no separables): de él
+    # cuelgan los eventos de avance (integraciones.services.registrar_evento_fulfillment).
+    shopify_fulfillment_id = models.CharField(max_length=80, blank=True, default="")
     cp = models.CharField("código postal", max_length=10, blank=True)
     es_local = models.BooleanField(default=False, help_text="CP de Colima (28xxx): entrega local propia")
     # Carta que le tocó en el reparto por porcentajes del cliente (vacío si el

@@ -366,22 +366,127 @@ def push_inventario():
 # requieren acciones previas del cliente; CLOSED ya está hecho.
 _FO_FULFILLEABLES = ("OPEN", "IN_PROGRESS")
 
+# Avance del envío que Shopify muestra como "Delivery status": estado de la
+# guía en Torre → FulfillmentEventStatus. Lo que no está aquí no viaja. El
+# RECOLECTADO lo pone el manifiesto (CARRIER_PICKED_UP), no el carrier.
+EVENTO_FULFILLMENT_POR_ESTADO = {
+    "RECOLECTADO": "CARRIER_PICKED_UP",
+    "EN_TRANSITO": "IN_TRANSIT",
+    "EN_RUTA": "OUT_FOR_DELIVERY",
+    "ENTREGADO": "DELIVERED",
+    "INTENTO_FALLIDO": "ATTEMPTED_DELIVERY",
+    "RETENIDO": "DELAYED",
+    "EXCEPCION": "DELAYED",
+    "RETORNO": "FAILURE",
+}
 
-def marcar_fulfillment(pedido):
-    """Marca el pedido como fulfilled en Shopify, con tracking y notifyCustomer.
+
+def _log_push(tienda, ok, detalle):
+    SyncLog.objects.create(
+        tienda=tienda, direccion=SyncLog.DIRECCION_PUSH,
+        resultado=SyncLog.RESULTADO_OK if ok else SyncLog.RESULTADO_ERROR, detalle=detalle,
+    )
+
+
+def _lineas_fulfillment_por_caja(cajas, fos):
+    """{caja.pk: [{"fulfillmentOrderId", "fulfillmentOrderLineItems": [{"id", "quantity"}]}]}
+    con las unidades de venta de cada caja repartidas sobre los line items
+    restantes de NUESTRAS fulfillment orders (por SKU, en orden). Medias cajas
+    (fraccion_de > 1): la unidad de venta viaja con la primera caja que lleva
+    una parte; la segunda media queda sin líneas propias ([]) y comparte
+    fulfillment. None si alguna unidad no encuentra line item (kits, SKU que
+    Shopify no conoce, cantidades ya fulfilleadas): el caller cae al
+    fulfillment único del pedido."""
+    restante, por_sku = {}, {}
+    for fo in fos:
+        for linea in fo["lineas"]:
+            if not linea.get("fo_line_item_id") or linea["cantidad"] <= 0:
+                continue
+            clave = (fo["gid"], linea["fo_line_item_id"])
+            restante[clave] = linea["cantidad"]
+            por_sku.setdefault(linea["sku"], []).append(clave)
+    partes_vistas, resultado = {}, {}
+    for caja in cajas:
+        asignacion = {}
+        for pl in caja.lineas.select_related("linea_pedido__sku"):
+            sku = pl.linea_pedido.sku.codigo
+            if pl.fraccion_de > 1:
+                vistas = partes_vistas.get(pl.linea_pedido_id, 0)
+                partes_vistas[pl.linea_pedido_id] = vistas + pl.cantidad
+                unidades = (
+                    -(-(vistas + pl.cantidad) // pl.fraccion_de) - (-(-vistas // pl.fraccion_de))
+                )
+            else:
+                unidades = pl.cantidad
+            while unidades > 0:
+                clave = next((k for k in por_sku.get(sku, []) if restante.get(k, 0) > 0), None)
+                if clave is None:
+                    return None
+                toma = min(unidades, restante[clave])
+                restante[clave] -= toma
+                unidades -= toma
+                items = asignacion.setdefault(clave[0], {})
+                items[clave[1]] = items.get(clave[1], 0) + toma
+        resultado[caja.pk] = [
+            {
+                "fulfillmentOrderId": fo_gid,
+                "fulfillmentOrderLineItems": [{"id": lid, "quantity": q} for lid, q in items.items()],
+            }
+            for fo_gid, items in asignacion.items()
+        ]
+    return resultado
+
+
+def _id_de_fulfillment(respuesta):
+    """gid del fulfillment que regresó fulfillmentCreate; "" si no vino (o mock)."""
+    fid = respuesta.get("id") if isinstance(respuesta, dict) else ""
+    return fid if isinstance(fid, str) else ""
+
+
+def _evento_inicial(api, tienda, pedido, fid, status, donde):
+    """Primer evento de avance tras crear el fulfillment (best-effort, con SyncLog)."""
+    if not fid or not status:
+        return
+    try:
+        api.crear_evento_fulfillment(fid, status, happened_at=timezone.now())
+    except Exception as exc:  # noqa: BLE001 — best-effort: el fulfillment ya quedó
+        _log_push(tienda, False, f"evento {status} de {pedido.folio} ({donde}): {exc}")
+    else:
+        _log_push(tienda, True, f"evento {status} de {pedido.folio} ({donde})")
+
+
+def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP"):
+    """Escribe en Shopify el fulfillment del pedido (o de sus cajas), con tracking.
 
     Hermano del "va en camino" de mensajería (mismo momento canónico:
     marcar_recolectado, vía on_commit) — con esto Shopify manda SU correo
     nativo de envío (link a NUESTRA página brandeada) y el admin del cliente
     muestra Fulfilled en vez de quedarse Unfulfilled para siempre.
 
+    Con `cajas` (las que subieron a ESTE manifiesto) hay UN fulfillment POR
+    CAJA: sus líneas (PaqueteLinea → line items de nuestras fulfillment
+    orders, por SKU), su guía y la página brandeada; Shopify muestra
+    Partially fulfilled entre manifiestos y cada caja lleva su propio
+    "Delivery status". Si las líneas no se pueden separar (kits, SKU que
+    Shopify no conoce), el fulfillment del pedido entero se escribe cuando
+    sale la última caja, como antes. Sin `cajas` (pedido sin plan, entrega
+    en bodega): un fulfillment con todas las FOs abiertas y todas las guías
+    activas. El id que regresa Shopify se guarda (Paquete.shopify_fulfillment_id
+    / Pedido.shopify_fulfillment_id) y de él cuelgan los eventos de avance
+    (registrar_evento_fulfillment); tras crearlo se manda `evento_inicial`
+    (CARRIER_PICKED_UP al firmar el manifiesto, DELIVERED en la entrega en
+    bodega, None = ninguno). Solo el PRIMER fulfillment del pedido notifica al
+    comprador: un correo de envío, no uno por caja.
+
     Best-effort: el resultado queda en SyncLog; jamás levanta hacia el caller.
-    Idempotente sin campo nuevo: sin fulfillment orders abiertas = ya estaba.
+    Idempotente: caja con id guardado, pedido con id guardado o sin fulfillment
+    orders abiertas = ya estaba.
     """
     tienda = pedido.tienda
     if tienda is None or not pedido.shopify_order_id:
         return False  # pedido manual: no existe en Shopify
 
+    cajas = [c for c in (cajas or []) if not c.shopify_fulfillment_id]
     numeros, carrier = [], ""
     for guia in pedido.guias.all().order_by("pk"):  # orden estable: caja 1 primero
         if guia.es_activa and guia.numero:
@@ -409,6 +514,12 @@ def marcar_fulfillment(pedido):
     except ImportError:
         url_rastreo = ""
 
+    if cajas:
+        return _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial)
+    if pedido.shopify_fulfillment_id:
+        _log_push(tienda, True, f"fulfillment: {pedido.folio} ya tiene fulfillment ({pedido.shopify_fulfillment_id})")
+        return True
+
     try:
         api = ShopifyClient(tienda)
         # Stage 1 multi-location: SOLO se cierran tickets de NUESTRA location.
@@ -435,7 +546,10 @@ def marcar_fulfillment(pedido):
                 ),
             )
             return True
-        api.crear_fulfillment(abiertas, numeros, url_rastreo, carrier)
+        ya_notificado = pedido.paquetes.exclude(shopify_fulfillment_id="").exists()
+        respuesta = api.crear_fulfillment(
+            abiertas, numeros, url_rastreo, carrier, notificar=not ya_notificado,
+        )
     except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no bloquea nada
         SyncLog.objects.create(
             tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_ERROR,
@@ -443,6 +557,10 @@ def marcar_fulfillment(pedido):
         )
         return False
 
+    fid = _id_de_fulfillment(respuesta)
+    if fid:
+        type(pedido).objects.filter(pk=pedido.pk).update(shopify_fulfillment_id=fid)
+        pedido.shopify_fulfillment_id = fid
     detalle_ajenas = f"; {len(ajenas)} FO de otra location intactas" if ajenas else ""
     SyncLog.objects.create(
         tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_OK,
@@ -453,8 +571,122 @@ def marcar_fulfillment(pedido):
     )
     registrar_evento(
         "pedido", pedido.pk, "fulfillment_shopify", cliente=pedido.cliente,
-        delta={"tienda": tienda.dominio, "guias": numeros},
+        delta={"tienda": tienda.dominio, "guias": numeros, "fulfillment": fid},
         motivo="Fulfillment escrito en Shopify al firmar el manifiesto (notifyCustomer).",
+    )
+    _evento_inicial(api, tienda, pedido, fid, evento_inicial, "pedido entero")
+    return True
+
+
+def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial):
+    """Un fulfillment por caja que sale (ver marcar_fulfillment)."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    try:
+        api = ShopifyClient(tienda)
+        nuestra = api.location_gid if (tienda.location_id or "").strip() else ""
+        abiertas, ajenas = [], []
+        for fo in api.fulfillment_orders_lineas(pedido.shopify_order_id):
+            if fo["status"] not in _FO_FULFILLEABLES:
+                continue
+            if nuestra and fo["location_gid"] and fo["location_gid"] != nuestra:
+                ajenas.append(fo["gid"])
+            else:
+                abiertas.append(fo)
+        if not abiertas:
+            detalle_ajenas = f"; {len(ajenas)} FO de otra location (no se tocan)" if ajenas else ""
+            _log_push(tienda, True, f"fulfillment: {pedido.folio} sin fulfillment orders nuestras abiertas{detalle_ajenas}")
+            return True
+        lineas_por_caja = _lineas_fulfillment_por_caja(cajas, abiertas)
+        if lineas_por_caja is None:
+            # Líneas no separables por caja (kits, SKU ajeno a Shopify): el
+            # pedido entero se fulfillea cuando salga su última caja.
+            if pedido.paquetes.filter(estado=Paquete.EMPACADO).exists():
+                _log_push(tienda, True, f"fulfillment: {pedido.folio} espera a la última caja (líneas no separables por caja)")
+                return True
+            return marcar_fulfillment(pedido, evento_inicial=evento_inicial)
+        ya_notificado = bool(pedido.shopify_fulfillment_id) or pedido.paquetes.exclude(
+            shopify_fulfillment_id="",
+        ).exists()
+        for caja in cajas:
+            lineas = lineas_por_caja.get(caja.pk) or []
+            guia = caja.guia_activa
+            if not lineas:
+                # Segunda media de una caja de 24: sus unidades ya viajan en el
+                # fulfillment de la caja hermana; comparte id para los eventos.
+                hermana = pedido.paquetes.exclude(shopify_fulfillment_id="").order_by("numero").first()
+                if hermana is not None:
+                    Paquete.objects.filter(pk=caja.pk).update(shopify_fulfillment_id=hermana.shopify_fulfillment_id)
+                    caja.shopify_fulfillment_id = hermana.shopify_fulfillment_id
+                _log_push(tienda, True, f"fulfillment: caja {caja.numero} de {pedido.folio} sin líneas propias (comparte el de la caja {hermana.numero if hermana else '?'})")
+                continue
+            numeros = [guia.numero] if guia is not None and guia.numero else []
+            respuesta = api.crear_fulfillment(
+                [l["fulfillmentOrderId"] for l in lineas], numeros, url_rastreo if numeros else "",
+                guia.carrier if guia is not None else "", notificar=not ya_notificado, lineas=lineas,
+            )
+            ya_notificado = True
+            fid = _id_de_fulfillment(respuesta)
+            if fid:
+                Paquete.objects.filter(pk=caja.pk).update(shopify_fulfillment_id=fid)
+                caja.shopify_fulfillment_id = fid
+            _log_push(tienda, True, f"fulfillment: caja {caja.numero} de {pedido.folio} marcada (guía {', '.join(numeros) or '—'}, {fid or 'sin id'})")
+            registrar_evento(
+                "paquete", caja.pk, "fulfillment_shopify", cliente=pedido.cliente,
+                delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero,
+                       "guias": numeros, "fulfillment": fid},
+                motivo=f"Fulfillment de la caja {caja.numero} de {pedido.folio} escrito en Shopify al firmar su manifiesto.",
+            )
+            _evento_inicial(api, tienda, pedido, fid, evento_inicial, f"caja {caja.numero}")
+    except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no bloquea nada
+        _log_push(tienda, False, f"fulfillment por caja {pedido.folio}: {exc}")
+        return False
+    return True
+
+
+def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=None):
+    """Avance de una guía → FulfillmentEvent en Shopify ("Delivery status").
+
+    El evento cuelga del fulfillment de la caja de la guía
+    (Paquete.shopify_fulfillment_id) o, sin caja, del fulfillment del pedido
+    (Pedido.shopify_fulfillment_id). Sin id guardado (pedidos anteriores al
+    backfill `shopify_eventos_backfill`, Shopify caído al fulfillear) no hay
+    dónde colgarlo: queda en SyncLog y regresa False. Estados sin equivalente
+    (EVENTO_FULFILLMENT_POR_ESTADO) no viajan. DELIVERED sobre el fulfillment
+    del pedido entero (varias guías en uno) solo cuando TODAS sus guías
+    activas están entregadas: una caja entregada no entrega el pedido.
+    `ts` = hora real del carrier. Best-effort: jamás levanta.
+    """
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id or not tienda.token:
+        return False
+    status = EVENTO_FULFILLMENT_POR_ESTADO.get(estado_guia or "")
+    if not status:
+        return False
+    fid = guia.paquete.shopify_fulfillment_id if guia is not None and guia.paquete_id else ""
+    donde = f"caja {guia.paquete.numero}" if fid else "pedido entero"
+    if not fid:
+        fid = pedido.shopify_fulfillment_id
+        if fid and status == "DELIVERED":
+            activas = [g for g in pedido.guias.all() if g.es_activa]
+            if any(g.estado != "ENTREGADO" for g in activas):
+                _log_push(tienda, True, f"evento DELIVERED de {pedido.folio} espera a las demás guías")
+                return False
+    if not fid:
+        _log_push(tienda, False, f"evento {status} de {pedido.folio}: sin fulfillment id en Torre (corre shopify_eventos_backfill)")
+        return False
+    try:
+        api = ShopifyClient(tienda)
+        api.crear_evento_fulfillment(fid, status, happened_at=ts, message=descripcion)
+    except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no detiene el rastreo
+        _log_push(tienda, False, f"evento {status} de {pedido.folio} ({donde}): {exc}")
+        return False
+    _log_push(tienda, True, f"evento {status} de {pedido.folio} ({donde})")
+    registrar_evento(
+        "guia" if guia is not None else "pedido", guia.pk if guia is not None else pedido.pk,
+        "evento_fulfillment_shopify", cliente=pedido.cliente,
+        delta={"pedido": pedido.folio, "status": status, "estado_guia": estado_guia, "fulfillment": fid},
+        motivo=(descripcion or f"{status} en Shopify")[:300],
     )
     return True
 

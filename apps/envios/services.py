@@ -694,7 +694,21 @@ def _aplicar_efectos(guia, estado, descripcion):
         if _abrir_incidencia(pedido, "RF", texto):
             abiertas += 1
     # RECOLECTADO del carrier NO mueve el pedido: el manifiesto es autoritativo.
+    _evento_fulfillment_shopify(guia, estado, descripcion)
     return abiertas
+
+
+def _evento_fulfillment_shopify(guia, estado, descripcion):
+    """El avance de la guía también se escribe en Shopify como FulfillmentEvent
+    ("Delivery status" del admin): lazy por contrato y best-effort — Shopify
+    caído no detiene el rastreo."""
+    try:
+        from apps.integraciones.services import registrar_evento_fulfillment  # lazy
+        registrar_evento_fulfillment(
+            guia.pedido, guia, estado, descripcion=descripcion, ts=guia.ts_ultimo_movimiento,
+        )
+    except Exception:  # noqa: BLE001, S110 — best-effort
+        pass
 
 
 def _revisar_sin_movimiento(guia, ahora):

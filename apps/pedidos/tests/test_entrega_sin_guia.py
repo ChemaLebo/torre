@@ -59,7 +59,7 @@ class EntregaSinGuiaTests(BaseServicios):
         self.assertEqual(pedido.paquetes.get().estado, Paquete.DESPACHADO)
         evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="entregado_sin_guia")
         self.assertEqual((evento.delta["recibio"], evento.delta["estado_inicial"], evento.motivo), ("Diego", "EN_PICKING", "Recolección en bodega"))
-        fulfillment.assert_called_once_with(pedido)
+        fulfillment.assert_called_once_with(pedido, evento_inicial="DELIVERED")
 
     def test_desde_pendiente_pasa_por_picking_y_desde_empacado_solo_despacha(self):
         pendiente = self._pedido(estado=Pedido.PENDIENTE, con_caja=False)

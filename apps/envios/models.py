@@ -213,6 +213,10 @@ class Paquete(models.Model):
     foto_contenido = models.ForeignKey(
         "core.EvidenciaFoto", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
     )
+    # Fulfillment de ESTA caja en Shopify (gid), escrito al firmar su manifiesto
+    # (integraciones.services.marcar_fulfillment): de él cuelgan los eventos de
+    # avance de su guía (FulfillmentEvent → "Delivery status" del admin).
+    shopify_fulfillment_id = models.CharField(max_length=80, blank=True, default="")
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:

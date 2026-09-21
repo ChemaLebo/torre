@@ -275,3 +275,41 @@ class EventosGuiaTests(TestCase):
         eventos = list(EventoGuia.objects.filter(guia=self.guia))
         self.assertEqual([(e.estado, e.ts_carrier) for e in eventos], [("RECOLECTADO", t1), ("EN_RUTA", t2)])
         self.assertEqual(eventos[0].raw, {"a": 1})
+
+
+@override_settings(ENVIA_API_KEY="")
+class EventosShopifyDesdePollerTests(TestCase):
+    """Cada cambio de estado de la guía también viaja a Shopify como
+    FulfillmentEvent (lazy, best-effort): el poller solo lo dispara."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.adapter = MockAdapter()
+        self.cliente = crear_cliente()
+        self.tienda = crear_tienda(self.cliente)
+
+    def test_el_avance_se_manda_con_estado_descripcion_y_hora(self):
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO")
+        guia = services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        pedido.transicionar("RECOLECTADO", motivo="Manifiesto firmado (test)")
+        self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
+        with patch("apps.integraciones.services.registrar_evento_fulfillment") as evento:
+            services.poll_tracking()
+        evento.assert_called_once()
+        args, kwargs = evento.call_args
+        self.assertEqual((args[0].pk, args[1].pk, args[2]), (pedido.pk, guia.pk, "EN_TRANSITO"))
+        guia.refresh_from_db()
+        self.assertEqual(kwargs["ts"], guia.ts_ultimo_movimiento)
+
+    def test_shopify_caido_no_detiene_el_rastreo(self):
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO")
+        guia = services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        pedido.transicionar("RECOLECTADO", motivo="Manifiesto firmado (test)")
+        self.adapter.avanzar_estado(guia.numero, "ENTREGADO")
+        with patch("apps.integraciones.services.registrar_evento_fulfillment", side_effect=RuntimeError("caído")):
+            resumen = services.poll_tracking()
+        self.assertEqual(resumen["actualizadas"], 1)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "ENTREGADO")

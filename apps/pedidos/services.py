@@ -1772,8 +1772,9 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     Todo el efecto de dominio (kardex + transiciones) va en UNA transacción:
     una línea que falle revierte completo. La plantilla B ("va en camino")
     sale SOLO aquí y una sola vez por pedido: en su primer manifiesto (el
-    rastreo público muestra cada caja). El fulfillment en Shopify sale con el
-    pedido completo fuera.
+    rastreo público muestra cada caja). El fulfillment en Shopify sale POR
+    CAJA en cada manifiesto (Partially fulfilled hasta la última), o entero
+    cuando no hay cajas.
     """
     if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         raise ValueError(
@@ -1836,17 +1837,21 @@ def marcar_recolectado(pedido, actor, paquetes=None):
             pass
         else:
             enviar_en_camino(pedido)
-    if quedan:
-        return pedido
-
     # Hermano del "va en camino": el fulfillment en Shopify sale del MISMO
     # momento canónico (correo nativo de envío + Fulfilled en el admin del
-    # cliente) cuando el pedido completo está fuera. Best-effort total en
-    # on_commit: Shopify jamás bloquea un manifiesto.
+    # cliente). Con cajas, UN fulfillment por caja que sube a ESTE camión
+    # (Shopify muestra Partially fulfilled hasta la última); sin cajas, el
+    # pedido entero. Best-effort total en on_commit: Shopify jamás bloquea
+    # un manifiesto.
+    cajas_fuera = list(salen)
+
     def _fulfillment():
         try:
             from apps.integraciones.services import marcar_fulfillment  # lazy
-            marcar_fulfillment(pedido)
+            if cajas_fuera:
+                marcar_fulfillment(pedido, cajas=cajas_fuera)
+            else:
+                marcar_fulfillment(pedido)
         except Exception:
             pass
     transaction.on_commit(_fulfillment)
@@ -1867,9 +1872,10 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
     a ENTREGADO estampando empacado, recolectado y entregado, y se libera del
     operador de piso (asignado_a). No hay transición directa en la máquina de
     estados: es un atajo explícito, auditado como entregado_sin_guia con
-    quién recibió. 5) Shopify: fulfillment sin rastreo, best-effort en
-    on_commit, para que el admin lo vea Fulfilled y el cliente reciba su
-    aviso. Sin "va en camino" de WhatsApp: nunca viajó. Regresa el pedido."""
+    quién recibió. 5) Shopify: fulfillment sin rastreo con evento DELIVERED,
+    best-effort en on_commit, para que el admin lo vea Fulfilled y entregado
+    y el cliente reciba su aviso. Sin "va en camino" de WhatsApp: nunca
+    viajó. Regresa el pedido."""
     if pedido.estado == Pedido.GUIA_GENERADA:
         raise ValueError(
             f"{pedido.folio} ya tiene guía generada: cancela la guía primero y vuelve a intentar."
@@ -1931,7 +1937,7 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
         def _fulfillment():
             try:
                 from apps.integraciones.services import marcar_fulfillment  # lazy
-                marcar_fulfillment(pedido)
+                marcar_fulfillment(pedido, evento_inicial="DELIVERED")
             except Exception:  # noqa: BLE001, S110 — best-effort: Shopify caído no deshace la entrega
                 pass
         transaction.on_commit(_fulfillment)
