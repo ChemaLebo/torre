@@ -238,6 +238,10 @@ TORRE = {
     # Productos distintos que pueden compartir una celda (cada uno en su pila);
     # los lotes de un mismo producto nunca se mezclan.
     "SKUS_POR_CELDA_MAX": 3,
+    # Zona de desborde: ubicación (reserva o picking, activa) a la que va lo
+    # que el plan de acomodo no pudo meter en picking, en vez de cuarentena.
+    # Queda vendible con su lote. Si la ubicación no existe, cuarentena como antes.
+    "ZONA_DESBORDE": "RES-CUAR",
     # Ocupación estimada de un anaquel: umbrales de "medio" y "lleno" (%).
     "OCUPACION_MEDIO_PCT": 60,
     "OCUPACION_LLENO_PCT": 90,

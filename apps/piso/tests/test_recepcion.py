@@ -353,6 +353,35 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertContains(respuesta, "1 pieza a cuarentena")
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
 
+    def test_sin_espacio_con_zona_de_desborde_queda_vendible_ahi_con_su_lote(self):
+        from apps.catalogo.models import Ubicacion
+        from apps.core.models import EventoAuditoria
+        from apps.inventario.models import OrdenEntrada, Saldo
+
+        Ubicacion.objects.create(codigo="RES-CUAR", tipo=Ubicacion.RESERVA)
+        self.anaquel.lleno_manual = True
+        self.anaquel.save()
+        self._foto()
+        self._contar(2)
+        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
+        self.assertContains(respuesta, 'id="anaquel-sugerido">RES-CUAR')
+        self.assertContains(respuesta, "Zona de desborde")
+        self.assertNotContains(respuesta, ">CUARENTENA<")
+        self.assertContains(respuesta, 'value="RES-CUAR" placeholder="PIC-1-I-F-1"')
+        # Confirmar tal cual (prellenado) → vendible en la zona, con lote, y el plan avanza su paso "sin espacio".
+        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "RES-CUAR", "lote": "L-ASN", "cantidad": "2"}, follow=True)
+        self.assertContains(respuesta, "2 piezas en RES-CUAR")
+        saldo = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
+        self.assertEqual((saldo.ubicacion.codigo, saldo.lote.codigo, saldo.cantidad), ("RES-CUAR", "L-ASN", 2))
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.CUARENTENA).exists())
+        paso = OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]
+        self.assertEqual((paso["ubicacion"], paso["ubicadas"]), (None, 2))
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="sku", entidad_id=self.sku.codigo, accion="a_desborde").exists())
+        # Vacío sigue siendo cuarentena, a mano.
+        self._contar(1)
+        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"}, follow=True)
+        self.assertContains(respuesta, "1 pieza en RES-CUAR (zona de desborde, vendible)")
+
     def test_el_plan_separa_lotes_en_anaqueles_distintos(self):
         from apps.catalogo.models import Ubicacion
         from apps.inventario.models import LineaASN, OrdenEntrada

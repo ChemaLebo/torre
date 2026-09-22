@@ -198,7 +198,7 @@
   "titulo": "Acomodo (put-away) y FEFO",
   "emoji": "🗄️",
   "resumen": "Lo contado todavía no se vende. En Torre, el producto recibido queda \"en put-away\": existe, pero no es vendible ni aparece disponible en la tienda del cliente. Solo cuando lo escaneas a su anaquel se vuelve vendible. Por eso el put-away no es \"acomodar cajas\": es el paso que enciende las ventas del cliente, con reloj contractual encima.",
-  "palabras": 1252,
+  "palabras": 1297,
   "minutos": 6,
   "grupo": "Operación diaria",
   "version": "v1.0 · Agosto 2026",

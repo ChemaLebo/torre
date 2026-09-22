@@ -55,6 +55,7 @@ Reglas físicas de los racks:
 
 6. **Revisa a diario** Piso → **Cuarentena**, sección **"Put-away pendiente"**: ahí caen los dictámenes "revendibles" y los retornos aceptados que esperan anaquel. Mismo procedimiento: Cantidad + "Ubicación escaneada" + botón **"Ubicar"** (si la fila ya trae lote, Torre lo conserva y no te lo vuelve a pedir).
 7. Ese producto **no es vendible hasta que lo ubiques** — no lo dejes envejecer en la repisa de cuarentena.
+8. **Sin espacio en picking**: la pantalla de Ubicar te manda a la **zona de desborde** (`RES-CUAR`) en vez de a cuarentena. Ahí el producto queda vendible con su lote; Mesa lo reacomoda cuando haya espacio. Cuarentena es solo para lo dañado o en revisión.
 
 ## E. El reloj SLA y qué pasa si no llegas
 

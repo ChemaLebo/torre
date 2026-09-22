@@ -76,6 +76,10 @@
     <div class="small muted">Anaquel vacío.</div>
     {% endif %}
   </div>
+  {% elif desborde %}
+  <div class="eyebrow">Sin anaquel con espacio · ve a</div>
+  <div class="pick-ubicacion" id="anaquel-sugerido">{{ desborde.codigo }}</div>
+  <div class="small muted">{% if paso %}{{ paso.motivo }}. {% endif %}Zona de desborde: queda vendible con su lote; Mesa la reacomoda cuando haya espacio.</div>
   {% elif paso %}
   <div class="eyebrow">Sin anaquel con espacio</div>
   <div class="pick-ubicacion">CUARENTENA</div>
@@ -88,7 +92,7 @@
 
   <label for="ubicacion" class="mt">Anaquel (cámbialo si lo acomodaste en otro; vacío = cuarentena)</label>
   <input type="text" name="ubicacion" id="ubicacion" class="mono" autocomplete="off" list="ubicaciones-destino"
-         value="{% if paso and paso.ubicacion %}{{ paso.ubicacion }}{% endif %}" placeholder="PIC-1-I-F-1">
+         value="{% if paso and paso.ubicacion %}{{ paso.ubicacion }}{% elif desborde %}{{ desborde.codigo }}{% endif %}" placeholder="PIC-1-I-F-1">
   <datalist id="ubicaciones-destino">
     {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
   </datalist>

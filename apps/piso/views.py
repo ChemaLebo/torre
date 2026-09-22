@@ -716,6 +716,12 @@ def recepcion_ubicar(request, pk):
             u = ad_hoc[0]["ubicacion"]
             paso = {"ubicacion": u.codigo if u else None, "cantidad": 1, "ubicadas": 0,
                     "motivo": ad_hoc[0]["motivo"] + " (fuera del plan)"}
+    # Sin anaquel con espacio: la zona de desborde (vendible con su lote) va
+    # prellenada; vacío sigue siendo cuarentena, a mano.
+    desborde = None
+    if not (paso and paso["ubicacion"]):
+        from apps.inventario.services import zona_desborde  # lazy por contrato
+        desborde = zona_desborde()
     # 3) Qué vive ya en ese anaquel (producto, piezas, lotes) y qué tan lleno
     #    está, para acomodar con toda la información.
     anaquel, vecinos, ocupacion_anaquel = None, [], None
@@ -727,6 +733,7 @@ def recepcion_ubicar(request, pk):
             vecinos = sorted(ocupacion_anaquel["por_sku"], key=lambda f: (f["sku"].pk != sku.pk, f["sku"].codigo))
     contexto.update({
         "paso": paso,
+        "desborde": desborde,
         # Cuántas del SKU van todavía en ese anaquel según el plan: la referencia para no meter de más.
         "faltan_paso": (paso["cantidad"] - paso["ubicadas"]) if paso else 0,
         "anaquel": anaquel, "vecinos": vecinos, "ocupacion_anaquel": ocupacion_anaquel,
@@ -791,6 +798,8 @@ def _recepcion_ubicar_pieza(request, orden, sku, lineas):
     piezas = "1 pieza" if cantidad == 1 else f"{cantidad} piezas"
     if destino is None:
         messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, {piezas} a cuarentena. Escanea la siguiente.")
+    elif not codigo_ubicacion:
+        messages.success(request, f"{sku.codigo}: sin anaquel con espacio, {piezas} en {destino.codigo} (zona de desborde, vendible). Escanea la siguiente.")
     else:
         messages.success(request, f"{sku.codigo}: {piezas} en {destino.codigo}. Escanea la siguiente.")
     return volver

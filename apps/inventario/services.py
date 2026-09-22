@@ -2009,18 +2009,45 @@ def a_cuarentena_desde_recepcion(sku, cantidad, referencia, actor, motivo=""):
         )
 
 
+def zona_desborde():
+    """Ubicación de desborde (settings.TORRE["ZONA_DESBORDE"], reserva o
+    picking, activa): ahí va lo que el plan no pudo meter en picking, vendible
+    con su lote, en vez de a cuarentena (la zona de cuarentena se usaba como
+    almacén y ese stock no se vendía; Chema 2026-09-22). None si no existe."""
+    codigo = str(settings.TORRE.get("ZONA_DESBORDE") or "").strip()
+    if not codigo:
+        return None
+    return Ubicacion.objects.filter(
+        codigo__iexact=codigo, activo=True, tipo__in=[Ubicacion.RESERVA, Ubicacion.PICKING],
+    ).first()
+
+
 def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
-    """`cantidad` piezas (default una, la recién escaneada): a su anaquel
-    (ubicar) o, sin anaquel (ubicacion=None), a cuarentena por falta de
-    espacio; avanza el plan."""
+    """`cantidad` piezas (default una, la recién contada): a su anaquel
+    (ubicar) o, sin anaquel (ubicacion=None), a la zona de desborde si existe
+    (vendible con su lote; evento a_desborde) y si no, a cuarentena por falta
+    de espacio; avanza el plan. Una pieza que cae en la zona de desborde —por
+    el plan o tecleada a mano— avanza el paso "sin espacio" del plan, no un
+    paso de anaquel."""
     cantidad = _validar_cantidad(cantidad, "ubicar")
     codigo_lote = lote.codigo if lote is not None else None
-    if ubicacion is None:
+    desborde = zona_desborde()
+    if ubicacion is None and desborde is None:
         a_cuarentena_desde_recepcion(sku, cantidad, orden.folio, actor, motivo="Sin anaquel con espacio en el plan de acomodo.")
         _avanzar_plan(orden, sku, None, codigo_lote, cantidad)
         return None
+    if ubicacion is None:
+        ubicacion = desborde
     ubicar(sku, cantidad, ubicacion, lote, actor)
-    _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote, cantidad)
+    es_desborde = desborde is not None and ubicacion.pk == desborde.pk
+    _avanzar_plan(orden, sku, None if es_desborde else ubicacion.codigo, codigo_lote, cantidad)
+    if es_desborde:
+        registrar_evento(
+            "sku", sku.codigo, "a_desborde", actor=actor, cliente=sku.cliente,
+            delta={"cantidad": cantidad, "referencia": str(orden.folio), "ubicacion": ubicacion.codigo,
+                   "lote": codigo_lote},
+            motivo="Sin anaquel con espacio en el plan: a la zona de desborde, vendible con su lote.",
+        )
     return ubicacion
 
 
