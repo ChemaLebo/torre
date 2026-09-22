@@ -271,24 +271,71 @@ def _pendientes_por_prioridad():
     return sorted(pendientes, key=lambda p: (p.creado > corte, p.creado))
 
 
-def _abierto_mas_viejo(user):
-    """El EN_PICKING más viejo MÍO o libre (para reanudar), o None."""
+# Estados en los que el pedido ya pasó por picking y sigue en la mesa de empaque.
+_ESTADOS_EN_MESA = (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO)
+
+
+def _por_antiguedad(pedidos):
+    """El más viejo primero: desde que se empezó a trabajar (o desde que entró)."""
+    return sorted(pedidos, key=lambda p: p.ts_picking or p.creado)
+
+
+def _empaque_incompleto(user):
+    """Lo más cerca de acabar primero: pedidos MÍOS o sin dueño que ya pasaron
+    por picking y no terminaron en la mesa (caja sin empacar, sin guía o sin
+    foto de cierre). Los que esperan inventario tras una salida parcial no
+    cuentan. Lo de otro operador es suyo hasta transferencia aceptada."""
     from django.db.models import Q
-    en_picking = sorted(
-        Pedido.objects.filter(estado=Pedido.EN_PICKING)
+    candidatos = (
+        Pedido.objects.filter(estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA))
         .filter(Q(asignado_a__isnull=True) | Q(asignado_a=user))
-        .select_related("cliente").prefetch_related("lineas__sku"),
-        key=lambda p: p.ts_picking or p.creado,
+        .select_related("cliente").prefetch_related("lineas__sku", "paquetes__guias", "guias")
     )
-    return en_picking[0] if en_picking else None
+    abiertos = []
+    for pedido in candidatos:
+        if pedido.estado == Pedido.EN_PICKING:
+            if pedido.lineas_completas:
+                abiertos.append(pedido)  # picking terminado: le toca la mesa
+        elif not pedido.empaque_completo and not pedido.esperando_inventario:
+            abiertos.append(pedido)
+    return _por_antiguedad(abiertos)
+
+
+def _picking_a_medias(user, libre=False):
+    """EN_PICKING sin terminar: MÍOS (libre=False) o SIN dueño (libre=True: los
+    soltaron; al escanear se vuelven míos), el más viejo primero."""
+    qs = Pedido.objects.filter(estado=Pedido.EN_PICKING)
+    qs = qs.filter(asignado_a__isnull=True) if libre else qs.filter(asignado_a=user)
+    return _por_antiguedad([
+        p for p in qs.select_related("cliente").prefetch_related("lineas__sku")
+        if not p.lineas_completas
+    ])
+
+
+def _abierto_mas_viejo(user):
+    """Lo que EMPEZAR manda a terminar antes de tomar un pedido nuevo (Chema
+    2026-09-22: de atrás para adelante, lo más cerca de acabar primero):
+    1º mi empaque incompleto (o libre), 2º mi picking a medias, 3º picking
+    libre. None si no hay nada a medias."""
+    for lote in (_empaque_incompleto(user), _picking_a_medias(user), _picking_a_medias(user, libre=True)):
+        if lote:
+            return lote[0]
+    return None
+
+
+def _etapa(pedido, user):
+    """Etiqueta de la card: en qué se quedó el pedido que ofrece EMPEZAR."""
+    if pedido.estado == Pedido.PENDIENTE:
+        return "nuevo"
+    if pedido.estado != Pedido.EN_PICKING or pedido.lineas_completas:
+        return "empaque"
+    return "picking" if pedido.asignado_a_id == user.pk else "libre"
 
 
 def _siguiente_en_cola(user):
-    """El pedido de LA card según prioridad del SERVIDOR (el empleado no decide).
-
-    1º EN_PICKING ya empezados (terminar lo abierto, el más viejo primero);
-    2º PENDIENTE por prioridad de cola.
-    """
+    """El pedido de LA card según prioridad del SERVIDOR (el empleado no decide):
+    primero lo que quedó a medias (_abierto_mas_viejo) y, solo sin nada a
+    medias, un PENDIENTE por prioridad de cola."""
     abierto = _abierto_mas_viejo(user)
     if abierto is not None:
         return abierto
@@ -306,27 +353,30 @@ def _destino_pedido(pedido):
 def _home_siguiente(request):
     """EMPEZAR ▶: toma el siguiente de la cola con manejo de carrera.
 
-    La card puede ofrecer REANUDAR un EN_PICKING (empezado=1): ese se sigue
-    directo. Para tomar uno nuevo, un EN_PICKING cuenta como TOMADO por el
-    otro operador: si el candidato PENDIENTE lo ganó alguien entre el render
-    y el POST, se toma el que sigue SIN error visible (select_for_update
-    decide quién ganó — dos empleados jamás agarran el mismo).
+    La card puede ofrecer CONTINUAR un pedido a medias (empezado=1: picking
+    o empaque incompleto): ese se sigue directo. Si no, primero lo que quedó
+    a medias (mío o libre) y solo sin nada a medias un pedido nuevo. Un
+    EN_PICKING cuenta como TOMADO por el otro operador: si el candidato
+    PENDIENTE lo ganó alguien entre el render y el POST, se toma el que sigue
+    SIN error visible (select_for_update decide quién ganó — dos empleados
+    jamás agarran el mismo).
     """
     from apps.pedidos.services import iniciar_picking  # lazy por contrato
 
     if request.POST.get("empezado"):
         abierto = Pedido.objects.filter(
-            pk=request.POST.get("pedido_id"), estado=Pedido.EN_PICKING,
+            pk=request.POST.get("pedido_id"), estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA),
         ).first()
         if abierto is not None and _acceso_pedido(request, abierto):
             return _destino_pedido(abierto)
 
+    abierto = _abierto_mas_viejo(request.user)
+    if abierto is not None:
+        return _destino_pedido(abierto)
+
     for _ in range(8):
         pendientes = _pendientes_por_prioridad()
         if not pendientes:
-            abierto = _abierto_mas_viejo(request.user)
-            if abierto is not None:
-                return _destino_pedido(abierto)
             messages.success(request, "Todo al día: no hay pedidos en la cola.")
             return redirect("piso:home")
         candidato = pendientes[0]
@@ -426,7 +476,9 @@ def home(request):
         siguiente.total_piezas = _piezas(siguiente)
         siguiente.num_lineas = len(siguiente.lineas_por_surtir)
         siguiente.piezas_sin_inventario = _piezas_sin_inventario(siguiente)
-        siguiente.ya_empezado = siguiente.estado == Pedido.EN_PICKING
+        siguiente.etapa = _etapa(siguiente, request.user)
+        siguiente.ya_empezado = siguiente.etapa != "nuevo"
+        siguiente.falta = _que_falta_empaque(siguiente) if siguiente.etapa == "empaque" else ""
 
     total_picking = len(pendientes) + len(por_pickear)
     corte_hora, corte_texto, corte_tono = _reloj_corte()

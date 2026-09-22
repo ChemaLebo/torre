@@ -40,7 +40,10 @@
 <div class="card">
   <div class="titulo">
     <div class="eyebrow">Siguiente</div>
-    {% if siguiente.ya_empezado %}<span class="pill accent">ya empezado — termínalo</span>{% else %}<span class="pill">en cola</span>{% endif %}
+    {% if siguiente.etapa == "empaque" %}<span class="pill accent">ya empezado — {{ siguiente.falta }}</span>
+    {% elif siguiente.etapa == "picking" %}<span class="pill accent">ya empezado — termínalo</span>
+    {% elif siguiente.etapa == "libre" %}<span class="pill accent">picking libre — lo soltaron, tómalo</span>
+    {% else %}<span class="pill">en cola</span>{% endif %}
   </div>
   <h1 class="mono">{{ siguiente.folio }}</h1>
   <p>{{ siguiente.cliente.nombre }} · {{ siguiente.comprador_nombre|default:"sin nombre" }}</p>
