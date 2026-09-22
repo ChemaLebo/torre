@@ -26,8 +26,8 @@ from apps.core.decorators import rol_requerido
 from apps.core.models import Cliente, EventoAuditoria, EvidenciaFoto, PerfilUsuario
 from apps.core.services import email_real, enviar_acceso, registrar_evento
 from apps.mesa.forms import (
-    CAMPOS_TARIFARIO_SIMPLES, FormAnuncioASNMesa, FormCliente, FormPedidoManual,
-    FormSKU, FormTarifario, ZONAS_ENVIO,
+    CAMPOS_TARIFARIO_SIMPLES, CLAVES_BRANDING, FormAnuncioASNMesa, FormCliente,
+    FormPedidoManual, FormSKU, FormTarifario, ZONAS_ENVIO,
 )
 
 # Minutos antes de vencer un reloj SLA en los que la pill pasa a "warn".
@@ -1744,10 +1744,7 @@ def cliente_editar(request, pk):
         "guia_de_voz": cliente.guia_de_voz,
         "activo": cliente.activo,
         **{f"peso_{carrier}": peso for carrier, peso in (cliente.reparto_pesos or {}).items()},
-        **{f"brand_{clave}": branding.get(clave, "") for clave in (
-            "color_primario", "color_fondo", "logo_url",
-            "nombre_publico", "whatsapp_soporte", "dominio_tienda",
-        )},
+        **{f"brand_{clave}": branding.get(clave, "") for clave in CLAVES_BRANDING},
     }
     form = FormCliente(request.POST or None, cliente=cliente, initial=inicial)
     if request.method == "POST" and form.is_valid():

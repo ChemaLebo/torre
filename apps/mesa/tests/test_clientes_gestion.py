@@ -116,12 +116,14 @@ class AltaClienteTests(BaseGestionClientes):
                 brand_color_primario="#123456",
                 brand_nombre_publico="Ron Caney de Cuba",
                 brand_logo_url="",
+                brand_pie="Hecho en Cuba",
+                brand_lema="",
             ),
         )
         cliente = Cliente.objects.get(slug="ron-caney")
         self.assertEqual(
             cliente.branding,
-            {"color_primario": "#123456", "nombre_publico": "Ron Caney de Cuba"},
+            {"color_primario": "#123456", "nombre_publico": "Ron Caney de Cuba", "pie": "Hecho en Cuba"},
         )
 
 

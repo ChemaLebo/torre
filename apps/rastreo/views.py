@@ -23,7 +23,24 @@ BRANDING_DEFAULT = {
     "color_texto": "#2B2118",
     "logo_url": "",
     "whatsapp_soporte": "",
+    "dominio_tienda": "",           # link "Volver a la tienda" en la página
+    "lema": "Seguimiento de tu pedido",  # bajo el logo
+    "pie": "",                      # pie de página, después del nombre (ej. "Hecho con cariño en Colima")
 }
+
+
+def _branding(cliente):
+    """Branding del cliente sobre los defaults, listo para la plantilla: nombre
+    público (o el nombre del cliente) y url_tienda a partir de dominio_tienda.
+    Cada cliente trae lo suyo — nada de la casa se cuela en la página de otro
+    (el pie "Hecho con cariño en Colima" salía en pedidos de Infinitea)."""
+    b = {**BRANDING_DEFAULT, **(cliente.branding or {})}
+    b["nombre_publico"] = b["nombre_publico"] or cliente.nombre
+    dominio = str(b.get("dominio_tienda") or "").strip()
+    if dominio and not dominio.startswith("http"):
+        dominio = f"https://{dominio}"
+    b["url_tienda"] = dominio
+    return b
 
 ESTADOS_HUMANOS = {
     "PENDIENTE": ("Recibimos tu pedido", "Ya está en nuestras manos y en fila para prepararse."),
@@ -85,8 +102,7 @@ def _throttle(request):
 
 
 def _contexto(pedido):
-    branding = {**BRANDING_DEFAULT, **(pedido.cliente.branding or {})}
-    branding["nombre_publico"] = branding["nombre_publico"] or pedido.cliente.nombre
+    branding = _branding(pedido.cliente)
 
     titulo, descripcion = ESTADOS_HUMANOS.get(
         pedido.estado, ("Tu pedido", "Estamos trabajando en tu pedido.")
@@ -278,8 +294,7 @@ def etiqueta_repartidor(request, token):
             cliente=pedido.cliente, delta={"folio": pedido.folio},
         )
 
-    branding = {**BRANDING_DEFAULT, **(pedido.cliente.branding or {})}
-    branding["nombre_publico"] = branding["nombre_publico"] or pedido.cliente.nombre
+    branding = _branding(pedido.cliente)
 
     if guia.paquete is not None:
         paquete_n = guia.paquete.numero

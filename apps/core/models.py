@@ -54,7 +54,7 @@ class Cliente(models.Model):
     )
     branding = models.JSONField(
         default=dict, blank=True,
-        help_text="Identidad para páginas públicas de rastreo: color_primario, color_fondo, logo_url, nombre_publico, whatsapp_soporte, dominio_tienda",
+        help_text="Identidad para páginas públicas de rastreo: color_primario, color_fondo, logo_url, nombre_publico, whatsapp_soporte, dominio_tienda, lema, pie",
     )
     tarifario = models.JSONField(
         default=dict, blank=True,

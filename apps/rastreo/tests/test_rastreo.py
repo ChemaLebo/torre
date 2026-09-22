@@ -117,3 +117,32 @@ class TestPodPublico(BaseRastreo):
         cuerpo = r.content.decode()
         self.assertIn(f"/r/{self.token}/pod/", cuerpo)
         self.assertNotIn("/media/", cuerpo)
+
+
+class TestBrandingPorCliente(BaseRastreo):
+    """La página es 100% del cliente: lema, pie y link a su tienda salen de su
+    branding; sin ellos, defaults neutros (el pie de Colima no se cuela en
+    pedidos de otro cliente)."""
+
+    def _pagina(self, **branding):
+        self.cliente.branding = {**self.cliente.branding, **branding}
+        self.cliente.save(update_fields=["branding"])
+        return self.client.get(f"/r/{self.token}/").content.decode()
+
+    def test_sin_pie_ni_tienda_el_footer_solo_lleva_el_nombre(self):
+        cuerpo = self._pagina()
+        self.assertNotIn("Hecho con cariño", cuerpo)
+        self.assertIn("<footer>Cervecería de Colima</footer>", cuerpo)
+        self.assertIn("Seguimiento de tu pedido", cuerpo)  # lema por default
+        self.assertNotIn("Volver a la tienda", cuerpo)
+
+    def test_pie_lema_y_tienda_del_cliente(self):
+        cuerpo = self._pagina(pie="Hecho con cariño en Colima", lema="Tu cerveza, en camino", dominio_tienda="cerveceriadecolima.com")
+        self.assertIn("Cervecería de Colima · Hecho con cariño en Colima", cuerpo)
+        self.assertIn("Tu cerveza, en camino", cuerpo)
+        self.assertNotIn("Seguimiento de tu pedido", cuerpo)
+        self.assertIn('<a href="https://cerveceriadecolima.com">Volver a la tienda</a>', cuerpo)
+
+    def test_dominio_con_esquema_se_respeta(self):
+        cuerpo = self._pagina(dominio_tienda="http://tienda.local:8080")
+        self.assertIn('href="http://tienda.local:8080"', cuerpo)

@@ -212,6 +212,7 @@ class Command(BaseCommand):
                 "color_fondo": "#F5EFE0",
                 "color_texto": "#2B2118",
                 "whatsapp_soporte": "523121112233",
+                "pie": "Hecho con cariño en Colima",
             }
             colima.save(update_fields=["branding"])
         nocturno, creado = Cliente.objects.get_or_create(

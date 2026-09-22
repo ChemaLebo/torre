@@ -111,7 +111,7 @@
   <div class="marca">
     {% if b.logo_url %}<img src="{{ b.logo_url }}" alt="{{ b.nombre_publico }}">{% else %}{{ b.nombre_publico }}{% endif %}
   </div>
-  <div class="lema">Seguimiento de tu pedido</div>
+  <div class="lema">{{ b.lema }}</div>
 </header>
 {% endif %}
 <div class="lienzo">
@@ -189,7 +189,7 @@
     {% endif %}
   </div>
 
-  <footer>{{ b.nombre_publico }} · Hecho con cariño en Colima</footer>
+  <footer>{{ b.nombre_publico }}{% if b.pie %} · {{ b.pie }}{% endif %}{% if b.url_tienda %} · <a href="{{ b.url_tienda }}">Volver a la tienda</a>{% endif %}</footer>
 </div>
 </body>
 </html>

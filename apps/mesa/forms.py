@@ -31,6 +31,8 @@ CLAVES_BRANDING = [
     "nombre_publico",
     "whatsapp_soporte",
     "dominio_tienda",
+    "lema",
+    "pie",
 ]
 
 # Campos simples del tarifario (los envio_* van anidados en envio_bloque).
@@ -145,7 +147,18 @@ class FormCliente(forms.Form):
     brand_logo_url = forms.CharField(label="URL del logo", max_length=300, required=False)
     brand_nombre_publico = forms.CharField(label="Nombre público", max_length=120, required=False)
     brand_whatsapp_soporte = forms.CharField(label="WhatsApp de soporte", max_length=20, required=False)
-    brand_dominio_tienda = forms.CharField(label="Dominio de la tienda", max_length=120, required=False)
+    brand_dominio_tienda = forms.CharField(
+        label="Dominio de la tienda", max_length=120, required=False,
+        widget=forms.TextInput(attrs={"placeholder": "tienda.com — link \"Volver a la tienda\" en el rastreo"}),
+    )
+    brand_lema = forms.CharField(
+        label="Lema bajo el logo", max_length=120, required=False,
+        widget=forms.TextInput(attrs={"placeholder": "Seguimiento de tu pedido"}),
+    )
+    brand_pie = forms.CharField(
+        label="Pie de página del rastreo", max_length=160, required=False,
+        widget=forms.TextInput(attrs={"placeholder": "Hecho con cariño en Colima"}),
+    )
 
     def __init__(self, *args, cliente=None, **kwargs):
         super().__init__(*args, **kwargs)
