@@ -1,7 +1,8 @@
 """Picking en piso: iniciar la ola y escanear línea por línea contra el SKU real."""
 from django.urls import reverse
 
-from apps.pedidos.models import Pedido
+from apps.catalogo.models import SKU
+from apps.pedidos.models import LineaPedido, Pedido
 
 from .base import PisoTestCase
 
@@ -64,7 +65,7 @@ class PickingPisoTests(PisoTestCase):
         from apps.pedidos.models import Pedido as P
 
         otro_cliente = Cliente.objects.create(nombre="Infinitea", slug="infinitea", integracion_envios="envia")
-        ajeno = self.crear_pedido(cantidad=1, reservar_stock=False)
+        ajeno = self.crear_pedido(cantidad=1)  # con reserva: sin ella sería "sin inventario"
         P.objects.filter(pk=ajeno.pk).update(cliente=otro_cliente)
         self._iniciar()  # el mío queda EN_PICKING conmigo
         otro = User.objects.create_user("piso2", password="pin-piso")
@@ -133,3 +134,78 @@ class PickingPisoTests(PisoTestCase):
     def test_detalle_de_pedido_no_en_picking_redirige(self):
         respuesta = self.client.get(self.url_detalle)  # sigue PENDIENTE
         self.assertRedirects(respuesta, reverse("piso:picking"), fetch_redirect_response=False)
+
+
+class PickingParcialTests(PisoTestCase):
+    """Fulfillment parcial (Chema 2026-09-22): la línea sin inventario no
+    detiene la ola — se ve con el tag "Sin inventario", el escáner la rechaza
+    y el pedido cierra sin ella."""
+
+    def setUp(self):
+        self.login_piso()
+        self.crear_stock(cantidad=50)
+        self.agotado = SKU.objects.create(
+            cliente=self.cliente, codigo="AGOTADO-SIX", codigo_barras="7509999999999",
+            descripcion="Six agotado", peso_gr=2000, requiere_lote=False,
+        )
+        self.pedido = self.crear_pedido(cantidad=2)
+        self.faltante = LineaPedido.objects.create(pedido=self.pedido, sku=self.agotado, cantidad=1)
+        self.url_detalle = reverse("piso:picking_pedido", args=[self.pedido.pk])
+
+    def _iniciar(self):
+        self.client.post(reverse("piso:picking"), {"accion": "iniciar", "pedido_id": self.pedido.pk})
+        self.pedido.refresh_from_db()
+
+    def test_la_lista_avisa_y_deja_iniciar(self):
+        respuesta = self.client.get(reverse("piso:picking"))
+        self.assertContains(respuesta, "Sin inventario · 1 pza")
+        self.assertContains(respuesta, "Iniciar picking")
+        self._iniciar()
+        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+
+    def test_el_detalle_muestra_la_faltante_fuera_de_la_ruta(self):
+        self._iniciar()
+        respuesta = self.client.get(self.url_detalle)
+        self.assertContains(respuesta, "no se surte en esta ola")
+        self.assertContains(respuesta, "AGOTADO-SIX")
+        self.assertNotContains(respuesta, 'data-codigo="AGOTADO-SIX"')  # no es una línea de la ruta
+        self.assertContains(respuesta, "0 / 2")  # el avance cuenta solo lo que se surte
+
+    def test_escanear_la_faltante_se_rechaza(self):
+        self._iniciar()
+        respuesta = self.client.post(self.url_detalle, {"codigo": "7509999999999", "cantidad": "1"}, follow=True)
+        self.assertContains(respuesta, "SIN INVENTARIO")
+        self.faltante.refresh_from_db()
+        self.assertEqual(self.faltante.cantidad_pickeada, 0)
+
+    def test_completar_lo_que_hay_manda_a_empaque(self):
+        self._iniciar()
+        respuesta = self.client.post(self.url_detalle, {"codigo": self.sku.codigo_barras, "cantidad": "2"})
+        self.assertRedirects(
+            respuesta, reverse("piso:empaque_pedido", args=[self.pedido.pk]), fetch_redirect_response=False,
+        )
+
+    def test_el_json_del_escaner_cierra_sin_la_faltante(self):
+        self._iniciar()
+        respuesta = self.client.post(
+            self.url_detalle, {"codigo": self.sku.codigo_barras, "cantidad": "2"}, HTTP_ACCEPT="application/json",
+        )
+        datos = respuesta.json()
+        self.assertTrue(datos["completo"])
+        self.assertEqual(datos["avance"], {"pickeadas": 2, "total": 2})
+
+    def test_todo_sin_inventario_no_arranca_ni_entra_a_la_cola(self):
+        self.pedido.delete()
+        pedido = self.crear_pedido(cantidad=1, reservar_stock=False)
+        respuesta = self.client.get(reverse("piso:picking"))
+        self.assertContains(respuesta, "espera inventario")
+        self.assertNotContains(respuesta, "Iniciar picking")
+        respuesta = self.client.post(
+            reverse("piso:picking"), {"accion": "iniciar", "pedido_id": pedido.pk}, follow=True,
+        )
+        self.assertContains(respuesta, "no tiene nada que surtir")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+        # EMPEZAR en Mi turno tampoco lo ofrece: no hay ola que empezar.
+        respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
+        self.assertContains(respuesta, "Todo al día: no hay pedidos en la cola.")

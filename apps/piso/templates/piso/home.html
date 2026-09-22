@@ -49,6 +49,7 @@
     <span class="pill">{{ siguiente.total_piezas }} piezas</span>
     {% if siguiente.es_local %}<span class="pill warn">local</span>{% else %}<span class="pill">foráneo</span>{% endif %}
     {% if siguiente.incidencia_activa %}<span class="pill crit">faltante</span>{% endif %}
+    {% if siguiente.piezas_sin_inventario %}<span class="pill crit">Sin inventario · {{ siguiente.piezas_sin_inventario }} pza{{ siguiente.piezas_sin_inventario|pluralize }}</span>{% endif %}
   </div>
 </div>
 <form method="post" class="accion-fija mt">{% csrf_token %}

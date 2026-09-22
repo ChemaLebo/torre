@@ -27,15 +27,20 @@
           <div class="small">{{ p.total_piezas }} piezas
             {% if p.es_local %}· <span class="pill warn">local</span>{% else %}· <span class="pill">foráneo</span>{% endif %}
             {% if p.incidencia_activa %}<span class="pill crit">faltante</span>{% endif %}
+            {% if p.piezas_sin_inventario %}<span class="pill crit">Sin inventario · {{ p.piezas_sin_inventario }} pza{{ p.piezas_sin_inventario|pluralize }}</span>{% endif %}
           </div>
         </div>
-        <span class="pill">por iniciar</span>
+        <span class="pill">{% if p.nada_que_surtir %}espera inventario{% else %}por iniciar{% endif %}</span>
       </div>
+      {% if p.nada_que_surtir %}
+      <p class="small muted mt">Nada que surtir todavía: todas sus líneas están sin inventario. Sale solo cuando entre stock.</p>
+      {% else %}
       <form method="post" class="mt">{% csrf_token %}
         <input type="hidden" name="accion" value="iniciar">
         <input type="hidden" name="pedido_id" value="{{ p.pk }}">
         <button class="btn primario bloque" type="submit">Iniciar picking</button>
       </form>
+      {% endif %}
     </div>
     {% endfor %}
     {% for p in c.en_picking %}
@@ -44,7 +49,8 @@
         <div>
           <span class="mono">{{ p.folio }}</span>
           <div class="small">{% if p.asignado_a %}lo tiene <b>{{ p.asignado_a.username }}</b>{% else %}libre, con avance{% endif %}
-            {% if p.incidencia_activa %}· <span class="pill crit">faltante</span>{% endif %}</div>
+            {% if p.incidencia_activa %}· <span class="pill crit">faltante</span>{% endif %}
+            {% if p.piezas_sin_inventario %}· <span class="pill crit">Sin inventario · {{ p.piezas_sin_inventario }} pza{{ p.piezas_sin_inventario|pluralize }}</span>{% endif %}</div>
         </div>
         <span class="num">{{ p.pickeadas }} / {{ p.total_piezas }}</span>
       </div>

@@ -77,6 +77,7 @@ class BaseBodegaMesa(TestCase):
         )
         LineaPedido.objects.create(
             pedido=pedido, sku=self.sku, cantidad=cantidad, cantidad_pickeada=pickeada,
+            reservada=True,
         )
         return pedido
 
@@ -161,7 +162,7 @@ class PlanoBodegaTests(BaseBodegaMesa):
             cliente=self.colima, origen="manual", estado=Pedido.EMPACADO,
             comprador_nombre="Ana Prueba", cp="28017", es_local=True, direccion={},
         )
-        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=1)
+        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=1, reservada=True)
 
         respuesta = self.get_bodega()
         self.assertEqual(respuesta.context["badges"]["paquetes_listos"], 1)

@@ -186,6 +186,9 @@
   {% if total_cajas > 1 %}
   <p class="small muted">No mezcles contenido de otras cajas: cada una viaja con su propia guía.</p>
   {% endif %}
+  {% if faltantes %}
+  <p class="small"><span class="pill crit">Sin inventario</span> {% for l in faltantes %}{{ l.sku.codigo }} × {{ l.cantidad }}{% if not forloop.last %} · {% endif %}{% endfor %} — no va en esta ola; el pedido se completa después con el mismo folio.</p>
+  {% endif %}
 </div>
 {% else %}
 <div class="card">
@@ -194,6 +197,12 @@
   <div class="corral-fila">
     <div class="crece"><span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}</div>
     <span class="num">{{ linea.cantidad_pickeada }} / {{ linea.cantidad }}</span>
+  </div>
+  {% endfor %}
+  {% for linea in faltantes %}
+  <div class="corral-fila">
+    <div class="crece"><span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}</div>
+    <span class="pill crit">Sin inventario · {{ linea.cantidad }} pza{{ linea.cantidad|pluralize }}</span>
   </div>
   {% endfor %}
 </div>

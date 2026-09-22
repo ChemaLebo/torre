@@ -148,8 +148,8 @@ class CarrierUnicoPorPlanTests(TestCase):
 
     def test_costo_particion_solo_combina_bins_del_mismo_carrier(self):
         pedido = crear_pedido(self.cliente, self.tienda, cp="64000", es_local=False)
-        l8 = LineaPedido.objects.create(pedido=pedido, sku=self.caja8, cantidad=1)
-        l12 = LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1)
+        l8 = LineaPedido.objects.create(pedido=pedido, sku=self.caja8, cantidad=1, reservada=True)
+        l12 = LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1, reservada=True)
         bins = [
             [(l8, Decimal("8"), 1)],
             [(l12, Decimal("12"), 1)],
@@ -164,8 +164,8 @@ class CarrierUnicoPorPlanTests(TestCase):
 
     def test_planificar_envio_produce_paquetes_del_mismo_carrier(self):
         pedido = crear_pedido(self.cliente, self.tienda, cp="64000", es_local=False)
-        LineaPedido.objects.create(pedido=pedido, sku=self.caja8, cantidad=1)
-        LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1)
+        LineaPedido.objects.create(pedido=pedido, sku=self.caja8, cantidad=1, reservada=True)
+        LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1, reservada=True)
         paquetes = cotizador.planificar_envio(pedido)
         self.assertGreaterEqual(len(paquetes), 2)  # 21 kg con margen: se divide
         carriers = {p.carrier for p in paquetes}

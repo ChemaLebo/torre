@@ -40,8 +40,22 @@
 {% endif %}
 
 
+{# Fulfillment parcial: lo sin inventario se queda y se completa después, con el mismo folio. #}
+{% if faltantes %}
+<div class="card mt">
+  <div class="titulo"><h2>Sin inventario</h2><span class="pill crit">no se surte en esta ola</span></div>
+  <p class="small muted">El pedido sale sin estas líneas; cuando entre stock vuelven a picking con el mismo folio.</p>
+  {% for linea in faltantes %}
+  <div class="corral-fila">
+    <div class="crece">{{ linea.sku.descripcion }} <span class="small mono">{{ linea.sku.codigo }}</span></div>
+    <span class="pill crit">Sin inventario · {{ linea.cantidad }} pza{{ linea.cantidad|pluralize }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% if completo %}
-<div class="banner ok"><span class="foco"></span>Pedido completo: todas las piezas escaneadas.</div>
+<div class="banner ok"><span class="foco"></span>Pedido completo: todas las piezas escaneadas{% if faltantes %} (lo sin inventario se queda){% endif %}.</div>
 <a class="btn primario gigante" href="{% url 'piso:empaque_pedido' pedido.pk %}">Ir a empaque ▶</a>
 {% else %}
 

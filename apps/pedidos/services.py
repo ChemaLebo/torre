@@ -214,7 +214,9 @@ def _avisar_piso_pedido_nuevo(pedido):
         try:
             from apps.mensajeria import push  # lazy por contrato
 
-            piezas = sum(linea.cantidad for linea in pedido.lineas.all())
+            lineas = list(pedido.lineas.all())
+            piezas = sum(linea.cantidad for linea in lineas)
+            sin_inventario = sum(linea.cantidad for linea in lineas if linea.faltante)
             destino = (
                 str((pedido.direccion or {}).get("city") or "").strip()
                 or pedido.cp or "sin destino"
@@ -223,11 +225,11 @@ def _avisar_piso_pedido_nuevo(pedido):
                 corte = pedido.corte_vigente_al_ingreso.strftime("%H:%M")
             else:
                 corte = str(settings.TORRE["CORTE_CONTRACTUAL"])
+            cuerpo = f"{piezas} pzas · {destino} · corte {corte}"
+            if sin_inventario:
+                cuerpo += f" · {sin_inventario} sin inventario"
             push.enviar_push_a_rol(
-                "piso",
-                f"📦 Nuevo pedido {pedido.folio}",
-                f"{piezas} pzas · {destino} · corte {corte}",
-                url="/piso/picking/",
+                "piso", f"📦 Nuevo pedido {pedido.folio}", cuerpo, url="/piso/picking/",
             )
         except Exception:
             pass
@@ -908,20 +910,20 @@ def crear_pedido_manual(cliente, *, comprador_nombre, comprador_tel="",
 def iniciar_picking(pedido, actor):
     """PENDIENTE → EN_PICKING. La ola del piso empieza aquí.
 
-    GATE de reservas (sep-2026): no se arranca picking con líneas sin
-    reservar — la reserva ES la garantía de existencias, y pickear sin ella
-    produce las inconsistencias bandera-vs-kardex que se arreglaban por
-    shell (PED-00002, PED-00009). Los kits pasan (nacen reservada=True,
-    virtuales); sus hijas sí se exigen. El reintento vive en Mesa.
+    GATE de reservas (sep-2026): la reserva ES la garantía de existencias, y
+    pickear sin ella produce las inconsistencias bandera-vs-kardex que se
+    arreglaban por shell (PED-00002, PED-00009). Fulfillment parcial (Chema
+    2026-09-22): una línea sin reservar ya no detiene la ola — se surte lo
+    que sí tiene reserva y la faltante espera con el tag "Sin inventario"
+    (confirmar_linea_pick la rechaza). Sin NADA que surtir no hay ola que
+    empezar. El reintento de reservas vive en Mesa y en la entrada de stock.
     """
-    sin_reserva = sorted({
-        l.sku.codigo
-        for l in pedido.lineas.select_related("sku").filter(reservada=False)
-    })
-    if sin_reserva:
+    if not pedido.lineas_por_surtir:
+        faltantes = sorted({l.sku.codigo for l in pedido.lineas_faltantes})
+        detalle = f": todas sus líneas están sin inventario ({', '.join(faltantes)})" if faltantes else ""
         raise ValueError(
-            f"{pedido.folio} tiene líneas sin reservar ({', '.join(sin_reserva)}): "
-            "no se puede iniciar picking. Pide a Mesa reintentar las reservas."
+            f"{pedido.folio} no tiene nada que surtir{detalle}. "
+            "Pide a Mesa reintentar las reservas."
         )
     if hasattr(actor, "pk"):
         # El que lo inicia se vuelve DUEÑO: el pedido desaparece para los
@@ -1038,6 +1040,11 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
             raise ValueError(
                 f"El pedido {pedido.folio} no está en picking (está {pedido.get_estado_display()}). "
                 "Pídele a Mesa que lo inicie antes de escanear."
+            )
+        if fresca.faltante:
+            raise ValueError(
+                f"{fresca.sku.codigo} está SIN INVENTARIO en este pedido: no se surte en esta "
+                "ola. Regresa la pieza al anaquel y avisa a Mesa si sí había existencia."
             )
         if codigo_escaneado is not None:
             codigo = str(codigo_escaneado).strip()

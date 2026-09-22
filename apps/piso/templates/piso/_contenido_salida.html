@@ -13,6 +13,9 @@
       </li>
       {% endfor %}
     </ul>
+    {% if contenido.sin_inventario %}
+    <div><span class="pill crit">Sin inventario</span> se queda: {% for l in contenido.sin_inventario %}{{ l.cantidad }} × {{ l.sku.codigo }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+    {% endif %}
     {% for c in contenido.cajas %}
     <div><b>Caja {{ c.numero }}:</b> {% for t in c.textos %}{{ t }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
     {% endfor %}

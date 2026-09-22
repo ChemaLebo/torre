@@ -42,9 +42,11 @@ class BaseCotizador(TestCase):
         )
 
     def pedido_con(self, cp, lineas):
+        # reservada=True: como deja la ingesta con stock. Sin reserva la línea
+        # es "faltante" y el plan la deja fuera (fulfillment parcial).
         pedido = crear_pedido(self.cliente, self.tienda, cp=cp, es_local=False)
         for sku, cantidad in lineas:
-            LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad)
+            LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=cantidad, reservada=True)
         return pedido
 
 
@@ -156,6 +158,49 @@ class TestReglaPrefiere(BaseCotizador):
         self.assertEqual(cotizador.elegir_entre(opciones)["carrier"], "fedex")  # None: el prioritario global
 
 
+class TestPlanParcial(BaseCotizador):
+    """Fulfillment parcial: el plan deja fuera la línea sin inventario; la
+    segunda ola planea cajas nuevas solo con lo pendiente, numeradas después
+    de las que ya salieron; un plan con guías no se duplica."""
+
+    def test_la_faltante_no_se_planea(self):
+        pedido = self.pedido_con("06600", [(self.six, 1)])
+        LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=2)  # sin reserva
+        paquetes = cotizador.planificar_envio(pedido)
+        self.assertEqual(len(paquetes), 1)
+        self.assertEqual(
+            [pl.linea_pedido_id for pl in paquetes[0].lineas.all()],
+            [pedido.lineas.get(sku=self.six).pk],
+        )
+        self.assertLess(paquetes[0].peso_kg, 5)
+
+    def test_segunda_ola_planea_solo_lo_pendiente_despues_de_las_fijas(self):
+        pedido = self.pedido_con("06600", [(self.six, 1)])
+        faltante = LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1)
+        primera = cotizador.planificar_envio(pedido)[0]
+        # Primera ola fuera: la caja se despachó y su línea quedó estampada.
+        primera.estado = Paquete.DESPACHADO
+        primera.save(update_fields=["estado"])
+        LineaPedido.objects.filter(pedido=pedido, sku=self.six).update(cantidad_despachada=1)
+        self.assertEqual(cotizador.planificar_envio(pedido), [primera])  # nada pendiente: no inventa cajas
+        faltante.reservada = True
+        faltante.save(update_fields=["reservada"])  # llegó stock
+        plan = cotizador.planificar_envio(pedido)
+        self.assertEqual([p.numero for p in plan], [1, 2])
+        self.assertEqual(
+            [(pl.linea_pedido_id, pl.cantidad) for pl in plan[1].lineas.all()], [(faltante.pk, 1)],
+        )
+        self.assertEqual(Paquete.objects.filter(pedido=pedido).count(), 2)
+
+    def test_plan_con_guia_no_se_duplica(self):
+        from apps.envios.models import Guia
+        pedido = self.pedido_con("06600", [(self.six, 1)])
+        caja = cotizador.planificar_envio(pedido)[0]
+        Guia.objects.create(pedido=pedido, paquete=caja, carrier=caja.carrier, numero="MOCK-1")
+        self.assertEqual(cotizador.planificar_envio(pedido), [caja])
+        self.assertEqual(Paquete.objects.filter(pedido=pedido).count(), 1)
+
+
 class TestPlanificarEnvio(BaseCotizador):
     def test_16kg_se_divide_en_dos_puntopost(self):
         # 2 cajas de 12 (16 kg) a CDMX: 2×8.4 kg puntopost ($182) < 16.8 kg estafeta (~$230)
@@ -227,7 +272,7 @@ class TestPlanificarEnvio(BaseCotizador):
     def test_local_con_flota_tarifa_flat_100(self):
         # El atajo local flat solo existe con flota propia (TORRE["FLOTA_PROPIA"]=True).
         pedido = crear_pedido(self.cliente, self.tienda, cp="01780", es_local=True)
-        LineaPedido.objects.create(pedido=pedido, sku=self.six, cantidad=2)
+        LineaPedido.objects.create(pedido=pedido, sku=self.six, cantidad=2, reservada=True)
         paquetes = cotizador.planificar_envio(pedido)
         self.assertEqual(len(paquetes), 1)
         self.assertEqual(paquetes[0].carrier, "local")
@@ -238,7 +283,7 @@ class TestPlanificarEnvio(BaseCotizador):
     def test_local_con_flota_pesado_se_divide_a_100_por_paquete(self):
         # 3 cajas de 12 (25.2 kg con margen): 2 paquetes locales de $100
         pedido = crear_pedido(self.cliente, self.tienda, cp="06700", es_local=True)
-        LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=3)
+        LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=3, reservada=True)
         paquetes = cotizador.planificar_envio(pedido)
         self.assertEqual(len(paquetes), 2)
         for p in paquetes:
@@ -249,7 +294,7 @@ class TestPlanificarEnvio(BaseCotizador):
         # Default TORRE["FLOTA_PROPIA"]=False: el es_local se planifica como
         # cualquier pedido — carrier real cotizado, nunca "local".
         pedido = crear_pedido(self.cliente, self.tienda, cp="01780", es_local=True)
-        LineaPedido.objects.create(pedido=pedido, sku=self.six, cantidad=2)
+        LineaPedido.objects.create(pedido=pedido, sku=self.six, cantidad=2, reservada=True)
         paquetes = cotizador.planificar_envio(pedido)
         self.assertGreaterEqual(len(paquetes), 1)
         for p in paquetes:

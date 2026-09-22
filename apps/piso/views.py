@@ -128,13 +128,19 @@ def _entero(valor, mensaje):
 
 
 def _piezas(pedido):
-    return sum(linea.cantidad for linea in pedido.lineas.all())
+    """Piezas que ESTA ola surte: sin las faltantes (sin inventario) ni lo que ya salió."""
+    return sum(linea.pendiente for linea in pedido.lineas.all())
+
+
+def _piezas_sin_inventario(pedido):
+    """Piezas del pedido que esperan inventario (tag "Sin inventario")."""
+    return sum(linea.cantidad for linea in pedido.lineas_faltantes)
 
 
 def _avance(pedido):
-    """(pickeadas, total, porcentaje) del pedido, para medidores."""
+    """(pickeadas, total, porcentaje) de lo que esta ola surte, para medidores."""
     total = pickeadas = 0
-    for linea in pedido.lineas.all():
+    for linea in pedido.lineas_por_surtir:
         total += linea.cantidad
         pickeadas += min(linea.cantidad_pickeada, linea.cantidad)
     pct = int(round(pickeadas * 100.0 / total)) if total else 0
@@ -253,13 +259,16 @@ def _pedido_transferir(request, pedido):
 
 def _pendientes_por_prioridad():
     """PENDIENTES en orden de cola: primero los que rebasan el corte de hoy
-    (entraron antes del corte → salen HOY), luego por creado ascendente."""
+    (entraron antes del corte → salen HOY), luego por creado ascendente. Un
+    pedido sin nada que surtir (todo sin inventario) no entra a la cola: se
+    ve en la lista de picking con su tag y espera stock."""
     corte = _corte_hoy()
-    return sorted(
-        Pedido.objects.filter(estado=Pedido.PENDIENTE)
-        .select_related("cliente").prefetch_related("lineas"),
-        key=lambda p: (p.creado > corte, p.creado),
-    )
+    pendientes = [
+        p for p in Pedido.objects.filter(estado=Pedido.PENDIENTE)
+        .select_related("cliente").prefetch_related("lineas__sku")
+        if p.lineas_por_surtir
+    ]
+    return sorted(pendientes, key=lambda p: (p.creado > corte, p.creado))
 
 
 def _abierto_mas_viejo(user):
@@ -268,7 +277,7 @@ def _abierto_mas_viejo(user):
     en_picking = sorted(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
         .filter(Q(asignado_a__isnull=True) | Q(asignado_a=user))
-        .select_related("cliente").prefetch_related("lineas"),
+        .select_related("cliente").prefetch_related("lineas__sku"),
         key=lambda p: p.ts_picking or p.creado,
     )
     return en_picking[0] if en_picking else None
@@ -365,7 +374,7 @@ def home(request):
     pendientes = list(Pedido.objects.filter(estado=Pedido.PENDIENTE).select_related("cliente"))
     en_picking = list(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
-        .select_related("cliente").prefetch_related("lineas")
+        .select_related("cliente").prefetch_related("lineas__sku")
     )
     if not _es_mesa(request):
         # Los pedidos con dueño desaparecen para los demás operadores.
@@ -396,7 +405,7 @@ def home(request):
         )
     restocks = list(
         Pedido.objects.filter(estado=Pedido.CANCELACION_PENDIENTE)
-        .select_related("cliente").prefetch_related("lineas")
+        .select_related("cliente").prefetch_related("lineas__sku")
     )
     for pedido in restocks:
         pedido.total_piezas = _piezas(pedido)
@@ -413,7 +422,8 @@ def home(request):
     siguiente = _siguiente_en_cola(request.user)
     if siguiente is not None:
         siguiente.total_piezas = _piezas(siguiente)
-        siguiente.num_lineas = siguiente.lineas.count()
+        siguiente.num_lineas = len(siguiente.lineas_por_surtir)
+        siguiente.piezas_sin_inventario = _piezas_sin_inventario(siguiente)
         siguiente.ya_empezado = siguiente.estado == Pedido.EN_PICKING
 
     total_picking = len(pendientes) + len(por_pickear)
@@ -988,12 +998,16 @@ def picking(request):
     )
     for pedido in pendientes:
         pedido.total_piezas = _piezas(pedido)
+        pedido.piezas_sin_inventario = _piezas_sin_inventario(pedido)
+        # Todo sin inventario: se ve con su tag pero no hay ola que iniciar.
+        pedido.nada_que_surtir = not pedido.lineas_por_surtir
     en_picking = list(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
         .select_related("cliente", "asignado_a").prefetch_related("lineas__sku").order_by("creado")
     )
     for pedido in en_picking:
         pedido.pickeadas, pedido.total_piezas, pedido.avance_pct = _avance(pedido)
+        pedido.piezas_sin_inventario = _piezas_sin_inventario(pedido)
         pedido.puedo_abrir = _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
     clientes = {}
     for pedido in pendientes:
@@ -1012,9 +1026,11 @@ def _lineas_en_ruta(pedido):
 
     Cada línea trae .ubicaciones (top 3 FEFO) y .completa; el orden es por
     el código de la primera ubicación — el picker camina el pasillo una vez,
-    sin zigzag. Sin stock a la vista → al final.
+    sin zigzag. Sin stock a la vista → al final. Solo lo que ESTA ola surte:
+    las faltantes (sin inventario) y lo que ya salió no van en la ruta — la
+    vista las lista aparte con su tag.
     """
-    lineas = list(pedido.lineas.select_related("sku"))
+    lineas = [l for l in pedido.lineas.select_related("sku") if l.pendiente > 0]
     for linea in lineas:
         linea.completa = linea.cantidad_pickeada >= linea.cantidad
         linea.ubicaciones = list(
@@ -1080,6 +1096,7 @@ def picking_pedido(request, pk):
         "seccion": "picking",
         "pedido": pedido,
         "lineas": lineas,
+        "faltantes": [l for l in pedido.lineas.select_related("sku") if l.faltante],
         "completo": all(l.completa for l in lineas),
         "pickeadas": pickeadas,
         "total_piezas": total,
@@ -1123,9 +1140,10 @@ def _picking_escanear(request, pedido):
     if not codigo:
         return error("Escanea el código de barras del producto.")
 
-    lineas = list(pedido.lineas.select_related("sku"))
+    todas = list(pedido.lineas.select_related("sku"))
+    lineas = [l for l in todas if l.pendiente > 0]  # lo que esta ola surte
     candidatas = [
-        l for l in lineas
+        l for l in todas
         if codigo in {c for c in (l.sku.codigo_barras, l.sku.codigo) if c}
     ]
     if not candidatas:
@@ -1133,7 +1151,14 @@ def _picking_escanear(request, pedido):
             f"Código equivocado: {codigo} no corresponde a ningún producto de este pedido. "
             "Regresa la pieza y toma la correcta."
         )
-    linea = next((l for l in candidatas if l.cantidad_pickeada < l.cantidad), None)
+    if all(l.faltante for l in candidatas):
+        return error(
+            f"{candidatas[0].sku.codigo} está SIN INVENTARIO en este pedido: no se surte en "
+            "esta ola. Regresa la pieza al anaquel y avisa a Mesa si sí había existencia."
+        )
+    linea = next(
+        (l for l in candidatas if l.pendiente > 0 and l.cantidad_pickeada < l.cantidad), None,
+    )
     if linea is None:
         return error(
             f"La línea de {candidatas[0].sku.codigo} ya está completa. No pickees de más."
@@ -1482,7 +1507,8 @@ def _render_paso_empacar(request, pedido, elegida=None):
     cajas = _paquetes_con_lineas(pedido)
     pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
     fallo_previo = request.session.pop(f"empaque_fallido_{pedido.pk}", None)
-    lineas = list(pedido.lineas.select_related("sku"))
+    todas = list(pedido.lineas.select_related("sku"))
+    lineas = [l for l in todas if l.pendiente > 0]  # lo que esta ola empaca
     contexto = {
         "seccion": "empaque",
         "pedido": pedido,
@@ -1491,6 +1517,7 @@ def _render_paso_empacar(request, pedido, elegida=None):
         "checklist": checklist,
         "naked": naked,
         "lineas": lineas,
+        "faltantes": [l for l in todas if l.faltante],
         "hubo_error_post": fallo_previo is not None,
         "peso_previo": fallo_previo or "",
     }
@@ -1902,9 +1929,11 @@ def _contenido_salida(pedido):
     for linea in lineas:
         if linea.parte_de_kit_id:
             hijas.setdefault(linea.parte_de_kit_id, []).append(linea)
+    # Solo lo que sigue aquí: ni las faltantes (sin inventario, se quedan) ni
+    # lo que ya salió en un manifiesto anterior.
     renglones = [
         {"linea": linea, "hijas": hijas.get(linea.pk, [])}
-        for linea in lineas if not linea.parte_de_kit_id
+        for linea in lineas if not linea.parte_de_kit_id and linea.pendiente > 0
     ]
     paquetes = list(pedido.paquetes.all())
     cajas = []
@@ -1915,7 +1944,8 @@ def _contenido_salida(pedido):
         ]
     return {
         "renglones": renglones,
-        "piezas": sum(r["linea"].cantidad for r in renglones),
+        "piezas": sum(r["linea"].pendiente for r in renglones),
+        "sin_inventario": [l for l in lineas if l.faltante and not l.parte_de_kit_id],
         "cajas": cajas,
     }
 

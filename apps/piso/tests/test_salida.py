@@ -252,6 +252,7 @@ class ContenidoEnSalidaTests(PisoTestCase):
         )
         te = SKU.objects.create(cliente=self.cliente, codigo="TE-1", descripcion="Té verde", peso_gr=100)
         pedido = self.crear_pedido(cantidad=1, estado=Pedido.GUIA_GENERADA, reservar_stock=False)
+        pedido.lineas.update(reservada=True)  # sin reserva la línea sería "sin inventario" y no se lista
         linea_kit = LineaPedido.objects.create(
             pedido=pedido, sku=kit, cantidad=1, cantidad_pickeada=1, reservada=True,
         )

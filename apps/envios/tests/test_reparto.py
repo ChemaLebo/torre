@@ -188,7 +188,7 @@ class PlanYGuiasRepartoTests(TestCase):
 
     def _pedido(self, cp="44100"):
         pedido = crear_pedido(self.cliente, self.tienda, cp=cp, es_local=False)
-        LineaPedido.objects.create(pedido=pedido, sku=self.six, cantidad=1)
+        LineaPedido.objects.create(pedido=pedido, sku=self.six, cantidad=1, reservada=True)
         return pedido
 
     def test_el_plan_solo_cotiza_la_carta(self):

@@ -12,9 +12,11 @@ Reglas de negocio (CONVENTIONS-ENVIOS.md, medidas contra la API real 2026-08-03)
   TORRE["CARRIER_PRIORITARIO"]) gana si cotiza todas las cajas del plan; si
   no, el precio decide entre lo permitido. La regla prefiere, no acota.
 """
+import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
+from fractions import Fraction
 
 from django.conf import settings
 from django.db import transaction
@@ -233,24 +235,48 @@ def mejor_opcion(cp_destino, peso_kg, dims=None, cliente=None, carriers=None, pr
 MARGEN_EMPAQUE = Decimal("1.05")  # +5% de caja/burbuja/separadores
 
 
-def _unidades(pedido):
+def _unidades(pedido, cubiertas=None):
     """[(linea, peso_kg, fraccion_de)] pieza por pieza, pesadas primero.
 
     Un SKU con empaques_divisibles > 1 (ej. caja de 24 → 2 medias de 12) se
     expande en subunidades: el 3PL puede reempacarlo en cajas del cliente para
     que cada envío quede más barato — la razón de ser de la división.
+
+    Fulfillment parcial (2026-09-22): solo entra lo que ESTA ola surte. Una
+    línea faltante (sin inventario) no se planea; lo que ya salió en un
+    manifiesto (cantidad_despachada) o ya viaja en una caja fija con guía
+    (`cubiertas`: {linea_pk: unidades}) tampoco.
     """
+    cubiertas = cubiertas or {}
     unidades = []
     for linea in pedido.lineas.select_related("sku").all():
+        if linea.faltante:
+            continue
+        ya = max(linea.cantidad_despachada, cubiertas.get(linea.pk, 0))
+        por_planear = max(linea.cantidad - ya, 0)
+        if por_planear <= 0:
+            continue
         peso = Decimal(linea.sku.peso_gr or 1000) / 1000
         partes = max(int(linea.sku.empaques_divisibles or 1), 1)
         if partes > 1:
             peso_sub = (peso / partes).quantize(Decimal("0.001"))
-            unidades.extend([(linea, peso_sub, partes)] * (linea.cantidad * partes))
+            unidades.extend([(linea, peso_sub, partes)] * (por_planear * partes))
         else:
-            unidades.extend([(linea, peso, 1)] * linea.cantidad)
+            unidades.extend([(linea, peso, 1)] * por_planear)
     unidades.sort(key=lambda u: u[1], reverse=True)
     return unidades
+
+
+def _unidades_cubiertas(paquetes):
+    """{linea_pk: unidades de venta} que ya viajan en esas cajas (fijas: con
+    guía o despachadas). Las medias cajas se suman exactas y se redondean
+    hacia arriba: la unidad de venta ya se abrió y no se vuelve a planear."""
+    acumulado = {}
+    for paquete in paquetes:
+        for pl in paquete.lineas.all():
+            fraccion = Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+            acumulado[pl.linea_pedido_id] = acumulado.get(pl.linea_pedido_id, Fraction(0)) + fraccion
+    return {pk: math.ceil(v) for pk, v in acumulado.items()}
 
 
 def _bins_por_capacidad(unidades, capacidad_kg):
@@ -364,14 +390,22 @@ def planificar_envio(pedido, force=False):
 
 @transaction.atomic
 def _planificar(pedido, force, carriers, preferido=None):
-    existentes = list(pedido.paquetes.all())
-    if existentes and not force:
+    """El plan en sí (ver planificar_envio). Las cajas ya despachadas o con
+    guía son FIJAS (la ola anterior) y no se tocan; un plan vivo (sin guía)
+    se conserva salvo `force`. Fulfillment parcial: se planean cajas nuevas
+    solo con lo pendiente (lo que ya viaja en las fijas queda fuera),
+    numeradas después de las que salieron; regresa fijas + nuevas."""
+    existentes = list(pedido.paquetes.prefetch_related("lineas", "guias"))
+    fijas = [p for p in existentes if p.estado == Paquete.DESPACHADO or bool(p.guias.all())]
+    vivas = [p for p in existentes if p not in fijas]
+    if vivas and not force:
         return existentes
-    if any(p.estado == Paquete.DESPACHADO for p in existentes):
-        return existentes
-    for paquete in existentes:  # replanear: solo se tiran planes sin guía
-        if not paquete.guias.exists():
-            paquete.delete()
+    for paquete in vivas:  # replanear: solo se tiran planes sin guía
+        paquete.delete()
+    desde = max((p.numero for p in fijas), default=0) + 1
+    unidades = _unidades(pedido, _unidades_cubiertas(fijas))
+    if not unidades:
+        return fijas
 
     max_kg = Decimal(str(settings.TORRE["MAX_PESO_ENVIO_KG"]))
     meta = Decimal(str(settings.TORRE["TARIFA_OBJETIVO_MXN"]))
@@ -382,14 +416,11 @@ def _planificar(pedido, force, carriers, preferido=None):
     if pedido.es_local and elegir_carrier(pedido)[0] == CARRIER_LOCAL:
         # Flota local: $100 flat por paquete ≤20 kg (CDMX + metro hasta Toluca).
         tarifa_local = Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100)))
-        unidades = _unidades(pedido)
-        bins = _bins_por_capacidad(unidades, max_kg) if unidades else None
-        if not bins:
-            bins = [unidades] if unidades else [[]]
+        bins = _bins_por_capacidad(unidades, max_kg) or [unidades]
         paquetes = []
-        for i, unidades_bin in enumerate(bins, start=1):
-            peso = _peso_bin(unidades_bin) if unidades_bin else _peso_total(pedido)
-            largo, ancho, alto = (unidades_bin and dims_de_unidades(unidades_bin)) or dims_para(peso)
+        for i, unidades_bin in enumerate(bins, start=desde):
+            peso = _peso_bin(unidades_bin)
+            largo, ancho, alto = dims_de_unidades(unidades_bin) or dims_para(peso)
             paquete = Paquete.objects.create(
                 pedido=pedido, numero=i, peso_kg=peso,
                 largo_cm=largo, ancho_cm=ancho, alto_cm=alto,
@@ -397,22 +428,15 @@ def _planificar(pedido, force, carriers, preferido=None):
                 precio_cotizado=tarifa_local,
                 fuera_de_meta=tarifa_local > meta,
             )
-            if unidades_bin:
-                _copiar_unidades(paquete, unidades_bin)
-            else:
-                _copiar_lineas(paquete, list(pedido.lineas.all()))
+            _copiar_unidades(paquete, unidades_bin)
             paquetes.append(paquete)
         registrar_evento(
             "pedido", pedido.pk, "plan_envio", cliente=pedido.cliente,
             delta={"paquetes": len(paquetes), "costo_total": float(tarifa_local * len(paquetes)),
-                   "modalidad": "entrega_local_flat"},
+                   "modalidad": "entrega_local_flat", "cajas_previas": [p.numero for p in fijas]},
             motivo=f"Entrega local: {len(paquetes)} paquete(s) × ${tarifa_local} flat",
         )
-        return paquetes
-
-    unidades = _unidades(pedido)
-    if not unidades:
-        return []
+        return fijas + paquetes
 
     candidatas = _particiones_candidatas(unidades, max_kg)
     evaluadas, viables = [], []
@@ -440,7 +464,7 @@ def _planificar(pedido, force, carriers, preferido=None):
     ahorro = max(Decimal(entero["precio"]) - costo_elegido, Decimal(0)) if entero else Decimal(0)
 
     paquetes = []
-    for i, (unidades_bin, opcion) in enumerate(zip(bins_elegidos, opciones), start=1):
+    for i, (unidades_bin, opcion) in enumerate(zip(bins_elegidos, opciones), start=desde):
         peso = _peso_bin(unidades_bin)
         largo, ancho, alto = dims_de_unidades(unidades_bin) or dims_para(peso)
         paquete = Paquete.objects.create(
@@ -462,26 +486,15 @@ def _planificar(pedido, force, carriers, preferido=None):
             "ahorro_vs_entero": float(ahorro),
             "particiones_evaluadas": evaluadas,
             "fuera_de_meta": [p.numero for p in paquetes if p.fuera_de_meta],
+            "cajas_previas": [p.numero for p in fijas],
         },
         motivo=f"División de envío: {len(paquetes)} paquete(s), total ${costo_elegido}",
     )
-    return paquetes
-
-
-def _peso_total(pedido):
-    total = sum(
-        Decimal(l.sku.peso_gr or 1000) / 1000 * l.cantidad
-        for l in pedido.lineas.select_related("sku").all()
-    ) * MARGEN_EMPAQUE
-    return total.quantize(Decimal("0.01")) if total else Decimal("1.00")
-
-
-def _copiar_lineas(paquete, lineas):
-    for linea in lineas:
-        PaqueteLinea.objects.create(paquete=paquete, linea_pedido=linea, cantidad=linea.cantidad)
+    return fijas + paquetes
 
 
 def _copiar_unidades(paquete, unidades_bin):
+    """PaqueteLinea por línea del bin: cuántas unidades (o subunidades) van en la caja."""
     conteo, fracciones, lineas = {}, {}, {}
     for linea, _, fraccion in unidades_bin:
         conteo[linea.pk] = conteo.get(linea.pk, 0) + 1

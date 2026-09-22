@@ -96,7 +96,7 @@ class PickingPantallaTests(PisoTestCase):
         from apps.inventario.services import recibir, ubicar
         recibir(linea_asn, 5, 0, self.operador)
         ubicar(sku2, 5, ubic2, None, self.operador)
-        LineaPedido.objects.create(pedido=self.pedido, sku=sku2, cantidad=1)
+        LineaPedido.objects.create(pedido=self.pedido, sku=sku2, cantidad=1, reservada=True)
 
         respuesta = self.client.get(self.url)
         codigos = [l.sku.codigo for l in respuesta.context["lineas"]]
