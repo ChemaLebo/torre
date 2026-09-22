@@ -15,7 +15,8 @@ from django.test import TestCase, override_settings
 
 from apps.catalogo.models import SKU, Ubicacion
 from apps.core.models import Cliente, PerfilUsuario
-from apps.envios.models import Paquete, PaqueteLinea
+from apps.core.models import EventoAuditoria
+from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.incidencias.models import Incidencia
 from apps.inventario.models import LineaASN, OrdenEntrada, Saldo
 from apps.inventario.services import disponible, recibir, ubicar
@@ -206,6 +207,153 @@ class CancelacionMixtaTests(BaseParcial):
         self.assertEqual(
             [(l.sku_id, l.cantidad_anunciada) for l in orden.lineas.all()], [(self.a.pk, 2)],
         )
+
+
+class SegundaOlaTests(BaseParcial):
+    """El manifiesto con faltantes deja el pedido esperando inventario; al
+    entrar stock vuelve a PENDIENTE sin dueño y con cajas nuevas solo con lo
+    pendiente; el tracking de lo que salió no lo entrega antes de tiempo; la
+    segunda ola cierra en RECOLECTADO con su propio "va en camino" y su
+    correo de Shopify."""
+
+    def test_manifiesto_con_faltantes_queda_esperando_inventario(self):
+        pedido, _la, _lb = self.primera_ola_fuera()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+        self.assertTrue(pedido.esperando_inventario)
+        self.assertTrue(pedido.pendiente_de_completar)
+        evento = EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="cambio_estado",
+        ).latest("ts")
+        self.assertIn("B-SIX", evento.motivo)
+
+    def test_llega_stock_y_vuelve_a_pendiente_sin_duenio_y_con_caja_nueva(self):
+        pedido, _la, lb = self.primera_ola_fuera()
+        pedido.asignado_a = self.operador
+        pedido.save(update_fields=["asignado_a"])
+        with self.captureOnCommitCallbacks(execute=True):
+            self.entra(self.b, 5)  # ubicar → reintentar_reservas_sku en on_commit
+        pedido.refresh_from_db()
+        lb.refresh_from_db()
+        self.assertTrue(lb.reservada)
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+        self.assertIsNone(pedido.asignado_a)
+        self.assertFalse(pedido.esperando_inventario)
+        self.assertEqual([l.pk for l in pedido.lineas_por_surtir], [lb.pk])
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="pedido_reabierto",
+        ).exists())
+        cajas = list(pedido.paquetes.all())
+        self.assertEqual(len(cajas), 1)
+        self.assertEqual([(pl.linea_pedido_id, pl.cantidad) for pl in cajas[0].lineas.all()], [(lb.pk, 1)])
+
+    def test_con_dos_faltantes_espera_a_tener_todas(self):
+        c = SKU.objects.create(
+            cliente=self.cliente, codigo="C-SIX", descripcion="Six C", peso_gr=2000,
+            requiere_lote=False, precio_declarado=Decimal(180),
+        )
+        pedido, la, lb = self.pedido_parcial(Pedido.EN_PICKING)
+        lc = LineaPedido.objects.create(pedido=pedido, sku=c, cantidad=1)
+        services.confirmar_linea_pick(la, 2, self.operador)
+        services.empacar(pedido, self.operador, 4200, [foto()])
+        pedido.transicionar(Pedido.GUIA_GENERADA)
+        with patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, self.operador)
+        with self.captureOnCommitCallbacks(execute=True):
+            self.entra(self.b, 5)
+        pedido.refresh_from_db()
+        lb.refresh_from_db()
+        self.assertTrue(lb.reservada)
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)  # C sigue sin inventario
+        with self.captureOnCommitCallbacks(execute=True):
+            self.entra(c, 5)
+        pedido.refresh_from_db()
+        lc.refresh_from_db()
+        self.assertTrue(lc.reservada)
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+
+    def test_el_boton_de_mesa_tambien_reabre(self):
+        pedido, _la, lb = self.primera_ola_fuera()
+        self.entra(self.b, 5)  # sin on_commit: el reintento automático no corre
+        lb.refresh_from_db()
+        self.assertFalse(lb.reservada)
+        with self.captureOnCommitCallbacks(execute=True):
+            mensaje = services.reintentar_reservas_pedido(pedido, self.operador)
+        self.assertIn("vuelve a picking", mensaje)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+
+    def test_el_tracking_no_entrega_el_pedido_mientras_espera(self):
+        from apps.envios.services import _aplicar_efectos
+        pedido, _la, _lb = self.primera_ola_fuera()
+        guia = Guia.objects.create(
+            pedido=pedido, carrier="estafeta", numero="G-1", proveedor="mock", estado=Guia.ENTREGADO,
+        )
+        _aplicar_efectos(guia, Guia.ENTREGADO, "Entregado")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+
+    def test_el_tracking_no_mueve_el_pedido_durante_la_segunda_ola(self):
+        from apps.envios.services import _aplicar_efectos
+        pedido, _la, lb = self.primera_ola_fuera()
+        guia = Guia.objects.create(
+            pedido=pedido, carrier="estafeta", numero="G-1", proveedor="mock", estado=Guia.EN_TRANSITO,
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.entra(self.b, 5)
+        pedido.refresh_from_db()
+        services.iniciar_picking(pedido, self.operador)
+        lb.refresh_from_db()
+        services.confirmar_linea_pick(lb, 1, self.operador)
+        caja = pedido.paquetes.get()
+        services.empacar_caja(caja, self.operador, 2100, foto())
+        pedido.refresh_from_db()
+        pedido.transicionar(Pedido.GUIA_GENERADA)
+        guia.estado = Guia.ENTREGADO
+        guia.save(update_fields=["estado"])
+        _aplicar_efectos(guia, Guia.ENTREGADO, "Entregado")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)  # la segunda ola sigue en el corral
+
+    def test_la_segunda_ola_cierra_recolectado_y_avisa_otra_vez(self):
+        pedido, la, lb = self.primera_ola_fuera()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.entra(self.b, 5)
+        pedido.refresh_from_db()
+        services.iniciar_picking(pedido, self.operador)
+        lb.refresh_from_db()
+        services.confirmar_linea_pick(lb, 1, self.operador)
+        caja = pedido.paquetes.get()
+        services.empacar_caja(caja, self.operador, 2100, foto())
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.EMPACADO)
+        self.assertEqual(suma(self.a, Saldo.EN_EMPAQUE), 0)  # A no se reconfirma
+        pedido.transicionar(Pedido.GUIA_GENERADA)
+        with (
+            patch("apps.mensajeria.services.enviar_en_camino") as en_camino,
+            patch("apps.integraciones.services.marcar_fulfillment") as fulfillment,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            services.marcar_recolectado(pedido, self.operador)
+        pedido.refresh_from_db()
+        la.refresh_from_db()
+        lb.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+        self.assertEqual((la.cantidad_despachada, lb.cantidad_despachada), (2, 1))
+        self.assertEqual(suma(self.b, Saldo.UBICADO_VENDIBLE), 4)
+        en_camino.assert_called_once()  # segundo "va en camino": es otra salida
+        fulfillment.assert_called_once_with(pedido, cajas=[caja], notificar=True)
+        self.assertFalse(pedido.pendiente_de_completar)
+
+    def test_si_shopify_quita_la_faltante_el_pedido_se_cierra(self):
+        pedido, _la, _lb = self.primera_ola_fuera()
+        payload = {"line_items": [
+            {"sku": "A-SIX", "current_quantity": 2},
+            {"sku": "B-SIX", "current_quantity": 0},
+        ]}
+        services._aplicar_cambios_cantidades(pedido, payload, "webhook")
+        pedido.refresh_from_db()
+        self.assertFalse(pedido.lineas.filter(sku=self.b).exists())
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
 
 
 class EntregaSinGuiaParcialTests(BaseParcial):

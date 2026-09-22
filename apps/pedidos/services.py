@@ -79,17 +79,26 @@ def _reservar_linea(linea):
     return False
 
 
+# Estados en los que una línea sin reserva vuelve a intentar: el pedido aún no
+# empieza (PENDIENTE) o ya salió una parte y espera inventario del resto
+# (fulfillment parcial). Nunca a media ola: lo que llegue durante el picking
+# espera a que salga esa caja y va en la siguiente.
+_ESTADOS_REINTENTO = (Pedido.PENDIENTE, Pedido.PARCIALMENTE_DESPACHADO)
+
+
 def reintentar_reservas_sku(sku):
-    """Reintenta reservar líneas sin apartar de pedidos PENDIENTES de este SKU.
+    """Reintenta reservar líneas sin apartar de este SKU en pedidos PENDIENTES
+    o que esperan inventario tras una salida parcial.
 
     FIFO por antigüedad del pedido; una línea reserva completa o nada (misma
     semántica que la ingesta). Lo dispara inventario cuando ENTRA stock
     (putaway, ajuste, liberación por cancelación), en on_commit. La incidencia
-    FAL no se resuelve sola: el evento avisa y un humano la cierra.
+    FAL no se resuelve sola: el evento avisa y un humano la cierra. Tras cada
+    reserva, _tras_reserva replanea (PENDIENTE) o reabre la segunda ola.
     """
     lineas = (
         LineaPedido.objects.select_related("pedido", "pedido__cliente", "sku")
-        .filter(sku=sku, reservada=False, pedido__estado=Pedido.PENDIENTE)
+        .filter(sku=sku, reservada=False, pedido__estado__in=_ESTADOS_REINTENTO)
         .order_by("pedido__creado", "pk")
     )
     logradas = []
@@ -104,19 +113,21 @@ def reintentar_reservas_sku(sku):
             delta={"sku": sku.codigo, "cantidad": linea.cantidad, "pedido_completo": completo},
             motivo="Entró stock y la reserva pendiente se completó sola.",
         )
+        _tras_reserva(pedido, "sistema")
         logradas.append(pedido.folio)
     return logradas
 
 
 def reintentar_reservas_pedido(pedido, actor):
-    """Botón de Mesa: reintenta las líneas sin reservar de ESTE pedido.
+    """Botón de Mesa: reintenta las líneas sin reservar de ESTE pedido
+    (PENDIENTE, o esperando inventario tras una salida parcial).
 
     Salta la fila FIFO a propósito: es la palanca humana para priorizar.
     """
-    if pedido.estado != Pedido.PENDIENTE:
+    if pedido.estado not in _ESTADOS_REINTENTO:
         raise ValueError(
-            f"{pedido.folio} está {pedido.get_estado_display()}: solo los pedidos "
-            "PENDIENTES reservan stock."
+            f"{pedido.folio} está {pedido.get_estado_display()}: solo reservan stock los "
+            "pedidos PENDIENTES o los que esperan inventario tras una salida parcial."
         )
     pendientes = list(pedido.lineas.select_related("sku").filter(reservada=False))
     if not pendientes:
@@ -130,7 +141,11 @@ def reintentar_reservas_pedido(pedido, actor):
         },
         motivo="Reintento manual de reservas desde Mesa de Control.",
     )
+    if con_stock:
+        _tras_reserva(pedido, actor)
     if len(con_stock) == len(pendientes):
+        if pedido.estado == Pedido.PENDIENTE and pedido.tiene_despachadas:
+            return f"{pedido.folio}: ya tiene su inventario; vuelve a picking para completarse."
         return (
             f"{pedido.folio}: todas sus líneas quedaron reservadas. "
             "Si su incidencia FAL sigue abierta, resuélvela."
@@ -139,6 +154,35 @@ def reintentar_reservas_pedido(pedido, actor):
         f"{pedido.folio}: {len(con_stock)} de {len(pendientes)} líneas reservadas; "
         "al resto le sigue faltando stock."
     )
+
+
+def _tras_reserva(pedido, actor):
+    """Qué sigue cuando una línea faltante consigue reserva. PENDIENTE (la ola
+    no empezó): se replanean las cajas con la línea nueva (force: aún no hay
+    guías). Esperando inventario tras una salida parcial: cuando ya no queda
+    ninguna faltante, el pedido vuelve a PENDIENTE (segunda ola, mismo folio),
+    sin dueño, y se planean cajas nuevas solo con lo pendiente. Con más de una
+    faltante se espera a tener todas: una sola segunda salida, no varias."""
+    if pedido.estado == Pedido.PENDIENTE:
+        _planificar_best_effort(pedido, force=True)
+        return
+    if pedido.estado != Pedido.PARCIALMENTE_DESPACHADO or pedido.tiene_faltantes:
+        return
+    pedido.asignado_a = None
+    pedido.transferencia_a = None
+    pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
+    pedido.transicionar(
+        Pedido.PENDIENTE, actor=actor,
+        motivo="Llegó el inventario que faltaba: segunda ola con el mismo folio.",
+    )
+    registrar_evento(
+        "pedido", pedido.pk, "pedido_reabierto", actor=actor, cliente=pedido.cliente,
+        delta={"pendientes": [
+            {"sku": l.sku.codigo, "cantidad": l.pendiente} for l in pedido.lineas_por_surtir
+        ]},
+        motivo="Fulfillment parcial: lo que faltaba ya tiene reserva y entra a picking.",
+    )
+    _planificar_best_effort(pedido)
 
 
 def _incidencias_auto_pausadas(cliente):
@@ -163,10 +207,12 @@ def _abrir_incidencia_faltante(pedido, faltantes):
         abrir_incidencia(pedido.cliente, "FAL", "auto", pedido=pedido, texto=texto)
 
 
-def _planificar_best_effort(pedido):
+def _planificar_best_effort(pedido, force=False):
     """División de envío (≤20 kg, optimizada por costo) planificada desde el alta.
 
     Best-effort: sin plan no se detiene el alta; generar_guias replanifica.
+    `force` tira el plan vivo (sin guías) y replanea: una línea faltante que
+    consiguió reserva con el pedido aún PENDIENTE.
 
     Sale en transaction.on_commit: cotizar un lane frío pega a la API real de
     Envia (varios segundos) y el alta corre dentro de un atomic con locks de
@@ -176,7 +222,7 @@ def _planificar_best_effort(pedido):
     def _planificar():
         try:
             from apps.envios.cotizador import planificar_envio  # lazy
-            planificar_envio(pedido)
+            planificar_envio(pedido, force=force)
         except (ImportError, ValueError):
             pass
     transaction.on_commit(_planificar)
@@ -351,7 +397,10 @@ def _aplicar_cambios_cantidades(pedido, payload, origen):
     for linea in pedido.lineas.select_related("sku").filter(parte_de_kit__isnull=True):
         por_sku.setdefault(linea.sku.codigo, []).append(linea)
 
-    editable = pedido.estado in (Pedido.PENDIENTE, Pedido.EN_PICKING)
+    # Esperando inventario tras una salida parcial, la línea faltante (sin
+    # avance físico) también se puede quitar: es la forma de cerrar el pedido
+    # si el producto ya no va a llegar.
+    editable = pedido.estado in (Pedido.PENDIENTE, Pedido.EN_PICKING) or pedido.esperando_inventario
     reducidas, aumentadas, conflictos, faltantes_stock = [], [], [], []
     delta_peso = 0
     for codigo, piezas_objetivo in objetivo.items():
@@ -386,6 +435,21 @@ def _aplicar_cambios_cantidades(pedido, payload, origen):
         motivo="Refund parcial o edición de la orden en Shopify.",
     )
     _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos)
+    _cerrar_espera_si_nada_pendiente(pedido, origen)
+
+
+def _cerrar_espera_si_nada_pendiente(pedido, actor):
+    """Un pedido que esperaba inventario tras una salida parcial se cierra
+    como RECOLECTADO cuando la edición de la orden quitó la línea faltante:
+    ya no hay nada que surtir y el tracking de lo que salió toma el control."""
+    if pedido.estado != Pedido.PARCIALMENTE_DESPACHADO or pedido.tiene_faltantes:
+        return
+    if pedido.paquetes.filter(estado="EMPACADO").exists() or pedido.lineas_por_surtir:
+        return
+    pedido.transicionar(
+        Pedido.RECOLECTADO, actor=actor,
+        motivo="La orden ya no pide lo que faltaba: todo lo pendiente salió.",
+    )
 
 
 def _aumentar_linea(pedido, filas, codigo, delta, aumentadas, conflictos, faltantes_stock):
@@ -1784,13 +1848,17 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     despacha solo lo nuevo, nunca dos veces. Pedido empacado entero
     (sin cajas EMPACADO): sale completo, como siempre. Con cajas pendientes
     el pedido queda PARCIALMENTE_DESPACHADO; con todas fuera, RECOLECTADO.
+    Con líneas sin inventario (fulfillment parcial) también queda
+    PARCIALMENTE_DESPACHADO: espera stock y vuelve a PENDIENTE para su
+    segunda ola con el mismo folio.
 
     Todo el efecto de dominio (kardex + transiciones) va en UNA transacción:
     una línea que falle revierte completo. La plantilla B ("va en camino")
-    sale SOLO aquí y una sola vez por pedido: en su primer manifiesto (el
+    sale SOLO aquí y una vez por OLA: en el primer manifiesto de cada una (el
     rastreo público muestra cada caja). El fulfillment en Shopify sale POR
     CAJA en cada manifiesto (Partially fulfilled hasta la última), o entero
-    cuando no hay cajas.
+    cuando no hay cajas; el comprador recibe el correo de envío de Shopify
+    una vez por ola (`notificar`).
     """
     if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         raise ValueError(
@@ -1835,6 +1903,7 @@ def marcar_recolectado(pedido, actor, paquetes=None):
                 motivo=f"Caja {caja.numero} de {pedido.folio} subió al camión (manifiesto firmado).",
             )
         quedan = [c for c in pendientes if c not in salen]
+        sin_inventario = sorted({l.sku.codigo for l in pedido.lineas_faltantes})
         if quedan:
             numeros = ", ".join(str(c.numero) for c in salen)
             faltan = ", ".join(str(c.numero) for c in quedan)
@@ -1845,6 +1914,21 @@ def marcar_recolectado(pedido, actor, paquetes=None):
                 registrar_evento(
                     "pedido", pedido.pk, "salida_parcial", actor=actor, cliente=pedido.cliente,
                     delta={"salen": [c.numero for c in salen], "quedan": [c.numero for c in quedan]},
+                    motivo=motivo,
+                )
+        elif sin_inventario:
+            # Fulfillment parcial: salió lo que había; lo sin inventario espera
+            # stock con el mismo folio (reintentar_reservas_sku lo reabre).
+            motivo = (
+                f"Salió lo que había; sin inventario: {', '.join(sin_inventario)}. "
+                "Se completa con el mismo folio cuando entre stock."
+            )
+            if pedido.estado == Pedido.GUIA_GENERADA:
+                pedido.transicionar(Pedido.PARCIALMENTE_DESPACHADO, actor=actor, motivo=motivo)
+            else:
+                registrar_evento(
+                    "pedido", pedido.pk, "salida_parcial", actor=actor, cliente=pedido.cliente,
+                    delta={"salen": [c.numero for c in salen], "sin_inventario": sin_inventario},
                     motivo=motivo,
                 )
         else:
@@ -1871,9 +1955,9 @@ def marcar_recolectado(pedido, actor, paquetes=None):
         try:
             from apps.integraciones.services import marcar_fulfillment  # lazy
             if cajas_fuera:
-                marcar_fulfillment(pedido, cajas=cajas_fuera)
+                marcar_fulfillment(pedido, cajas=cajas_fuera, notificar=primer_manifiesto)
             else:
-                marcar_fulfillment(pedido)
+                marcar_fulfillment(pedido, notificar=primer_manifiesto)
         except Exception:
             pass
     transaction.on_commit(_fulfillment)

@@ -164,7 +164,7 @@ class DisparadorEnManifiestoTests(BaseFulfillment):
             with self.captureOnCommitCallbacks(execute=True):
                 marcar_recolectado(self.pedido, None)
                 marcar.assert_not_called()  # dentro de la transacción: nada
-        marcar.assert_called_once_with(self.pedido)
+        marcar.assert_called_once_with(self.pedido, notificar=True)  # primer manifiesto de la ola
 
 
 class FulfillmentPorCajaTests(BaseFulfillment):
@@ -283,6 +283,28 @@ class FulfillmentPorCajaTests(BaseFulfillment):
         with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
             self.assertTrue(marcar_fulfillment(self.pedido))
         cliente_cls.return_value.crear_fulfillment.assert_not_called()
+
+
+class NotificarPorOlaTests(FulfillmentPorCajaTests):
+    """Fulfillment parcial: la segunda ola (días después, con su propia guía)
+    sí notifica al comprador aunque el pedido ya tenga un fulfillment. El
+    caller (marcar_recolectado) manda `notificar` en el primer manifiesto de
+    cada ola; None conserva la regla de "solo el primer fulfillment"."""
+
+    def test_segunda_ola_notifica_cuando_el_manifiesto_lo_pide(self):
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = self._api(cliente_cls)
+            marcar_fulfillment(self.pedido, cajas=[self.c1])
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = self._api(cliente_cls, restante=1, ids=("gid://shopify/Fulfillment/B",))
+            self.assertTrue(marcar_fulfillment(self.pedido, cajas=[self.c2], notificar=True))
+        self.assertTrue(api.crear_fulfillment.call_args.kwargs["notificar"])
+
+    def test_notificar_false_calla_aunque_sea_el_primero(self):
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = self._api(cliente_cls)
+            self.assertTrue(marcar_fulfillment(self.pedido, cajas=[self.c1], notificar=False))
+        self.assertFalse(api.crear_fulfillment.call_args.kwargs["notificar"])
 
 
 class EventoFulfillmentTests(BaseFulfillment):

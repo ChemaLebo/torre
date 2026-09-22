@@ -17,6 +17,7 @@
     <h2>{{ c.cliente.nombre }}</h2>
     <span class="pill">{{ c.pendientes|length }} por iniciar</span>
     <span class="pill accent">{{ c.en_picking|length }} en picking</span>
+    {% if c.esperando %}<span class="pill crit">{{ c.esperando|length }} espera{{ c.esperando|length|pluralize:"n" }} inventario</span>{% endif %}
   </div>
   <div class="lista-cards">
     {% for p in c.pendientes %}
@@ -60,6 +61,21 @@
       {% else %}
       <p class="small muted mt">Lo está surtiendo {{ p.asignado_a.username }}. Si lo suelta o te lo envía, aquí sale el botón.</p>
       {% endif %}
+    </div>
+    {% endfor %}
+    {# Fulfillment parcial: una parte ya salió; el resto espera inventario y vuelve solo a esta lista. #}
+    {% for p in c.esperando %}
+    <div class="card">
+      <div class="fila entre">
+        <div>
+          <span class="mono">{{ p.folio }}</span>
+          <div class="small">ya salió una parte
+            · <span class="pill crit">Sin inventario · {{ p.piezas_sin_inventario }} pza{{ p.piezas_sin_inventario|pluralize }}</span>
+          </div>
+        </div>
+        <span class="pill crit">espera inventario</span>
+      </div>
+      <p class="small muted mt">Cuando entre stock vuelve a "por iniciar" con el mismo folio.</p>
     </div>
     {% endfor %}
   </div>

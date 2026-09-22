@@ -455,7 +455,7 @@ def _evento_inicial(api, tienda, pedido, fid, status, donde):
         _log_push(tienda, True, f"evento {status} de {pedido.folio} ({donde})")
 
 
-def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP"):
+def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", notificar=None):
     """Escribe en Shopify el fulfillment del pedido (o de sus cajas), con tracking.
 
     Hermano del "va en camino" de mensajería (mismo momento canónico:
@@ -476,7 +476,11 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP"):
     (registrar_evento_fulfillment); tras crearlo se manda `evento_inicial`
     (CARRIER_PICKED_UP al firmar el manifiesto, DELIVERED en la entrega en
     bodega, None = ninguno). Solo el PRIMER fulfillment del pedido notifica al
-    comprador: un correo de envío, no uno por caja.
+    comprador: un correo de envío, no uno por caja. `notificar` lo fija el
+    caller cuando sabe más: marcar_recolectado manda True en el primer
+    manifiesto de cada OLA (fulfillment parcial: la segunda salida, días
+    después, sí merece su correo) y False en los siguientes; None = la regla
+    de "primer fulfillment del pedido".
 
     Best-effort: el resultado queda en SyncLog; jamás levanta hacia el caller.
     Idempotente: caja con id guardado, pedido con id guardado o sin fulfillment
@@ -515,7 +519,7 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP"):
         url_rastreo = ""
 
     if cajas:
-        return _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial)
+        return _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, notificar)
     if pedido.shopify_fulfillment_id:
         _log_push(tienda, True, f"fulfillment: {pedido.folio} ya tiene fulfillment ({pedido.shopify_fulfillment_id})")
         return True
@@ -546,7 +550,10 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP"):
                 ),
             )
             return True
-        ya_notificado = pedido.paquetes.exclude(shopify_fulfillment_id="").exists()
+        if notificar is None:
+            ya_notificado = pedido.paquetes.exclude(shopify_fulfillment_id="").exists()
+        else:
+            ya_notificado = not notificar
         respuesta = api.crear_fulfillment(
             abiertas, numeros, url_rastreo, carrier, notificar=not ya_notificado,
         )
@@ -578,7 +585,7 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP"):
     return True
 
 
-def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial):
+def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, notificar=None):
     """Un fulfillment por caja que sale (ver marcar_fulfillment)."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
@@ -604,10 +611,13 @@ def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial):
             if pedido.paquetes.filter(estado=Paquete.EMPACADO).exists():
                 _log_push(tienda, True, f"fulfillment: {pedido.folio} espera a la última caja (líneas no separables por caja)")
                 return True
-            return marcar_fulfillment(pedido, evento_inicial=evento_inicial)
-        ya_notificado = bool(pedido.shopify_fulfillment_id) or pedido.paquetes.exclude(
-            shopify_fulfillment_id="",
-        ).exists()
+            return marcar_fulfillment(pedido, evento_inicial=evento_inicial, notificar=notificar)
+        if notificar is None:
+            ya_notificado = bool(pedido.shopify_fulfillment_id) or pedido.paquetes.exclude(
+                shopify_fulfillment_id="",
+            ).exists()
+        else:
+            ya_notificado = not notificar
         for caja in cajas:
             lineas = lineas_por_caja.get(caja.pk) or []
             guia = caja.guia_activa

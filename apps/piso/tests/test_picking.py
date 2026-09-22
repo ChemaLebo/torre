@@ -209,3 +209,20 @@ class PickingParcialTests(PisoTestCase):
         # EMPEZAR en Mi turno tampoco lo ofrece: no hay ola que empezar.
         respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
         self.assertContains(respuesta, "Todo al día: no hay pedidos en la cola.")
+
+    def test_esperando_inventario_se_ve_en_picking_y_no_en_salida_ni_en_el_corral(self):
+        # Ya salió lo que había (A despachada); B espera stock con el mismo folio.
+        self.pedido.delete()
+        pedido = self.crear_pedido(cantidad=2, estado=Pedido.PARCIALMENTE_DESPACHADO)
+        pedido.lineas.update(cantidad_pickeada=2, cantidad_despachada=2)
+        LineaPedido.objects.create(pedido=pedido, sku=self.agotado, cantidad=1)
+        self.assertTrue(pedido.esperando_inventario)
+        respuesta = self.client.get(reverse("piso:picking"))
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, "espera inventario")
+        self.assertContains(respuesta, "ya salió una parte")
+        self.assertNotContains(respuesta, "Iniciar picking")
+        self.assertNotContains(self.client.get(reverse("piso:salida")), pedido.folio)
+        home = self.client.get(reverse("piso:home"))
+        self.assertNotContains(home, pedido.folio)
+        self.assertContains(home, "0 en salida")

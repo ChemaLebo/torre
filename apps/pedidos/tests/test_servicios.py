@@ -1089,7 +1089,7 @@ class SalidaParcialTests(BaseServicios):
         despachar.assert_called_once_with(self.sku, 2, pedido.folio)
         en_camino.assert_called_once()
         # Shopify: fulfillment POR CAJA en cada manifiesto (Partially fulfilled).
-        fulfillment.assert_called_once_with(pedido, cajas=[c1])
+        fulfillment.assert_called_once_with(pedido, cajas=[c1], notificar=True)  # primer manifiesto de la ola
         self.assertEqual(services.cajas_por_salir(pedido), [c2])
 
         despachar, en_camino, fulfillment = self._salida(pedido, [c2])
@@ -1098,7 +1098,7 @@ class SalidaParcialTests(BaseServicios):
         self.assertEqual(c2.estado, Paquete.DESPACHADO)
         despachar.assert_called_once_with(otro, 1, pedido.folio)
         en_camino.assert_not_called()
-        fulfillment.assert_called_once_with(pedido, cajas=[c2])
+        fulfillment.assert_called_once_with(pedido, cajas=[c2], notificar=False)  # misma ola: sin segundo correo
 
     def test_todas_las_cajas_de_una_vez_es_recolectado_directo(self):
         pedido, c1, c2, otro = self._pedido_dos_cajas()
@@ -1106,7 +1106,7 @@ class SalidaParcialTests(BaseServicios):
         self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
         self.assertEqual(despachar.call_count, 2)
         en_camino.assert_called_once()
-        fulfillment.assert_called_once_with(pedido, cajas=[c1, c2])
+        fulfillment.assert_called_once_with(pedido, cajas=[c1, c2], notificar=True)
 
     def test_ninguna_caja_pendiente_entre_las_palomeadas_truena(self):
         pedido, c1, c2, _ = self._pedido_dos_cajas()

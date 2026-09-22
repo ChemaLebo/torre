@@ -597,13 +597,16 @@ def _estado_por_guias(pedido):
     """Estado que le toca al pedido según TODAS sus guías: "ENTREGADO" solo
     cuando cada guía activa está entregada; "RETORNADO" cuando ninguna sigue
     activa (todas regresaron); None mientras haya cajas en juego. Un pedido
-    de una sola guía se comporta como siempre."""
+    de una sola guía se comporta como siempre. Fulfillment parcial: mientras
+    el pedido espere inventario o esté en su segunda ola
+    (Pedido.pendiente_de_completar) no se entrega — se entregan todos los
+    line items o nada (Chema 2026-09-22)."""
     guias = list(pedido.guias.all())
     activas = [g for g in guias if g.es_activa]
     if guias and not activas:
         return "RETORNADO"
     if activas and all(g.estado == Guia.ENTREGADO for g in activas):
-        return "ENTREGADO"
+        return None if pedido.pendiente_de_completar else "ENTREGADO"
     return None
 
 
@@ -649,7 +652,12 @@ def _aplicar_efectos(guia, estado, descripcion):
     (PARCIALMENTE_DESPACHADO): ahí manda el manifiesto de las que faltan."""
     pedido = guia.pedido
     abiertas = 0
-    en_bodega = pedido.estado == "PARCIALMENTE_DESPACHADO"
+    # Cajas de esta ola en bodega, o una segunda ola en curso (fulfillment
+    # parcial: algo ya salió y algo sigue adentro): el tracking de lo que
+    # salió no mueve el pedido; mandan el manifiesto y la máquina del piso.
+    en_bodega = pedido.estado == "PARCIALMENTE_DESPACHADO" or (
+        pedido.tiene_despachadas and bool(pedido.lineas_por_surtir)
+    )
     if estado in {Guia.EN_TRANSITO, Guia.EN_RUTA}:
         if not en_bodega:
             _transicionar_pedido(pedido, "EN_TRANSITO", motivo=descripcion)

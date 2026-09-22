@@ -63,8 +63,11 @@ class Pedido(models.Model):
         ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO, CANCELADO},
         # PARCIALMENTE_DESPACHADO = salieron algunas cajas y otras siguen en
         # bodega (manifiesto por caja); al salir la última → RECOLECTADO. El
-        # tracking no lo mueve mientras queden cajas adentro.
-        PARCIALMENTE_DESPACHADO: {RECOLECTADO, EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO},
+        # tracking no lo mueve mientras queden cajas adentro. También es el
+        # estado de espera del fulfillment parcial (2026-09-22): salió lo que
+        # había y una línea sin inventario espera stock; al reservarse el
+        # pedido vuelve a PENDIENTE (segunda ola, mismo folio).
+        PARCIALMENTE_DESPACHADO: {RECOLECTADO, EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO, PENDIENTE},
         CANCELACION_PENDIENTE: {CANCELADO},
         ENTREGADO: set(),
         CANCELADO: set(),
@@ -285,6 +288,27 @@ class Pedido(models.Model):
     def tiene_despachadas(self):
         """True si algo del pedido ya salió en un manifiesto (primera ola en la calle)."""
         return any(l.cantidad_despachada for l in self.lineas.all())
+
+    @property
+    def pendiente_de_completar(self):
+        """True si el pedido todavía no está entero en la calle: espera
+        inventario (faltantes) o está en su segunda ola (ya salió una parte y
+        otra sigue en bodega). El tracking de lo que ya salió no debe cerrar
+        el pedido mientras esto sea True."""
+        lineas = list(self.lineas.all())
+        if any(l.faltante for l in lineas):
+            return True
+        return any(l.cantidad_despachada for l in lineas) and any(l.pendiente > 0 for l in lineas)
+
+    @property
+    def esperando_inventario(self):
+        """True mientras el pedido, ya con una parte en la calle, espera stock
+        de sus faltantes (PARCIALMENTE_DESPACHADO sin cajas por salir)."""
+        if self.estado != self.PARCIALMENTE_DESPACHADO:
+            return False
+        if any(c.estado == "EMPACADO" for c in self.paquetes.all()):
+            return False  # cajas de esta ola aún en bodega: es un manifiesto por caja
+        return self.tiene_faltantes
 
     @property
     def lineas_completas(self):

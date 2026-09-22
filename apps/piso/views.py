@@ -389,6 +389,8 @@ def home(request):
             estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO],
         ).select_related("cliente", "asignado_a").prefetch_related("paquetes__guias", "guias")
     )
+    # Esperando inventario tras una salida parcial: ni en el corral ni en la mesa.
+    en_empaque = [p for p in en_empaque if not p.esperando_inventario]
     staging = [p for p in en_empaque if p.estado != Pedido.EMPACADO and p.empaque_completo]
     incompletos = [p for p in en_empaque if not p.empaque_completo]
     if not _es_mesa(request):
@@ -1009,13 +1011,32 @@ def picking(request):
         pedido.pickeadas, pedido.total_piezas, pedido.avance_pct = _avance(pedido)
         pedido.piezas_sin_inventario = _piezas_sin_inventario(pedido)
         pedido.puedo_abrir = _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
+    # Fulfillment parcial: ya salió una parte y el resto espera inventario.
+    # Se ven aquí, con su tag, para que el piso sepa que siguen vivos.
+    esperando = [
+        p for p in Pedido.objects.filter(estado=Pedido.PARCIALMENTE_DESPACHADO)
+        .select_related("cliente").prefetch_related("lineas__sku", "paquetes").order_by("creado")
+        if p.esperando_inventario
+    ]
+    for pedido in esperando:
+        pedido.piezas_sin_inventario = _piezas_sin_inventario(pedido)
     clientes = {}
+
+    def _grupo(pedido):
+        return clientes.setdefault(
+            pedido.cliente_id,
+            {"cliente": pedido.cliente, "pendientes": [], "en_picking": [], "esperando": []},
+        )
+
     for pedido in pendientes:
-        clientes.setdefault(pedido.cliente_id, {"cliente": pedido.cliente, "pendientes": [], "en_picking": []})["pendientes"].append(pedido)
+        _grupo(pedido)["pendientes"].append(pedido)
     for pedido in en_picking:
-        clientes.setdefault(pedido.cliente_id, {"cliente": pedido.cliente, "pendientes": [], "en_picking": []})["en_picking"].append(pedido)
+        _grupo(pedido)["en_picking"].append(pedido)
+    for pedido in esperando:
+        _grupo(pedido)["esperando"].append(pedido)
     contexto = {
         "seccion": "picking", "pendientes": pendientes, "en_picking": en_picking,
+        "esperando": esperando,
         "clientes": sorted(clientes.values(), key=lambda c: c["cliente"].nombre),
     }
     return render(request, "piso/picking.html", contexto)
@@ -1984,8 +2005,8 @@ def salida(request):
         Pedido.objects.filter(estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO])
         .select_related("cliente").prefetch_related(*prefetch_contenido, "paquetes__guias", "guias")
     ):
-        if not pedido.empaque_completo:
-            continue
+        if not pedido.empaque_completo or pedido.esperando_inventario:
+            continue  # incompleto en la mesa, o esperando inventario tras una salida parcial
         pedido.contenido = _contenido_salida(pedido)
         # Cajas que siguen en bodega (empaque por caja): cada una se palomea
         # sola en el manifiesto. Vacío = el pedido se empacó entero y sale completo.
@@ -2129,7 +2150,9 @@ def _salida_manifiesto(request):
     for pedido in Pedido.objects.filter(
         estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO],
         pk__in=seleccion | pedidos_de_cajas,
-    ).select_related("cliente").prefetch_related("paquetes__guias"):
+    ).select_related("cliente").prefetch_related("paquetes__guias", "lineas__sku"):
+        if pedido.esperando_inventario:
+            continue  # nada que subir: espera stock de sus faltantes
         guia = _guia_activa(pedido)
         carrier_pedido = guia.carrier if guia else _carrier_probable(pedido)
         # Un pedido de otro carrier u otro corral no sube a ESTE manifiesto

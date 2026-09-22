@@ -51,7 +51,7 @@ ESTADOS_HUMANOS = {
     "EN_TRANSITO": ("En camino", "Tu pedido viaja hacia ti."),
     "ENTREGADO": ("Entregado", "Tu pedido llegó. ¡Salud!"),
     "ENTREGA_PRESUNTA": ("Entregado", "La paquetería reporta tu pedido como entregado."),
-    "PARCIALMENTE_DESPACHADO": ("En camino por partes", "Una parte de tu pedido ya salió; el resto sale en la siguiente recolección."),
+    "PARCIALMENTE_DESPACHADO": ("En camino por partes", "Una parte de tu pedido ya salió; el resto sale en cuanto esté listo."),
     "CANCELACION_PENDIENTE": ("Cancelación en proceso", "Estamos procesando la cancelación."),
     "CANCELADO": ("Pedido cancelado", "Este pedido fue cancelado."),
     "RETORNADO": ("De regreso con nosotros", "Tu pedido regresó; ya estamos atendiéndolo."),
