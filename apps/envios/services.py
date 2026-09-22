@@ -354,44 +354,16 @@ def _carrier_de_paquete(pedido, paquete):
     return carrier, servicio
 
 
-def _reintentar_sin_prioritario(pedido, paquete, exc):
-    """El carrier prioritario (TORRE["CARRIER_PRIORITARIO"]) falló al comprar la
-    guía de este paquete (p. ej. envia sin cobertura de origen para iMile): se
-    re-cotiza el lane SIN él entre los carriers vigentes, el paquete se reasigna
-    a la mejor opción por precio y se compra una vez más (Chema 2026-09-21: iMile
-    siempre que se pueda; si no, precio). Auditado como carrier_prioritario_fallo.
-    Sin alternativa que cotice, se propaga el error original."""
-    from .cotizador import cotizar_lane  # lazy: evita ciclo en carga
-
-    prioritario = paquete.carrier
-    permitidos = [c for c in carriers_del_pedido(pedido) if c != prioritario]
-    dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
-    filas = [
-        f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente, carriers=permitidos)
-        if f["ok"] and f["precio"] is not None
-    ] if permitidos else []
-    if not filas:
-        raise exc
-    mejor = min(filas, key=lambda f: f["precio"])
-    registrar_evento(
-        "pedido", pedido.pk, "carrier_prioritario_fallo", cliente=pedido.cliente,
-        delta={"paquete": paquete.numero, "prioritario": prioritario,
-               "ahora": mejor["carrier"], "precio": float(mejor["precio"])},
-        motivo=f"{prioritario} falló al generar la guía: {str(exc)[:200]}",
-    )
-    with transaction.atomic():
-        Paquete.objects.select_for_update().get(pk=paquete.pk)
-        paquete.carrier, paquete.servicio, paquete.precio_cotizado = mejor["carrier"], mejor["servicio"], mejor["precio"]
-        paquete.save(update_fields=["carrier", "servicio", "precio_cotizado"])
-        return _crear_guia(pedido, mejor["carrier"], mejor["servicio"], paquete=paquete)
-
-
 def generar_guias(pedido):
     """Genera las guías del pedido: UNA POR PAQUETE del plan de envío.
 
     Si el pedido no tiene plan, se planifica aquí (división ≤20 kg optimizada
     por costo, ver cotizador.planificar_envio). Idempotente por paquete: un
     paquete con guía activa no genera otra. Solo un RETORNO libera reexpedición.
+    Un carrier que cotizó el lane y falla al COMPRAR no se sustituye solo
+    (Chema 2026-09-22): el error queda auditado (error_generacion_guia) y la
+    caja se reintenta desde el empaque; el respaldo por precio vive solo al
+    cotizar (cotizador.elegir_entre).
 
     El commit es POR PAQUETE (atomic propio por guía): una guía YA COMPRADA
     al carrier jamás se revierte porque otra caja falle — el error del
@@ -451,21 +423,16 @@ def generar_guias(pedido):
                     carrier, servicio = _carrier_de_paquete(pedido, paquete)
                     guias.append(_crear_guia(pedido, carrier, servicio, paquete=paquete))
             except ErrorCarrier as exc:
-                prioritario = settings.TORRE.get("CARRIER_PRIORITARIO") or ""
-                if prioritario and paquete.carrier == prioritario:
-                    # iMile siempre que se pueda; si no se puede, por precio.
-                    try:
-                        guias.append(_reintentar_sin_prioritario(pedido, paquete, exc))
-                        continue
-                    except ErrorCarrier as exc2:
-                        exc = exc2
-                # El atomic del paquete se revirtió (y con él su evento
-                # interno): se re-registra aquí para que la falla quede
-                # auditada aunque las demás guías sí hayan salido.
+                # Sin reintento automático con otro carrier: se registra y el
+                # pedido se frena, para ver cada fallo mientras se depura. El
+                # atomic del paquete se revirtió (y con él su evento interno):
+                # se re-registra aquí para que la falla quede auditada aunque
+                # las demás guías sí hayan salido.
                 error_pendiente = exc
                 registrar_evento(
                     "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
-                    delta={"paquete": paquete.numero, "carrier": paquete.carrier or ""},
+                    delta={"paquete": paquete.numero, "carrier": paquete.carrier or "",
+                           "servicio": paquete.servicio or ""},
                     motivo=str(exc)[:300],
                 )
 

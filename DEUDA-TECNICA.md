@@ -112,12 +112,18 @@ como origen, error 1300, PED-00021). No hay adapter propio.
 **2026-09-21 (Chema):** lista completa otra vez con iMile como carrier
 PRIORITARIO (`TORRE["CARRIER_PRIORITARIO"] = "imile"`): si cotiza el lane gana
 aunque sea más caro (`cotizador.elegir_entre`, también en `_costo_particion` y
-en el replan al generar); si no cotiza, o falla al comprar la guía (p. ej.
-error 1300 de envia), el paquete se re-cotiza sin él y se compra con el mejor
-por precio (`services._reintentar_sin_prioritario`, evento
-`carrier_prioritario_fallo`). Vacío = el más barato manda. La tabla mock de dev
-no tiene tarifa de imile; las pruebas pinean la lista clásica
-(TORRE_CARRIERS_CLASICOS) y usan otro carrier como prioritario.
+en el replan al generar); si no cotiza, el resto compite por precio. Vacío =
+el más barato manda. Hasta el 2026-09-22 un fallo al COMPRAR la guía del
+prioritario se re-cotizaba solo por precio (`_reintentar_sin_prioritario`,
+evento `carrier_prioritario_fallo`): se quitó. Hoy un carrier que cotizó y
+falla al comprar se audita (`error_generacion_guia`, con carrier, servicio,
+caja y el mensaje del conector) y el pedido se frena en empaque ("Reintentar
+guía"); destrabar = cambiar `Paquete.carrier` en admin/shell. Sin botón de
+"otro carrier" por decisión de Chema (cuando valga la pena el botón, valdrá la
+pena automatizarlo); los casos se consultan en admin → Eventos de auditoría,
+acción `error_generacion_guia`. La tabla mock de dev no tiene tarifa de imile;
+las pruebas pinean la lista clásica (TORRE_CARRIERS_CLASICOS) y usan otro
+carrier como prioritario.
 
 **2026-09-22 (Chema):** las reglas primero, el precio después. La preferencia
 ya no es solo global: `services.carrier_preferido(pedido)` toma primero la

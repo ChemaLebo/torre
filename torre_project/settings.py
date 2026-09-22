@@ -203,8 +203,10 @@ TORRE = {
     # ganaba el plan; al generar, envia fallaba con 1300 (PED-00021).
     # 2026-09-21 (Chema): imile vuelve a la lista completa como carrier
     # PRIORITARIO (CARRIER_PRIORITARIO): si cotiza el lane gana aunque sea más
-    # caro; si no cotiza, o falla al comprar la guía, el resto compite por
-    # precio (cotizador.elegir_entre y services._reintentar_sin_prioritario).
+    # caro; si no cotiza, el resto compite por precio (cotizador.elegir_entre).
+    # 2026-09-22: si el carrier cotizó y falla al COMPRAR la guía no hay
+    # reintento automático: se audita (error_generacion_guia) y el pedido se
+    # frena en empaque, para ver cada fallo mientras se depura.
     # noventa9Minutos no tiene "ground" en envia (local_next_day / next_day):
     # jamás usarlo de carrier_preferente en un cliente envia.
     "CARRIERS_COTIZAR": [
