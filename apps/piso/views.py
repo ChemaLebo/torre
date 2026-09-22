@@ -1264,19 +1264,30 @@ def _picking_escanear(request, pedido):
 
 @rol_requerido("piso", "mesa")
 def empaque(request):
+    """Mesa de empaque: lo listo para empacar (picking terminado) y lo que ya
+    se empacó pero no terminó (caja sin empacar, sin guía o sin foto de
+    cierre), con lo que le falta. Del operador; Mesa ve todos. Lo que sigue
+    en picking no va aquí: para eso está la vista de picking (Chema
+    2026-09-22)."""
     en_picking = list(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
-        .select_related("cliente").prefetch_related("lineas__sku")
+        .select_related("cliente", "asignado_a").prefetch_related("lineas__sku", "paquetes")
+    )
+    en_mesa = list(
+        Pedido.objects.filter(estado__in=_ESTADOS_EN_MESA)
+        .select_related("cliente", "asignado_a").prefetch_related("lineas__sku", "paquetes__guias", "guias")
     )
     if not _es_mesa(request):
         en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
-    listos = [p for p in en_picking if p.lineas_completas]
-    incompletos = [p for p in en_picking if not p.lineas_completas]
-    for pedido in listos:
+        en_mesa = [p for p in en_mesa if _pedido_libre_o_mio(p, request.user)]
+    listos = _por_antiguedad([p for p in en_picking if p.lineas_completas])
+    en_empaque = _por_antiguedad([
+        p for p in en_mesa if not p.empaque_completo and not p.esperando_inventario
+    ])
+    for pedido in listos + en_empaque:
         pedido.total_piezas = _piezas(pedido)
-    for pedido in incompletos:
-        pedido.pickeadas, pedido.total_piezas, pedido.avance_pct = _avance(pedido)
-    contexto = {"seccion": "empaque", "listos": listos, "incompletos": incompletos}
+        pedido.falta = _que_falta_empaque(pedido)
+    contexto = {"seccion": "empaque", "listos": listos, "en_empaque": en_empaque}
     return render(request, "piso/empaque.html", contexto)
 
 

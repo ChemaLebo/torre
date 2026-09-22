@@ -5,6 +5,7 @@
   <div>
     <div class="eyebrow">Piso · Empaque</div>
     <h1>Empaque</h1>
+    <div class="small"><b>{{ listos|length }}</b> por empacar · <b>{{ en_empaque|length }}</b> en empaquetado</div>
   </div>
   <div class="quien">Báscula ±{{ TORRE.TOLERANCIA_PESO_PCT }}% y fotos por caja. Sin foto no hay botón.</div>
 </div>
@@ -16,29 +17,33 @@
     <div class="titulo">
       <h2 class="mono">{{ p.folio }}</h2>
       {% if p.es_local %}<span class="pill warn">local · naked packing</span>{% else %}<span class="pill">foráneo</span>{% endif %}
+      {% if p.falta != "por empacar" %}<span class="pill accent">{{ p.falta }}</span>{% endif %}
     </div>
     <p>{{ p.cliente.nombre }} · {{ p.total_piezas }} piezas
       {% if p.nota_regalo %}<span class="pill accent">nota de regalo</span>{% endif %}
+      {% if p.asignado_a %}· lo tiene <b>{{ p.asignado_a.username }}</b>{% endif %}
     </p>
     <a class="btn primario bloque" href="{% url 'piso:empaque_pedido' p.pk %}">Empacar</a>
   </div>
   {% endfor %}
 </div>
 {% else %}
-<div class="banner ok"><span class="foco"></span>Sin pedidos listos para empacar. Los que siguen en picking aparecen abajo.</div>
+<div class="banner ok"><span class="foco"></span>Sin pedidos listos para empacar.</div>
 {% endif %}
 
-{% if incompletos %}
+{# Ya se empacó pero no terminó en la mesa: sin guía o sin foto de cierre. Nada sale al corral sin las dos. #}
+{% if en_empaque %}
 <div class="card mt">
-  <div class="titulo"><h2>Aún en picking</h2></div>
+  <div class="titulo"><h2>En empaquetado</h2><span class="pill accent">{{ en_empaque|length }} por terminar</span></div>
   <div class="lista-cards">
-    {% for p in incompletos %}
+    {% for p in en_empaque %}
     <div class="card">
       <div class="fila entre">
-        <div><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}</div>
-        <span class="num">{{ p.pickeadas }} / {{ p.total_piezas }}</span>
+        <div><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}
+          {% if p.asignado_a %}<span class="small muted">· lo tiene <b>{{ p.asignado_a.username }}</b></span>{% endif %}</div>
+        <span class="pill accent">{{ p.falta }}</span>
       </div>
-      <a class="btn bloque mt" href="{% url 'piso:picking_pedido' p.pk %}">Terminar picking</a>
+      <a class="btn primario bloque mt" href="{% url 'piso:empaque_pedido' p.pk %}">Completar empaquetado</a>
     </div>
     {% endfor %}
   </div>

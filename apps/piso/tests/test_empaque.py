@@ -238,3 +238,49 @@ class EmpaquePisoTests(PisoTestCase):
         )
         self.assertContains(respuesta, "SIGUIENTE PEDIDO")
         self.assertContains(respuesta, "listo")
+
+
+class ListaEmpaqueTests(PisoTestCase):
+    """La lista de Empaque (Chema 2026-09-22): lo listo para empacar y lo que
+    está en empaquetado con lo que le falta; lo que sigue en picking no va
+    aquí. Del operador; Mesa ve todos."""
+
+    def setUp(self):
+        self.login_piso()
+        self.crear_stock(cantidad=50)
+        self.url = reverse("piso:empaque")
+
+    def test_listo_y_en_empaquetado_con_lo_que_falta(self):
+        from apps.pedidos.services import confirmar_linea_pick, iniciar_picking
+
+        listo = self.crear_pedido(cantidad=1)
+        iniciar_picking(listo, self.operador)
+        confirmar_linea_pick(listo.lineas.get(), 1, self.operador)
+        a_medias = self.crear_pedido(cantidad=2)
+        iniciar_picking(a_medias, self.operador)
+        empacado = self.dejar_empacado(self.crear_pedido(cantidad=1))  # sin guía
+        respuesta = self.client.get(self.url)
+        self.assertEqual([p.pk for p in respuesta.context["listos"]], [listo.pk])
+        self.assertEqual([p.pk for p in respuesta.context["en_empaque"]], [empacado.pk])
+        self.assertContains(respuesta, "En empaquetado")
+        self.assertContains(respuesta, "sin guía")
+        self.assertContains(respuesta, "Completar empaquetado")
+        self.assertNotContains(respuesta, a_medias.folio)  # el picking a medias vive en Picking
+        self.assertNotContains(respuesta, "Terminar picking")
+
+    def test_lo_de_otro_operador_no_es_mio_pero_mesa_lo_ve(self):
+        from django.contrib.auth import get_user_model
+
+        from apps.core.models import PerfilUsuario
+
+        otro = get_user_model().objects.create_user("piso2", password="x")
+        PerfilUsuario.objects.create(usuario=otro, rol=PerfilUsuario.ROL_PISO, pin="2222")
+        empacado = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        Pedido.objects.filter(pk=empacado.pk).update(asignado_a=otro)
+        self.assertNotContains(self.client.get(self.url), empacado.folio)
+        mesa = get_user_model().objects.create_user("mesa1", password="x")
+        PerfilUsuario.objects.create(usuario=mesa, rol=PerfilUsuario.ROL_MESA, pin="3333")
+        self.client.force_login(mesa)
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, empacado.folio)
+        self.assertContains(respuesta, "piso2")
