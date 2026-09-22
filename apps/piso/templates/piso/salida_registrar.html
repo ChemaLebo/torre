@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Registrar salida · {{ carrier }}{% endblock %}
+{% block content %}
+{# Registrar salida por escaneo (Chema 2026-09-22): la lista vive en la sesión del operador. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Salida · {{ corral }}</div>
+    <h1>Registrar salida · <span class="mono">{{ carrier|upper }}</span></h1>
+    <div class="small">escaneadas <b class="mono">{{ escaneadas|length }}</b> de <b>{{ total_listas }}</b> listas</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:salida' %}">Volver a Salida</a>
+</div>
+
+<div class="banner accent"><span class="foco"></span>Escanea la etiqueta interna de Torre de CADA caja que sube al camión de {{ carrier }}. Si no se lee, teclea el folio del pedido o el número de guía.</div>
+
+<div class="card">
+  <div class="titulo"><h2>Escaneadas</h2><span class="pill accent">{{ escaneadas|length }}</span></div>
+  {% for u in escaneadas %}
+  <div class="corral-fila" data-tipo="{{ u.tipo }}" data-id="{{ u.id }}">
+    <div class="crece">
+      <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span>
+      <div class="small muted">{{ u.pedido.cliente.nombre }} · {{ u.pedido.destino }}</div>
+    </div>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="quitar">
+      <input type="hidden" name="corral" value="{{ corral }}">
+      <input type="hidden" name="carrier" value="{{ carrier }}">
+      <input type="hidden" name="tipo" value="{{ u.tipo }}">
+      <input type="hidden" name="id" value="{{ u.id }}">
+      <button class="btn chico" type="submit">Quitar</button>
+    </form>
+  </div>
+  {% empty %}
+  <p class="muted small">Todavía nada. Escanea la primera caja.</p>
+  {% endfor %}
+</div>
+
+{% if se_quedan %}
+<details class="colapsable mt">
+  <summary>{{ se_quedan|length }} sin escanear · se quedan si cierras ahora</summary>
+  <div class="colapsable-cuerpo small">
+    {% for u in se_quedan %}<div><span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }}</div>{% endfor %}
+  </div>
+</details>
+{% endif %}
+
+<div class="accion-fija mt">
+  <div class="card">
+    <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
+    <form method="post" id="form-salida">{% csrf_token %}
+      <input type="hidden" name="accion" value="escanear">
+      <input type="hidden" name="corral" value="{{ corral }}">
+      <input type="hidden" name="carrier" value="{{ carrier }}">
+      <label for="codigo">O teclea el folio o la guía</label>
+      <div class="fila">
+        <input type="text" name="codigo" id="codigo" class="mono" autocomplete="off" placeholder="PED-00001 o número de guía" style="flex:1 1 auto">
+        <button class="btn" type="submit">Agregar</button>
+      </div>
+    </form>
+    <form method="post" class="mt">{% csrf_token %}
+      <input type="hidden" name="accion" value="cerrar">
+      <input type="hidden" name="corral" value="{{ corral }}">
+      <input type="hidden" name="carrier" value="{{ carrier }}">
+      <button class="btn primario gigante" type="submit" {% if not escaneadas %}disabled{% endif %}>Cerrar salida</button>
+    </form>
+    <form method="post" class="mt" onsubmit="return confirm('¿Descartar lo escaneado? Nada se registra.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="cancelar">
+      <input type="hidden" name="corral" value="{{ corral }}">
+      <input type="hidden" name="carrier" value="{{ carrier }}">
+      <button class="btn chico" type="submit">Descartar y volver</button>
+    </form>
+  </div>
+</div>
+
+<script>
+/* escaner.js carga con defer: todo lo que use Escaner/Feedback espera DOMContentLoaded. */
+document.addEventListener("DOMContentLoaded", function () {
+  var form = document.getElementById("form-salida");
+  var csrf = form.querySelector("[name=csrfmiddlewaretoken]").value;
+  var inputCodigo = document.getElementById("codigo");
+  var ocupado = false;
+
+  function agregar(codigo) {
+    if (!codigo) return;
+    if (ocupado) { Feedback.error("Espera — registrando la anterior."); return; }
+    ocupado = true;
+    var datos = new FormData(form);
+    datos.set("codigo", codigo);
+    fetch(window.location.pathname + window.location.search, {
+      method: "POST",
+      headers: { "Accept": "application/json", "X-CSRFToken": csrf },
+      body: datos,
+    }).then(function (resp) {
+      ocupado = false;
+      var tipo = resp.headers.get("Content-Type") || "";
+      if (resp.redirected || tipo.indexOf("application/json") === -1) {
+        window.location.reload();
+        return null;
+      }
+      return resp.json().then(function (r) {
+        if (!resp.ok || !r.ok) {
+          Feedback.error(r.error || ("Error del servidor (" + resp.status + "). Intenta de nuevo."));
+          return;
+        }
+        Feedback.ok();
+        // La lista es del servidor (sesión): se recarga para verla completa.
+        Escaner.detener();
+        window.location.reload();
+      });
+    }).catch(function (err) {
+      ocupado = false;
+      Feedback.error(err instanceof TypeError ? "Sin conexión. Intenta de nuevo." : "Error inesperado. Intenta de nuevo.");
+    });
+  }
+
+  Escaner.montar(document.getElementById("visor-escaner"), function (valor) { agregar(valor); });
+  form.addEventListener("submit", function (ev) {
+    if (!window.fetch) return;
+    ev.preventDefault();
+    agregar(inputCodigo.value.trim());
+    inputCodigo.value = "";
+  });
+});
+</script>
+{% endblock %}

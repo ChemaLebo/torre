@@ -22,7 +22,25 @@ class ReglaEnvioAdmin(admin.ModelAdmin):
     ordering = ("prioridad", "id")
 
 
-from .models import CotizacionCache, Paquete, PaqueteLinea, TrabajoImpresion  # noqa: E402
+from .models import (  # noqa: E402
+    CotizacionCache, LineaManifiesto, Manifiesto, Paquete, PaqueteLinea, TrabajoImpresion,
+)
+
+
+class LineaManifiestoInline(admin.TabularInline):
+    model = LineaManifiesto
+    extra = 0
+    raw_id_fields = ("pedido", "paquete", "guia")
+
+
+@admin.register(Manifiesto)
+class ManifiestoAdmin(admin.ModelAdmin):
+    list_display = ("folio", "carrier", "corral", "ts", "operador", "chofer")
+    list_filter = ("carrier", "corral")
+    search_fields = ("folio", "lineas__pedido__folio", "lineas__numero_guia")
+    readonly_fields = ("folio", "ts")
+    date_hierarchy = "ts"
+    inlines = [LineaManifiestoInline]
 
 
 @admin.register(TrabajoImpresion)

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Manifiestos{% endblock %}
+{% block content %}
+{# Manifiestos de salida: la hoja que firmó el chofer por cada salida (Chema 2026-09-22: se consultan aquí, no en piso). #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa · Salida</div>
+    <h1>Manifiestos</h1>
+    <div class="small"><b>{{ total }}</b> manifiesto{{ total|pluralize }}</div>
+  </div>
+</div>
+
+<form method="get" class="fila mt">
+  <label for="f-fecha">Fecha</label>
+  <input type="date" name="fecha" id="f-fecha" value="{{ filtro.fecha }}">
+  <label for="f-carrier">Carrier</label>
+  <select name="carrier" id="f-carrier">
+    <option value="">Todos</option>
+    {% for c in carriers %}<option value="{{ c }}" {% if filtro.carrier == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+  </select>
+  <button class="btn" type="submit">Filtrar</button>
+  {% if filtro.fecha or filtro.carrier %}<a class="btn chico" href="{% url 'mesa:manifiestos' %}">Quitar filtros</a>{% endif %}
+</form>
+
+<div class="tabla-wrap mt">
+  <table>
+    <thead><tr><th>Folio</th><th>Fecha y hora</th><th>Carrier</th><th>Corral</th><th>Cajas</th><th>Pedidos</th><th>Registró</th><th>Chofer</th><th></th></tr></thead>
+    <tbody>
+      {% for m in manifiestos %}
+      <tr>
+        <td class="mono">{{ m.folio }}</td>
+        <td>{{ m.ts|date:"d/M/Y H:i" }}</td>
+        <td class="mono">{{ m.carrier }}</td>
+        <td class="mono">{{ m.corral|default:"—" }}</td>
+        <td class="mono">{{ m.cajas }}</td>
+        <td class="mono small">{% for f in m.folios %}{{ f }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+        <td>{{ m.operador.username|default:"—" }}</td>
+        <td>{{ m.chofer|default:"—" }}</td>
+        <td><a class="btn chico" href="{% url 'piso:manifiesto' m.pk %}" target="_blank" rel="noopener">Ver e imprimir</a></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9" class="muted">Sin manifiestos{% if filtro.fecha or filtro.carrier %} con ese filtro{% endif %}. Nacen al confirmar una salida en Piso → Salida → Registrar salida.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

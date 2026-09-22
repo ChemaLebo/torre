@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Confirmar salida · {{ carrier }}{% endblock %}
+{% block content %}
+{# Resumen del registro de salida: solo lo escaneado lleva palomita; confirmar dispara el manifiesto (accion=manifiesto en Salida). #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Salida · {{ corral }}</div>
+    <h1>Confirmar salida · <span class="mono">{{ carrier|upper }}</span></h1>
+  </div>
+  <a class="btn chico" href="{% url 'piso:salida_registrar' %}?corral={{ corral|urlencode }}&carrier={{ carrier|urlencode }}">Seguir escaneando</a>
+</div>
+
+<form method="post" action="{% url 'piso:salida' %}">{% csrf_token %}
+  <input type="hidden" name="accion" value="manifiesto">
+  <input type="hidden" name="corral" value="{{ corral }}">
+  <input type="hidden" name="carrier" value="{{ carrier }}">
+  <input type="hidden" name="desde_escaner" value="1">
+  <div class="card">
+    <div class="titulo"><h2>Sube al camión</h2><span class="pill accent">{{ escaneadas|length }} caja{{ escaneadas|length|pluralize }}</span></div>
+    {% for u in escaneadas %}
+    <label class="corral-fila">
+      <input type="checkbox" name="{% if u.tipo == 'caja' %}paquete_id{% else %}pedido_id{% endif %}" value="{{ u.id }}" checked>
+      <span class="crece">
+        <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span>
+        <div class="small muted">{{ u.pedido.cliente.nombre }} · {{ u.pedido.destino }}</div>
+      </span>
+    </label>
+    {% endfor %}
+    <p class="small muted mt">Desmarca lo que al final no subió. Lo que no se escaneó no se marca aquí: se escanea o se teclea su folio.</p>
+  </div>
+
+  {% if se_quedan %}
+  <div class="card mt">
+    <div class="titulo"><h2>Se quedan en el corral</h2><span class="pill warn">{{ se_quedan|length }}</span></div>
+    {% for u in se_quedan %}
+    <div class="corral-fila small"><span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="card mt">
+    <label for="chofer">Nombre del chofer (opcional, va en la hoja del manifiesto)</label>
+    <input type="text" name="chofer" id="chofer" maxlength="120" placeholder="Quien firma">
+  </div>
+
+  <div class="accion-fija mt">
+    <button class="btn primario gigante" type="submit">Confirmar salida · {{ escaneadas|length }} caja{{ escaneadas|length|pluralize }}</button>
+  </div>
+</form>
+{% endblock %}

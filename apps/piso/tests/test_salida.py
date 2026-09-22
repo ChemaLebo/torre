@@ -211,7 +211,7 @@ class SalidaPisoTests(PisoTestCase):
         pantalla = self.client.get(self.url)
         self.assertContains(pantalla, "PUNTOPOST")
         self.assertContains(pantalla, "ESTAFETA")
-        self.assertContains(pantalla, "SALE LO PALOMEADO")
+        self.assertContains(pantalla, "Registrar salida")
 
         respuesta = self.client.post(self.url, {
             "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
@@ -385,12 +385,14 @@ class ManifiestoPorCajaTests(PisoTestCase):
         pedido.refresh_from_db()
         return pedido, cajas[0], cajas[1]
 
-    def test_salida_palomea_por_caja(self):
+    def test_salida_ya_no_palomea_en_la_tabla_sino_al_registrar_salida(self):
         pedido, c1, c2 = self._pedido_dos_cajas()
         respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, f'name="paquete_id" value="{c1.pk}"')
-        self.assertContains(respuesta, f'name="paquete_id" value="{c2.pk}"')
-        self.assertNotContains(respuesta, f'name="pedido_id" value="{pedido.pk}"')
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, "Registrar salida")
+        self.assertNotContains(respuesta, f'name="paquete_id" value="{c1.pk}"')
+        self.assertNotContains(respuesta, f'name="paquete_id" value="{c2.pk}"')
+        self.assertNotContains(respuesta, "SALE LO PALOMEADO")
 
     def test_una_caja_sin_cierre_saca_al_pedido_de_salida(self):
         from apps.envios.models import Paquete

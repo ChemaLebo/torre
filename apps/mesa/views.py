@@ -643,6 +643,38 @@ def pedidos(request):
 
 
 @rol_requerido("mesa")
+def manifiestos(request):
+    """Manifiestos de salida (Chema 2026-09-22: se consultan en Mesa): lista
+    por fecha y carrier con sus pedidos y el link a la hoja imprimible."""
+    from datetime import date as _date
+
+    from apps.envios.models import Manifiesto  # lazy: modelo de otra app
+
+    qs = Manifiesto.objects.select_related("operador").prefetch_related("lineas__pedido")
+    carrier = (request.GET.get("carrier") or "").strip()
+    fecha = (request.GET.get("fecha") or "").strip()
+    if carrier:
+        qs = qs.filter(carrier=carrier)
+    if fecha:
+        try:
+            qs = qs.filter(ts__date=_date.fromisoformat(fecha))
+        except ValueError:
+            fecha = ""
+    filas = list(qs[:200])
+    for hoja in filas:
+        lineas = list(hoja.lineas.all())
+        hoja.cajas = len(lineas)
+        hoja.folios = sorted({l.pedido.folio for l in lineas})
+    return render(request, "mesa/manifiestos.html", {
+        "seccion": "manifiestos",
+        "manifiestos": filas,
+        "total": qs.count(),
+        "carriers": sorted(set(Manifiesto.objects.values_list("carrier", flat=True))),
+        "filtro": {"carrier": carrier, "fecha": fecha},
+    })
+
+
+@rol_requerido("mesa")
 def pedido_nuevo(request):
     """Alta manual de un pedido: clientes sin Shopify (mayoreo, B2B, almacenaje).
 

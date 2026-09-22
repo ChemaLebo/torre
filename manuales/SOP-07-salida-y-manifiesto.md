@@ -33,15 +33,15 @@ La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de l
 ## B. Llegada del repartidor (por cada recolección)
 
 4. **Verifica la identidad del repartidor**: uniforme/credencial del carrier y su orden o número de recolección. Si algo no cuadra (camioneta sin logo, "vengo por unos paquetes" sin datos), NO entregues nada y llama a Mesa. Los paquetes con alcohol son mercancía apetecible.
-5. **Coteja físicamente contra la pantalla**: en el panel del corral, la lista *"Con guía, listos para el chofer"* muestra folio + cliente + número de guía. Escanea/verifica **caja por caja contra esa lista**: cada caja del corral está en la lista, cada renglón de la lista tiene su caja. Cuenta total de bultos = renglones.
-6. **Imprime/llena el manifiesto en papel** (formato de la casa o del carrier): fecha, carrier, número de guías, folios. **El chofer firma con nombre y hora, y se lleva su copia; la nuestra se archiva.**
-   - ⚠️ El chofer NO se lleva ninguna caja que no esté en la lista, y ninguna caja de otro corral "de pasada".
-7. **Ya con la firma en la mano**, pulsa en Torre **"Manifiesto firmado · salen N"** en el panel de ese corral. La leyenda bajo el botón es la regla: *"Firma del chofer en mano ANTES de tocar este botón. Marca RECOLECTADO en lote y avisa al comprador."* Torre confirma: *"Manifiesto de [corral] firmado: N pedido(s) recolectado(s). Ahora sí, el comprador recibe su 'va en camino'."*
-8. **Despide al camión** y verifica el corral: debe quedar vacío. Si un paquete se quedó (chofer no lo aceptó, caja dañada), NO debió estar en el manifiesto firmado — si ya lo estaba, avisa a Mesa DE INMEDIATO para corregir antes de que el comprador reciba un aviso falso.
+5. **Pulsa "Registrar salida"** en la tabla del carrier que llegó (dentro de su corral). Se abre el escáner: **escanea la etiqueta interna de Torre de CADA caja que sube al camión** (el QR o el código de barras de nuestra etiqueta, no la del carrier). Torre la agrega a la lista y te dice cuántas llevas de las listas. Si una etiqueta no se lee, teclea el folio del pedido o el número de guía. Torre rechaza lo que no es de esta salida: caja de otro carrier, caja sin foto de cierre, caja que ya salió, o repetida. La lista se guarda aunque cierres el teléfono.
+   - ⚠️ El chofer NO se lleva ninguna caja que no esté en la lista, y ninguna caja de otro corral "de pasada". Escaneas lo que sube, nada más.
+6. **"Cerrar salida"**: Torre te muestra el resumen — lo escaneado con su palomita, y lo que **se queda** en el corral (lo que no escaneaste no se puede palomear: se escanea o se teclea su folio). Desmarca lo que al final no subió, escribe el nombre del chofer y pulsa **"Confirmar salida · N cajas"**. Ahí Torre marca RECOLECTADO lo confirmado y avisa al comprador ("va en camino"); lo demás se queda para la siguiente recolección.
+7. **Imprime el manifiesto** que aparece al confirmar (folio `MAN-AAAA-####`, carrier, hora, cajas, guías). **El chofer firma con nombre y hora, y se lleva su copia; la nuestra se archiva.** Mesa lo consulta e imprime en Mesa → Manifiestos cuando haga falta.
+8. **Despide al camión** y verifica el corral: debe quedar vacío. Si un paquete se quedó (chofer no lo aceptó, caja dañada), NO debió confirmarse — si ya se confirmó, avisa a Mesa DE INMEDIATO para corregir antes de que el comprador reciba un aviso falso.
 
 ## C. Ruta local
 
-9. El corral `SAL-LOCAL` funciona igual: guías generadas, cotejo, y **"Manifiesto firmado · salen N"** cuando la ruta sale — quien firma el manifiesto es quien maneja la ruta (OP-2). La pantalla te recuerda: *"Ruta local: al firmar salen a reparto. Cierra cada entrega con su POD en Entregas locales."* Sigue SOP-08.
+9. El corral `SAL-LOCAL` funciona igual: guías generadas, **"Registrar salida"** con el escaneo de cada caja y confirmar cuando la ruta sale — quien confirma la salida es quien maneja la ruta (OP-2). La pantalla te recuerda: *"Ruta local: al firmar salen a reparto. Cierra cada entrega con su POD en Entregas locales."* Sigue SOP-08.
 
 ## D. Si la paquetería no llega
 

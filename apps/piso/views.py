@@ -2072,6 +2072,311 @@ def _contenido_salida(pedido):
     }
 
 
+# ── Registrar salida por escaneo (Chema 2026-09-22) ─────────────────────────
+# La etiqueta interna de cada caja se escanea; la lista vive en la sesión del
+# operador (recargar o cerrar el teléfono no la pierde); "Cerrar salida" lleva
+# al resumen, y confirmar ahí dispara el manifiesto de siempre (marcar_recolectado)
+# más la hoja con folio (envios.registrar_manifiesto).
+
+_SESION_SALIDA = "salida_escaneo"
+_RE_TOKEN_ETIQUETA = re.compile(r"/r/e/([A-Za-z0-9_-]{6,20})/?")
+
+
+def _pedidos_en_salida():
+    """Pedidos listos en el corral (empaque completo: guía y foto de cierre en
+    cada caja; los que esperan inventario no), decorados para la tabla y el
+    escáner: contenido, cajas_salida (cada una con .guia), guias_activas,
+    destino, carrier_salida y corral_salida."""
+    from apps.pedidos.services import cajas_por_salir  # lazy por contrato
+    mapa = _mapa_corrales()
+    listos = []
+    for pedido in (
+        Pedido.objects.filter(estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO])
+        .select_related("cliente")
+        .prefetch_related("lineas__sku", "paquetes__lineas__linea_pedido__sku", "paquetes__guias", "guias")
+    ):
+        if not pedido.empaque_completo or pedido.esperando_inventario:
+            continue  # incompleto en la mesa, o esperando inventario tras una salida parcial
+        pedido.contenido = _contenido_salida(pedido)
+        pedido.cajas_salida = cajas_por_salir(pedido)
+        for caja in pedido.cajas_salida:
+            caja.guia = caja.guia_activa
+        pedido.por_caja = _por_caja(pedido)
+        ciudad = str((pedido.direccion or {}).get("city") or "").strip()
+        pedido.destino = f"{ciudad} · CP {pedido.cp}" if ciudad else f"CP {pedido.cp}"
+        cajas = [c for c in pedido.paquetes.all() if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
+        pedido.cajas_total = len(cajas)
+        pedido.cajas_fuera = [c for c in cajas if c.estado == Paquete.DESPACHADO]
+        pedido.guias_activas = [
+            g for g in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
+            if g.paquete_id is None or g.paquete.estado != Paquete.DESPACHADO
+        ]
+        guia = pedido.guias_activas[-1] if pedido.guias_activas else None
+        pedido.guia = guia
+        pedido.carrier_salida = (guia.carrier if guia else _carrier_probable(pedido)) or "?"
+        pedido.corral_salida = _corral_de_carrier(pedido.carrier_salida, mapa)
+        listos.append(pedido)
+    return listos
+
+
+def _listos_carrier(corral, carrier):
+    """Lo que está listo para subir al camión de ESE carrier en ESE corral."""
+    return [p for p in _pedidos_en_salida() if p.corral_salida == corral and p.carrier_salida == carrier]
+
+
+def _unidades_salida(listos):
+    """Lo escaneable de una salida: cada caja por salir, o el pedido entero
+    cuando se empacó sin plan de cajas. [{tipo, id, pedido, caja, guia}]."""
+    unidades = []
+    for pedido in listos:
+        if pedido.cajas_salida:
+            for caja in pedido.cajas_salida:
+                unidades.append({
+                    "tipo": "caja", "id": caja.pk, "pedido": pedido, "caja": caja,
+                    "guia": caja.guia.numero if caja.guia else "",
+                })
+        else:
+            unidades.append({
+                "tipo": "pedido", "id": pedido.pk, "pedido": pedido, "caja": None,
+                "guia": pedido.guia.numero if pedido.guia else "",
+            })
+    return unidades
+
+
+def _escaneo_actual(request, corral, carrier):
+    """Lo escaneado hasta ahora para ESTE corral y carrier (sesión del
+    operador); otra salida en la sesión se descarta."""
+    datos = request.session.get(_SESION_SALIDA) or {}
+    if datos.get("corral") != corral or datos.get("carrier") != carrier:
+        return {"corral": corral, "carrier": carrier, "cajas": [], "pedidos": []}
+    return {
+        "corral": corral, "carrier": carrier,
+        "cajas": list(datos.get("cajas") or []), "pedidos": list(datos.get("pedidos") or []),
+    }
+
+
+def _guardar_escaneo(request, datos):
+    request.session[_SESION_SALIDA] = datos
+    request.session.modified = True
+
+
+def _limpiar_escaneo(request, corral, carrier):
+    datos = request.session.get(_SESION_SALIDA) or {}
+    if datos.get("corral") == corral and datos.get("carrier") == carrier:
+        request.session.pop(_SESION_SALIDA, None)
+        request.session.modified = True
+
+
+def _escaneadas_en_sesion(request, corral, carrier):
+    """Cuántas cajas lleva escaneadas el operador para esa salida (0 si ninguna)."""
+    datos = request.session.get(_SESION_SALIDA) or {}
+    if datos.get("corral") != corral or datos.get("carrier") != carrier:
+        return 0
+    return len(datos.get("cajas") or []) + len(datos.get("pedidos") or [])
+
+
+def _partir_escaneo(listos, datos):
+    """(escaneadas, se_quedan) entre las unidades listas de la salida."""
+    escaneadas, se_quedan = [], []
+    for unidad in _unidades_salida(listos):
+        en_lista = datos["cajas"] if unidad["tipo"] == "caja" else datos["pedidos"]
+        (escaneadas if unidad["id"] in en_lista else se_quedan).append(unidad)
+    return escaneadas, se_quedan
+
+
+def _resolver_escaneo_salida(codigo):
+    """Qué se escaneó en Salida → (pedido, paquete | None) o (None, None).
+
+    Etiqueta interna de Torre: QR con /r/e/<token>/ o Code128 con el token
+    (rastreo.AccesoEtiqueta → guía → caja). Respaldo: número de guía del
+    carrier, o folio del pedido (todas sus cajas por salir)."""
+    from apps.rastreo.models import AccesoEtiqueta  # lazy por contrato
+    valor = (codigo or "").strip()
+    encontrado = _RE_TOKEN_ETIQUETA.search(valor)
+    token = encontrado.group(1) if encontrado else valor
+    acceso = (
+        AccesoEtiqueta.objects.select_related("guia__pedido", "guia__paquete")
+        .filter(token=token).first()
+    )
+    if acceso is not None:
+        return acceso.guia.pedido, acceso.guia.paquete
+    guia = (
+        Guia.objects.select_related("pedido", "paquete")
+        .exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).filter(numero=valor).order_by("-id").first()
+    )
+    if guia is not None:
+        return guia.pedido, guia.paquete
+    pedido = Pedido.objects.filter(folio__iexact=valor).first()
+    if pedido is not None:
+        return pedido, None
+    return None, None
+
+
+def _por_que_no_sale(pedido, corral, carrier):
+    """Mensaje para el piso cuando lo escaneado no sube a ESTA salida."""
+    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+        return f"{pedido.folio} está {pedido.get_estado_display().lower()}: no está en el corral."
+    if pedido.esperando_inventario:
+        return f"{pedido.folio} espera inventario tras una salida parcial: hoy no sale."
+    if not pedido.empaque_completo:
+        return f"{pedido.folio} no ha terminado en la mesa (le falta guía o foto de cierre): no sube al camión."
+    guia = _guia_activa(pedido)
+    suyo = (guia.carrier if guia else _carrier_probable(pedido)) or "?"
+    if suyo != carrier:
+        return f"{pedido.folio} viaja con {suyo}, no con {carrier}: escanéalo en la salida de {suyo}."
+    return f"{pedido.folio} no está listo para salir en {corral}."
+
+
+def _url_registrar(corral, carrier):
+    return f"{reverse('piso:salida_registrar')}?corral={quote(corral)}&carrier={quote(carrier)}"
+
+
+def _salida_escanear(request, corral, carrier, listos, datos):
+    """Un escaneo: la etiqueta interna de una caja, o el folio / la guía como
+    respaldo. Valida que sea de ESTA salida y que no esté ya en la lista."""
+    quiere_json = _quiere_json(request)
+    destino = redirect(_url_registrar(corral, carrier))
+
+    def error(mensaje):
+        if quiere_json:
+            return JsonResponse({"ok": False, "error": mensaje}, status=400)
+        messages.error(request, mensaje)
+        return destino
+
+    codigo = (request.POST.get("codigo") or "").strip()
+    if not codigo:
+        return error("Escanea la etiqueta interna de la caja que sube al camión.")
+    pedido, paquete = _resolver_escaneo_salida(codigo)
+    if pedido is None:
+        return error(
+            f"No reconozco «{codigo[:40]}»: escanea la etiqueta interna de Torre, "
+            "o teclea el folio del pedido o el número de guía."
+        )
+    listo = next((p for p in listos if p.pk == pedido.pk), None)
+    if listo is None:
+        return error(_por_que_no_sale(pedido, corral, carrier))
+    agregadas = []
+    if paquete is not None and listo.cajas_salida:
+        caja = next((c for c in listo.cajas_salida if c.pk == paquete.pk), None)
+        if caja is None:
+            if paquete.estado == Paquete.DESPACHADO:
+                return error(f"La caja {paquete.numero} de {pedido.folio} ya salió en otro manifiesto.")
+            return error(f"La caja {paquete.numero} de {pedido.folio} no está lista (sin foto de cierre o sin guía).")
+        if caja.pk in datos["cajas"]:
+            return error(f"La caja {caja.numero} de {pedido.folio} ya está en la lista.")
+        datos["cajas"].append(caja.pk)
+        agregadas.append(f"{pedido.folio} · caja {caja.numero}")
+    elif listo.cajas_salida:
+        nuevas = [c for c in listo.cajas_salida if c.pk not in datos["cajas"]]
+        if not nuevas:
+            return error(f"{pedido.folio} ya está completo en la lista.")
+        for caja in nuevas:
+            datos["cajas"].append(caja.pk)
+            agregadas.append(f"{pedido.folio} · caja {caja.numero}")
+    else:
+        if pedido.pk in datos["pedidos"]:
+            return error(f"{pedido.folio} ya está en la lista.")
+        datos["pedidos"].append(pedido.pk)
+        agregadas.append(pedido.folio)
+    _guardar_escaneo(request, datos)
+    escaneadas = len(datos["cajas"]) + len(datos["pedidos"])
+    listas = len(_unidades_salida(listos))
+    if quiere_json:
+        return JsonResponse({"ok": True, "agregadas": agregadas, "escaneadas": escaneadas, "listas": listas})
+    messages.success(request, f"{' · '.join(agregadas)} — {escaneadas} de {listas} escaneadas.")
+    return destino
+
+
+def _parametros_salida(request):
+    """(corral, carrier) de la salida en curso, validados; (None, None) si no vienen bien."""
+    corral = (request.GET.get("corral") or request.POST.get("corral") or "").strip()
+    carrier = (request.GET.get("carrier") or request.POST.get("carrier") or "").strip()
+    conocidos = {codigo for codigo, _ in corrales_activos()} | {CORRAL_LOCAL, CORRAL_OTRO}
+    if corral not in conocidos or not carrier:
+        return None, None
+    return corral, carrier
+
+
+@rol_requerido("piso", "mesa")
+def salida_registrar(request):
+    """Registrar salida: escáner + lista de lo escaneado para UN carrier de UN
+    corral. POST accion=escanear (JSON para el visor o PRG), quitar,
+    cancelar (descarta la lista) y cerrar (→ resumen)."""
+    corral, carrier = _parametros_salida(request)
+    if corral is None:
+        messages.error(request, "Elige la salida desde los botones de la pantalla de Salida.")
+        return redirect("piso:salida")
+    listos = _listos_carrier(corral, carrier)
+    datos = _escaneo_actual(request, corral, carrier)
+    if request.method == "POST":
+        accion = request.POST.get("accion")
+        if accion == "escanear":
+            return _salida_escanear(request, corral, carrier, listos, datos)
+        if accion == "quitar":
+            tipo = request.POST.get("tipo")
+            valor = _entero(request.POST.get("id"), "Elemento desconocido.") if str(request.POST.get("id", "")).isdigit() else None
+            lista = datos["cajas"] if tipo == "caja" else datos["pedidos"]
+            if valor in lista:
+                lista.remove(valor)
+                _guardar_escaneo(request, datos)
+            return redirect(_url_registrar(corral, carrier))
+        if accion == "cancelar":
+            _limpiar_escaneo(request, corral, carrier)
+            messages.info(request, f"Salida de {carrier} descartada: nada se registró.")
+            return redirect("piso:salida")
+        if accion == "cerrar":
+            return redirect(f"{reverse('piso:salida_resumen')}?corral={quote(corral)}&carrier={quote(carrier)}")
+        messages.error(request, "No entendí la acción. Intenta de nuevo.")
+        return redirect(_url_registrar(corral, carrier))
+    escaneadas, se_quedan = _partir_escaneo(listos, datos)
+    return render(request, "piso/salida_registrar.html", {
+        "seccion": "salida", "corral": corral, "carrier": carrier,
+        "escaneadas": escaneadas, "se_quedan": se_quedan,
+        "total_listas": len(escaneadas) + len(se_quedan),
+    })
+
+
+@rol_requerido("piso", "mesa")
+def salida_resumen(request):
+    """Cerrar salida: resumen de lo escaneado con una palomita por caja (solo
+    lo escaneado; lo demás "se queda") y "Confirmar salida", que dispara el
+    manifiesto de siempre (accion=manifiesto en Salida) con la hoja para el chofer."""
+    corral, carrier = _parametros_salida(request)
+    if corral is None:
+        messages.error(request, "Elige la salida desde los botones de la pantalla de Salida.")
+        return redirect("piso:salida")
+    listos = _listos_carrier(corral, carrier)
+    escaneadas, se_quedan = _partir_escaneo(listos, _escaneo_actual(request, corral, carrier))
+    if not escaneadas:
+        messages.error(request, "Todavía no has escaneado ninguna caja de esta salida.")
+        return redirect(_url_registrar(corral, carrier))
+    return render(request, "piso/salida_resumen.html", {
+        "seccion": "salida", "corral": corral, "carrier": carrier,
+        "escaneadas": escaneadas, "se_quedan": se_quedan,
+    })
+
+
+@rol_requerido("piso", "mesa")
+def manifiesto(request, pk):
+    """Hoja del manifiesto para la firma del chofer: standalone e imprimible
+    (folio, carrier, hora, quién, cajas con guía y destino)."""
+    from apps.envios.models import Manifiesto  # lazy: modelo de otra app
+    hoja = get_object_or_404(
+        Manifiesto.objects.select_related("operador")
+        .prefetch_related("lineas__pedido__cliente", "lineas__paquete"),
+        pk=pk,
+    )
+    lineas = list(hoja.lineas.all())
+    for linea in lineas:
+        direccion = linea.pedido.direccion or {}
+        ciudad = str(direccion.get("city") or "").strip()
+        linea.destino = f"{ciudad} · CP {linea.pedido.cp}" if ciudad else f"CP {linea.pedido.cp}"
+    return render(request, "piso/manifiesto.html", {
+        "manifiesto": hoja, "lineas": lineas,
+        "pedidos": len({l.pedido_id for l in lineas}), "es_mesa": _es_mesa(request),
+    })
+
+
 @rol_requerido("piso", "mesa")
 def salida(request):
     if request.method == "POST":
@@ -2097,39 +2402,11 @@ def salida(request):
             orden_corrales.append((corral, corral))
         return grupos[corral]
 
-    prefetch_contenido = ("lineas__sku", "paquetes__lineas__linea_pedido__sku")
-    from apps.pedidos.services import cajas_por_salir  # lazy por contrato
     # Al corral solo llega lo que terminó en la mesa: todas las cajas con guía
     # y foto de cierre (Pedido.empaque_completo). Lo demás se termina en el
     # wizard de empaque, desde "Completar empaquetado" en Mi turno.
-    for pedido in (
-        Pedido.objects.filter(estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO])
-        .select_related("cliente").prefetch_related(*prefetch_contenido, "paquetes__guias", "guias")
-    ):
-        if not pedido.empaque_completo or pedido.esperando_inventario:
-            continue  # incompleto en la mesa, o esperando inventario tras una salida parcial
-        pedido.contenido = _contenido_salida(pedido)
-        # Cajas que siguen en bodega (empaque por caja): cada una se palomea
-        # sola en el manifiesto. Vacío = el pedido se empacó entero y sale completo.
-        pedido.cajas_salida = cajas_por_salir(pedido)
-        for caja in pedido.cajas_salida:
-            caja.guia = caja.guia_activa
-        pedido.por_caja = _por_caja(pedido)
-        # Columnas de la tabla por carrier (Chema 2026-09-22): destino y cajas.
-        ciudad = str((pedido.direccion or {}).get("city") or "").strip()
-        pedido.destino = f"{ciudad} · CP {pedido.cp}" if ciudad else f"CP {pedido.cp}"
-        cajas = [c for c in pedido.paquetes.all() if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
-        pedido.cajas_total = len(cajas)
-        pedido.cajas_fuera = [c for c in cajas if c.estado == Paquete.DESPACHADO]
-        # Todas las guías vigentes de lo que sigue aquí: una etiqueta por guía.
-        pedido.guias_activas = [
-            g for g in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
-            if g.paquete_id is None or g.paquete.estado != Paquete.DESPACHADO
-        ]
-        guia = pedido.guias_activas[-1] if pedido.guias_activas else None
-        pedido.guia = guia
-        carrier = guia.carrier if guia else _carrier_probable(pedido)
-        _grupo(carrier)["listos"].append(pedido)
+    for pedido in _pedidos_en_salida():
+        _grupo(pedido.carrier_salida)["listos"].append(pedido)
     for grupo in grupos.values():
         grupo["firman"] = len(grupo["listos"])
         # El manifiesto se firma POR CARRIER, no por corral: SAL-OTRO junta
@@ -2138,8 +2415,7 @@ def salida(request):
         # sigue en el piso.
         por_carrier = {}
         for p in grupo["listos"]:
-            clave = (p.guia.carrier if p.guia else _carrier_probable(p)) or "?"
-            por_carrier.setdefault(clave, []).append(p)
+            por_carrier.setdefault(p.carrier_salida, []).append(p)
         grupo["carriers"] = [
             {"carrier": clave, "listos": pedidos, "firman": len(pedidos)}
             for clave, pedidos in sorted(por_carrier.items())
@@ -2157,6 +2433,9 @@ def salida(request):
         for gc in grupo["carriers"]:
             gc["puede_recolectar"] = bool(pickup_map.get(gc["carrier"]))
             gc["recoleccion"] = agendadas.get(gc["carrier"])
+            # Registrar salida por escaneo: lo que este operador ya lleva escaneado.
+            gc["registrar_url"] = _url_registrar(grupo["codigo"], gc["carrier"])
+            gc["escaneadas"] = _escaneadas_en_sesion(request, grupo["codigo"], gc["carrier"])
 
     contexto = {
         "seccion": "salida",
@@ -2229,6 +2508,10 @@ def _salida_manifiesto(request):
     caja con detalle) se queda en el corral para la siguiente recolección.
     Pedidos de varias cajas se palomean POR CAJA (paquete_id): las que suben
     salen y el pedido queda PARCIALMENTE_DESPACHADO hasta que salga la última.
+    Desde 2026-09-22 las palomitas las pone el resumen de "Registrar salida"
+    (solo lo escaneado); al confirmar nace el Manifiesto con folio
+    (envios.registrar_manifiesto) y, si vino del escáner (desde_escaner), se
+    abre su hoja imprimible.
     """
     corral = (request.POST.get("corral") or "").strip()
     conocidos = {codigo for codigo, _ in corrales_activos()} | {CORRAL_LOCAL, CORRAL_OTRO}
@@ -2297,11 +2580,12 @@ def _salida_manifiesto(request):
         return redirect("piso:salida")
 
     from apps.pedidos.services import marcar_recolectado  # lazy por contrato
-    recolectados, errores = [], []
+    recolectados, errores, salidas = [], [], []
     for pedido, cajas in listos:
         try:
             marcar_recolectado(pedido, request.user, paquetes=cajas)
             recolectados.append(pedido.folio)
+            salidas.append((pedido, cajas))
         except ValueError as exc:
             errores.append(f"{pedido.folio}: {exc}")
             continue
@@ -2314,19 +2598,28 @@ def _salida_manifiesto(request):
                 f"la caja {quedan} se queda en el corral para la siguiente recolección.",
             )
 
+    hoja = None
     if recolectados:
+        from apps.envios.services import registrar_manifiesto  # lazy por contrato
+        hoja = registrar_manifiesto(
+            carrier, corral, request.user, salidas, chofer=(request.POST.get("chofer") or "").strip(),
+        )
         registrar_evento(
             "manifiesto", corral, "manifiesto_firmado", actor=request.user,
-            delta={"corral": corral, "carrier": carrier, "pedidos": recolectados},
+            delta={"corral": corral, "carrier": carrier, "pedidos": recolectados,
+                   "manifiesto": hoja.folio if hoja else None},
             motivo=f"Manifiesto de {carrier} firmado por el chofer: RECOLECTADO en lote.",
         )
         messages.success(
             request,
-            f"Manifiesto de {carrier} en {corral} firmado: {len(recolectados)} pedido(s) "
+            f"Manifiesto {hoja.folio if hoja else ''} de {carrier} en {corral}: {len(recolectados)} pedido(s) "
             "recolectado(s). Ahora sí, el comprador recibe su \"va en camino\".",
         )
     for error in errores:
         messages.error(request, error)
+    _limpiar_escaneo(request, corral, carrier)
+    if hoja is not None and request.POST.get("desde_escaner"):
+        return redirect("piso:manifiesto", pk=hoja.pk)
     return redirect("piso:salida")
 
 

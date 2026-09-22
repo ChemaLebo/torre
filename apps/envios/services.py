@@ -20,7 +20,7 @@ from django.utils import timezone
 from apps.core.services import registrar_evento
 
 from .adapters import Adapter99Minutos, EnviaAdapter, ErrorCarrier, MockAdapter
-from .models import EventoGuia, Guia, Paquete, Recoleccion, ReglaEnvio
+from .models import EventoGuia, Guia, LineaManifiesto, Manifiesto, Paquete, Recoleccion, ReglaEnvio
 
 CARRIER_LOCAL = "local"
 SERVICIO_LOCAL = "entrega_local"
@@ -502,6 +502,51 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
         motivo=f"Recolección {carrier} agendada con {len(guias)} guía(s).",
     )
     return recoleccion
+
+
+def registrar_manifiesto(carrier, corral, operador, salidas, chofer=""):
+    """La hoja que firma el chofer: un Manifiesto con folio por lo que subió a
+    SU camión (Chema 2026-09-22). `salidas` = [(pedido, cajas)] tal como lo
+    despachó pedidos.marcar_recolectado: cajas = las que salieron, o None si
+    el pedido salió entero (una línea por guía activa; sin guía, una línea
+    del pedido). Guarda el número de guía como quedó impreso. Regresa el
+    Manifiesto, o None si no salió nada."""
+    lineas = []
+    for pedido, cajas in salidas:
+        if cajas:
+            for caja in cajas:
+                guia = caja.guia_activa
+                lineas.append(LineaManifiesto(
+                    pedido=pedido, paquete=caja, guia=guia,
+                    numero_guia=guia.numero if guia else "", caja=caja.numero,
+                ))
+            continue
+        guias = [g for g in pedido.guias.all() if g.es_activa]
+        if not guias:
+            lineas.append(LineaManifiesto(pedido=pedido))
+        for guia in guias:
+            lineas.append(LineaManifiesto(
+                pedido=pedido, paquete=guia.paquete, guia=guia, numero_guia=guia.numero,
+                caja=guia.paquete.numero if guia.paquete_id else None,
+            ))
+    if not lineas:
+        return None
+    with transaction.atomic():
+        manifiesto = Manifiesto.objects.create(
+            carrier=carrier, corral=corral or "",
+            operador=operador if hasattr(operador, "pk") else None,
+            chofer=(chofer or "")[:120],
+        )
+        for linea in lineas:
+            linea.manifiesto = manifiesto
+        LineaManifiesto.objects.bulk_create(lineas)
+    registrar_evento(
+        "manifiesto", manifiesto.folio, "manifiesto_creado", actor=operador,
+        delta={"carrier": carrier, "corral": corral, "cajas": len(lineas),
+               "pedidos": sorted({p.folio for p, _ in salidas})},
+        motivo=f"Manifiesto {manifiesto.folio} de {carrier}: {len(lineas)} caja(s) al camión.",
+    )
+    return manifiesto
 
 
 def poll_tracking():

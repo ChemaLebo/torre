@@ -5,6 +5,7 @@ El pedido lo mueve `services.poll_tracking` a partir de estados normalizados.
 Regla dura del BLUEPRINT §1.4: el RECOLECTADO del pedido nace del manifiesto
 físico (escaneo de salida), nunca del escaneo del chofer.
 """
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -455,4 +456,75 @@ class LocalidadCP(models.Model):
 
     def __str__(self):
         return f"{self.cp} · {self.localidad or 'desconocido'} ({self.estado or '--'})"
+
+
+class Manifiesto(models.Model):
+    """Manifiesto de salida: la hoja que firma el chofer por lo que subió a SU
+    camión. Chema (2026-09-22): la salida se registra escaneando la etiqueta
+    interna de cada caja y esto es la prueba. Folio MAN-AAAA-#### por año,
+    carrier, corral, quién lo registró y las cajas que salieron
+    (LineaManifiesto). Se imprime desde Salida al confirmar y se consulta en
+    Mesa → Manifiestos. Lo crea envios.services.registrar_manifiesto."""
+
+    folio = models.CharField(max_length=20, unique=True, blank=True, editable=False)
+    carrier = models.CharField(max_length=40)
+    corral = models.CharField(max_length=20, blank=True, default="")
+    operador = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="manifiestos", help_text="Quien registró la salida en Torre",
+    )
+    chofer = models.CharField(max_length=120, blank=True, default="", help_text="Nombre del chofer que firmó")
+    notas = models.CharField(max_length=300, blank=True, default="")
+    ts = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-ts"]
+        verbose_name = "manifiesto de salida"
+        verbose_name_plural = "manifiestos de salida"
+
+    def __str__(self):
+        return f"{self.folio} · {self.carrier}"
+
+    @classmethod
+    def _generar_folio(cls):
+        """Consecutivo por año (zero-pad 4), como el folio de incidencias."""
+        prefijo = f"MAN-{timezone.localtime().year}-"
+        ultimo = (
+            cls.objects.filter(folio__startswith=prefijo)
+            .order_by("-folio")
+            .values_list("folio", flat=True)
+            .first()
+        )
+        consecutivo = int(ultimo.rsplit("-", 1)[1]) + 1 if ultimo else 1
+        return f"{prefijo}{consecutivo:04d}"
+
+    def save(self, *args, **kwargs):
+        if not self.folio:
+            self.folio = self._generar_folio()
+        super().save(*args, **kwargs)
+
+
+class LineaManifiesto(models.Model):
+    """Una caja (o un pedido entero sin plan de cajas) que subió al camión en
+    ese manifiesto, con el número de guía tal como quedó impreso."""
+
+    manifiesto = models.ForeignKey(Manifiesto, on_delete=models.CASCADE, related_name="lineas")
+    pedido = models.ForeignKey("pedidos.Pedido", on_delete=models.PROTECT, related_name="lineas_manifiesto")
+    paquete = models.ForeignKey(
+        Paquete, null=True, blank=True, on_delete=models.SET_NULL, related_name="lineas_manifiesto",
+    )
+    guia = models.ForeignKey(
+        Guia, null=True, blank=True, on_delete=models.SET_NULL, related_name="lineas_manifiesto",
+    )
+    numero_guia = models.CharField(max_length=64, blank=True, default="")
+    caja = models.PositiveIntegerField(null=True, blank=True, help_text="Número de caja dentro del pedido")
+
+    class Meta:
+        ordering = ["pedido_id", "caja", "pk"]
+        verbose_name = "línea de manifiesto"
+        verbose_name_plural = "líneas de manifiesto"
+
+    def __str__(self):
+        caja = f" · caja {self.caja}" if self.caja else ""
+        return f"{self.manifiesto.folio} · {self.pedido.folio}{caja}"
 

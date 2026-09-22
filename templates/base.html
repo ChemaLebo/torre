@@ -113,6 +113,7 @@ window.addEventListener("load", function () {
         <summary>Reportes</summary>
         <a class="nav-link {% if seccion == 'reportes' %}activo{% endif %}" href="{% url 'mesa:reportes' %}">Reportes</a>
         <a class="nav-link {% if seccion == 'reporte_reparto' %}activo{% endif %}" href="{% url 'mesa:reporte_reparto' %}">Reparto de carriers</a>
+        <a class="nav-link {% if seccion == 'manifiestos' %}activo{% endif %}" href="{% url 'mesa:manifiestos' %}">Manifiestos</a>
       </details>
       <details class="nav-grupo" data-grupo="mesa-admin">
         <summary>Administración</summary>

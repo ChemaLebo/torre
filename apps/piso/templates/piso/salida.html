@@ -34,30 +34,17 @@
   <div class="titulo">
     <h3 class="mono">{{ grupo.carrier|upper }}</h3>
     <span class="pill accent">{{ grupo.listos|length }} pedido{{ grupo.listos|length|pluralize }}</span>
-    <span class="small muted">palomea lo que sube a ESTE camión</span>
+    {# La salida se registra escaneando la etiqueta interna de cada caja (Chema 2026-09-22): ya no hay palomitas aquí. #}
+    <a class="btn primario" href="{{ grupo.registrar_url }}">Registrar salida{% if grupo.escaneadas %} · {{ grupo.escaneadas }} escaneada{{ grupo.escaneadas|pluralize }}{% endif %}</a>
   </div>
   <div class="tabla-wrap">
     <table>
       <thead>
-        <tr><th>Sube</th><th>Pedido</th><th>Comprador · destino</th><th>Cajas</th><th>Guías</th><th>Contenido</th></tr>
+        <tr><th>Pedido</th><th>Comprador · destino</th><th>Cajas</th><th>Guías</th><th>Contenido</th></tr>
       </thead>
       <tbody>
         {% for p in grupo.listos %}
         <tr>
-          <td>
-            {% if p.por_caja %}
-            {# Varias cajas: se palomea CADA caja (camión lleno = la que no cabe se queda). #}
-            {% for c in p.cajas_salida %}
-            <label class="small" style="display:block;white-space:nowrap">
-              <input type="checkbox" name="paquete_id" value="{{ c.pk }}" checked
-                     form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}"> caja {{ c.numero }}
-            </label>
-            {% endfor %}
-            {% else %}
-            <input type="checkbox" name="pedido_id" value="{{ p.pk }}" checked
-                   form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}" aria-label="Sube {{ p.folio }}">
-            {% endif %}
-          </td>
           <td>
             <span class="mono">{{ p.folio }}</span>
             <div class="small">{{ p.cliente.nombre }}</div>
@@ -104,16 +91,6 @@
     </table>
   </div>
 
-  {# El form va al final (los botones de etiqueta son forms propios: no se anidan); #}
-  {# los checkboxes de la tabla le pertenecen vía el atributo form=. #}
-  <form method="post" class="mt" id="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">{% csrf_token %}
-    <input type="hidden" name="accion" value="manifiesto">
-    <input type="hidden" name="corral" value="{{ corral.codigo }}">
-    <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
-    <button class="btn primario gigante" type="submit" {% if grupo.firman == 0 %}disabled{% endif %}>
-      FIRMÓ EL CHOFER DE {{ grupo.carrier|upper }} · SALE LO PALOMEADO
-    </button>
-  </form>
   {% if grupo.puede_recolectar %}
   {% if grupo.recoleccion %}
   <p class="small mt"><span class="pill ok">recolección</span>
@@ -140,7 +117,7 @@
   {% endif %}
   {% endif %}
   {% endfor %}
-  <p class="small muted mt">Firma del chofer en mano ANTES de tocar el botón. Lo palomeado se marca RECOLECTADO y se avisa al comprador; lo demás se queda para la siguiente recolección.</p>
+  <p class="small muted mt">Cuando llegue el chofer: "Registrar salida", escanea la etiqueta interna de cada caja que sube, cierra la salida y confirma. Ahí nace el manifiesto con folio para su firma; lo que no se escaneó se queda para la siguiente recolección.</p>
   {% elif not corral.sin_guia %}
   <p class="muted mt">Corral vacío.</p>
   {% else %}
