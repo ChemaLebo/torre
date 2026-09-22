@@ -1255,7 +1255,9 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
                 f"El pedido {fresco.folio} no se puede empacar: está {fresco.get_estado_display()} "
                 "y el empaque solo aplica a pedidos en picking."
             )
-        incompletas = [l for l in fresco.lineas.all() if l.cantidad_pickeada < l.cantidad]
+        # Solo cuenta lo que ESTA ola surte: las faltantes (sin inventario)
+        # y lo que ya salió con una ola anterior no detienen el empaque.
+        incompletas = [l for l in fresco.lineas_por_surtir if l.cantidad_pickeada < l.cantidad]
         if incompletas:
             detalle = ", ".join(
                 f"{l.sku.codigo} ({l.cantidad_pickeada}/{l.cantidad})" for l in incompletas
@@ -1272,6 +1274,8 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
         for l in fresco.lineas.select_related("sku").filter(
             sku__es_kit=True, parte_de_kit__isnull=True,
         ):
+            if l.pendiente <= 0:
+                continue  # kit faltante (espera inventario) o ya despachado en la ola anterior
             piezas = sum(h.cantidad for h in l.componentes.all())
             cupo = l.sku.productos_por_kit or 0
             objetivo = cupo * l.cantidad
@@ -1325,8 +1329,11 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
         from apps.inventario.services import confirmar_pick  # lazy
         for linea in fresco.lineas.select_related("sku"):
             # La línea kit se escanea (la caja física) pero no tiene stock propio.
-            if linea.cantidad_pickeada and not linea.sku.es_kit:
-                confirmar_pick(linea.sku, linea.cantidad_pickeada, fresco.folio)
+            # Segunda ola: lo que salió con la primera (cantidad_despachada) se
+            # confirmó entonces; solo se confirma lo nuevo.
+            por_confirmar = linea.cantidad_pickeada - linea.cantidad_despachada
+            if por_confirmar > 0 and not linea.sku.es_kit:
+                confirmar_pick(linea.sku, por_confirmar, fresco.folio)
 
         fresco.peso_real_gr = peso_real
         fresco.save(update_fields=["peso_real_gr", "actualizado"])
@@ -1401,7 +1408,7 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
             f"El pedido {pedido.folio} no se puede empacar: está {pedido.get_estado_display()} "
             "y el empaque solo aplica a pedidos en picking."
         )
-    incompletas = [l for l in pedido.lineas.all() if l.cantidad_pickeada < l.cantidad]
+    incompletas = [l for l in pedido.lineas_por_surtir if l.cantidad_pickeada < l.cantidad]
     if incompletas:
         detalle = ", ".join(
             f"{l.sku.codigo} ({l.cantidad_pickeada}/{l.cantidad})" for l in incompletas
@@ -1765,7 +1772,9 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     faltan). Cada caja pasa a DESPACHADO; el kardex despacha (en_empaque →
     salida) las líneas de esas cajas la primera vez que alguna de sus
     unidades sale — una caja 24 reempacada en dos medias sale del kardex con
-    la primera media: la unidad de venta ya se abrió. Pedido empacado entero
+    la primera media: la unidad de venta ya se abrió. Lo despachado queda en
+    `LineaPedido.cantidad_despachada`: una segunda ola (fulfillment parcial)
+    despacha solo lo nuevo, nunca dos veces. Pedido empacado entero
     (sin cajas EMPACADO): sale completo, como siempre. Con cajas pendientes
     el pedido queda PARCIALMENTE_DESPACHADO; con todas fuera, RECOLECTADO.
 
@@ -1798,15 +1807,21 @@ def marcar_recolectado(pedido, actor, paquetes=None):
                 f"{pedido.folio}: ninguna de las cajas palomeadas sigue pendiente de salir."
             )
         if salen:
-            ya_fuera = _lineas_de_cajas(
-                [c for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
-            )
-            lineas = [l for pk, l in _lineas_de_cajas(salen).items() if pk not in ya_fuera]
+            lineas = list(_lineas_de_cajas(salen).values())
         else:
             lineas = list(pedido.lineas.select_related("sku"))
         for linea in lineas:
-            if linea.cantidad_pickeada and not linea.sku.es_kit:
-                despachar(linea.sku, linea.cantidad_pickeada, pedido.folio)
+            # Sale del kardex lo pickeado que aún no ha salido: una línea
+            # repartida en dos cajas sale entera con la primera (la unidad de
+            # venta ya se abrió) y en una segunda ola lo de la primera ya se
+            # fue (cantidad_despachada): nada se despacha dos veces.
+            por_despachar = linea.cantidad_pickeada - linea.cantidad_despachada
+            if por_despachar <= 0:
+                continue
+            if not linea.sku.es_kit:
+                despachar(linea.sku, por_despachar, pedido.folio)
+            linea.cantidad_despachada = linea.cantidad_pickeada
+            linea.save(update_fields=["cantidad_despachada"])
         for caja in salen:
             caja.transicionar(
                 Paquete.DESPACHADO, actor=actor,
@@ -1885,6 +1900,14 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
             f"{pedido.folio} está {pedido.get_estado_display()}: la entrega sin guía "
             "solo aplica antes de generar la guía."
         )
+    faltantes = sorted({l.sku.codigo for l in pedido.lineas_faltantes})
+    if faltantes:
+        # ENTREGADO es terminal: no hay segunda ola después. Lo sin inventario
+        # se resuelve (o se quita del pedido) antes de entregar en bodega.
+        raise ValueError(
+            f"{pedido.folio} tiene líneas sin inventario ({', '.join(faltantes)}): "
+            "consigue el stock o quítalas del pedido antes de entregarlo en bodega."
+        )
     from apps.envios.models import Paquete  # lazy: modelo de otra app
     from apps.inventario.services import confirmar_pick, despachar  # lazy
 
@@ -1902,11 +1925,15 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
                 if faltan > 0:
                     confirmar_linea_pick(linea, faltan, actor)
         for linea in lineas:
-            if linea.sku.es_kit or not linea.cantidad_pickeada:
-                continue
-            if estado_inicial != Pedido.EMPACADO:
-                confirmar_pick(linea.sku, linea.cantidad_pickeada, pedido.folio)
-            despachar(linea.sku, linea.cantidad_pickeada, pedido.folio)
+            por_despachar = linea.cantidad_pickeada - linea.cantidad_despachada
+            if por_despachar <= 0:
+                continue  # sin pick, o ya salió con la primera ola
+            if not linea.sku.es_kit:
+                if estado_inicial != Pedido.EMPACADO:
+                    confirmar_pick(linea.sku, por_despachar, pedido.folio)
+                despachar(linea.sku, por_despachar, pedido.folio)
+            linea.cantidad_despachada = linea.cantidad_pickeada
+            linea.save(update_fields=["cantidad_despachada"])
         for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero"):
             if caja.estado != Paquete.EMPACADO:
                 caja.transicionar(Paquete.EMPACADO, actor=actor, motivo=f"Entrega sin guía de {pedido.folio}.")
@@ -1958,10 +1985,20 @@ def cancelar(pedido, actor, motivo=""):
       se marca cancelacion_tardia y se abre incidencia CAN; el pedido pasa a
       CANCELADO cuando Mesa decide el reingreso (registrar_reingreso /
       marcar_no_recuperado) o resuelve la CAN, lo que ocurra primero.
+    - Segunda ola en bodega con la primera ya en la calle (fulfillment
+      parcial): lo de bodega se libera / reingresa como siempre y lo que
+      salió (cantidad_despachada) sigue el camino de la cancelación tardía;
+      el pedido queda CANCELADO con la decisión de reingreso abierta en Mesa.
     - Terminales: ValueError.
     """
     estado = pedido.estado
-    if estado == Pedido.PENDIENTE:
+    en_bodega = (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA)
+    if estado in en_bodega and pedido.tiene_despachadas:
+        _devolver_stock_y_cancelar(
+            pedido, actor, motivo or "Cancelación con una parte del pedido ya en la calle",
+            tardia=True,
+        )
+    elif estado == Pedido.PENDIENTE:
         _liberar_reservas(pedido)
         pedido.transicionar(Pedido.CANCELADO, actor=actor, motivo=motivo or "Cancelación directa")
     elif estado in (Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
@@ -1977,21 +2014,26 @@ def cancelar(pedido, actor, motivo=""):
             "pedido", pedido.pk, "cancelacion_tardia", actor=actor, cliente=pedido.cliente,
             motivo=motivo or "Cancelación solicitada con el paquete ya despachado.",
         )
-        try:
-            from apps.incidencias.services import abrir_incidencia  # lazy
-        except ImportError:
-            pass
-        else:
-            texto = (
-                f"Cancelación tardía: el pedido {pedido.folio} ya salió de bodega "
-                f"({pedido.get_estado_display()}). {motivo}".strip()
-            )
-            abrir_incidencia(pedido.cliente, "CAN", "auto", pedido=pedido, texto=texto)
+        _abrir_incidencia_can(
+            pedido,
+            f"Cancelación tardía: el pedido {pedido.folio} ya salió de bodega "
+            f"({pedido.get_estado_display()}). {motivo}".strip(),
+        )
     else:
         raise ValueError(
             f"No se puede cancelar el pedido {pedido.folio}: está {pedido.get_estado_display()}."
         )
     return pedido
+
+
+def _abrir_incidencia_can(pedido, texto):
+    """Incidencia CAN de una cancelación con mercancía en la calle (lazy por
+    contrato; sin módulo de incidencias no pasa nada)."""
+    try:
+        from apps.incidencias.services import abrir_incidencia  # lazy
+    except ImportError:
+        return None
+    return abrir_incidencia(pedido.cliente, "CAN", "auto", pedido=pedido, texto=texto)
 
 
 def confirmar_restock(pedido, actor, motivo=""):
@@ -2007,13 +2049,19 @@ def confirmar_restock(pedido, actor, motivo=""):
     )
 
 
-def _devolver_stock_y_cancelar(pedido, actor, motivo):
+def _devolver_stock_y_cancelar(pedido, actor, motivo, tardia=False):
     """Núcleo de la cancelación con mercancía en proceso, en UNA transacción:
-    por línea (kits fuera), lo pickeado → reingreso (put-away en recepción,
-    desde empaque si ya se empacó, desde vendible si sigue en carrito) y el
-    resto libera su reserva; si hubo reingreso nace una OrdenEntrada tipo
-    reingreso ya RECIBIDA; el pedido pasa a CANCELADO. Las guías activas se
-    cancelan con el carrier fuera de la transacción, best-effort.
+    por línea (kits fuera), lo pickeado que sigue en bodega → reingreso
+    (put-away en recepción, desde empaque si ESTA ola ya se empacó, desde
+    vendible si sigue en carrito) y el resto libera su reserva; si hubo
+    reingreso nace una OrdenEntrada tipo reingreso ya RECIBIDA; el pedido pasa
+    a CANCELADO. Las guías activas se cancelan con el carrier fuera de la
+    transacción, best-effort.
+
+    `tardia=True` (segunda ola cancelada con la primera en la calle): lo que
+    ya salió (cantidad_despachada) no se toca — se marca cancelacion_tardia,
+    se abre la CAN y la decisión de reingreso de ESA parte queda abierta en
+    Mesa aunque lo de bodega ya haya vuelto; vale también desde PENDIENTE.
     """
     from apps.inventario.models import LineaASN, OrdenEntrada  # lazy: modelo de otra app
     from apps.inventario.services import liberar_reserva, reingresar_desde_pedido  # lazy
@@ -2021,25 +2069,36 @@ def _devolver_stock_y_cancelar(pedido, actor, motivo):
     with transaction.atomic():
         fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
         pedido.estado = fresco.estado
-        if pedido.estado not in (
+        permitidos = (
             Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.CANCELACION_PENDIENTE,
-        ):
+        )
+        if tardia:
+            permitidos += (Pedido.PENDIENTE,)  # segunda ola aún sin empezar
+        if pedido.estado not in permitidos:
             raise ValueError(
                 f"No se puede cancelar el pedido {pedido.folio}: está {pedido.get_estado_display()}."
             )
-        empacado = pedido.ts_empacado is not None
-        reingreso = []
+        # De dónde vuelve lo pickeado: de empaque si ESTA ola ya se empacó.
+        # ts_empacado no sirve en una segunda ola: lo estampó la primera.
+        empacado = pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA) or (
+            pedido.estado == Pedido.CANCELACION_PENDIENTE and pedido.ts_empacado is not None
+        )
+        reingreso, en_calle = [], []
         for linea in pedido.lineas.select_related("sku"):
+            if linea.cantidad_despachada:
+                en_calle.append(f"{linea.sku.codigo} × {linea.cantidad_despachada}")
             if linea.sku.es_kit:
                 continue
-            pickeada = linea.cantidad_pickeada
-            if pickeada:
+            # Lo que ya salió en un manifiesto (cantidad_despachada) no está
+            # en bodega: sigue el camino de la cancelación tardía.
+            pickeada = linea.cantidad_pickeada - linea.cantidad_despachada
+            if pickeada > 0:
                 reingresar_desde_pedido(linea.sku, pickeada, pedido.folio, actor, desde_empaque=empacado)
                 reingreso.append((linea.sku, pickeada))
-            resto = linea.cantidad - pickeada
+            resto = linea.cantidad - linea.cantidad_pickeada
             if resto > 0 and linea.reservada:
                 liberar_reserva(linea.sku, resto, pedido.folio)
-            if linea.reservada:
+            if linea.reservada and not linea.cantidad_despachada:
                 linea.reservada = False
                 linea.save(update_fields=["reservada"])
         orden = None
@@ -2060,9 +2119,28 @@ def _devolver_stock_y_cancelar(pedido, actor, motivo):
                        "lineas": [{"sku": s.codigo, "cantidad": n} for s, n in reingreso]},
                 motivo=f"Mercancía de {pedido.folio} de vuelta a recepción; el piso la ubica.",
             )
-            pedido.reingreso_estado = Pedido.REINGRESADO
-            pedido.save(update_fields=["reingreso_estado", "actualizado"])
+            if not tardia:
+                pedido.reingreso_estado = Pedido.REINGRESADO
+                pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        if tardia:
+            # La parte en la calle: misma señal que la cancelación tardía
+            # normal; Mesa decide su reingreso (o lo da por no recuperado).
+            pedido.incidencia_activa = True
+            pedido.cancelacion_tardia = True
+            pedido.save(update_fields=["incidencia_activa", "cancelacion_tardia", "actualizado"])
+            registrar_evento(
+                "pedido", pedido.pk, "cancelacion_tardia", actor=actor, cliente=pedido.cliente,
+                delta={"en_calle": en_calle,
+                       "reingreso_bodega": [{"sku": s.codigo, "cantidad": n} for s, n in reingreso]},
+                motivo=f"{motivo} Ya en la calle: {', '.join(en_calle)}."[:300],
+            )
         pedido.transicionar(Pedido.CANCELADO, actor=actor, motivo=motivo)
+    if tardia:
+        _abrir_incidencia_can(
+            pedido,
+            f"Cancelación con una parte de {pedido.folio} ya en la calle "
+            f"({', '.join(en_calle)}); lo de bodega ya se liberó o reingresó. {motivo}".strip(),
+        )
     _cancelar_guias_best_effort(pedido, actor)
     return pedido
 
@@ -2071,11 +2149,14 @@ def _cancelar_guias_best_effort(pedido, actor):
     """Avisa al carrier de cada guía activa (adapter.cancelar); un fallo del
     carrier no revierte la cancelación: queda auditado para que Mesa lo persiga."""
     try:
-        from apps.envios.models import Guia
+        from apps.envios.models import Guia, Paquete
         from apps.envios.services import get_adapter  # lazy por contrato
     except ImportError:
         return
-    for guia in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)):
+    guias = pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).select_related("paquete")
+    for guia in guias:
+        if guia.paquete_id and guia.paquete.estado == Paquete.DESPACHADO:
+            continue  # ya en la calle (primera ola): la CAN decide, no se cancela con el carrier
         try:
             adapter = get_adapter(guia.carrier, proveedor=guia.proveedor, cliente=pedido.cliente)
             ok = bool(adapter.cancelar(guia))
@@ -2146,8 +2227,13 @@ def registrar_reingreso(pedido, actor, motivo=""):
     with transaction.atomic():
         pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
         _validar_decision_reingreso(pedido)
+        # Vuelve lo que salió: cantidad_despachada cuando el manifiesto la
+        # estampó (desde 2026-09-22; en una cancelación mixta lo de bodega ya
+        # regresó por su cuenta); en pedidos anteriores, lo pickeado o, sin
+        # pick registrado, lo pedido.
+        con_despacho = pedido.tiene_despachadas
         lineas = [
-            (l.sku, l.cantidad_pickeada or l.cantidad)
+            (l.sku, l.cantidad_despachada if con_despacho else (l.cantidad_pickeada or l.cantidad))
             for l in pedido.lineas.select_related("sku") if not l.sku.es_kit
         ]
         lineas = [(sku, n) for sku, n in lineas if n > 0]

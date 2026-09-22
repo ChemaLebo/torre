@@ -263,9 +263,34 @@ class Pedido(models.Model):
     # ── Ayudas de dominio ──
 
     @property
+    def lineas_por_surtir(self):
+        """Líneas que la ola en curso sí surte: con reserva y con unidades que
+        aún no salen (LineaPedido.pendiente > 0). Fuera quedan las faltantes
+        (sin inventario, tag "Sin inventario") y lo que ya se fue en un
+        manifiesto anterior. Lee `lineas.all()` para respetar el prefetch de
+        `lineas__sku` de las vistas."""
+        return [l for l in self.lineas.all() if l.pendiente > 0]
+
+    @property
+    def lineas_faltantes(self):
+        """Líneas sin inventario que esta ola ignora (fulfillment parcial)."""
+        return [l for l in self.lineas.all() if l.faltante]
+
+    @property
+    def tiene_faltantes(self):
+        """True si alguna línea espera inventario (se surte en una segunda ola)."""
+        return any(l.faltante for l in self.lineas.all())
+
+    @property
+    def tiene_despachadas(self):
+        """True si algo del pedido ya salió en un manifiesto (primera ola en la calle)."""
+        return any(l.cantidad_despachada for l in self.lineas.all())
+
+    @property
     def lineas_completas(self):
-        """True si toda línea tiene su cantidad completa pickeada."""
-        return all(l.cantidad_pickeada >= l.cantidad for l in self.lineas.all())
+        """True si toda línea POR SURTIR tiene su cantidad completa pickeada;
+        las faltantes no cuentan (van con el tag "Sin inventario")."""
+        return all(l.cantidad_pickeada >= l.cantidad for l in self.lineas_por_surtir)
 
     @property
     def cajas_cerradas_completas(self):
@@ -323,6 +348,13 @@ class LineaPedido(models.Model):
     reservada = models.BooleanField(
         default=False, help_text="True si inventario.reservar apartó el stock de esta línea",
     )
+    # Fulfillment parcial (Chema 2026-09-22): lo que ya salió de bodega en un
+    # manifiesto. La segunda ola surte solo cantidad - cantidad_despachada, y
+    # empacar / marcar_recolectado no confirman ni despachan dos veces del
+    # kardex lo que se fue con la primera.
+    cantidad_despachada = models.PositiveIntegerField(
+        default=0, help_text="Unidades que ya salieron de bodega en un manifiesto anterior",
+    )
     parte_de_kit = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.CASCADE, related_name="componentes",
         help_text="Línea kit a la que pertenece este componente (té dentro de la TeaBox)",
@@ -344,3 +376,23 @@ class LineaPedido(models.Model):
 
     def __str__(self):
         return f"{self.pedido.folio} · {self.sku} × {self.cantidad}"
+
+    @property
+    def faltante(self):
+        """True si la línea se queda sin surtir por falta de existencias: la
+        ingesta no encontró stock (reservada=False) y el reintento aún no lo
+        consigue. Picking, plan de cajas y empaque la ignoran y el piso la ve
+        con el tag "Sin inventario" (Chema 2026-09-22). Un kit (nace
+        reservada=True, sin stock propio) es faltante cuando alguna de sus
+        hijas lo es: la caja del kit no viaja incompleta."""
+        if self.sku.es_kit:
+            return any(h.faltante for h in self.componentes.all())
+        return not self.reservada
+
+    @property
+    def pendiente(self):
+        """Unidades por surtir en la ola en curso: lo pedido menos lo que ya
+        salió en un manifiesto (cantidad_despachada); 0 si es faltante."""
+        if self.faltante:
+            return 0
+        return max(self.cantidad - self.cantidad_despachada, 0)

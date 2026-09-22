@@ -31,7 +31,7 @@ class PedidoAdmin(admin.ModelAdmin):
 
 @admin.register(LineaPedido)
 class LineaPedidoAdmin(admin.ModelAdmin):
-    list_display = ("pedido", "sku", "cantidad", "cantidad_pickeada", "reservada", "lote_asignado")
+    list_display = ("pedido", "sku", "cantidad", "cantidad_pickeada", "cantidad_despachada", "reservada", "lote_asignado")
     list_filter = ("reservada",)
     search_fields = ("pedido__folio", "sku__codigo")
     raw_id_fields = ("pedido", "sku", "lote_asignado")
