@@ -40,6 +40,10 @@
 {% endif %}
 
 
+{% if reinicia_al_tomar %}
+<div class="banner warn mt"><span class="foco"></span>Este pedido lo soltó <b>{{ quien_lo_solto|default:"otro operador" }}</b> con avance. Al escanear se vuelve tuyo y el avance se reinicia: re-escanea todo desde el carrito.</div>
+{% endif %}
+
 {# Fulfillment parcial: lo sin inventario se queda y se completa después, con el mismo folio. #}
 {% if faltantes %}
 <div class="card mt">
@@ -191,6 +195,13 @@ document.addEventListener("DOMContentLoaded", function () {
       return resp.json().then(function (r) {
         if (!resp.ok || !r.ok) {
           Feedback.error(r.error || ("Error del servidor (" + resp.status + "). Intenta de nuevo."));
+          return;
+        }
+        if (r.reiniciado) {
+          // El pedido cambió de manos en este escaneo: los contadores de las
+          // demás líneas volvieron a cero en el servidor — se recarga completo.
+          Escaner.detener();
+          window.location.reload();
           return;
         }
         for (var i = 0; i < secciones.length; i++) {

@@ -41,7 +41,7 @@ class AsignacionTests(PisoTestCase):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.asignado_a, self.operador)
 
-    def test_transferencia_requiere_aceptacion_y_conserva_avance(self):
+    def test_transferencia_requiere_aceptacion_y_reinicia_el_avance(self):
         self._iniciar()
         from apps.pedidos.services import confirmar_linea_pick
         confirmar_linea_pick(self.pedido.lineas.get(), 1, self.operador)
@@ -62,7 +62,35 @@ class AsignacionTests(PisoTestCase):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.asignado_a, self.otro)
         self.assertIsNone(self.pedido.transferencia_a)
-        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)  # avance intacto
+        # Chema 2026-09-22: quien recibe re-escanea desde el carrito.
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 0)
+        from apps.core.models import EventoAuditoria
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(self.pedido.pk), accion="picking_reiniciado",
+        )
+        self.assertEqual(evento.delta["avance_anterior"], [{"sku": self.sku.codigo, "pickeada": 1}])
+
+    def test_transferencia_con_caja_ya_empacada_no_reinicia(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete, PaqueteLinea
+        from apps.pedidos.services import confirmar_linea_pick, empacar_caja
+
+        self._iniciar()
+        linea = self.pedido.lineas.get()
+        confirmar_linea_pick(linea, 2, self.operador)
+        caja = Paquete.objects.create(
+            pedido=self.pedido, numero=1, peso_kg=Decimal("2.1"), carrier="estafeta", servicio="ground",
+        )
+        c2 = Paquete.objects.create(
+            pedido=self.pedido, numero=2, peso_kg=Decimal("2.1"), carrier="estafeta", servicio="ground",
+        )
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=1)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=1)
+        empacar_caja(caja, self.operador, 2100, self.foto())  # la caja 1 ya está pesada y con foto
+        services.transferir_pedido(self.pedido, self.operador, self.otro)
+        services.aceptar_transferencia(self.pedido, self.otro)
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 2)  # no se deshace lo empacado
 
     def test_solo_el_dueno_puede_enviar(self):
         self._iniciar()
@@ -89,3 +117,38 @@ class AsignacionTests(PisoTestCase):
         )
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.asignado_a, self.otro)
+
+    def _soltado_con_avance(self, por):
+        """Pedido en picking con 1 de 2 escaneada, soltado por `por`."""
+        services.iniciar_picking(self.pedido, por)
+        services.confirmar_linea_pick(self.pedido.lineas.get(), 1, por)
+        services.soltar_pedido(self.pedido, por)
+        self.pedido.refresh_from_db()
+        url = reverse("piso:picking_pedido", args=[self.pedido.pk])
+        return url, {"codigo": self.sku.codigo_barras, "cantidad": 1}
+
+    def test_tomar_lo_que_solto_otro_reinicia_y_recarga(self):
+        url, datos = self._soltado_con_avance(self.operador)
+        self.client.force_login(self.otro)
+        pagina = self.client.get(url)
+        self.assertContains(pagina, "el avance se reinicia")
+        self.assertContains(pagina, "piso1")
+        respuesta = self.client.post(url, datos, HTTP_ACCEPT="application/json")
+        self.assertTrue(respuesta.json()["reiniciado"])
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.asignado_a, self.otro)
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)  # 0 + la pieza recién escaneada
+        from apps.core.models import EventoAuditoria
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(self.pedido.pk), accion="picking_reiniciado",
+        ).exists())
+
+    def test_quien_lo_solto_lo_retoma_con_su_avance(self):
+        url, datos = self._soltado_con_avance(self.operador)
+        pagina = self.client.get(url)  # sigo logueado como piso1
+        self.assertNotContains(pagina, "el avance se reinicia")
+        respuesta = self.client.post(url, datos, HTTP_ACCEPT="application/json")
+        self.assertFalse(respuesta.json()["reiniciado"])
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.asignado_a, self.operador)
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 2)  # 1 + 1

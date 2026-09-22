@@ -42,7 +42,9 @@ class PickingPisoTests(PisoTestCase):
         self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)  # el avance no se pierde
         evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.pedido.pk), accion="pedido_soltado")
         self.assertEqual((evento.delta["de"], evento.delta["motivo"]), ("piso1", "Faltante de producto"))
-        # Otro operador lo ve en la lista, lo abre y al escanear se vuelve su dueño.
+        # Otro operador lo ve en la lista, lo abre y al escanear se vuelve su
+        # dueño; el avance del anterior se reinicia (Chema 2026-09-22: se
+        # re-escanea desde el carrito), así que queda 0 + la pieza recién leída.
         otro = User.objects.create_user("piso2", password="pin-piso")
         PerfilUsuario.objects.create(usuario=otro, rol=PerfilUsuario.ROL_PISO, pin="2222")
         self.client.force_login(otro)
@@ -50,7 +52,7 @@ class PickingPisoTests(PisoTestCase):
         self.assertContains(respuesta, self.pedido.folio)
         self.client.post(self.url_detalle, {"codigo": "7501234567890", "cantidad": "1"})
         self.pedido.refresh_from_db()
-        self.assertEqual((self.pedido.asignado_a, self.pedido.lineas.get().cantidad_pickeada), (otro, 2))
+        self.assertEqual((self.pedido.asignado_a, self.pedido.lineas.get().cantidad_pickeada), (otro, 1))
         # Y el primero ya no puede soltar lo que no es suyo.
         self.client.force_login(self.operador)
         respuesta = self.client.post(self.url_detalle, {"accion": "soltar"}, follow=True)

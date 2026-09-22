@@ -203,11 +203,40 @@ def _acceso_pedido(request, pedido):
     return _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
 
 
+def _quien_lo_solto(pedido):
+    """Username de quien soltó el pedido (último evento pedido_soltado), o ""."""
+    from apps.core.models import EventoAuditoria  # lazy por contrato
+    evento = (
+        EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="pedido_soltado")
+        .order_by("-ts").first()
+    )
+    return str((evento.delta or {}).get("de") or "") if evento else ""
+
+
+def _reinicia_al_tomar(pedido, request):
+    """True si tomar este pedido libre reinicia su avance: lo soltó OTRA
+    persona (quien lo soltó y lo retoma conserva lo suyo)."""
+    if pedido.asignado_a_id is not None or _es_mesa(request):
+        return False
+    return _quien_lo_solto(pedido) != request.user.username
+
+
 def _reclamar_si_libre(pedido, request):
-    """Trabajar un pedido libre = volverse su dueño (adopción implícita)."""
-    if pedido.asignado_a_id is None and not _es_mesa(request):
-        pedido.asignado_a = request.user
-        pedido.save(update_fields=["asignado_a", "actualizado"])
+    """Trabajar un pedido libre = volverse su dueño (adopción implícita). Si lo
+    soltó otra persona, el avance se reinicia (pedidos.reiniciar_picking):
+    quien recibe re-escanea desde el carrito. Regresa True si reinició."""
+    if pedido.asignado_a_id is not None or _es_mesa(request):
+        return False
+    from apps.pedidos.services import reiniciar_picking  # lazy por contrato
+    reiniciado = False
+    if _reinicia_al_tomar(pedido, request):
+        quien = _quien_lo_solto(pedido) or "otro operador"
+        reiniciado = reiniciar_picking(
+            pedido, request.user, motivo=f"Lo soltó {quien} y lo tomó {request.user.username}: re-escanea desde el carrito.",
+        )
+    pedido.asignado_a = request.user
+    pedido.save(update_fields=["asignado_a", "actualizado"])
+    return reiniciado
 
 
 def _operadores_piso(request):
@@ -1157,12 +1186,14 @@ def picking_pedido(request, pk):
             return redirect("piso:picking_pedido", pk=pedido.pk)
         if request.POST.get("accion") == "soltar":
             return _pedido_soltar(request, pedido)
-        _reclamar_si_libre(pedido, request)
-        return _picking_escanear(request, pedido)
+        reiniciado = _reclamar_si_libre(pedido, request)
+        return _picking_escanear(request, pedido, reiniciado=reiniciado)
 
     lineas = _lineas_en_ruta(pedido)
     pickeadas, total, _ = _avance(pedido)
     contexto = {
+        "reinicia_al_tomar": _reinicia_al_tomar(pedido, request) and pickeadas > 0,
+        "quien_lo_solto": _quien_lo_solto(pedido),
         "operadores": _operadores_piso(request),
         "paquetes": _paquetes_con_lineas(pedido),
         "ahorro_division": _ahorro_division(pedido),
@@ -1177,12 +1208,15 @@ def picking_pedido(request, pk):
     return render(request, "piso/picking_pedido.html", contexto)
 
 
-def _picking_json(pedido, linea, lineas):
-    """Payload del confirmar AJAX: avance sin reload para el visor."""
+def _picking_json(pedido, linea, lineas, reiniciado=False):
+    """Payload del confirmar AJAX: avance sin reload para el visor. Con
+    `reiniciado` (el pedido cambió de manos en este escaneo) el visor recarga
+    la página: los contadores de las demás líneas volvieron a cero."""
     pickeadas, total, _ = _avance(pedido)
     completo = all(l.cantidad_pickeada >= l.cantidad for l in lineas)
     return JsonResponse({
         "ok": True,
+        "reiniciado": reiniciado,
         "linea_id": linea.pk,
         "sku": linea.sku.codigo,
         "pickeada": linea.cantidad_pickeada,
@@ -1194,14 +1228,18 @@ def _picking_json(pedido, linea, lineas):
     })
 
 
-def _picking_escanear(request, pedido):
+def _picking_escanear(request, pedido, reiniciado=False):
     """Escaneo por línea: código de barras + cantidad, validado contra el SKU real.
 
     Con `Accept: application/json` (visor de cámara) regresa JSON con el
     avance — el POST clásico (fallback sin JS) sigue con PRG y flashes.
+    `reiniciado`: este escaneo tomó un pedido que soltó otra persona y el
+    avance volvió a cero antes de contar la pieza.
     """
     quiere_json = _quiere_json(request)
     destino = redirect("piso:picking_pedido", pk=pedido.pk)
+    if reiniciado and not quiere_json:
+        messages.warning(request, "El pedido cambió de manos: el avance se reinició, re-escanea desde el carrito.")
 
     def error(mensaje):
         if quiere_json:
@@ -1246,7 +1284,7 @@ def _picking_escanear(request, pedido):
         return error(str(exc))
 
     if quiere_json:
-        return _picking_json(pedido, linea, lineas)
+        return _picking_json(pedido, linea, lineas, reiniciado=reiniciado)
 
     if all(l.cantidad_pickeada >= l.cantidad for l in lineas):
         messages.success(request, f"Pedido {pedido.folio} completo. Llévalo a la mesa de empaque.")

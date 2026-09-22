@@ -1030,7 +1030,9 @@ def soltar_pedido(pedido, usuario, motivo=""):
     se queda EN_PICKING con el avance intacto y sin dueño, así lo puede tomar
     cualquier operador desde la lista o seguirlo él mismo después (Chema
     2026-09-21: con un faltante el operador quedaba trabado). Mesa también
-    puede soltarlo. Cancela una transferencia pendiente si la había."""
+    puede soltarlo. Cancela una transferencia pendiente si la había. Si lo
+    retoma OTRA persona, el avance se reinicia al reclamarlo
+    (reiniciar_picking): nadie da fe del carrito de otro."""
     es_mesa = getattr(getattr(usuario, "perfil", None), "rol", "") == "mesa" or getattr(usuario, "is_superuser", False)
     if pedido.asignado_a_id != getattr(usuario, "pk", None) and not es_mesa:
         raise ValueError(f"{pedido.folio} no es tuyo: solo su dueño (o Mesa) puede soltarlo.")
@@ -1053,7 +1055,9 @@ def soltar_pedido(pedido, usuario, motivo=""):
 
 
 def aceptar_transferencia(pedido, usuario):
-    """El destinatario acepta: cambia de manos con el avance INTACTO."""
+    """El destinatario acepta: cambia de manos y, si sigue en picking, el
+    avance se reinicia (Chema 2026-09-22: quien recibe re-escanea desde el
+    carrito; nadie da fe de lo que otro metió)."""
     if pedido.transferencia_a_id != usuario.pk:
         raise ValueError(f"{pedido.folio} no tiene una transferencia para ti.")
     anterior = pedido.asignado_a
@@ -1065,7 +1069,45 @@ def aceptar_transferencia(pedido, usuario):
         delta={"de": _nombre_usuario(anterior), "a": usuario.username},
         motivo=f"Transferencia aceptada: ahora lo trabaja {usuario.username}.",
     )
+    reiniciar_picking(
+        pedido, usuario,
+        motivo=f"Transferencia aceptada de {_nombre_usuario(anterior)}: re-escanea desde el carrito.",
+    )
     return pedido
+
+
+def reiniciar_picking(pedido, actor, motivo=""):
+    """El picking vuelve a cero cuando el pedido cambia de manos (transferencia
+    aceptada o un pedido libre que toma OTRA persona): quien recibe el carrito
+    no puede dar fe de lo que otro metió y lo re-escanea todo. Solo aplica en
+    picking y antes de que alguna caja esté empacada (una caja ya pesada y
+    con foto no se deshace); las hijas de kit declaradas en empaque no se
+    tocan (reservan stock al declararse). No mueve inventario: el pick se
+    confirma hasta empacar. Regresa True si reinició algo; queda el evento
+    picking_reiniciado con el avance que había."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    if pedido.estado != Pedido.EN_PICKING:
+        return False
+    if pedido.paquetes.filter(estado__in=[Paquete.EMPACADO, Paquete.DESPACHADO]).exists():
+        return False
+    with transaction.atomic():
+        lineas = list(
+            pedido.lineas.select_for_update().select_related("sku")
+            .filter(parte_de_kit__isnull=True, cantidad_pickeada__gt=0)
+        )
+        if not lineas:
+            return False
+        avance = [{"sku": l.sku.codigo, "pickeada": l.cantidad_pickeada} for l in lineas]
+        for linea in lineas:
+            linea.cantidad_pickeada = 0
+            linea.save(update_fields=["cantidad_pickeada"])
+        registrar_evento(
+            "pedido", pedido.pk, "picking_reiniciado", actor=actor, cliente=pedido.cliente,
+            delta={"avance_anterior": avance},
+            motivo=(motivo or "El pedido cambió de manos: se re-escanea desde el carrito.")[:300],
+        )
+    return True
 
 
 def rechazar_transferencia(pedido, usuario):
