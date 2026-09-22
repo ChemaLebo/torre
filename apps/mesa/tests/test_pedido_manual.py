@@ -215,6 +215,16 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         self.url = reverse("mesa:pedidos")
         self.client.force_login(self.usuario_mesa)
 
+    def test_la_lista_marca_las_piezas_sin_inventario(self):
+        from apps.catalogo.models import SKU
+        from apps.pedidos.models import LineaPedido
+
+        pedido = crear_pedido(self.colima)
+        agotado = SKU.objects.create(cliente=self.colima, codigo="AGOTADO-SIX", descripcion="Six agotado")
+        LineaPedido.objects.create(pedido=pedido, sku=agotado, cantidad=2)  # sin reserva: faltante
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "Sin inventario · 2 pzas")
+
     def test_boton_reintenta_reservas_del_pedido(self):
         from unittest.mock import patch
 

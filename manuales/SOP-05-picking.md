@@ -18,7 +18,7 @@ El picking es donde nace (o muere) el "pedido perfecto". La regla de la casa: **
 ## Pasos
 
 1. **Abre Piso → Picking.** Verás dos listas: **"Por iniciar"** (pedidos pendientes) y **"En picking"** (los que ya están en curso, con su barra de avance).
-2. **Toma el siguiente pedido** de "Por iniciar" y pulsa **"Iniciar picking"**. Torre confirma: *"Picking de [folio] iniciado. Escanea línea por línea."* (Si un pedido de la lista trae la etiqueta roja **"faltante"**, tiene una incidencia activa: pregúntale a OP-1 antes de tomarlo.)
+2. **Toma el siguiente pedido** de "Por iniciar" y pulsa **"Iniciar picking"**. Torre confirma: *"Picking de [folio] iniciado. Escanea línea por línea."* (Si un pedido de la lista trae la etiqueta roja **"faltante"**, tiene una incidencia activa: pregúntale a OP-1 antes de tomarlo. La etiqueta roja **"Sin inventario · N pza"** es otra cosa: esa línea no tiene existencias y Torre la deja fuera de la ola — el pedido SÍ se inicia y sale con lo demás; ver el paso 7b. Un pedido con la etiqueta **"espera inventario"** no se toma: o no tiene nada que surtir todavía, o ya salió una parte y vuelve solo a "Por iniciar" cuando entre stock.)
 3. **Lee el detalle del pedido antes de caminar**:
    - Encabezado: cliente, comprador y, si aplica, la etiqueta **"entrega local"**.
    - ⚠️ **Banner de pedido DIVIDIDO**: si aparece *"Este pedido va DIVIDIDO en N paquetes"*, el pedido viaja en varias cajas, **cada caja con su propia guía**. La pantalla te muestra cada **"Paquete N de N"** con su contenido exacto. **No mezcles el contenido entre cajas**: pickea y agrupa en el carrito respetando el plan por paquete (usa separación física en el carrito desde ya — le ahorras el error a empaque).
@@ -35,6 +35,7 @@ El picking es donde nace (o muere) el "pedido perfecto". La regla de la casa: **
    - ⚠️ **NO ajustes nada. NO tomes de otro lote ni de otra ubicación "para completar" sin registro.** El descuadre es un síntoma; si lo tapas, se vuelve inventario fantasma.
    - **Reporta a OP-1 en el momento.** OP-1 dispara un conteo de ese SKU (SOP-09) y Mesa decide con el cliente: sustituir, mandar parcial o retener. Deja el pedido en pausa (queda "En picking" con su avance guardado).
    - Tú no le avisas al cliente ni al comprador: eso es de Mesa.
+7b. **Línea "Sin inventario"** (aparece al final del detalle, en su propia tarjeta con etiqueta roja): NO la busques ni la escanees — Torre la rechaza (*"está SIN INVENTARIO en este pedido: no se surte en esta ola"*). El avance y el "Pedido completo" cuentan solo lo que sí se surte. El pedido sale sin esa línea; cuando entre stock, vuelve solo a "Por iniciar" **con el mismo folio** para surtir lo que faltó (en la lista se ve como *"espera inventario · ya salió una parte"* mientras tanto). Si tú sí ves el producto en el anaquel, no lo tomes: avisa a OP-1, es un descuadre.
 8. **Termina el pedido**: cuando escaneas la última pieza, Torre te lo dice: *"Pedido [folio] completo. Llévalo a la mesa de empaque."* y te lleva directo a la pantalla de empaque. También verás el banner *"Pedido completo: todas las piezas escaneadas"* con el botón **"Ir a empaque"**.
 9. **Lleva el carrito a la mesa de empaque** tal cual (un carrito = un pedido) y continúa con SOP-06, o entrégaselo a quien empaca y toma el siguiente pedido.
 

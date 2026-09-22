@@ -74,3 +74,9 @@ manage.py cerrar_entregas_presuntas
 - **Visible para pickers/packers**: picking y empaque muestran los paquetes del plan, su contenido ("1/2 de Caja 24 — REEMPACADA"), peso, carrier, precio y el ahorro vs envío único.
 - **Rastreo público brandeado** (`/r/<token>/`): la página del comprador con la marca del cliente (branding por tenant), timeline humana, tarjeta por paquete, POD, reporte de problemas (abre incidencia) y WhatsApp. Embebible en Shopify: ver `docs/shopify-rastreo.md`.
 - **Evidencia de tarifas**: `manage.py probar_tarifas` corre la matriz nacional real y evalúa la meta por envío.
+
+## Fulfillment parcial (septiembre 2026)
+
+- **Una línea sin inventario no detiene el pedido.** Lo que sí hay se pickea, empaca y sale; la línea sin existencias se ve con el tag **"Sin inventario"** en piso, Mesa y portal, y el escáner la rechaza.
+- **Mismo folio, misma orden de Shopify.** Al firmar el manifiesto el pedido queda "Parcialmente despachado" esperando stock (Shopify: Partially fulfilled). Cuando entra el inventario, vuelve solo a "Por iniciar" para surtir lo que faltó: cajas nuevas, su guía, su "va en camino" y su correo de Shopify; el fulfillment cierra los line items restantes.
+- **Reglas:** el pedido no se entrega en Shopify ni en Torre hasta que salió todo; con varias líneas faltantes espera a tener todas; el kit con un componente faltante espera completo; lo que ya salió nunca vuelve a salir del kardex ni se repone en una cancelación (esa parte sigue la cancelación tardía).

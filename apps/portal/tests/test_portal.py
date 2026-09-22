@@ -91,6 +91,27 @@ class TestAcceso(BasePortal):
         self.assertNotContains(respuesta, "tiempo real")  # prohibido en el portal
 
 
+class TestSinInventario(BasePortal):
+    """Fulfillment parcial: Karina ve por línea qué espera inventario (tag "Sin
+    inventario") en la lista y en el detalle; una línea con reserva no lo trae."""
+
+    def _pedido_parcial(self):
+        pedido = Pedido.objects.create(cliente=self.colima, comprador_nombre="Ana", cp="28017")
+        LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=2, reservada=True)
+        agotado = SKU.objects.create(cliente=self.colima, codigo="AGOTADO-SIX", descripcion="Six agotado")
+        LineaPedido.objects.create(pedido=pedido, sku=agotado, cantidad=3)  # sin reserva: faltante
+        return pedido
+
+    def test_lista_y_detalle_marcan_la_linea_sin_inventario(self):
+        pedido = self._pedido_parcial()
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:pedidos") + "?ver=todos")
+        self.assertContains(respuesta, "Sin inventario · 3 pzas")
+        respuesta = self.client.get(reverse("portal:pedido_detalle", args=[pedido.pk]))
+        self.assertContains(respuesta, "sale después, con el mismo folio")
+        self.assertEqual(respuesta.content.decode().count("Sin inventario"), 1)  # solo la línea agotada
+
+
 class TestLinkShopify(BasePortal):
     """La sección de pedidos del portal enlaza la orden en el admin de Shopify,
     el mismo link que Mesa; un pedido manual no lo trae."""

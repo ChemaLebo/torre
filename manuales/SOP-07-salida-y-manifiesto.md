@@ -28,6 +28,8 @@ La pantalla de Salida lo dice arriba, en banner, y es la regla más sagrada de l
    - Si el carrier no responde, Torre te lo dice tal cual: *"El carrier no respondió al generar la guía… Reintenta en un momento con 'Reintentar guía' o avisa a Mesa de Control."* Reintenta una vez; si sigue, Mesa.
    - **No dejes guías pendientes para cuando el chofer ya está tocando el timbre.** La meta: todo pedido del corte empacado, con guía, con foto y en staging **antes de las 14:00** — así se mide nuestro SLA de salida, con evidencia propia.
 
+**Contenido con "Sin inventario · se queda: …"**: esa línea no viaja hoy (no tenía existencias); el pedido sale con lo demás y se completa después con el mismo folio. No la busques ni la reclames: el pedido no aparece incompleto, aparece parcial.
+
 ## B. Llegada del repartidor (por cada recolección)
 
 4. **Verifica la identidad del repartidor**: uniforme/credencial del carrier y su orden o número de recolección. Si algo no cuadra (camioneta sin logo, "vengo por unos paquetes" sin datos), NO entregues nada y llama a Mesa. Los paquetes con alcohol son mercancía apetecible.

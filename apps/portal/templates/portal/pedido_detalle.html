@@ -96,7 +96,7 @@
         <tbody>
           {% for linea in pedido.lineas.all %}
             <tr>
-              <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div></td>
+              <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div>{% if linea.faltante %}<span class="pill crit">Sin inventario</span> <span class="small muted">sale después, con el mismo folio</span>{% endif %}</td>
               <td class="mono">{{ linea.cantidad }}</td>
               <td class="mono">{{ linea.cantidad_pickeada }}</td>
             </tr>

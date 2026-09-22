@@ -603,7 +603,10 @@ def pedidos(request):
         destino = reverse("mesa:pedidos")
         return redirect(f"{destino}?{qs_filtros}" if qs_filtros else destino)
 
-    qs = Pedido.objects.select_related("cliente", "tienda").order_by("-creado")
+    qs = (
+        Pedido.objects.select_related("cliente", "tienda")
+        .prefetch_related("lineas__sku").order_by("-creado")
+    )
     cliente_id = request.GET.get("cliente", "").strip()
     estado = request.GET.get("estado", "").strip()
     canal = request.GET.get("canal", "").strip()
@@ -625,6 +628,8 @@ def pedidos(request):
     for pedido in filas:
         pedido.pill = PILL_PEDIDO.get(pedido.estado, "")
         pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
+        # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
+        pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
 
     return render(request, "mesa/pedidos.html", {
         "seccion": "pedidos",

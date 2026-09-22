@@ -367,10 +367,12 @@ def pedidos(request):
     canal = request.GET.get("canal", "").strip()
     if canal:
         qs = qs.filter(canal=canal)
-    lista = list(qs.annotate(piezas=Sum("lineas__cantidad"))[:200])
+    lista = list(qs.prefetch_related("lineas__sku").annotate(piezas=Sum("lineas__cantidad"))[:200])
     for pedido in lista:
         pedido.pill = _PILL_PEDIDO.get(pedido.estado, "")
         pedido.url_shopify = url_orden_shopify(pedido)  # la orden en el admin de Shopify, como en Mesa
+        # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
+        pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
     return render(request, "portal/pedidos.html", {
         "seccion": "pedidos",
         "ver": ver,

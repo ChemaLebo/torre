@@ -249,6 +249,33 @@ con cajas en bodega. Sin migración.
 con Chema si un pedido con una caja regresada y otra entregada debe cerrar
 como ENTREGADO (hoy sí, con la incidencia RF abierta) o quedarse abierto.
 
+## Fulfillment parcial (líneas sin inventario) — hecho 2026-09-22
+
+Chema: "el picking y empaquetado ignoran la existencia de los faltantes… el
+pedido sigue apareciendo en picking… seguimos ligados a Shopify sin inventar
+nada". Implementado en cuatro piezas (ver CONVENTIONS → pedidos, "Fulfillment
+parcial"): faltante = línea sin reserva; `LineaPedido.cantidad_despachada`
+(migración pedidos 0012) para que la segunda ola no confirme ni despache dos
+veces; picking/plan/empaque ignoran faltantes con tag "Sin inventario" (piso,
+Mesa, portal); manifiesto con faltantes → PARCIALMENTE_DESPACHADO esperando
+stock; el reintento de reservas reabre (`PARCIALMENTE_DESPACHADO → PENDIENTE`,
+cajas nuevas numeradas después); candado del poller mientras haya algo por
+completar; plantilla B y correo de Shopify una vez por ola; cancelación mixta
+como tardía para lo que salió.
+
+**Queda / decisiones tomadas para revisar con uso real:**
+- Con varias líneas faltantes el pedido espera a tener TODAS antes de
+  reabrirse (una sola segunda salida). Si un producto no volverá, Mesa lo
+  quita de la orden en Shopify (la edición cierra el pedido como RECOLECTADO)
+  o cancela; no hay botón "reabrir con lo que hay".
+- Stock que entra a media ola (EN_PICKING..GUIA_GENERADA) no se inyecta:
+  espera a la siguiente ola.
+- Texto público del parcial: "el resto sale en cuanto esté listo"; el portal
+  y Mesa muestran "Sin inventario" por línea. La incidencia FAL sigue igual
+  (hoy pausada para Colima).
+- Reporte de ventas / SLA: los ts_* se estampan una sola vez (la primera ola
+  marca el SLA); una segunda salida días después no reabre el reloj.
+
 ## Auditoría usada como estado de negocio → columnas — hecho 2026-09-15
 
 `Paquete.ts_cierre` + `Paquete.foto_cierre` (migración envios 0009 con
