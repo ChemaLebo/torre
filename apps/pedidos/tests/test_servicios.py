@@ -129,6 +129,8 @@ class IngestaTests(BaseServicios):
             ({"source_name": "pos"}, Pedido.CANAL_POS, "pos"),
             ({"source_name": "12345678"}, Pedido.CANAL_OTRO, "12345678"),
             ({"source_name": "web", "tags": "Mayoreo, urgente"}, Pedido.CANAL_B2B, "web"),
+            ({"source_name": "subscription_contract"}, Pedido.CANAL_SUSCRIPCION, "subscription_contract"),
+            ({"source_name": "Recharge Subscriptions"}, Pedido.CANAL_SUSCRIPCION, "Recharge Subscriptions"),
         ]
         for i, (extra, canal, fuente) in enumerate(casos):
             payload = payload_shopify(order_id=7700 + i)

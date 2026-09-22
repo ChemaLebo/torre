@@ -287,9 +287,14 @@ TORRE = {
     # (tags) que coincida con CANAL_POR_TAG manda sobre el source_name. Ajustar
     # con la primera orden real de cada canal (Mesa → Salud de sync muestra el
     # payload).
+    # Suscripciones (Recharge, Colima, 2026-09-22): las órdenes recurrentes
+    # llegan como subscription_contract (API de suscripciones de Shopify) o
+    # con el nombre de la app; si aparece otro nombre, se ve en el tooltip de
+    # la pill "Otro" en Mesa → Pedidos y se agrega aquí.
     "CANAL_POR_SOURCE": {
         "web": "web", "pos": "pos", "shopify_draft_order": "b2b", "draft": "b2b",
         "tiktok": "tiktok", "instagram": "social", "facebook": "social",
+        "subscription_contract": "suscripcion", "recharge": "suscripcion",
     },
     "CANAL_POR_TAG": {"b2b": "b2b", "mayoreo": "b2b", "wholesale": "b2b", "tiktok": "tiktok"},
     "COTIZACION_CACHE_DIAS": 7,  # vigencia del caché de cotizaciones por (CP, peso)

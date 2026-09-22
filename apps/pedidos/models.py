@@ -107,12 +107,13 @@ class Pedido(models.Model):
     CANAL_B2B = "b2b"
     CANAL_POS = "pos"
     CANAL_SOCIAL = "social"
+    CANAL_SUSCRIPCION = "suscripcion"  # recurrentes de Recharge (2026-09-22)
     CANAL_MANUAL = "manual"
     CANAL_OTRO = "otro"
     CANALES = [
         (CANAL_WEB, "Tienda en línea"), (CANAL_TIKTOK, "TikTok Shop"), (CANAL_B2B, "B2B"),
         (CANAL_POS, "Punto de venta"), (CANAL_SOCIAL, "Redes sociales"),
-        (CANAL_MANUAL, "Manual"), (CANAL_OTRO, "Otro"),
+        (CANAL_SUSCRIPCION, "Suscripción"), (CANAL_MANUAL, "Manual"), (CANAL_OTRO, "Otro"),
     ]
     canal = models.CharField(max_length=12, choices=CANALES, default=CANAL_WEB, db_index=True)
     canal_fuente = models.CharField(max_length=60, blank=True, help_text="source_name crudo de Shopify")
