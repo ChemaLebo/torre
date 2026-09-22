@@ -119,6 +119,14 @@ por precio (`services._reintentar_sin_prioritario`, evento
 no tiene tarifa de imile; las pruebas pinean la lista clásica
 (TORRE_CARRIERS_CLASICOS) y usan otro carrier como prioritario.
 
+**2026-09-22 (Chema):** las reglas primero, el precio después. La preferencia
+ya no es solo global: `services.carrier_preferido(pedido)` toma primero la
+ReglaEnvio del pedido (Colima en /admin/: `{"es_local": true}` → estafeta,
+`{"es_local": false}` → imile) y `CARRIER_PRIORITARIO` queda de respaldo para
+pedidos sin regla. Los pedidos planeados antes del cambio conservan su carrier:
+se replanean por consola (`planificar_envio(p, force=True)` sobre PENDIENTE /
+EN_PICKING con cajas PLANEADO y sin guía), sin command en el servidor.
+
 **Hallazgos (2026-09-14):** imileexpress.com NO es la API del courier en México:
 es una empresa socia en Hong Kong para envíos transfronterizos. La plataforma
 real es `openapi.imile.com` (peticiones firmadas: customerId, sign, signMethod,
@@ -211,11 +219,12 @@ y estafeta, Mérida forzado a paquetexpress por regla.
   sin carta". Forzar a mano un pedido a otro carrier tampoco tiene pantalla en
   Mesa (hoy: admin/shell sobre `Paquete.carrier`); el reporte lo cuenta como
   "otro carrier".
-- Gap preexistente, fuera de este trabajo: para clientes SIN reparto el
-  planificador cotiza toda la lista blanca y no acota al carrier de la
-  ReglaEnvio que aplique (la regla solo manda en el atajo local y en el
-  camino legacy sin plan). En reparto sí se respeta. Generalizarlo cambiaría
-  el costo de clientes con reglas catch-all: decidir con Chema.
+- Gap cerrado el 2026-09-22: `services.carrier_preferido(pedido)` lleva la
+  ReglaEnvio aplicable al planificador, al replan y a `elegir_entre` como
+  PREFERENCIA (gana si cotiza todas las cajas; si no, precio). Para clientes
+  sin reparto la regla sigue sin acotar: la lista blanca completa cotiza
+  detrás. Reglas por cliente, no globales: Infinitea va por 99minutos directo
+  y una global la alcanzaría en el camino sin plan.
 
 ## Despacho parcial por guía y paquete — hecho 2026-09-15
 

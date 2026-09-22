@@ -11,7 +11,7 @@ from django.test import TestCase, override_settings
 
 from apps.catalogo.models import SKU
 from apps.envios import cotizador
-from apps.envios.models import CotizacionCache, Paquete
+from apps.envios.models import CotizacionCache, Paquete, ReglaEnvio
 from apps.pedidos.models import LineaPedido
 
 from .base import crear_cliente, crear_pedido, crear_tienda
@@ -94,6 +94,66 @@ class TestCarrierPrioritario(BaseCotizador):
         pedido = self.pedido_con("06600", [(self.caja12, 2)])
         paquetes = cotizador.planificar_envio(pedido)
         self.assertTrue(all(p.carrier == "estafeta" for p in paquetes))
+
+
+@override_settings(TORRE={**TORRE_POOL_LEGADO, "CARRIER_PRIORITARIO": "fedex"})
+class TestReglaPrefiere(BaseCotizador):
+    """La ReglaEnvio del pedido manda sobre el prioritario global y sobre el
+    precio (Chema 2026-09-22: locales → estafeta, foráneos → imile), pero
+    PREFIERE sin acotar: si su carrier no cotiza el lane, el precio decide
+    entre la lista blanca. fedex es el prioritario global de esta suite."""
+
+    def _regla(self, carrier, condicion=None, cliente="propio"):
+        return ReglaEnvio.objects.create(
+            cliente=self.cliente if cliente == "propio" else cliente,
+            prioridad=1, condicion=condicion or {}, carrier=carrier, servicio="ground",
+        )
+
+    def test_la_regla_gana_al_prioritario_global_y_al_precio(self):
+        self._regla("estafeta", {"es_local": False})
+        pedido = self.pedido_con("06600", [(self.caja12, 2)])
+        # puntopost es el más barato ($91 × 2) y fedex el prioritario global.
+        paquetes = cotizador.planificar_envio(pedido)
+        self.assertTrue(paquetes)
+        self.assertTrue(all(p.carrier == "estafeta" for p in paquetes))
+
+    def test_si_el_carrier_de_la_regla_no_cotiza_manda_el_precio(self):
+        self._regla("puntopost")
+        pedido = self.pedido_con("97000", [(self.caja12, 1)])  # Mérida: sin puntopost
+        # El prioritario global NO entra de segundo: la regla desplaza la preferencia.
+        self.assertEqual([p.carrier for p in cotizador.planificar_envio(pedido)], ["estafeta"])
+
+    def test_la_regla_de_otro_cliente_no_aplica(self):
+        from .base import crear_cliente
+        self._regla("estafeta", cliente=crear_cliente())
+        pedido = self.pedido_con("06600", [(self.caja12, 1)])
+        self.assertEqual(cotizador.planificar_envio(pedido)[0].carrier, "fedex")
+
+    def test_la_condicion_de_la_regla_se_respeta(self):
+        self._regla("estafeta", {"es_local": True})
+        pedido = self.pedido_con("06600", [(self.caja12, 1)])  # foráneo: la regla no aplica
+        self.assertEqual(cotizador.planificar_envio(pedido)[0].carrier, "fedex")
+
+    def test_carrier_preferido_del_servicio(self):
+        from apps.envios.services import carrier_preferido
+        pedido = self.pedido_con("06600", [(self.caja12, 1)])
+        self.assertEqual(carrier_preferido(pedido), "fedex")  # sin regla: el global
+        self._regla("estafeta")
+        self.assertEqual(carrier_preferido(pedido), "estafeta")
+        with override_settings(TORRE={**TORRE_POOL_LEGADO, "CARRIER_PRIORITARIO": ""}):
+            ReglaEnvio.objects.all().delete()
+            self.assertEqual(carrier_preferido(pedido), "")  # nada que preferir: precio
+
+    def test_elegir_entre_con_preferido_explicito(self):
+        opciones = [
+            {"carrier": "puntopost", "precio": Decimal(91)},
+            {"carrier": "estafeta", "precio": Decimal(177)},
+            {"carrier": "fedex", "precio": Decimal(229)},
+        ]
+        self.assertEqual(cotizador.elegir_entre(opciones, "estafeta")["carrier"], "estafeta")
+        self.assertEqual(cotizador.elegir_entre(opciones, "paquetexpress")["carrier"], "puntopost")  # no cotiza: precio
+        self.assertEqual(cotizador.elegir_entre(opciones, "")["carrier"], "puntopost")  # sin preferencia: precio
+        self.assertEqual(cotizador.elegir_entre(opciones)["carrier"], "fedex")  # None: el prioritario global
 
 
 class TestPlanificarEnvio(BaseCotizador):

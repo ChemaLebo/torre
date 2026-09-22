@@ -7,6 +7,10 @@ Reglas de negocio (CONVENTIONS-ENVIOS.md, medidas contra la API real 2026-08-03)
 - La división se decide COTIZANDO particiones reales y comparando totales:
   puntopost ($86/$91, solo ≤10 kg y cobertura parcial) hace que 16 kg dividido
   en 2×8 cueste $182 vs $224 entero por estafeta.
+- Preferencia antes que precio (2026-09-22): el carrier que decide
+  services.carrier_preferido (la ReglaEnvio del pedido o, sin regla,
+  TORRE["CARRIER_PRIORITARIO"]) gana si cotiza todas las cajas del plan; si
+  no, el precio decide entre lo permitido. La regla prefiere, no acota.
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -191,32 +195,37 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
 
 def carrier_prioritario():
     """TORRE["CARRIER_PRIORITARIO"]: el carrier que gana siempre que cotice,
-    sin importar el precio (iMile por acuerdo con Colima, 2026-09-21). "" =
-    el más barato manda."""
+    sin importar el precio, cuando NINGUNA ReglaEnvio aplica al pedido (iMile
+    por acuerdo con Colima, 2026-09-21). "" = el más barato manda. Quien tiene
+    el pedido a la mano pasa services.carrier_preferido(pedido) en su lugar."""
     return settings.TORRE.get("CARRIER_PRIORITARIO") or ""
 
 
-def elegir_entre(opciones):
+def elegir_entre(opciones, preferido=None):
     """La opción que manda entre cotizaciones válidas: la del carrier
-    prioritario si está, si no la más barata. None sin opciones."""
+    preferido si está, si no la más barata. `preferido` es lo que decidió
+    services.carrier_preferido (la ReglaEnvio del pedido o, sin regla, el
+    prioritario global); None = el prioritario global; "" = solo precio.
+    None sin opciones."""
     if not opciones:
         return None
-    prioritario = carrier_prioritario()
-    if prioritario:
+    if preferido is None:
+        preferido = carrier_prioritario()
+    if preferido:
         for f in opciones:
-            if f["carrier"] == prioritario:
+            if f["carrier"] == preferido:
                 return f
     return min(opciones, key=lambda f: f["precio"])
 
 
-def mejor_opcion(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
+def mejor_opcion(cp_destino, peso_kg, dims=None, cliente=None, carriers=None, preferido=None):
     """La opción que manda entre las que sí cotizan (elegir_entre: el carrier
-    prioritario si cotiza, si no la más barata), o None si nadie cubre el lane."""
+    preferido si cotiza, si no la más barata), o None si nadie cubre el lane."""
     opciones = [
         f for f in cotizar_lane(cp_destino, peso_kg, dims, cliente=cliente, carriers=carriers)
         if f["ok"] and f["precio"] is not None
     ]
-    return elegir_entre(opciones)
+    return elegir_entre(opciones, preferido)
 
 
 # ── Particionado ──────────────────────────────────────────────────────
@@ -297,15 +306,17 @@ def _particiones_candidatas(unidades, max_kg):
     return unicas
 
 
-def _costo_particion(cp_destino, bins, cliente=None, carriers=None):
+def _costo_particion(cp_destino, bins, cliente=None, carriers=None, preferido=None):
     """(costo_total, [opcion por bin]) con UN SOLO carrier para todo el plan.
 
     Regla operativa: todas las cajas de un pedido viajan con el MISMO carrier.
     El manifiesto de salida se firma por corral (= por carrier): un plan
     mixto (caja PQX + caja estafeta) caería entero al corral de una sola guía
     y la otra caja saldría sin manifiesto. Por eso aquí solo se combinan bins
-    del mismo carrier: se elige el carrier que cotice TODOS los bins con el
-    menor total. (None, None) si ningún carrier cubre la partición completa.
+    del mismo carrier: gana el preferido (services.carrier_preferido; None =
+    el prioritario global) si cotiza TODOS los bins, si no el carrier que los
+    cotice todos con el menor total. (None, None) si ningún carrier cubre la
+    partición completa.
     """
     cotizaciones = []
     for unidades_bin in bins:
@@ -322,9 +333,10 @@ def _costo_particion(cp_destino, bins, cliente=None, carriers=None):
         comunes &= set(filas)
     if not comunes:
         return None, None
-    prioritario = carrier_prioritario()
-    if prioritario in comunes:  # cotiza todos los bins: gana aunque sea más caro
-        carrier = prioritario
+    if preferido is None:
+        preferido = carrier_prioritario()
+    if preferido in comunes:  # cotiza todos los bins: gana aunque sea más caro
+        carrier = preferido
         total = sum((filas[carrier]["precio"] for filas in cotizaciones), Decimal(0))
     else:
         total, carrier = min(
@@ -339,16 +351,19 @@ def planificar_envio(pedido, force=False):
 
     La config vigente acota qué se cotiza (services.carriers_del_pedido: la
     carta del reparto por porcentajes, el directo de 99minutos o la lista
-    blanca). La carta se saca FUERA del atomic del plan: si nadie cotiza, la
-    carta se queda con el pedido (dato del fallo) en vez de revertirse."""
-    from .services import carriers_del_pedido  # lazy: evita ciclo
+    blanca) y la ReglaEnvio del pedido PREFIERE sin acotar
+    (services.carrier_preferido: gana si cotiza todas las cajas, si no manda
+    el precio). La carta se saca FUERA del atomic del plan: si nadie cotiza,
+    la carta se queda con el pedido (dato del fallo) en vez de revertirse."""
+    from .services import carrier_preferido, carriers_del_pedido  # lazy: evita ciclo
 
     carriers = carriers_del_pedido(pedido)
-    return _planificar(pedido, force, carriers)
+    preferido = carrier_preferido(pedido)
+    return _planificar(pedido, force, carriers, preferido)
 
 
 @transaction.atomic
-def _planificar(pedido, force, carriers):
+def _planificar(pedido, force, carriers, preferido=None):
     existentes = list(pedido.paquetes.all())
     if existentes and not force:
         return existentes
@@ -402,7 +417,9 @@ def _planificar(pedido, force, carriers):
     candidatas = _particiones_candidatas(unidades, max_kg)
     evaluadas, viables = [], []
     for bins in candidatas:
-        costo, opciones = _costo_particion(pedido.cp, bins, cliente=pedido.cliente, carriers=carriers)
+        costo, opciones = _costo_particion(
+            pedido.cp, bins, cliente=pedido.cliente, carriers=carriers, preferido=preferido,
+        )
         evaluadas.append({"bins": [float(_peso_bin(b)) for b in bins],
                           "costo": float(costo) if costo is not None else None})
         if costo is not None:
@@ -417,7 +434,9 @@ def _planificar(pedido, force, carriers):
     costo_elegido, _, bins_elegidos, opciones = min(viables, key=lambda v: (v[0], v[1]))
 
     # Ahorro vs mandarlo entero (aunque entero viole el tope, solo para el dato).
-    entero = mejor_opcion(pedido.cp, _peso_bin(unidades), cliente=pedido.cliente, carriers=carriers)
+    entero = mejor_opcion(
+        pedido.cp, _peso_bin(unidades), cliente=pedido.cliente, carriers=carriers, preferido=preferido,
+    )
     ahorro = max(Decimal(entero["precio"]) - costo_elegido, Decimal(0)) if entero else Decimal(0)
 
     paquetes = []

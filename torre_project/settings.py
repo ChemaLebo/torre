@@ -215,8 +215,12 @@ TORRE = {
         "noventa9Minutos",
         "amPm",
     ],
-    # Carrier que gana siempre que cotice, sin importar el precio; vacío = el
-    # más barato manda. Acuerdo con Colima (2026-09-21): iMile mientras se pueda.
+    # Carrier que gana siempre que cotice, sin importar el precio, cuando
+    # NINGUNA ReglaEnvio aplica al pedido (envios.services.carrier_preferido:
+    # la regla del pedido prefiere primero); vacío = el más barato manda.
+    # Acuerdo con Colima (2026-09-21): iMile mientras se pueda. Desde el
+    # 2026-09-22 mandan las reglas por cliente en /admin/ (Colima: locales →
+    # estafeta, foráneos → imile) y esto queda de respaldo para pedidos sin regla.
     "CARRIER_PRIORITARIO": "imile",
     # Carrier → proveedor que lo opera. Vacío = todo por envia.com; el flip a
     # 99minutos directo es config, no código: {"noventa9Minutos": "99minutos"}.

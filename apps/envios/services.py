@@ -1,6 +1,7 @@
 """Servicios de envíos (contrato CONVENTIONS.md):
 
 - `elegir_carrier(pedido) -> (carrier, servicio)`
+- `carrier_preferido(pedido) -> carrier` (la ReglaEnvio prefiere, el precio respalda)
 - `generar_guia(pedido) -> Guia` (idempotente)
 - `poll_tracking()` (job idempotente; command `poll_tracking`, cron cada 30 min)
 - `get_adapter()`
@@ -175,8 +176,8 @@ def carriers_del_pedido(pedido):
     Cliente en reparto: el carrier de la ReglaEnvio que aplique (decidió antes,
     no consume carta) o la carta del pedido; cliente 99minutos directo:
     noventa9Minutos; los demás: la lista blanca CARRIERS_COTIZAR (las reglas
-    no acotan el plan de esos clientes, conducta de siempre). Lo usan el
-    planificador y el replan."""
+    no acotan el plan de esos clientes: PREFIEREN, ver carrier_preferido). Lo
+    usan el planificador y el replan."""
     if _cliente_reparte(pedido.cliente):
         flota = _flota_propia()
         regla = _regla_aplicable(pedido, flota)
@@ -187,6 +188,22 @@ def carriers_del_pedido(pedido):
     elif getattr(pedido.cliente, "integracion_envios", "") == "99minutos":
         return ["noventa9Minutos"]
     return list(settings.TORRE["CARRIERS_COTIZAR"])
+
+
+def carrier_preferido(pedido):
+    """Carrier que el cotizador PREFIERE para el pedido (Chema 2026-09-22: las
+    reglas primero, el precio después): el de la ReglaEnvio que le aplique
+    (Colima: locales → estafeta, foráneos → imile) o, sin regla, el prioritario
+    global TORRE["CARRIER_PRIORITARIO"]; "" = manda el precio. La regla
+    prefiere, no acota: si el preferido no cotiza el lane (o no cotiza TODAS
+    las cajas del plan) el resto de carriers_del_pedido compite por precio.
+    Una regla con carrier "local" sin flota propia no prefiere nada (carril
+    muerto, igual que en elegir_carrier); con flota, el atajo local del
+    planificador decide antes de cotizar."""
+    regla = _regla_aplicable(pedido, _flota_propia())
+    if regla is not None:
+        return "" if regla[0] == CARRIER_LOCAL else regla[0]
+    return settings.TORRE.get("CARRIER_PRIORITARIO") or ""
 
 
 def _respaldo_envia(adapter, pedido, carrier, exc):
@@ -286,9 +303,10 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
 def _replan_paquete(pedido, paquete, carrier_viejo):
     """El plan guardó un carrier que la config vigente ya no permite (lista
     recortada o cliente flipeado de integración): se re-cotiza el lane AL
-    GENERAR y el paquete se reasigna a la mejor opción permitida. El plan se
-    conserva como plan (división, corral, precio de referencia); la config
-    manda a la hora de comprar la guía."""
+    GENERAR y el paquete se reasigna a la mejor opción permitida (el carrier
+    preferido del pedido si cotiza, si no el más barato). El plan se conserva
+    como plan (división, corral, precio de referencia); la config manda a la
+    hora de comprar la guía."""
     from .cotizador import cotizar_lane, elegir_entre  # lazy: evita ciclo en carga
 
     dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
@@ -303,7 +321,7 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
             f"permitido) y ningún carrier vigente cotiza CP {pedido.cp}. "
             "Revisar con Mesa de Control."
         )
-    mejor = elegir_entre(filas)
+    mejor = elegir_entre(filas, carrier_preferido(pedido))
     paquete.carrier = mejor["carrier"]
     paquete.servicio = mejor["servicio"]
     paquete.precio_cotizado = mejor["precio"]

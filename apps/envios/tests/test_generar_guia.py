@@ -462,3 +462,16 @@ class ReplanAlGenerarTests(TestCase):
         self.assertFalse(
             EventoAuditoria.objects.filter(accion="replan_paquete").exists()
         )
+
+    def test_el_replan_prefiere_el_carrier_de_la_regla(self):
+        from apps.envios.models import ReglaEnvio
+        ReglaEnvio.objects.create(
+            cliente=self.cliente, prioridad=1, condicion={}, carrier="fedex", servicio="ground",
+        )
+        pedido = crear_pedido(self.cliente, self.tienda)
+        paquete = self._paquete(pedido, "puntopost")  # ya no permitido → se re-cotiza
+        guia = services.generar_guia(pedido)
+        # estafeta es la más barata de la tabla mock; la regla prefiere fedex.
+        self.assertEqual(guia.carrier, "fedex")
+        paquete.refresh_from_db()
+        self.assertEqual(paquete.carrier, "fedex")
