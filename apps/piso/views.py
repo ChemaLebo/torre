@@ -2115,6 +2115,12 @@ def salida(request):
         for caja in pedido.cajas_salida:
             caja.guia = caja.guia_activa
         pedido.por_caja = _por_caja(pedido)
+        # Columnas de la tabla por carrier (Chema 2026-09-22): destino y cajas.
+        ciudad = str((pedido.direccion or {}).get("city") or "").strip()
+        pedido.destino = f"{ciudad} · CP {pedido.cp}" if ciudad else f"CP {pedido.cp}"
+        cajas = [c for c in pedido.paquetes.all() if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
+        pedido.cajas_total = len(cajas)
+        pedido.cajas_fuera = [c for c in cajas if c.estado == Paquete.DESPACHADO]
         # Todas las guías vigentes de lo que sigue aquí: una etiqueta por guía.
         pedido.guias_activas = [
             g for g in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")

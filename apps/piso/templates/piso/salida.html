@@ -17,120 +17,142 @@
   El “va en camino” al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino.
 </div>
 
-<div class="grid g3">
-  {% for corral in corrales %}
-  {% if corral.codigo != corral_local or flota_propia or corral.listos %}
-  <div class="card">
-    <div class="titulo">
-      <h2 class="mono">{{ corral.codigo }}</h2>
-      <span class="pill {% if corral.listos %}accent{% endif %}">{{ corral.nombre }}</span>
-    </div>
-    <div class="numero-corral">{{ corral.listos|length }}</div>
-    <div class="small muted">listos para el chofer</div>
-
-    {# Aquí solo hay pedidos con empaque completo: guía y foto de cierre en cada caja. #}
-    {% if corral.listos %}
-    {% for grupo in corral.carriers %}
-    <hr class="sep">
-    <div class="small"><b class="mono">{{ grupo.carrier|upper }}</b> · palomea lo que sube a ESTE camión:</div>
-    {% for p in grupo.listos %}
-    <div class="corral-fila">
-      {% if p.por_caja %}
-      {# Varias cajas: se palomea CADA caja (camión lleno = la que no cabe se queda). #}
-      <div class="crece">
-        <span class="mono">{{ p.folio }}</span>
-        · <span class="small">{{ p.cajas_salida|length }} caja(s) por salir{% if p.estado == "PARCIALMENTE_DESPACHADO" %} · <span class="pill warn">salida parcial</span>{% endif %}</span>
-        <div class="small">{{ p.cliente.nombre }}</div>
-        {% for c in p.cajas_salida %}
-        <label class="small" style="display:block">
-          <input type="checkbox" name="paquete_id" value="{{ c.pk }}" checked
-                 form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">
-          Caja {{ c.numero }} · <span class="mono">{{ c.guia.numero|default:"—" }}</span>
-        </label>
-        {% endfor %}
-      </div>
-      {% else %}
-      <label class="crece">
-        <input type="checkbox" name="pedido_id" value="{{ p.pk }}" checked
-               form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">
-        <span class="mono">{{ p.folio }}</span>
-        · <span class="mono small">{{ p.guia.numero|default:"—" }}</span>
-        <div class="small">{{ p.cliente.nombre }}</div>
-      </label>
-      {% endif %}
-      <div class="fila">
-        {% for g in p.guias_activas %}
-        {% if g.etiqueta_url %}
-        <a class="btn chico" href="{{ g.etiqueta_url }}" target="_blank" rel="noopener">PDF carrier{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
-        {% endif %}
-        <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta interna{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
-        <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
-          <input type="hidden" name="accion" value="imprimir">
-          <input type="hidden" name="volver" value="salida">
-          <button class="btn chico" type="submit" title="Imprimir etiqueta del CARRIER en bodega (la que rutea el paquete)" aria-label="Imprimir etiqueta del carrier en la impresora de bodega">🖨 carrier</button>
-        </form>
-        <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
-          <input type="hidden" name="accion" value="imprimir_interna">
-          <input type="hidden" name="volver" value="salida">
-          <button class="btn chico" type="submit" title="Imprimir etiqueta INTERNA de Torre en bodega (QR del repartidor)" aria-label="Imprimir etiqueta interna en la impresora de bodega">🖨 interna</button>
-        </form>
-        {% endfor %}
-      </div>
-    </div>
-    {# Fuera del <label>: un <details> adentro togglearía el checkbox del manifiesto. #}
-    {% include "piso/_contenido_salida.html" with contenido=p.contenido %}
-    {% endfor %}
-
-    {# El form va al final (los botones de etiqueta son forms propios: no se anidan); #}
-    {# los checkboxes de arriba le pertenecen vía el atributo form=. #}
-    <form method="post" class="mt" id="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">{% csrf_token %}
-      <input type="hidden" name="accion" value="manifiesto">
-      <input type="hidden" name="corral" value="{{ corral.codigo }}">
-      <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
-      <button class="btn primario gigante" type="submit" {% if grupo.firman == 0 %}disabled{% endif %}>
-        FIRMÓ EL CHOFER DE {{ grupo.carrier|upper }} · SALE LO PALOMEADO
-      </button>
-    </form>
-    {% if grupo.puede_recolectar %}
-    {% if grupo.recoleccion %}
-    <p class="small mt"><span class="pill ok">recolección</span>
-      {{ grupo.carrier }} pasa el {{ grupo.recoleccion.fecha }} ({{ grupo.recoleccion.hora_desde }}-{{ grupo.recoleccion.hora_hasta }} h){% if grupo.recoleccion.folio_carrier %} · folio <span class="mono">{{ grupo.recoleccion.folio_carrier }}</span>{% endif %}</p>
-    {% else %}
-    <details class="colapsable mt">
-      <summary>Programar recolección de {{ grupo.carrier }}</summary>
-      <form method="post" class="colapsable-cuerpo">{% csrf_token %}
-        <input type="hidden" name="accion" value="recoleccion">
-        <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
-        <label for="rec-fecha-{{ grupo.carrier }}">Fecha</label>
-        <input type="date" name="fecha" id="rec-fecha-{{ grupo.carrier }}" value="{{ hoy_iso }}" required>
-        <div class="fila mt">
-          <label>De</label><input type="number" name="desde" value="10" min="0" max="23" style="max-width:80px" aria-label="Hora desde">
-          <label>a</label><input type="number" name="hasta" value="18" min="1" max="23" style="max-width:80px" aria-label="Hora hasta">
-          <span class="muted">h</span>
-        </div>
-        <label class="mt">Instrucciones</label>
-        <input type="text" name="instrucciones" maxlength="200" placeholder="Local 380 E — preguntar por almacén">
-        <p class="small muted">Se agenda UNA visita con TODAS las guías vivas de {{ grupo.carrier }}. El fee se cobra al balance de envia. Jamás doble booking el mismo día.</p>
-        <button class="btn primario" type="submit">Agendar recolección</button>
-      </form>
-    </details>
-    {% endif %}
-    {% endif %}
-    {% endfor %}
-    <p class="small muted">Firma del chofer en mano ANTES de tocar el botón. Lo palomeado se marca RECOLECTADO y se avisa al comprador; lo demás se queda para la siguiente recolección.</p>
-    {% elif not corral.sin_guia %}
-    <p class="muted mt">Corral vacío.</p>
-    {% else %}
-    <p class="small muted mt">Genera las guías para poder firmar el manifiesto.</p>
-    {% endif %}
-
-    {% if corral.codigo == corral_local and flota_propia %}
-    <hr class="sep">
-    <p class="small">Ruta local: al firmar salen a reparto. Cierra cada entrega con su POD en
-      <a href="{% url 'piso:entrega_local' %}">Entregas locales</a>.</p>
-    {% endif %}
+{# Una tabla por carrier dentro de su corral (Chema 2026-09-22): misma información de antes, en renglones; el contenido del pedido va en acordeón. #}
+{% for corral in corrales %}
+{% if corral.codigo != corral_local or flota_propia or corral.listos %}
+<div class="card mt">
+  <div class="titulo">
+    <h2 class="mono">{{ corral.codigo }}</h2>
+    <span class="pill {% if corral.listos %}accent{% endif %}">{{ corral.nombre }}</span>
+    <span class="small muted">{{ corral.listos|length }} listo{{ corral.listos|length|pluralize }} para el chofer</span>
   </div>
+
+  {# Aquí solo hay pedidos con empaque completo: guía y foto de cierre en cada caja. #}
+  {% if corral.listos %}
+  {% for grupo in corral.carriers %}
+  <hr class="sep">
+  <div class="titulo">
+    <h3 class="mono">{{ grupo.carrier|upper }}</h3>
+    <span class="pill accent">{{ grupo.listos|length }} pedido{{ grupo.listos|length|pluralize }}</span>
+    <span class="small muted">palomea lo que sube a ESTE camión</span>
+  </div>
+  <div class="tabla-wrap">
+    <table>
+      <thead>
+        <tr><th>Sube</th><th>Pedido</th><th>Comprador · destino</th><th>Cajas</th><th>Guías</th><th>Contenido</th></tr>
+      </thead>
+      <tbody>
+        {% for p in grupo.listos %}
+        <tr>
+          <td>
+            {% if p.por_caja %}
+            {# Varias cajas: se palomea CADA caja (camión lleno = la que no cabe se queda). #}
+            {% for c in p.cajas_salida %}
+            <label class="small" style="display:block;white-space:nowrap">
+              <input type="checkbox" name="paquete_id" value="{{ c.pk }}" checked
+                     form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}"> caja {{ c.numero }}
+            </label>
+            {% endfor %}
+            {% else %}
+            <input type="checkbox" name="pedido_id" value="{{ p.pk }}" checked
+                   form="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}" aria-label="Sube {{ p.folio }}">
+            {% endif %}
+          </td>
+          <td>
+            <span class="mono">{{ p.folio }}</span>
+            <div class="small">{{ p.cliente.nombre }}</div>
+            {% if p.estado == "PARCIALMENTE_DESPACHADO" %}<span class="pill warn">salida parcial</span>{% endif %}
+          </td>
+          <td>
+            {{ p.comprador_nombre|default:"—" }}
+            <div class="small muted">{{ p.destino }}{% if p.es_local %} · <span class="pill warn">local</span>{% endif %}</div>
+          </td>
+          <td class="small">
+            {% if p.por_caja %}
+            {{ p.cajas_salida|length }} por salir de {{ p.cajas_total }}
+            {% for c in p.cajas_salida %}<div>caja {{ c.numero }} · <span class="mono">{{ c.guia.numero|default:"—" }}</span></div>{% endfor %}
+            {% if p.cajas_fuera %}<div class="muted">ya salió: {% for c in p.cajas_fuera %}caja {{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+            {% else %}
+            1 caja · <span class="mono">{{ p.guia.numero|default:"—" }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% for g in p.guias_activas %}
+            <div class="fila" style="flex-wrap:wrap;gap:4px;margin-bottom:4px">
+              <span class="mono small">{{ g.numero }}</span>
+              {% if g.etiqueta_url %}
+              <a class="btn chico" href="{{ g.etiqueta_url }}" target="_blank" rel="noopener">PDF carrier{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
+              {% endif %}
+              <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta interna{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
+              <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
+                <input type="hidden" name="accion" value="imprimir">
+                <input type="hidden" name="volver" value="salida">
+                <button class="btn chico" type="submit" title="Imprimir etiqueta del CARRIER en bodega (la que rutea el paquete)" aria-label="Imprimir etiqueta del carrier en la impresora de bodega">🖨 carrier</button>
+              </form>
+              <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
+                <input type="hidden" name="accion" value="imprimir_interna">
+                <input type="hidden" name="volver" value="salida">
+                <button class="btn chico" type="submit" title="Imprimir etiqueta INTERNA de Torre en bodega (QR del repartidor)" aria-label="Imprimir etiqueta interna en la impresora de bodega">🖨 interna</button>
+              </form>
+            </div>
+            {% endfor %}
+          </td>
+          <td>{% include "piso/_contenido_salida.html" with contenido=p.contenido %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# El form va al final (los botones de etiqueta son forms propios: no se anidan); #}
+  {# los checkboxes de la tabla le pertenecen vía el atributo form=. #}
+  <form method="post" class="mt" id="manifiesto-{{ corral.codigo }}-{{ grupo.carrier }}">{% csrf_token %}
+    <input type="hidden" name="accion" value="manifiesto">
+    <input type="hidden" name="corral" value="{{ corral.codigo }}">
+    <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
+    <button class="btn primario gigante" type="submit" {% if grupo.firman == 0 %}disabled{% endif %}>
+      FIRMÓ EL CHOFER DE {{ grupo.carrier|upper }} · SALE LO PALOMEADO
+    </button>
+  </form>
+  {% if grupo.puede_recolectar %}
+  {% if grupo.recoleccion %}
+  <p class="small mt"><span class="pill ok">recolección</span>
+    {{ grupo.carrier }} pasa el {{ grupo.recoleccion.fecha }} ({{ grupo.recoleccion.hora_desde }}-{{ grupo.recoleccion.hora_hasta }} h){% if grupo.recoleccion.folio_carrier %} · folio <span class="mono">{{ grupo.recoleccion.folio_carrier }}</span>{% endif %}</p>
+  {% else %}
+  <details class="colapsable mt">
+    <summary>Programar recolección de {{ grupo.carrier }}</summary>
+    <form method="post" class="colapsable-cuerpo">{% csrf_token %}
+      <input type="hidden" name="accion" value="recoleccion">
+      <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
+      <label for="rec-fecha-{{ grupo.carrier }}">Fecha</label>
+      <input type="date" name="fecha" id="rec-fecha-{{ grupo.carrier }}" value="{{ hoy_iso }}" required>
+      <div class="fila mt">
+        <label>De</label><input type="number" name="desde" value="10" min="0" max="23" style="max-width:80px" aria-label="Hora desde">
+        <label>a</label><input type="number" name="hasta" value="18" min="1" max="23" style="max-width:80px" aria-label="Hora hasta">
+        <span class="muted">h</span>
+      </div>
+      <label class="mt">Instrucciones</label>
+      <input type="text" name="instrucciones" maxlength="200" placeholder="Local 380 E — preguntar por almacén">
+      <p class="small muted">Se agenda UNA visita con TODAS las guías vivas de {{ grupo.carrier }}. El fee se cobra al balance de envia. Jamás doble booking el mismo día.</p>
+      <button class="btn primario" type="submit">Agendar recolección</button>
+    </form>
+  </details>
+  {% endif %}
   {% endif %}
   {% endfor %}
+  <p class="small muted mt">Firma del chofer en mano ANTES de tocar el botón. Lo palomeado se marca RECOLECTADO y se avisa al comprador; lo demás se queda para la siguiente recolección.</p>
+  {% elif not corral.sin_guia %}
+  <p class="muted mt">Corral vacío.</p>
+  {% else %}
+  <p class="small muted mt">Genera las guías para poder firmar el manifiesto.</p>
+  {% endif %}
+
+  {% if corral.codigo == corral_local and flota_propia %}
+  <hr class="sep">
+  <p class="small">Ruta local: al firmar salen a reparto. Cierra cada entrega con su POD en
+    <a href="{% url 'piso:entrega_local' %}">Entregas locales</a>.</p>
+  {% endif %}
 </div>
+{% endif %}
+{% endfor %}
 {% endblock %}
