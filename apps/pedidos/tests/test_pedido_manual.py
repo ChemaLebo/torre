@@ -34,7 +34,7 @@ def direccion_manual(cp="01780"):
 class BasePedidoManual(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        cls.cliente = Cliente.objects.create(avisos_comprador=True, nombre="Cervecería Colima", slug="colima")
         cls.sku = SKU.objects.create(
             cliente=cls.cliente,
             codigo="COL-SIX",

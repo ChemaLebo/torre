@@ -36,6 +36,7 @@
       {% if reparto %}Reparto: {% for f in reparto.filas %}{{ f.carrier }} {{ f.peso }}%{% if not forloop.last %} · {% endif %}{% endfor %}<br>
       Bloque de {{ reparto.tam }} cartas · siguiente: carta {{ reparto.posicion }} del bloque {{ reparto.bloque }} · <a href="{% url 'mesa:reporte_reparto' %}?cliente={{ cliente.slug }}">reporte →</a><br>{% endif %}
       Naked packing local: {% if cliente.naked_packing_local %}sí{% else %}no{% endif %}<br>
+      Avisos al comprador final: {% if cliente.avisos_comprador %}sí (WhatsApp de Torre){% else %}no (la tienda avisa){% endif %}<br>
       Visto bueno desde: ${{ cliente.umbral_visto_bueno_mxn }} MXN
     </p>
   </div>

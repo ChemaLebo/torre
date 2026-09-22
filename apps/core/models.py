@@ -44,6 +44,18 @@ class Cliente(models.Model):
     reparto_base = models.PositiveIntegerField(default=0)
     naked_packing_local = models.BooleanField(default=True)
     guia_de_voz = models.TextField(blank=True, help_text="Reglas de tono para mensajes al comprador final")
+    # Avisos directos al comprador final (plantillas A/B/E de mensajería por
+    # WhatsApp). Apagado por default (Chema 2026-09-22): Shopify ya manda sus
+    # correos de confirmación y envío; se prende para un cliente fuera de
+    # Shopify. Los avisos AL CLIENTE (Karina: recepción cerrada, incidencias,
+    # digest) no dependen de esto.
+    avisos_comprador = models.BooleanField(
+        default=False,
+        help_text=(
+            "Torre le escribe al comprador final (WhatsApp: confirmación, en camino, retraso). "
+            "Apagado cuando la tienda ya lo hace (Shopify); préndelo para un cliente fuera de Shopify."
+        ),
+    )
     umbral_visto_bueno_mxn = models.DecimalField(max_digits=8, decimal_places=2, default=2000)
     incidencias_auto_pausadas_hasta = models.DateField(
         null=True, blank=True,

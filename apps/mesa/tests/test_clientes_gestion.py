@@ -65,6 +65,21 @@ class BaseGestionClientes(TestCase):
         self.client.force_login(self.usuario_mesa)
 
 
+class AvisosCompradorSwitchTests(BaseGestionClientes):
+    """El switch de avisos al comprador nace apagado y se prende desde el form de Mesa."""
+
+    def test_nace_apagado_y_el_form_lo_prende(self):
+        from apps.mesa.forms import FormCliente
+
+        self.assertFalse(self.colima.avisos_comprador)
+        form = FormCliente(data=datos_form_cliente())
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertFalse(form.datos_cliente()["avisos_comprador"])
+        form = FormCliente(data=datos_form_cliente(avisos_comprador="on"))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.datos_cliente()["avisos_comprador"])
+
+
 class AltaClienteTests(BaseGestionClientes):
     def test_alta_con_slug_registra_evento(self):
         respuesta = self.client.post(

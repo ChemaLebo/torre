@@ -103,6 +103,13 @@ class FormCliente(forms.Form):
     naked_packing_local = forms.BooleanField(
         label="Naked packing en entrega local", required=False, initial=True,
     )
+    avisos_comprador = forms.BooleanField(
+        label="Avisos al comprador final por WhatsApp", required=False, initial=False,
+        help_text=(
+            "Confirmación, «va en camino» y retraso directo al comprador. Apagado cuando la tienda "
+            "ya avisa (Shopify manda sus correos); préndelo para un cliente fuera de Shopify."
+        ),
+    )
     umbral_visto_bueno_mxn = forms.DecimalField(
         label="Visto bueno desde (MXN)",
         max_digits=8,
@@ -265,6 +272,7 @@ class FormCliente(forms.Form):
             "carrier_preferente": d["carrier_preferente"],
             "integracion_envios": d["integracion_envios"],
             "naked_packing_local": d.get("naked_packing_local", False),
+            "avisos_comprador": d.get("avisos_comprador", False),
             "umbral_visto_bueno_mxn": d["umbral_visto_bueno_mxn"],
             "incidencias_auto_pausadas_hasta": d.get("incidencias_auto_pausadas_hasta"),
             "guia_de_voz": (d.get("guia_de_voz") or "").strip(),

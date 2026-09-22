@@ -187,6 +187,7 @@ class Command(BaseCommand):
                 "integracion_envios": "reparto",
                 "reparto_pesos": dict(REPARTO_COLIMA),
                 "naked_packing_local": True,
+                "avisos_comprador": True,  # la demo muestra las plantillas A/B/E
                 "guia_de_voz": (
                     "Voz cálida y directa, orgullosamente colimense. Hablamos de "
                     "'cerveza artesanal de Colima', jamás culpamos a la paquetería y "

@@ -1744,6 +1744,7 @@ def cliente_editar(request, pk):
         "carrier_preferente": cliente.carrier_preferente,
         "integracion_envios": cliente.integracion_envios,
         "naked_packing_local": cliente.naked_packing_local,
+        "avisos_comprador": cliente.avisos_comprador,
         "umbral_visto_bueno_mxn": cliente.umbral_visto_bueno_mxn,
         "incidencias_auto_pausadas_hasta": cliente.incidencias_auto_pausadas_hasta,
         "guia_de_voz": cliente.guia_de_voz,

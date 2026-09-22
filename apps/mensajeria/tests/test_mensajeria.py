@@ -110,7 +110,7 @@ class RenderPlantillaTests(TestCase):
 class EnvioIdempotenteTests(TestCase):
     def setUp(self):
         self.cliente = Cliente.objects.create(
-            nombre="Cervecería Colima", slug="colima",
+            nombre="Cervecería Colima", slug="colima", avisos_comprador=True,
             contacto_nombre="Karina", contacto_whatsapp="+523120000000",
         )
         self.tienda = crear_tienda(self.cliente)
@@ -158,6 +158,7 @@ class PlantillaBTests(TestCase):
     def setUp(self):
         self.cliente = Cliente.objects.create(
             nombre="Cervecería Colima", slug="colima", contacto_whatsapp="+523120000000",
+            avisos_comprador=True,
         )
         self.tienda = crear_tienda(self.cliente)
 
@@ -185,6 +186,40 @@ class PlantillaBTests(TestCase):
         self.assertNotEqual(primera.pk, distinta.pk)
         self.assertIn("viernes 24 de julio", primera.cuerpo)
         self.assertEqual(NotificacionEnviada.objects.count(), 2)
+
+
+@override_settings(WHATSAPP_TOKEN="", WHATSAPP_PHONE_ID="")
+class AvisosCompradorApagadosTests(TestCase):
+    """Chema 2026-09-22: Shopify ya le escribe al comprador. Con el switch del
+    cliente apagado (default) las plantillas A/B/E no salen y queda el evento;
+    prendido, salen como siempre."""
+
+    def setUp(self):
+        self.cliente = Cliente.objects.create(
+            nombre="Cervecería Colima", slug="colima", contacto_whatsapp="+523120000000",
+        )
+        self.tienda = crear_tienda(self.cliente)
+
+    def test_apagado_por_default_no_manda_y_deja_evento(self):
+        from apps.core.models import EventoAuditoria
+
+        pedido = crear_pedido(self.cliente, self.tienda, estado="RECOLECTADO")
+        crear_guia(pedido, numero="MOCK-1")
+        self.assertIsNone(services.enviar_confirmacion(pedido))
+        self.assertIsNone(services.enviar_en_camino(pedido))
+        self.assertEqual(NotificacionEnviada.objects.count(), 0)
+        evento = EventoAuditoria.objects.filter(
+            entidad="notificacion", entidad_id=pedido.folio, accion="envio_omitido",
+        ).first()
+        self.assertIsNotNone(evento)
+        self.assertIn("apagados", evento.motivo)
+
+    def test_prendido_manda(self):
+        self.cliente.avisos_comprador = True
+        self.cliente.save(update_fields=["avisos_comprador"])
+        pedido = crear_pedido(self.cliente, self.tienda)
+        self.assertIsNotNone(services.enviar_confirmacion(pedido))
+        self.assertEqual(NotificacionEnviada.objects.count(), 1)
 
 
 @override_settings(WHATSAPP_TOKEN="", WHATSAPP_PHONE_ID="")

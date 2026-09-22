@@ -218,7 +218,23 @@ def enviar_plantilla(clave, pedido, contexto_extra=None):
 
     Idempotente por (evento, canal, destinatario). Regresa la NotificacionEnviada
     (nueva o existente) o None si no hubo teléfono / el canal falló.
+
+    Switch por cliente (Chema 2026-09-22): con `Cliente.avisos_comprador`
+    apagado (default: la tienda ya avisa, Shopify manda sus correos) NADA sale
+    al comprador — queda el evento `envio_omitido` y regresa None. Los avisos
+    al cliente (Karina) no pasan por aquí y siguen igual.
     """
+    cliente = getattr(pedido, "cliente", None)
+    if not getattr(cliente, "avisos_comprador", False):
+        registrar_evento(
+            "notificacion", pedido.folio, "envio_omitido",
+            cliente=cliente,
+            motivo=(
+                f"Avisos al comprador apagados para {getattr(cliente, 'nombre', '?')} "
+                f"(la tienda avisa); plantilla {clave} no enviada"
+            ),
+        )
+        return None
     destinatario = (getattr(pedido, "comprador_tel", "") or "").strip()
     if not destinatario:
         registrar_evento(

@@ -76,6 +76,9 @@
       <div>
         <label for="{{ form.naked_packing_local.id_for_label }}">{{ form.naked_packing_local.label }}</label>
         {{ form.naked_packing_local }}{{ form.naked_packing_local.errors }}
+        <label class="mt" for="{{ form.avisos_comprador.id_for_label }}">{{ form.avisos_comprador.label }}</label>
+        {{ form.avisos_comprador }}{{ form.avisos_comprador.errors }}
+        <p class="small muted">{{ form.avisos_comprador.help_text }}</p>
         <label class="mt" for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>
         {{ form.activo }}{{ form.activo.errors }}
       </div>
