@@ -40,7 +40,7 @@
   <div class="tabla-wrap">
     <table>
       <thead>
-        <tr><th>Pedido</th><th>Comprador · destino</th><th>Cajas</th><th>Guías</th><th>Contenido</th></tr>
+        <tr><th>Pedido</th><th>Comprador · destino</th><th>Cajas</th></tr>
       </thead>
       <tbody>
         {% for p in grupo.listos %}
@@ -64,7 +64,13 @@
             1 caja · <span class="mono">{{ p.guia.numero|default:"—" }}</span>
             {% endif %}
           </td>
-          <td>
+        </tr>
+        {# Guías y contenido en un acordeón del renglón (Chema 2026-09-23), no de la celda. #}
+        <tr>
+          <td colspan="3" style="padding-top:0">
+            <details class="colapsable">
+              <summary class="small">Guías y contenido · {{ p.guias_activas|length }} guía{{ p.guias_activas|length|pluralize }} · {{ p.contenido.piezas }} pieza{{ p.contenido.piezas|pluralize }}</summary>
+              <div class="colapsable-cuerpo">
             {% for g in p.guias_activas %}
             <div class="fila" style="flex-wrap:wrap;gap:4px;margin-bottom:4px">
               <span class="mono small">{{ g.numero }}</span>
@@ -84,8 +90,10 @@
               </form>
             </div>
             {% endfor %}
+                {% include "piso/_contenido_salida.html" with contenido=p.contenido %}
+              </div>
+            </details>
           </td>
-          <td>{% include "piso/_contenido_salida.html" with contenido=p.contenido %}</td>
         </tr>
         {% endfor %}
       </tbody>
