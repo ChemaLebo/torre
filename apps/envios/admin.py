@@ -23,8 +23,20 @@ class ReglaEnvioAdmin(admin.ModelAdmin):
 
 
 from .models import (  # noqa: E402
-    CotizacionCache, LineaManifiesto, Manifiesto, Paquete, PaqueteLinea, TrabajoImpresion,
+    CotizacionCache, LineaManifiesto, LocalidadCP, Manifiesto, Paquete, PaqueteLinea, TrabajoImpresion,
 )
+
+
+@admin.register(LocalidadCP)
+class LocalidadCPAdmin(admin.ModelAdmin):
+    """Catálogo de ciudad por CP (se llena solo desde el geocodificador de envia).
+    Editable a mano cuando un carrier rechaza la localidad (iMile, 2026-09-23:
+    quiso "Carmen" en vez de "Ciudad del Carmen")."""
+
+    list_display = ("cp", "localidad", "municipio", "estado", "ts")
+    list_filter = ("estado",)
+    search_fields = ("cp", "localidad", "municipio")
+    readonly_fields = ("ts",)
 
 
 class LineaManifiestoInline(admin.TabularInline):
