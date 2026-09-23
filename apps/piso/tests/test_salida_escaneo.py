@@ -142,6 +142,20 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertContains(hoja_html, c1.guia_activa.numero)
         self.assertContains(hoja_html, "PUNTOPOST")
 
+    def test_el_orden_es_del_mas_antiguo_al_mas_reciente(self):
+        viejo = self._pedido_entero()
+        _pedido, c1, c2 = self._pedido_dos_cajas()
+        pantalla = self.client.get(self.url)
+        self.assertEqual(pantalla.context["siguiente"]["pedido"].pk, viejo.pk)
+        self.assertContains(pantalla, "Siguiente en orden")
+        self.assertEqual(
+            [(u["pedido"].pk, u["id"]) for u in pantalla.context["se_quedan"]],
+            [(viejo.pk, viejo.pk), (c1.pedido_id, c1.pk), (c2.pedido_id, c2.pk)],
+        )
+        self._escanear(viejo.folio)  # escaneado el viejo, el siguiente es la caja 1
+        pantalla = self.client.get(self.url)
+        self.assertEqual(pantalla.context["siguiente"]["id"], c1.pk)
+
     def test_sin_escanear_no_hay_resumen_y_descartar_limpia(self):
         r = self.client.get(reverse("piso:salida_resumen") + PARAMS)
         self.assertRedirects(r, self.url, fetch_redirect_response=False)

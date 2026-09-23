@@ -2120,8 +2120,11 @@ def _pedidos_en_salida():
 
 
 def _listos_carrier(corral, carrier):
-    """Lo que está listo para subir al camión de ESE carrier en ESE corral."""
-    return [p for p in _pedidos_en_salida() if p.corral_salida == corral and p.carrier_salida == carrier]
+    """Lo que está listo para subir al camión de ESE carrier en ESE corral, del
+    pedido más antiguo al más reciente (Chema 2026-09-23: el escaneo va en ese
+    orden para que lo viejo no se quede en el corral)."""
+    listos = [p for p in _pedidos_en_salida() if p.corral_salida == corral and p.carrier_salida == carrier]
+    return sorted(listos, key=lambda p: (p.creado, p.pk))
 
 
 def _unidades_salida(listos):
@@ -2332,6 +2335,7 @@ def salida_registrar(request):
     return render(request, "piso/salida_registrar.html", {
         "seccion": "salida", "corral": corral, "carrier": carrier,
         "escaneadas": escaneadas, "se_quedan": se_quedan,
+        "siguiente": se_quedan[0] if se_quedan else None,  # el más antiguo sin escanear
         "total_listas": len(escaneadas) + len(se_quedan),
     })
 

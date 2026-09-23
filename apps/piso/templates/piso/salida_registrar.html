@@ -13,6 +13,15 @@
 
 <div class="banner accent"><span class="foco"></span>Escanea la etiqueta interna de Torre de CADA caja que sube al camión de {{ carrier }}. Si no se lee, teclea el folio del pedido o el número de guía.</div>
 
+{# El orden es del pedido más antiguo al más reciente: lo viejo sale primero. #}
+{% if siguiente %}
+<div class="card">
+  <div class="eyebrow">Siguiente en orden</div>
+  <h2 class="mono">{{ siguiente.pedido.folio }}{% if siguiente.caja %} · caja {{ siguiente.caja.numero }}{% endif %}</h2>
+  <div class="small">{{ siguiente.pedido.cliente.nombre }} · {{ siguiente.pedido.destino }} · guía <span class="mono">{{ siguiente.guia|default:"—" }}</span> · entró {{ siguiente.pedido.creado|date:"d/M H:i" }}</div>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="titulo"><h2>Escaneadas</h2><span class="pill accent">{{ escaneadas|length }}</span></div>
   {% for u in escaneadas %}
@@ -36,10 +45,10 @@
 </div>
 
 {% if se_quedan %}
-<details class="colapsable mt">
-  <summary>{{ se_quedan|length }} sin escanear · se quedan si cierras ahora</summary>
+<details class="colapsable mt" open>
+  <summary>{{ se_quedan|length }} sin escanear, del más antiguo al más reciente · se quedan si cierras ahora</summary>
   <div class="colapsable-cuerpo small">
-    {% for u in se_quedan %}<div><span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }}</div>{% endfor %}
+    {% for u in se_quedan %}<div>{{ forloop.counter }}. <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }} · {{ u.pedido.creado|date:"d/M" }}</div>{% endfor %}
   </div>
 </details>
 {% endif %}
