@@ -105,6 +105,16 @@ class IngestaTests(BaseServicios):
             pedido = services.ingerir_pedido_shopify(self.tienda, payload)
         return pedido, reservar, confirmacion, abrir
 
+    def test_la_ingesta_escribe_el_link_al_portal_tras_el_commit(self):
+        """Chema 2026-09-23: la orden de Shopify lleva un metafield con el link
+        al pedido en el portal; sale en on_commit y solo para órdenes nuevas."""
+        with patch("apps.integraciones.services.escribir_link_pedido") as link:
+            pedido, *_ = self._ingerir(payload_shopify())
+        link.assert_called_once_with(pedido)
+        with patch("apps.integraciones.services.escribir_link_pedido") as link:
+            self._ingerir(payload_shopify())
+        link.assert_not_called()
+
     def test_ingesta_crea_pedido_con_lineas_y_reserva(self):
         pedido, reservar, confirmacion, abrir = self._ingerir(payload_shopify())
         self.assertEqual(pedido.estado, Pedido.PENDIENTE)

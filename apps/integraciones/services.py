@@ -4,6 +4,7 @@
 - encolar_push_inventario(sku)  → cola en BD, idempotente por SKU.
 - push_inventario()             → drena la cola: on_hand a TODAS las tiendas del cliente.
 - reconciliar_pedidos(tienda)   → polling de respaldo con checkpoint.
+- escribir_link_pedido(pedido)  → metafield torre.pedido_url en la orden: link al pedido en el portal.
 
 Todo job puede correr dos veces sin duplicar efecto (BLUEPRINT §2.2.7).
 """
@@ -791,3 +792,84 @@ def reprocesar_pendientes(tienda=None):
         if procesar_webhook(evento) is not None or evento.procesado:
             reprocesados += 1
     return reprocesados
+
+
+# ── Link al pedido en el portal (metafield de la orden) ─────────────────────
+
+# Servicio al cliente trabaja con el "nombre" de la orden en el admin de
+# Shopify; en vez de guardarlo en Torre, la orden lleva un metafield con el
+# link al pedido en el portal (Chema 2026-09-23). Con la definición creada y
+# fijada (`crear_definicion_link`), Shopify lo muestra en la página de la orden.
+METAFIELD_LINK = {
+    "namespace": "torre",
+    "key": "pedido_url",
+    "type": "url",
+    "name": "Pedido en Torre",
+    "description": "Abre el pedido en el portal de Torre (requiere usuario del portal).",
+}
+
+
+def url_pedido_portal(pedido):
+    """URL absoluta del pedido en el portal del cliente, con la misma base
+    pública que los links de rastreo (BASE_URL_PUBLICA)."""
+    from django.urls import reverse
+
+    from apps.rastreo.services import _base_publica  # lazy por contrato: misma base que /r/
+
+    return f"{_base_publica()}{reverse('portal:pedido_detalle', args=[pedido.pk])}"
+
+
+def escribir_link_pedido(pedido):
+    """Escribe en la orden de Shopify el metafield `torre.pedido_url` con el
+    link al pedido en el portal. Lo dispara la ingesta de una orden nueva (en
+    on_commit) y el backfill del command `shopify_metafield_torre`.
+
+    Best-effort: el resultado queda en SyncLog (push); jamás levanta hacia el
+    caller. Idempotente: `metafieldsSet` pisa el valor con el mismo link.
+    Pedido manual (sin tienda u orden) → False sin log.
+    """
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return False
+    url = url_pedido_portal(pedido)
+    if not tienda.token:
+        if not settings.DEBUG:
+            _log_push(tienda, False, f"link al portal: {pedido.folio} NO se escribió (tienda sin token)")
+            return False
+        _log_push(tienda, True, f"ok (mock): link al portal de {pedido.folio} → {url}")
+        return True
+    try:
+        ShopifyClient(tienda).set_metafield_orden(
+            pedido.shopify_order_id, METAFIELD_LINK["namespace"], METAFIELD_LINK["key"],
+            METAFIELD_LINK["type"], url,
+        )
+    except ShopifyError as exc:
+        _log_push(tienda, False, f"link al portal: {pedido.folio}: {exc}")
+        return False
+    _log_push(tienda, True, f"link al portal: {pedido.folio} → {url}")
+    return True
+
+
+def crear_definicion_link(tienda):
+    """Define en la tienda el metafield del link (una vez por tienda): con
+    definición y `pin`, el admin de Shopify lo muestra fijo en cada orden.
+    Regresa "creada", "existia" o "error"; el detalle queda en SyncLog."""
+    if not tienda.token:
+        _log_push(tienda, False, "definición del link al portal: tienda sin token")
+        return "error"
+    definicion = {
+        "name": METAFIELD_LINK["name"],
+        "namespace": METAFIELD_LINK["namespace"],
+        "key": METAFIELD_LINK["key"],
+        "type": METAFIELD_LINK["type"],
+        "description": METAFIELD_LINK["description"],
+        "ownerType": "ORDER",
+        "pin": True,
+    }
+    try:
+        creada = ShopifyClient(tienda).crear_definicion_metafield(definicion)
+    except ShopifyError as exc:
+        _log_push(tienda, False, f"definición del link al portal: {exc}")
+        return "error"
+    _log_push(tienda, True, "definición del link al portal " + ("creada" if creada else "ya existía"))
+    return "creada" if creada else "existia"

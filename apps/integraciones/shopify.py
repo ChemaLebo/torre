@@ -148,6 +148,25 @@ query fulfillmentsDeOrden($id: ID!) {
 """
 
 
+MUTACION_METAFIELDS_SET = """
+mutation fijarMetafields($metafields: [MetafieldsSetInput!]!) {
+  metafieldsSet(metafields: $metafields) {
+    metafields { id namespace key value }
+    userErrors { field message code }
+  }
+}
+"""
+
+MUTACION_DEFINICION_METAFIELD = """
+mutation definirMetafield($definition: MetafieldDefinitionInput!) {
+  metafieldDefinitionCreate(definition: $definition) {
+    createdDefinition { id name }
+    userErrors { field message code }
+  }
+}
+"""
+
+
 class ShopifyError(Exception):
     """Error de la API de Shopify (HTTP, GraphQL o userErrors)."""
 
@@ -397,6 +416,36 @@ class ShopifyClient:
             ]
             resultado.append((str(f.get("id") or ""), str(f.get("status") or ""), numeros))
         return resultado
+
+    # ── metafields (link al pedido en el portal) ──
+    def set_metafield_orden(self, order_id, namespace, key, tipo, valor):
+        """Escribe (o pisa) UN metafield de la orden vía `metafieldsSet`; regresa
+        su gid. `order_id` numérico o gid. Los userErrors levantan ShopifyError."""
+        gid = str(order_id)
+        if not gid.startswith("gid://"):
+            gid = f"gid://shopify/Order/{gid}"
+        datos = self.graphql(MUTACION_METAFIELDS_SET, {"metafields": [{
+            "ownerId": gid, "namespace": namespace, "key": key, "type": tipo, "value": valor,
+        }]})
+        resultado = datos.get("metafieldsSet") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"metafieldsSet {self.tienda.dominio} orden {order_id}: {errores}")
+        creados = resultado.get("metafields") or []
+        return str((creados[0] if creados else {}).get("id") or "")
+
+    def crear_definicion_metafield(self, definicion):
+        """`metafieldDefinitionCreate` con el dict `definicion` (name, namespace,
+        key, type, ownerType, pin…). Regresa el gid de la definición nueva o
+        None si ya existía (userError TAKEN); otros userErrors levantan."""
+        datos = self.graphql(MUTACION_DEFINICION_METAFIELD, {"definition": definicion})
+        resultado = datos.get("metafieldDefinitionCreate") or {}
+        errores = resultado.get("userErrors") or []
+        if any(str(e.get("code") or "") == "TAKEN" for e in errores):
+            return None
+        if errores:
+            raise ShopifyError(f"metafieldDefinitionCreate {self.tienda.dominio}: {errores}")
+        return str((resultado.get("createdDefinition") or {}).get("id") or "")
 
     # ── pedidos (polling de respaldo) ──
     def _paginar_pedidos(self, params):

@@ -282,6 +282,22 @@ def _avisar_piso_pedido_nuevo(pedido):
     transaction.on_commit(_enviar)
 
 
+def _escribir_link_shopify_best_effort(pedido):
+    """Metafield `torre.pedido_url` en la orden de Shopify: el link al pedido en
+    el portal, para que servicio al cliente llegue desde el admin de Shopify
+    (Chema 2026-09-23). Best-effort TOTAL en on_commit: un Shopify caído
+    jamás tira la ingesta; el resultado queda en SyncLog.
+    """
+    def _escribir():
+        try:
+            from apps.integraciones.services import escribir_link_pedido  # lazy por contrato
+
+            escribir_link_pedido(pedido)
+        except Exception:
+            pass
+    transaction.on_commit(_escribir)
+
+
 # ── Ingesta desde Shopify ──
 
 @transaction.atomic
@@ -848,6 +864,7 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
     _planificar_best_effort(pedido)
     _enviar_confirmacion_best_effort(pedido)
     _avisar_piso_pedido_nuevo(pedido)
+    _escribir_link_shopify_best_effort(pedido)
     return pedido
 
 
