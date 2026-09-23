@@ -310,6 +310,27 @@ class TestAccionesIncidencia(BasePortal):
         self.assertContains(respuesta, "Dirección nueva pendiente")
         self.assertContains(respuesta, "Av. Vallarta 500, Guadalajara, 44100")
 
+    def test_expediente_con_guias_y_orden_de_shopify(self):
+        """Chema 2026-09-23: el portal también muestra el expediente, con todas
+        las guías (una por caja) y el botón a la orden de Shopify."""
+        from decimal import Decimal
+
+        from apps.envios.models import Guia, Paquete
+
+        Pedido.objects.filter(pk=self.pedido.pk).update(tienda=self.tienda, shopify_order_id="8398059995298")
+        for n in (1, 2):
+            caja = Paquete.objects.create(pedido=self.pedido, numero=n, peso_kg=Decimal("2"), carrier="estafeta", estado=Paquete.EMPACADO)
+            Guia.objects.create(pedido=self.pedido, paquete=caja, carrier="estafeta", numero=f"EST-{n}", proveedor="mock")
+        self.entrar()
+        html = self.client.get(reverse("portal:incidencia_detalle", args=[self.incidencia.pk])).content.decode()
+        self.assertIn("Expediente", html)
+        self.assertIn("Guía caja 1: estafeta", html)
+        self.assertIn("EST-1", html)
+        self.assertIn("Guía caja 2: estafeta", html)
+        self.assertIn("EST-2", html)
+        self.assertIn("Ver orden en Shopify", html)
+        self.assertIn("https://colima-mx.myshopify.com/admin/orders/8398059995298", html)
+
     def test_nueva_incidencia_rechaza_pedido_ajeno(self):
         self.entrar()
         antes = Incidencia.objects.count()

@@ -556,6 +556,25 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
     return recoleccion
 
 
+def guias_del_pedido(pedido):
+    """Todas las guías del pedido para un expediente (Mesa y portal; Chema
+    2026-09-23): una por caja cuando el envío va dividido, con carrier, número,
+    caja, estado legible, si sigue viva y el rastreo público del carrier. Orden
+    estable por pk (caja 1 primero); las canceladas o retornadas van igual,
+    marcadas como inactivas."""
+    return [
+        {
+            "carrier": g.carrier,
+            "numero": g.numero,
+            "caja": g.paquete.numero if g.paquete_id else None,
+            "estado": g.get_estado_display(),
+            "activa": g.es_activa,
+            "url": url_rastreo_carrier(g.carrier, g.numero),
+        }
+        for g in pedido.guias.select_related("paquete").order_by("pk")
+    ]
+
+
 def cancelar_guia(guia, actor, motivo=""):
     """Cancela UNA guía comprada que aún no sale (cambio de dirección, Chema
     2026-09-23): avisa al carrier por API (envia: POST /ship/cancel/;

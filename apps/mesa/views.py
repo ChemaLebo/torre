@@ -487,6 +487,7 @@ def _gestionar_incidencia(request, incidencia):
 @rol_requerido("mesa")
 def incidencia_detalle(request, pk):
     from apps.incidencias.models import Compensacion, Incidencia, ReclamacionCarrier
+    from apps.envios.services import guias_del_pedido  # lazy por contrato
     from apps.pedidos.reportes import url_orden_shopify  # lazy por contrato
 
     incidencia = get_object_or_404(
@@ -540,6 +541,7 @@ def incidencia_detalle(request, pk):
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,
         **_contexto_cambio_direccion(incidencia),
         "url_shopify": url_orden_shopify(incidencia.pedido) if incidencia.pedido else "",
+        "guias": guias_del_pedido(incidencia.pedido) if incidencia.pedido else [],
         "puede_cerrar": incidencia.estado == Incidencia.RESUELTA,
     })
 

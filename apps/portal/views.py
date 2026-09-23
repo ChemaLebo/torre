@@ -563,8 +563,13 @@ def incidencia_detalle(request, pk):
             return redirect("portal:incidencia_detalle", pk=incidencia.pk)
 
     _decorar_incidencia(incidencia)
+    from apps.envios.services import guias_del_pedido  # lazy: servicio de otra app
+
     timeline = incidencia.mensajes.filter(interno=False)
+    pedido = incidencia.pedido
     return render(request, "portal/incidencia_detalle.html", {
+        "url_shopify": url_orden_shopify(pedido) if pedido else "",
+        "guias": guias_del_pedido(pedido) if pedido else [],
         "seccion": "incidencias",
         "incidencia": incidencia,
         "timeline": timeline,

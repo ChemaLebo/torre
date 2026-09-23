@@ -20,6 +20,8 @@
     <p class="mono" style="margin:8px 0 0">
       Cliente: {{ incidencia.cliente.nombre }}<br>
       {% if incidencia.pedido %}Pedido: {{ incidencia.pedido.folio }} ({{ incidencia.pedido.get_estado_display }})<br>{% endif %}
+      {# Todas las guías (una por caja si el envío va dividido), con el rastreo del carrier. #}
+      {% for g in guias %}Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}{{ g.numero }}{% endif %}{% if not g.activa %} <span class="muted">({{ g.estado|lower }})</span>{% endif %}<br>{% endfor %}
       {% if incidencia.sku %}SKU: {{ incidencia.sku.codigo }}<br>{% endif %}
       Origen: {{ incidencia.get_origen_display }}<br>
       Dueño: {{ incidencia.dueno|default:"sin dueño" }}

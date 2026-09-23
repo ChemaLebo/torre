@@ -29,6 +29,25 @@ class ExpedienteIncidenciaTests(TestCase):
         self.assertIn(f"https://{self.tienda.dominio}/admin/orders/8401962139810", html)
         self.assertIn("Ver orden en Shopify", html)
 
+    def test_lista_todas_las_guias_una_por_caja(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Guia, Paquete
+
+        pedido = crear_pedido(self.cliente, self.tienda)
+        for n in (1, 2):
+            caja = Paquete.objects.create(pedido=pedido, numero=n, peso_kg=Decimal("2"), carrier="estafeta", estado=Paquete.EMPACADO)
+            Guia.objects.create(pedido=pedido, paquete=caja, carrier="estafeta", numero=f"EST-{n}", proveedor="mock")
+        cancelada = Guia.objects.create(pedido=pedido, carrier="imile", numero="IM-VIEJA", proveedor="mock", estado=Guia.CANCELADA)
+        html = self._detalle(pedido)
+        self.assertIn("Guía caja 1: estafeta", html)
+        self.assertIn("EST-1", html)
+        self.assertIn("Guía caja 2: estafeta", html)
+        self.assertIn("EST-2", html)
+        self.assertIn("IM-VIEJA", html)
+        self.assertIn("(cancelada)", html)
+        self.assertEqual(cancelada.es_activa, False)
+
     def test_pedido_manual_no_tiene_link(self):
         pedido = Pedido.objects.create(cliente=self.cliente, origen="manual", comprador_nombre="Ana", cp="44100")
         self.assertNotIn("Ver orden en Shopify", self._detalle(pedido))
