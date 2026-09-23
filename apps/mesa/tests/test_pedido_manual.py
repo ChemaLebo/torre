@@ -215,6 +215,19 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         self.url = reverse("mesa:pedidos")
         self.client.force_login(self.usuario_mesa)
 
+    def test_la_lista_muestra_la_guia_con_carrier_y_estado(self):
+        from apps.envios.models import Guia
+        from apps.pedidos.models import Pedido
+
+        pedido = crear_pedido(self.colima)
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.GUIA_GENERADA)
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="EST-123", proveedor="mock")
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "EST-123")
+        self.assertContains(respuesta, "estafeta")
+        self.assertContains(respuesta, "Guía creada")
+        self.assertContains(respuesta, "rastreo3.estafeta.com")  # link al rastreo público del carrier
+
     def test_la_lista_marca_las_piezas_sin_inventario(self):
         from apps.catalogo.models import SKU
         from apps.pedidos.models import LineaPedido

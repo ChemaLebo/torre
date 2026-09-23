@@ -605,7 +605,7 @@ def pedidos(request):
 
     qs = (
         Pedido.objects.select_related("cliente", "tienda")
-        .prefetch_related("lineas__sku").order_by("-creado")
+        .prefetch_related("lineas__sku", "guias").order_by("-creado")
     )
     cliente_id = request.GET.get("cliente", "").strip()
     estado = request.GET.get("estado", "").strip()
@@ -630,6 +630,13 @@ def pedidos(request):
         pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
         # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
         pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
+        # Guías vivas con su rastreo público (Chema 2026-09-23: ver el número
+        # desde Mesa sin ir al admin).
+        from apps.envios.services import url_rastreo_carrier  # lazy por contrato
+        pedido.guias_vivas = [
+            (g, url_rastreo_carrier(g.carrier, g.numero))
+            for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.es_activa
+        ]
 
     return render(request, "mesa/pedidos.html", {
         "seccion": "pedidos",

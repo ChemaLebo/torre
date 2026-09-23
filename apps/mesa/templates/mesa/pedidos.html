@@ -54,7 +54,7 @@
 <div class="tabla-wrap">
   <table>
     <thead>
-      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Incidencia</th><th>Ingresó</th><th>Cancelar</th></tr>
+      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Guía</th><th>Incidencia</th><th>Ingresó</th><th>Cancelar</th></tr>
     </thead>
     <tbody>
       {% for pedido in pedidos %}
@@ -75,6 +75,14 @@
         <td>
           <span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span>
           {% if pedido.parcial_de_orden %}<span class="pill accent" title="La orden se dividió entre locations: este pedido ampara solo nuestro ticket">parcial</span>{% endif %}
+        </td>
+        <td class="small">
+          {% for g, url in pedido.guias_vivas %}
+          <div>{% if url %}<a class="mono" href="{{ url }}" target="_blank" rel="noopener" title="Rastreo público de {{ g.carrier }}">{{ g.numero }} ↗</a>{% else %}<span class="mono">{{ g.numero }}</span>{% endif %}
+            · {{ g.carrier }}{% if g.paquete %} · caja {{ g.paquete.numero }}{% endif %}
+            <span class="pill {% if g.estado == 'ENTREGADO' %}ok{% elif g.estado == 'RETORNO' or g.estado == 'INTENTO_FALLIDO' or g.estado == 'EXCEPCION' %}crit{% elif g.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ g.ultimo_evento }}">{{ g.get_estado_display }}</span>
+          </div>
+          {% empty %}—{% endfor %}
         </td>
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% else %}<span class="small">—</span>{% endif %}{% if pedido.reingreso_estado %} <span class="pill">{{ pedido.get_reingreso_estado_display }}</span>{% endif %}{% if pedido.piezas_sin_inventario %} <span class="pill crit">Sin inventario · {{ pedido.piezas_sin_inventario }} pza{{ pedido.piezas_sin_inventario|pluralize }}</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
