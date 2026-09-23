@@ -20,6 +20,7 @@
     <p class="mono" style="margin:8px 0 0">
       Cliente: {{ incidencia.cliente.nombre }}<br>
       {% if incidencia.pedido %}Pedido: {{ incidencia.pedido.folio }} ({{ incidencia.pedido.get_estado_display }})<br>{% endif %}
+      {% if url_shopify %}<a href="{{ url_shopify }}" target="_blank" rel="noopener" title="Abrir la orden en el admin de Shopify">Orden #{{ incidencia.pedido.shopify_order_id }} en Shopify ↗</a><br>{% endif %}
       {% if incidencia.sku %}SKU: {{ incidencia.sku.codigo }}<br>{% endif %}
       Origen: {{ incidencia.get_origen_display }}<br>
       Dueño: {{ incidencia.dueno|default:"sin dueño" }}
