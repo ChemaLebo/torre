@@ -63,6 +63,19 @@ la hoja que firma el chofer por lo que subió a su camión. Blanco y negro.
   </tbody>
 </table>
 
+{% if sin_escaneo %}
+<h2 style="font-size:15px;margin-top:18px">Ya habían salido antes, sin escaneo ({{ sin_escaneo|length }})</h2>
+<p style="font-size:11px;color:#444">No estaban en el corral al registrar esta salida; el operador confirmó que se fueron antes sin registro. No cuentan en lo que firma el chofer hoy.</p>
+<table>
+  <thead><tr><th>Pedido</th><th>Caja</th><th>Guía</th><th>Cliente</th></tr></thead>
+  <tbody>
+    {% for l in sin_escaneo %}
+    <tr><td class="mono">{{ l.pedido.folio }}</td><td>{% if l.caja %}{{ l.caja }}{% else %}—{% endif %}</td><td class="mono">{{ l.numero_guia|default:"—" }}</td><td>{{ l.pedido.cliente.nombre }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <div class="firmas">
   <div class="firma">Entrega (Torre): {{ manifiesto.operador.username|default:"" }}</div>
   <div class="firma">Recibe (chofer de {{ manifiesto.carrier }}): {{ manifiesto.chofer }}</div>

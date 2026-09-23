@@ -2150,11 +2150,16 @@ def _escaneo_actual(request, corral, carrier):
     """Lo escaneado hasta ahora para ESTE corral y carrier (sesión del
     operador); otra salida en la sesión se descarta."""
     datos = request.session.get(_SESION_SALIDA) or {}
+    vacio = {"corral": corral, "carrier": carrier, "cajas": [], "pedidos": [],
+             "faltan": {"cajas": [], "pedidos": []}}
     if datos.get("corral") != corral or datos.get("carrier") != carrier:
-        return {"corral": corral, "carrier": carrier, "cajas": [], "pedidos": []}
+        return vacio
+    faltan = datos.get("faltan") or {}
     return {
         "corral": corral, "carrier": carrier,
         "cajas": list(datos.get("cajas") or []), "pedidos": list(datos.get("pedidos") or []),
+        # "No está en salida": se resuelve en el resumen (ya salió / no se toca).
+        "faltan": {"cajas": list(faltan.get("cajas") or []), "pedidos": list(faltan.get("pedidos") or [])},
     }
 
 
@@ -2179,12 +2184,19 @@ def _escaneadas_en_sesion(request, corral, carrier):
 
 
 def _partir_escaneo(listos, datos):
-    """(escaneadas, se_quedan) entre las unidades listas de la salida."""
-    escaneadas, se_quedan = [], []
+    """(escaneadas, faltan, se_quedan) entre las unidades listas de la salida:
+    escaneadas suben al camión; faltan = marcadas "No está en salida" (se
+    resuelven en el resumen); se_quedan = ni una cosa ni la otra."""
+    escaneadas, faltan, se_quedan = [], [], []
     for unidad in _unidades_salida(listos):
-        en_lista = datos["cajas"] if unidad["tipo"] == "caja" else datos["pedidos"]
-        (escaneadas if unidad["id"] in en_lista else se_quedan).append(unidad)
-    return escaneadas, se_quedan
+        clave = "cajas" if unidad["tipo"] == "caja" else "pedidos"
+        if unidad["id"] in datos[clave]:
+            escaneadas.append(unidad)
+        elif unidad["id"] in datos["faltan"][clave]:
+            faltan.append(unidad)
+        else:
+            se_quedan.append(unidad)
+    return escaneadas, faltan, se_quedan
 
 
 def _resolver_escaneo_salida(codigo):
@@ -2281,6 +2293,9 @@ def _salida_escanear(request, corral, carrier, listos, datos):
             return error(f"{pedido.folio} ya está en la lista.")
         datos["pedidos"].append(pedido.pk)
         agregadas.append(pedido.folio)
+    # Lo escaneado sí está: sale de "no está en salida" si alguien lo marcó.
+    for clave in ("cajas", "pedidos"):
+        datos["faltan"][clave] = [v for v in datos["faltan"][clave] if v not in datos[clave]]
     _guardar_escaneo(request, datos)
     escaneadas = len(datos["cajas"]) + len(datos["pedidos"])
     listas = len(_unidades_salida(listos))
@@ -2323,6 +2338,20 @@ def salida_registrar(request):
                 lista.remove(valor)
                 _guardar_escaneo(request, datos)
             return redirect(_url_registrar(corral, carrier))
+        if accion in ("no_esta", "si_esta"):
+            # "No está en salida": la caja no está en el corral; se decide en el
+            # resumen si ya había salido. "Sí está" lo deshace.
+            clave = "cajas" if request.POST.get("tipo") == "caja" else "pedidos"
+            valor = int(request.POST.get("id")) if str(request.POST.get("id", "")).isdigit() else None
+            lista = datos["faltan"][clave]
+            if accion == "no_esta" and valor is not None and valor not in lista:
+                lista.append(valor)
+                if valor in datos[clave]:
+                    datos[clave].remove(valor)
+            if accion == "si_esta" and valor in lista:
+                lista.remove(valor)
+            _guardar_escaneo(request, datos)
+            return redirect(_url_registrar(corral, carrier))
         if accion == "cancelar":
             _limpiar_escaneo(request, corral, carrier)
             messages.info(request, f"Salida de {carrier} descartada: nada se registró.")
@@ -2331,12 +2360,12 @@ def salida_registrar(request):
             return redirect(f"{reverse('piso:salida_resumen')}?corral={quote(corral)}&carrier={quote(carrier)}")
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect(_url_registrar(corral, carrier))
-    escaneadas, se_quedan = _partir_escaneo(listos, datos)
+    escaneadas, faltan, se_quedan = _partir_escaneo(listos, datos)
     return render(request, "piso/salida_registrar.html", {
         "seccion": "salida", "corral": corral, "carrier": carrier,
-        "escaneadas": escaneadas, "se_quedan": se_quedan,
+        "escaneadas": escaneadas, "faltan": faltan, "se_quedan": se_quedan,
         "siguiente": se_quedan[0] if se_quedan else None,  # el más antiguo sin escanear
-        "total_listas": len(escaneadas) + len(se_quedan),
+        "total_listas": len(escaneadas) + len(faltan) + len(se_quedan),
     })
 
 
@@ -2350,13 +2379,13 @@ def salida_resumen(request):
         messages.error(request, "Elige la salida desde los botones de la pantalla de Salida.")
         return redirect("piso:salida")
     listos = _listos_carrier(corral, carrier)
-    escaneadas, se_quedan = _partir_escaneo(listos, _escaneo_actual(request, corral, carrier))
-    if not escaneadas:
+    escaneadas, faltan, se_quedan = _partir_escaneo(listos, _escaneo_actual(request, corral, carrier))
+    if not escaneadas and not faltan:
         messages.error(request, "Todavía no has escaneado ninguna caja de esta salida.")
         return redirect(_url_registrar(corral, carrier))
     return render(request, "piso/salida_resumen.html", {
         "seccion": "salida", "corral": corral, "carrier": carrier,
-        "escaneadas": escaneadas, "se_quedan": se_quedan,
+        "escaneadas": escaneadas, "faltan": faltan, "se_quedan": se_quedan,
     })
 
 
@@ -2370,13 +2399,15 @@ def manifiesto(request, pk):
         .prefetch_related("lineas__pedido__cliente", "lineas__paquete"),
         pk=pk,
     )
-    lineas = list(hoja.lineas.all())
-    for linea in lineas:
+    todas = list(hoja.lineas.all())
+    for linea in todas:
         direccion = linea.pedido.direccion or {}
         ciudad = str(direccion.get("city") or "").strip()
         linea.destino = f"{ciudad} · CP {linea.pedido.cp}" if ciudad else f"CP {linea.pedido.cp}"
+    lineas = [l for l in todas if not l.sin_escaneo]  # lo que sube el chofer HOY
     return render(request, "piso/manifiesto.html", {
         "manifiesto": hoja, "lineas": lineas,
+        "sin_escaneo": [l for l in todas if l.sin_escaneo],
         "pedidos": len({l.pedido_id for l in lineas}), "es_mesa": _es_mesa(request),
     })
 
@@ -2528,6 +2559,11 @@ def _salida_manifiesto(request):
         return redirect("piso:salida")
     seleccion = {int(v) for v in request.POST.getlist("pedido_id") if v.isdigit()}
     cajas_sel = {int(v) for v in request.POST.getlist("paquete_id") if v.isdigit()}
+    # "No estaba en salida · ya salió": se registra igual, pero aparte en la hoja.
+    ya_pedidos = {int(v) for v in request.POST.getlist("ya_salio_pedido_id") if v.isdigit()}
+    ya_cajas = {int(v) for v in request.POST.getlist("ya_salio_paquete_id") if v.isdigit()}
+    seleccion |= ya_pedidos
+    cajas_sel |= ya_cajas
     if not seleccion and not cajas_sel:
         messages.error(
             request,
@@ -2590,6 +2626,13 @@ def _salida_manifiesto(request):
             marcar_recolectado(pedido, request.user, paquetes=cajas)
             recolectados.append(pedido.folio)
             salidas.append((pedido, cajas))
+            sin_escaneo = [c.numero for c in (cajas or []) if c.pk in ya_cajas]
+            if pedido.pk in ya_pedidos or sin_escaneo:
+                registrar_evento(
+                    "pedido", pedido.pk, "salida_sin_escaneo", actor=request.user, cliente=pedido.cliente,
+                    delta={"carrier": carrier, "cajas": sin_escaneo or "pedido entero"},
+                    motivo="No estaba en el corral al registrar la salida: el operador confirmó que ya había salido.",
+                )
         except ValueError as exc:
             errores.append(f"{pedido.folio}: {exc}")
             continue
@@ -2607,6 +2650,7 @@ def _salida_manifiesto(request):
         from apps.envios.services import registrar_manifiesto  # lazy por contrato
         hoja = registrar_manifiesto(
             carrier, corral, request.user, salidas, chofer=(request.POST.get("chofer") or "").strip(),
+            sin_escaneo={"pedidos": ya_pedidos, "cajas": ya_cajas},
         )
         registrar_evento(
             "manifiesto", corral, "manifiesto_firmado", actor=request.user,

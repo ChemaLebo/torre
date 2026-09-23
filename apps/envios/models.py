@@ -518,6 +518,10 @@ class LineaManifiesto(models.Model):
     )
     numero_guia = models.CharField(max_length=64, blank=True, default="")
     caja = models.PositiveIntegerField(null=True, blank=True, help_text="Número de caja dentro del pedido")
+    # "No estaba en salida" y el operador confirmó que YA había salido antes sin
+    # registro (Chema 2026-09-23, control del corral): se registra igual pero
+    # en la hoja va aparte, fuera del conteo que firma el chofer.
+    sin_escaneo = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["pedido_id", "caja", "pk"]

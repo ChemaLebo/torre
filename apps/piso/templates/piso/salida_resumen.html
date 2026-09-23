@@ -29,6 +29,23 @@
     <p class="small muted mt">Desmarca lo que al final no subió. Lo que no se escaneó no se marca aquí: se escanea o se teclea su folio.</p>
   </div>
 
+  {# "No está en salida": la palomita "ya salió" nace apagada; solo con ella se registra. #}
+  {% if faltan %}
+  <div class="card mt">
+    <div class="titulo"><h2>No estaban en salida</h2><span class="pill warn">{{ faltan|length }}</span></div>
+    <p class="small muted">Marca "ya salió" solo si estás seguro de que se fue antes sin registro. Se registra su salida, pero en el manifiesto va aparte, fuera de lo que firma el chofer hoy.</p>
+    {% for u in faltan %}
+    <label class="corral-fila">
+      <input type="checkbox" name="{% if u.tipo == 'caja' %}ya_salio_paquete_id{% else %}ya_salio_pedido_id{% endif %}" value="{{ u.id }}">
+      <span class="crece">
+        <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span> · <b>ya salió</b>
+        <div class="small muted">{{ u.pedido.cliente.nombre }} · {{ u.pedido.destino }}</div>
+      </span>
+    </label>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if se_quedan %}
   <div class="card mt">
     <div class="titulo"><h2>Se quedan en el corral</h2><span class="pill warn">{{ se_quedan|length }}</span></div>

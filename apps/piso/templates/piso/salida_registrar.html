@@ -48,9 +48,42 @@
 <details class="colapsable mt" open>
   <summary>{{ se_quedan|length }} sin escanear, del más antiguo al más reciente · se quedan si cierras ahora</summary>
   <div class="colapsable-cuerpo small">
-    {% for u in se_quedan %}<div>{{ forloop.counter }}. <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }} · {{ u.pedido.creado|date:"d/M" }}</div>{% endfor %}
+    {% for u in se_quedan %}
+    <div class="corral-fila">
+      <div class="crece">{{ forloop.counter }}. <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }} · {{ u.pedido.creado|date:"d/M" }}</div>
+      <form method="post">{% csrf_token %}
+        <input type="hidden" name="accion" value="no_esta">
+        <input type="hidden" name="corral" value="{{ corral }}">
+        <input type="hidden" name="carrier" value="{{ carrier }}">
+        <input type="hidden" name="tipo" value="{{ u.tipo }}">
+        <input type="hidden" name="id" value="{{ u.id }}">
+        <button class="btn chico" type="submit">No está en salida</button>
+      </form>
+    </div>
+    {% endfor %}
   </div>
 </details>
+{% endif %}
+
+{# Marcadas "No está en salida": la caja no está en el corral; en el resumen se decide si ya había salido. #}
+{% if faltan %}
+<div class="card mt">
+  <div class="titulo"><h2>No están en salida</h2><span class="pill warn">{{ faltan|length }}</span></div>
+  <p class="small muted">Al cerrar la salida decides, una por una, si ya había salido antes sin registro.</p>
+  {% for u in faltan %}
+  <div class="corral-fila">
+    <div class="crece"><span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }}</div>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="si_esta">
+      <input type="hidden" name="corral" value="{{ corral }}">
+      <input type="hidden" name="carrier" value="{{ carrier }}">
+      <input type="hidden" name="tipo" value="{{ u.tipo }}">
+      <input type="hidden" name="id" value="{{ u.id }}">
+      <button class="btn chico" type="submit">Sí está</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
 {% endif %}
 
 <div class="accion-fija mt">
@@ -70,7 +103,7 @@
       <input type="hidden" name="accion" value="cerrar">
       <input type="hidden" name="corral" value="{{ corral }}">
       <input type="hidden" name="carrier" value="{{ carrier }}">
-      <button class="btn primario gigante" type="submit" {% if not escaneadas %}disabled{% endif %}>Cerrar salida</button>
+      <button class="btn primario gigante" type="submit" {% if not escaneadas and not faltan %}disabled{% endif %}>Cerrar salida</button>
     </form>
     <form method="post" class="mt" onsubmit="return confirm('¿Descartar lo escaneado? Nada se registra.');">{% csrf_token %}
       <input type="hidden" name="accion" value="cancelar">

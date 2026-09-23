@@ -556,13 +556,18 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
     return recoleccion
 
 
-def registrar_manifiesto(carrier, corral, operador, salidas, chofer=""):
+def registrar_manifiesto(carrier, corral, operador, salidas, chofer="", sin_escaneo=None):
     """La hoja que firma el chofer: un Manifiesto con folio por lo que subió a
     SU camión (Chema 2026-09-22). `salidas` = [(pedido, cajas)] tal como lo
     despachó pedidos.marcar_recolectado: cajas = las que salieron, o None si
     el pedido salió entero (una línea por guía activa; sin guía, una línea
-    del pedido). Guarda el número de guía como quedó impreso. Regresa el
-    Manifiesto, o None si no salió nada."""
+    del pedido). Guarda el número de guía como quedó impreso. `sin_escaneo` =
+    {"pedidos": {pk}, "cajas": {pk}} marcados "no estaba en salida · ya
+    salió": sus líneas van aparte en la hoja. Regresa el Manifiesto, o None
+    si no salió nada."""
+    sin_escaneo = sin_escaneo or {}
+    ya_pedidos = set(sin_escaneo.get("pedidos") or ())
+    ya_cajas = set(sin_escaneo.get("cajas") or ())
     lineas = []
     for pedido, cajas in salidas:
         if cajas:
@@ -583,6 +588,8 @@ def registrar_manifiesto(carrier, corral, operador, salidas, chofer=""):
             ))
     if not lineas:
         return None
+    for linea in lineas:
+        linea.sin_escaneo = linea.pedido_id in ya_pedidos or (linea.paquete_id in ya_cajas)
     with transaction.atomic():
         manifiesto = Manifiesto.objects.create(
             carrier=carrier, corral=corral or "",
@@ -595,6 +602,7 @@ def registrar_manifiesto(carrier, corral, operador, salidas, chofer=""):
     registrar_evento(
         "manifiesto", manifiesto.folio, "manifiesto_creado", actor=operador,
         delta={"carrier": carrier, "corral": corral, "cajas": len(lineas),
+               "sin_escaneo": sum(1 for l in lineas if l.sin_escaneo),
                "pedidos": sorted({p.folio for p, _ in salidas})},
         motivo=f"Manifiesto {manifiesto.folio} de {carrier}: {len(lineas)} caja(s) al camión.",
     )

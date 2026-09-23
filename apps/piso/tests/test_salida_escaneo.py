@@ -9,6 +9,7 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.core.models import EventoAuditoria
 from apps.envios.adapters import MockAdapter
 from apps.envios.models import Guia, Manifiesto, Paquete, PaqueteLinea
 from apps.pedidos.models import Pedido
@@ -155,6 +156,62 @@ class RegistrarSalidaTests(PisoTestCase):
         self._escanear(viejo.folio)  # escaneado el viejo, el siguiente es la caja 1
         pantalla = self.client.get(self.url)
         self.assertEqual(pantalla.context["siguiente"]["id"], c1.pk)
+
+    def _no_esta(self, unidad):
+        return self.client.post(self.url, {
+            "accion": "no_esta", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "tipo": unidad[0], "id": unidad[1],
+        })
+
+    def test_no_esta_en_salida_y_ya_salio_se_registra_aparte(self):
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        self._escanear(obtener_o_crear_token_etiqueta(c1.guia_activa))
+        self._no_esta(("caja", c2.pk))
+        pantalla = self.client.get(self.url)
+        self.assertEqual([u["id"] for u in pantalla.context["faltan"]], [c2.pk])
+        self.assertEqual(pantalla.context["se_quedan"], [])
+        self.assertContains(pantalla, "No están en salida")
+        resumen = self.client.get(reverse("piso:salida_resumen") + PARAMS)
+        self.assertContains(resumen, f'name="ya_salio_paquete_id" value="{c2.pk}"')
+        self.assertNotContains(resumen, f'name="ya_salio_paquete_id" value="{c2.pk}" checked')
+        with self.captureOnCommitCallbacks(execute=True):
+            r = self.client.post(reverse("piso:salida"), {
+                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+                "paquete_id": [c1.pk], "ya_salio_paquete_id": [c2.pk], "desde_escaner": "1",
+            })
+        hoja = Manifiesto.objects.get()
+        self.assertRedirects(r, reverse("piso:manifiesto", args=[hoja.pk]), fetch_redirect_response=False)
+        self.assertEqual({l.paquete_id: l.sin_escaneo for l in hoja.lineas.all()}, {c1.pk: False, c2.pk: True})
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
+        self.assertTrue(EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo",
+        ).exists())
+        hoja_html = self.client.get(reverse("piso:manifiesto", args=[hoja.pk]))
+        self.assertContains(hoja_html, "Ya habían salido antes, sin escaneo (1)")
+        self.assertContains(hoja_html, "<b>1</b> caja")  # el chofer firma solo por la escaneada
+
+    def test_no_esta_sin_palomita_no_se_toca_y_si_esta_lo_regresa(self):
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        self._escanear(obtener_o_crear_token_etiqueta(c1.guia_activa))
+        self._no_esta(("caja", c2.pk))
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("piso:salida"), {
+                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+                "paquete_id": [c1.pk], "desde_escaner": "1",
+            })
+        pedido.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual((pedido.estado, c2.estado), (Pedido.PARCIALMENTE_DESPACHADO, Paquete.EMPACADO))
+        self.assertEqual(Manifiesto.objects.get().lineas.count(), 1)
+        # Otra salida: se marca "no está" y luego "sí está" → vuelve a "se quedan".
+        self._no_esta(("caja", c2.pk))
+        self.client.post(self.url, {
+            "accion": "si_esta", "corral": "SAL-OTRO", "carrier": "puntopost", "tipo": "caja", "id": c2.pk,
+        })
+        pantalla = self.client.get(self.url)
+        self.assertEqual(pantalla.context["faltan"], [])
+        self.assertEqual([u["id"] for u in pantalla.context["se_quedan"]], [c2.pk])
 
     def test_sin_escanear_no_hay_resumen_y_descartar_limpia(self):
         r = self.client.get(reverse("piso:salida_resumen") + PARAMS)
