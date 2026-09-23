@@ -2082,11 +2082,22 @@ _SESION_SALIDA = "salida_escaneo"
 _RE_TOKEN_ETIQUETA = re.compile(r"/r/e/([A-Za-z0-9_-]{6,20})/?")
 
 
+def _carrier_de_caja(caja, pedido):
+    """Carrier con el que viaja ESA caja (su guía activa; sin guía, el probable del pedido)."""
+    guia = caja.guia_activa
+    return (guia.carrier if guia else _carrier_probable(pedido)) or "?"
+
+
 def _pedidos_en_salida():
-    """Pedidos listos en el corral (empaque completo: guía y foto de cierre en
-    cada caja; los que esperan inventario no), decorados para la tabla y el
+    """Entradas listas en el corral (empaque completo: guía y foto de cierre
+    en cada caja; los que esperan inventario no), decoradas para la tabla y el
     escáner: contenido, cajas_salida (cada una con .guia), guias_activas,
-    destino, carrier_salida y corral_salida."""
+    destino, carrier_salida y corral_salida. UNA entrada por pedido y
+    carrier (Chema 2026-09-23, PED-00034 con caja estafeta y caja amPm): un
+    pedido con cajas de dos carriers aparece en las dos tablas, cada una solo
+    con sus cajas y sus guías; las entradas son copias del pedido."""
+    import copy
+
     from apps.pedidos.services import cajas_por_salir  # lazy por contrato
     mapa = _mapa_corrales()
     listos = []
@@ -2107,15 +2118,32 @@ def _pedidos_en_salida():
         cajas = [c for c in pedido.paquetes.all() if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
         pedido.cajas_total = len(cajas)
         pedido.cajas_fuera = [c for c in cajas if c.estado == Paquete.DESPACHADO]
-        pedido.guias_activas = [
+        guias_vivas = [
             g for g in pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
             if g.paquete_id is None or g.paquete.estado != Paquete.DESPACHADO
         ]
-        guia = pedido.guias_activas[-1] if pedido.guias_activas else None
-        pedido.guia = guia
-        pedido.carrier_salida = (guia.carrier if guia else _carrier_probable(pedido)) or "?"
-        pedido.corral_salida = _corral_de_carrier(pedido.carrier_salida, mapa)
-        listos.append(pedido)
+        if pedido.cajas_salida:
+            carriers = []
+            for caja in pedido.cajas_salida:
+                carrier = _carrier_de_caja(caja, pedido)
+                if carrier not in carriers:
+                    carriers.append(carrier)
+        else:
+            ultima = guias_vivas[-1] if guias_vivas else None
+            carriers = [(ultima.carrier if ultima else _carrier_probable(pedido)) or "?"]
+        for carrier in carriers:
+            entrada = copy.copy(pedido)
+            entrada.cajas_salida = [c for c in pedido.cajas_salida if _carrier_de_caja(c, pedido) == carrier]
+            entrada.guias_activas = [
+                g for g in guias_vivas
+                if g.carrier == carrier and (g.paquete_id is None or not pedido.cajas_salida
+                                             or any(c.pk == g.paquete_id for c in entrada.cajas_salida))
+            ]
+            entrada.guia = entrada.guias_activas[-1] if entrada.guias_activas else None
+            entrada.carrier_salida = carrier
+            entrada.corral_salida = _corral_de_carrier(carrier, mapa)
+            entrada.otros_carriers = [c for c in carriers if c != carrier]
+            listos.append(entrada)
     return listos
 
 
@@ -2229,16 +2257,20 @@ def _resolver_escaneo_salida(codigo):
 
 def _por_que_no_sale(pedido, corral, carrier):
     """Mensaje para el piso cuando lo escaneado no sube a ESTA salida."""
+    from apps.pedidos.services import cajas_por_salir  # lazy por contrato
     if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         return f"{pedido.folio} está {pedido.get_estado_display().lower()}: no está en el corral."
     if pedido.esperando_inventario:
         return f"{pedido.folio} espera inventario tras una salida parcial: hoy no sale."
     if not pedido.empaque_completo:
         return f"{pedido.folio} no ha terminado en la mesa (le falta guía o foto de cierre): no sube al camión."
-    guia = _guia_activa(pedido)
-    suyo = (guia.carrier if guia else _carrier_probable(pedido)) or "?"
-    if suyo != carrier:
-        return f"{pedido.folio} viaja con {suyo}, no con {carrier}: escanéalo en la salida de {suyo}."
+    suyos = sorted({_carrier_de_caja(c, pedido) for c in cajas_por_salir(pedido)})
+    if not suyos:
+        guia = _guia_activa(pedido)
+        suyos = [(guia.carrier if guia else _carrier_probable(pedido)) or "?"]
+    if carrier not in suyos:
+        con = " y ".join(suyos)
+        return f"{pedido.folio} viaja con {con}, no con {carrier}: escanéalo en la salida de {con}."
     return f"{pedido.folio} no está listo para salir en {corral}."
 
 
@@ -2276,6 +2308,12 @@ def _salida_escanear(request, corral, carrier, listos, datos):
         if caja is None:
             if paquete.estado == Paquete.DESPACHADO:
                 return error(f"La caja {paquete.numero} de {pedido.folio} ya salió en otro manifiesto.")
+            suyo = _carrier_de_caja(paquete, pedido)
+            if suyo != carrier:
+                return error(
+                    f"La caja {paquete.numero} de {pedido.folio} viaja con {suyo}, no con {carrier}: "
+                    f"escanéala en la salida de {suyo}."
+                )
             return error(f"La caja {paquete.numero} de {pedido.folio} no está lista (sin foto de cierre o sin guía).")
         if caja.pk in datos["cajas"]:
             return error(f"La caja {caja.numero} de {pedido.folio} ya está en la lista.")
@@ -2583,24 +2621,30 @@ def _salida_manifiesto(request):
     ).select_related("cliente").prefetch_related("paquetes__guias", "lineas__sku"):
         if pedido.esperando_inventario:
             continue  # nada que subir: espera stock de sus faltantes
-        guia = _guia_activa(pedido)
-        carrier_pedido = guia.carrier if guia else _carrier_probable(pedido)
-        # Un pedido de otro carrier u otro corral no sube a ESTE manifiesto
-        # aunque venga palomeado (formulario viejo, doble submit, manipulación).
-        if _corral_de_carrier(carrier_pedido, mapa) != corral or carrier_pedido != carrier:
-            continue
         # Sin evidencia de cierre (foto de la caja cerrada con su etiqueta
         # pegada) el pedido — o la caja — NO sube al manifiesto: se queda y se avisa.
         if not _por_caja(pedido):
+            guia = _guia_activa(pedido)
+            carrier_pedido = guia.carrier if guia else _carrier_probable(pedido)
+            # Un pedido de otro carrier u otro corral no sube a ESTE manifiesto
+            # aunque venga palomeado (formulario viejo, doble submit, manipulación).
+            if _corral_de_carrier(carrier_pedido, mapa) != corral or carrier_pedido != carrier:
+                continue
             if not pedido.cajas_cerradas_completas:
                 sin_cierre.append(pedido)
                 continue
             listos.append((pedido, None))
             continue
+        # Por caja: solo las cajas de ESTE carrier (un pedido mixto sale por partes,
+        # cada caja con su chofer; PED-00034: caja estafeta + caja amPm).
         elegidas = [
             c for c in cajas_por_salir(pedido)
-            if pedido.pk in seleccion or c.pk in cajas_sel
+            if (pedido.pk in seleccion or c.pk in cajas_sel)
+            and _carrier_de_caja(c, pedido) == carrier
+            and _corral_de_carrier(carrier, mapa) == corral
         ]
+        if not elegidas:
+            continue
         cerradas = [c for c in elegidas if c.ts_cierre is not None]
         if not cerradas:
             sin_cierre.append(pedido)

@@ -213,6 +213,33 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertEqual(pantalla.context["faltan"], [])
         self.assertEqual([u["id"] for u in pantalla.context["se_quedan"]], [c2.pk])
 
+    def test_pedido_con_cajas_de_dos_carriers_sale_por_partes(self):
+        # PED-00034: caja 1 estafeta, caja 2 puntopost. Cada tabla ve solo lo suyo.
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        g1 = c1.guia_activa
+        g1.carrier = "estafeta"
+        g1.save(update_fields=["carrier"])
+        salida = self.client.get(reverse("piso:salida"))
+        otro = next(g for g in salida.context["corrales"] if g["codigo"] == "SAL-OTRO")
+        por_carrier = {gc["carrier"]: gc["listos"] for gc in otro["carriers"]}
+        self.assertEqual([c.pk for c in por_carrier["estafeta"][0].cajas_salida], [c1.pk])
+        self.assertEqual([c.pk for c in por_carrier["puntopost"][0].cajas_salida], [c2.pk])
+        self.assertContains(salida, "también con estafeta")
+        # En la salida de puntopost, la caja de estafeta se rechaza con su carrier.
+        r = self._escanear(obtener_o_crear_token_etiqueta(g1))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("viaja con estafeta", r.json()["error"])
+        # Confirmar el pedido entero en la salida de puntopost solo saca la caja 2.
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("piso:salida"), {
+                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost", "pedido_id": [pedido.pk],
+            })
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        pedido.refresh_from_db()
+        self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.EMPACADO, Paquete.DESPACHADO, Pedido.PARCIALMENTE_DESPACHADO))
+        self.assertEqual([l.paquete_id for l in Manifiesto.objects.get().lineas.all()], [c2.pk])
+
     def test_sin_escanear_no_hay_resumen_y_descartar_limpia(self):
         r = self.client.get(reverse("piso:salida_resumen") + PARAMS)
         self.assertRedirects(r, self.url, fetch_redirect_response=False)

@@ -49,6 +49,7 @@
             <span class="mono">{{ p.folio }}</span>
             <div class="small">{{ p.cliente.nombre }}</div>
             {% if p.estado == "PARCIALMENTE_DESPACHADO" %}<span class="pill warn">salida parcial</span>{% endif %}
+            {% if p.otros_carriers %}<span class="pill warn" title="Sus otras cajas viajan con otro carrier: están en su propia tabla">también con {{ p.otros_carriers|join:", " }}</span>{% endif %}
           </td>
           <td>
             {{ p.comprador_nombre|default:"—" }}
