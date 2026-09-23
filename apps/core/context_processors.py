@@ -28,16 +28,25 @@ def _reingresos_pendientes(request):
 
 
 def _incidencias_abiertas(request):
-    """Incidencias sin cerrar de todos los clientes (Mesa): badge de Incidencias
-    en el menú. Chema 2026-09-23: "abiertas" = todo lo que no está CERRADA,
-    incluidas las resueltas que el cliente aún no confirma."""
-    if getattr(request, "rol", None) != "mesa" and not getattr(getattr(request, "user", None), "is_superuser", False):
+    """Incidencias sin cerrar para el badge de Incidencias en el menú (Chema
+    2026-09-23: "abiertas" = todo lo que no está CERRADA, incluidas las
+    resueltas que el cliente aún no confirma). Mesa ve las de todos los
+    clientes; el portal solo las de su cliente."""
+    rol = getattr(request, "rol", None)
+    cliente = getattr(request, "cliente", None)
+    superuser = getattr(getattr(request, "user", None), "is_superuser", False)
+    if rol == "portal" and cliente is None:
+        return 0
+    if rol not in ("mesa", "portal") and not superuser:
         return 0
     try:
         from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
     except ImportError:
         return 0
-    return Incidencia.objects.exclude(estado=Incidencia.CERRADA).count()
+    qs = Incidencia.objects.exclude(estado=Incidencia.CERRADA)
+    if rol == "portal":
+        qs = qs.filter(cliente=cliente)
+    return qs.count()
 
 
 def torre(request):

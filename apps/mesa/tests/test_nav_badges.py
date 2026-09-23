@@ -30,10 +30,14 @@ class BadgeIncidenciasTests(TestCase):
         cerrar(primera, self.mesa)
         self.assertIn('Incidencias <span class="pill warn">1</span>', self._menu())
 
-    def test_el_portal_no_ve_el_conteo_de_mesa(self):
+    def test_el_portal_cuenta_solo_las_de_su_cliente(self):
+        """Chema 2026-09-23: el portal también lleva el conteo, acotado a su cliente."""
+        otro = Cliente.objects.create(nombre="Mezcal Nocturno", slug="nocturno")
         abrir_incidencia(self.colima, Incidencia.TIPO_RET, Incidencia.ORIGEN_MANUAL, texto="Retraso")
+        abrir_incidencia(otro, Incidencia.TIPO_RET, Incidencia.ORIGEN_MANUAL, texto="Ajena")
         karina = get_user_model().objects.create_user("karina", password="x12345678")
         PerfilUsuario.objects.create(usuario=karina, rol="portal", cliente=self.colima)
         self.client.force_login(karina)
-        respuesta = self.client.get(reverse("portal:pedidos"))
-        self.assertNotIn('<span class="pill warn">1</span>', respuesta.content.decode())
+        html = self.client.get(reverse("portal:pedidos")).content.decode()
+        self.assertIn('Incidencias <span class="pill warn">1</span>', html)
+        self.assertEqual(html.count('<span class="pill warn">1</span>'), 1)

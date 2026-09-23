@@ -67,7 +67,7 @@ window.addEventListener("load", function () {
         <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'portal:dashboard' %}">Hoy</a>
         <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'portal:pedidos' %}">Pedidos</a>
         <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'portal:recepciones' %}">Recepciones</a>
-        <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'portal:incidencias' %}">Incidencias</a>
+        <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'portal:incidencias' %}">Incidencias{% if incidencias_abiertas %} <span class="pill warn">{{ incidencias_abiertas }}</span>{% endif %}</a>
       </details>
       <details class="nav-grupo" data-grupo="portal-inventario">
         <summary>Inventario</summary>
