@@ -307,10 +307,15 @@ Migraciones: envios 0016 (`Guia.CANCELADA`), incidencias 0004 (tipo CDR).
 - Si el carrier rechaza la cancelación por API, la guía queda CANCELADA en
   Torre de todos modos (evento `cancelacion_carrier_fallida`): Mesa la
   cancela en el panel de envia para que no se cobre. No hay reintento.
-- El botón exige que la dirección nueva ya haya llegado por webhook
-  (`ingesta_repetida` con direccion/cp después de la guía). Si Shopify no la
-  mandó (webhook caído), Mesa corre `sync_shopify` (reconcilia y re-ingesta) o espera el
-  poller antes de regresar a empaque; el mensaje de error lo dice.
+- Ajuste del mismo día (Chema: "si ya salió quedaría la dirección cambiada
+  incorrectamente"): con guía comprada o algo en la calle la ingesta ya NO
+  pisa la dirección; la nueva queda en `Pedido.direccion_pendiente`
+  (migración pedidos 0014). El botón exige esa pendiente y la aplica al
+  regresar a empaque; un pedido que ya salió conserva la dirección a la que
+  viajó y Mesa ve las dos. Si Shopify no mandó el cambio (webhook caído),
+  Mesa corre `sync_shopify` o espera la reconciliación; el aviso lo dice.
+- Al regresar a empaque el pedido queda sin dueño: lo toma quien esté en la
+  mesa (quien empacó puede no estar en turno).
 - La incidencia no se resuelve sola al regresar a empaque: Mesa la cierra
   cuando la nueva guía está comprada (queda la nota interna con el detalle).
 

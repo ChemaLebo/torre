@@ -49,6 +49,9 @@
         {% if direccion.address1 %}{{ direccion.address1 }}{% if direccion.address2 %}, {{ direccion.address2 }}{% endif %}<br>{% endif %}
         {% if direccion.city %}{{ direccion.city }}{% if direccion.province %}, {{ direccion.province }}{% endif %} · {% endif %}CP {{ pedido.cp|default:"—" }}
       </p>
+      {% if direccion_pendiente %}
+        <p class="small"><span class="pill warn">Dirección nueva pendiente</span> Shopify ahora tiene: {{ direccion_pendiente }}. El pedido ya tenía guía, así que la Mesa de Control la aplica al recomprarla; si el paquete ya salió, sigue a la dirección original.</p>
+      {% endif %}
       {% if pedido.nota_regalo %}
         <p class="small">Nota de regalo: “{{ pedido.nota_regalo }}”</p>
       {% endif %}

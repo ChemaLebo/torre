@@ -7,7 +7,6 @@ from unittest import mock
 from django.test import override_settings
 
 from apps.core.models import EventoAuditoria, EvidenciaFoto
-from apps.core.services import registrar_evento
 from apps.envios.adapters import MockAdapter
 from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.envios.services import cancelar_guia
@@ -101,16 +100,32 @@ class RegresarAEmpaqueTests(PisoTestCase):
             entidad="guia", entidad_id=str(guia.pk), accion="cancelacion_carrier_fallida",
         ).exists())
 
-    def test_direccion_cambio_desde_lee_la_ingesta_repetida(self):
+    def test_regresar_aplica_la_direccion_pendiente_y_libera_al_operador(self):
+        """La dirección nueva (congelada como pendiente al llegar con la guía
+        comprada) se aplica al regresar, y el pedido vuelve a la mesa sin dueño."""
         pedido, caja = self._pedido_con_guia()
-        desde = caja.guia_activa.creado
-        self.assertFalse(services.direccion_cambio_desde(pedido, desde))
-        registrar_evento("pedido", pedido.pk, "ingesta_repetida", actor="webhook", cliente=self.cliente,
-                         delta={"origen": "webhook", "campos": ["notas"]})
-        self.assertFalse(services.direccion_cambio_desde(pedido, desde))
-        registrar_evento("pedido", pedido.pk, "ingesta_repetida", actor="webhook", cliente=self.cliente,
-                         delta={"origen": "webhook", "campos": ["direccion", "cp", "es_local"]})
-        self.assertTrue(services.direccion_cambio_desde(pedido, desde))
+        self.assertIsNotNone(pedido.asignado_a)
+        pedido.direccion_pendiente = {"address1": "Calle 5 de Mayo 10", "city": "Colima", "province_code": "COL", "zip": "28017"}
+        pedido.save(update_fields=["direccion_pendiente"])
+        services.regresar_a_empaque(pedido, self.operador)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.direccion["address1"], pedido.cp), ("Calle 5 de Mayo 10", "28017"))
+        self.assertEqual(pedido.es_local, services._es_local("28017"))
+        self.assertIsNone(pedido.direccion_pendiente)
+        self.assertIsNone(pedido.asignado_a)
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="regresado_a_empaque")
+        self.assertTrue(evento.delta["direccion_aplicada"])
+
+    def test_direccion_congelada_solo_con_guia_activa_o_algo_en_la_calle(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        self.assertFalse(pedido.direccion_congelada)
+        guia = services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        self.assertTrue(pedido.direccion_congelada)
+        cancelar_guia(guia, self.operador)
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.EMPACADO)
+        pedido.refresh_from_db()
+        self.assertFalse(pedido.direccion_congelada)
 
     def test_cierre_legacy_deja_de_contar(self):
         """Pedido empacado entero (sin cajas propias) con evidencia de cierre

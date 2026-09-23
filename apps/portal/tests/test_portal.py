@@ -288,6 +288,28 @@ class TestAccionesIncidencia(BasePortal):
         # Un pedido ajeno o basura no selecciona nada ni rompe la página.
         self.assertEqual(self.client.get(reverse("portal:incidencia_nueva") + "?pedido=abc").status_code, 200)
 
+    def test_banner_de_retornado_solo_promete_incidencia_cuando_existe(self):
+        """Chema 2026-09-23 (PED-00039): el banner decía "ya hay una incidencia" sin haberla."""
+        limpio = Pedido.objects.create(
+            cliente=self.colima, origen="manual", comprador_nombre="Sin incidencia", cp="28017",
+            estado=Pedido.RETORNADO,
+        )
+        self.entrar()
+        url = reverse("portal:pedido_detalle", args=[limpio.pk])
+        respuesta = self.client.get(url)
+        self.assertContains(respuesta, "El paquete regresó a la bodega.")
+        self.assertNotContains(respuesta, "Ya hay una incidencia dándole seguimiento")
+        abrir_incidencia(self.colima, "RET", "auto", pedido=limpio, texto="Regresó a bodega")
+        self.assertContains(self.client.get(url), "Ya hay una incidencia dándole seguimiento")
+
+    def test_direccion_pendiente_se_explica_en_el_detalle(self):
+        self.pedido.direccion_pendiente = {"address1": "Av. Vallarta 500", "city": "Guadalajara", "zip": "44100"}
+        self.pedido.save(update_fields=["direccion_pendiente"])
+        self.entrar()
+        respuesta = self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk]))
+        self.assertContains(respuesta, "Dirección nueva pendiente")
+        self.assertContains(respuesta, "Av. Vallarta 500, Guadalajara, 44100")
+
     def test_nueva_incidencia_rechaza_pedido_ajeno(self):
         self.entrar()
         antes = Incidencia.objects.count()

@@ -6,7 +6,6 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.core.models import Cliente, PerfilUsuario
-from apps.core.services import registrar_evento
 from apps.envios.models import Guia, Paquete
 from apps.incidencias.models import Incidencia
 from apps.incidencias.services import abrir_incidencia
@@ -31,26 +30,36 @@ class CambioDireccionMesaTests(TestCase):
         )
         self.url = reverse("mesa:incidencia_detalle", args=[self.incidencia.pk])
 
+    def _con_direccion_pendiente(self):
+        self.pedido.direccion_pendiente = {"address1": "Av. Vallarta 500", "city": "Guadalajara", "province_code": "JAL", "zip": "44100"}
+        self.pedido.save(update_fields=["direccion_pendiente"])
+
     def test_nace_p1_y_ofrece_el_boton_si_nada_ha_salido(self):
         self.assertEqual(self.incidencia.prioridad, Incidencia.P1)
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "Cancelar guía y regresar a empaquetado")
+        self.assertContains(respuesta, "Shopify todavía no manda una dirección distinta")
+        self._con_direccion_pendiente()
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "La guía va a: <strong>Guadalajara, JAL, 44100</strong>")
+        self.assertContains(respuesta, "Shopify ahora dice: <strong>Av. Vallarta 500, Guadalajara, JAL, 44100</strong>")
 
     def test_sin_direccion_nueva_en_torre_no_cancela(self):
         respuesta = self.client.post(self.url, {"accion": "regresar_a_empaque"}, follow=True)
-        self.assertContains(respuesta, "aún no recibe la dirección nueva")
+        self.assertContains(respuesta, "aún no recibe una dirección distinta")
         self.guia.refresh_from_db()
         self.assertEqual(self.guia.estado, Guia.GUIA_CREADA)
 
     def test_con_direccion_nueva_cancela_y_regresa(self):
-        registrar_evento("pedido", self.pedido.pk, "ingesta_repetida", actor="webhook", cliente=self.colima,
-                         delta={"origen": "webhook", "campos": ["direccion", "cp"]})
+        self._con_direccion_pendiente()
         respuesta = self.client.post(self.url, {"accion": "regresar_a_empaque"}, follow=True)
         self.assertContains(respuesta, "regresó a empaquetado")
         self.pedido.refresh_from_db()
         self.guia.refresh_from_db()
         self.assertEqual((self.pedido.estado, self.guia.estado), (Pedido.EMPACADO, Guia.CANCELADA))
-        self.assertTrue(self.incidencia.mensajes.filter(interno=True, texto__contains="regresado a empaquetado").exists())
+        self.assertEqual(self.pedido.direccion["address1"], "Av. Vallarta 500")
+        self.assertIsNone(self.pedido.direccion_pendiente)
+        self.assertTrue(self.incidencia.mensajes.filter(interno=True, texto__contains="Av. Vallarta 500").exists())
         self.assertNotContains(self.client.get(self.url), "Cancelar guía y regresar a empaquetado")
 
     def test_si_ya_salio_avisa_en_vez_del_boton(self):
@@ -58,7 +67,11 @@ class CambioDireccionMesaTests(TestCase):
         self.guia.paquete_id = Paquete.objects.get().pk
         self.guia.save(update_fields=["paquete"])
         Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.RECOLECTADO)
+        self._con_direccion_pendiente()
         respuesta = self.client.get(self.url)
         self.assertNotContains(respuesta, "Cancelar guía y regresar a empaquetado")
         self.assertContains(respuesta, "Ya salió")
         self.assertContains(respuesta, "estafeta EST-1")
+        self.assertContains(respuesta, "El pedido conserva la dirección a la que viajó")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.direccion["zip"], "44100")

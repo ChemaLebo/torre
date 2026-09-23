@@ -26,6 +26,7 @@ from apps.integraciones.models import SyncLog
 from apps.inventario.models import Movimiento, OrdenEntrada
 from apps.pedidos.models import Pedido
 from apps.pedidos.reportes import url_orden_shopify
+from apps.pedidos.services import direccion_en_una_linea
 
 from .forms import (
     FormAnuncioASN, FormNuevaIncidencia, FormRespuestaIncidencia, FormSugerenciaManual,
@@ -84,10 +85,7 @@ _ESTADO_ESPECIAL = {
         "crit",
         "Este pedido quedó cancelado. El producto regresó a tu inventario disponible.",
     ),
-    Pedido.RETORNADO: (
-        "crit",
-        "El paquete regresó a la bodega. Ya hay una incidencia dándole seguimiento.",
-    ),
+    Pedido.RETORNADO: ("crit", "El paquete regresó a la bodega."),  # pedido_detalle completa según haya incidencia
 }
 
 _PILL_ASN = {
@@ -425,6 +423,12 @@ def pedido_detalle(request, pk):
         entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio],
     )
     incidencias_pedido = [_decorar_incidencia(i) for i in pedido.incidencias.all()]
+    if pedido.estado == Pedido.RETORNADO:
+        # Chema 2026-09-23 (PED-00039): no prometer una incidencia que no existe.
+        especial = ("crit", especial[1] + (
+            " Ya hay una incidencia dándole seguimiento." if incidencias_pedido
+            else " Levanta una incidencia para decirnos qué hacer con él."
+        ))
     direccion = pedido.direccion or {}
     paquetes = list(
         pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "guias").order_by("numero")
@@ -443,6 +447,7 @@ def pedido_detalle(request, pk):
         "fotos": fotos,
         "incidencias_pedido": incidencias_pedido,
         "direccion": direccion,
+        "direccion_pendiente": direccion_en_una_linea(pedido.direccion_pendiente) if pedido.direccion_pendiente else "",
     })
 
 

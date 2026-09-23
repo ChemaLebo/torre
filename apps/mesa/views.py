@@ -391,21 +391,21 @@ def _gestionar_incidencia(request, incidencia):
 
     if accion == "regresar_a_empaque":
         # Cambio de dirección con guía comprada (Chema 2026-09-23): solo si
-        # nada ha salido y Torre ya recibió la dirección nueva desde Shopify.
-        from apps.pedidos.services import direccion_cambio_desde, regresar_a_empaque
+        # nada ha salido y Shopify ya mandó una dirección distinta (pendiente).
+        from apps.pedidos.services import direccion_en_una_linea, regresar_a_empaque
         pedido = incidencia.pedido
         if pedido is None:
             raise ValueError("La incidencia no está ligada a un pedido.")
-        guias = [g for g in pedido.guias.all() if g.es_activa]
-        if guias and not direccion_cambio_desde(pedido, min(g.creado for g in guias)):
+        if not pedido.direccion_pendiente:
             raise ValueError(
-                "Torre aún no recibe la dirección nueva desde Shopify: corrígela en la orden y espera "
-                "el sync (o dispáralo en Salud de sync) antes de cancelar la guía."
+                "Torre aún no recibe una dirección distinta desde Shopify para este pedido: corrígela "
+                "en la orden y espera el sync (o dispáralo en Salud de sync) antes de cancelar la guía."
             )
-        regresar_a_empaque(pedido, request.user, motivo=f"Cambio de dirección ({incidencia.folio})")
+        fresco = regresar_a_empaque(pedido, request.user, motivo=f"Cambio de dirección ({incidencia.folio})")
         responder(
             incidencia, usuario, "mesa",
-            f"Guía cancelada y {pedido.folio} regresado a empaquetado: etiqueta y foto de cierre nuevas.",
+            f"Guía cancelada y {pedido.folio} regresado a empaquetado con la dirección nueva "
+            f"({direccion_en_una_linea(fresco.direccion)}): etiqueta y foto de cierre nuevas.",
             interno=True,
         )
         return f"{pedido.folio} regresó a empaquetado: el piso compra la guía nueva con la dirección corregida."
@@ -680,13 +680,19 @@ def _contexto_cambio_direccion(incidencia):
         return {}
     if incidencia.estado not in Incidencia.ESTADOS_ABIERTOS:
         return {}
+    from apps.pedidos.services import direccion_en_una_linea
     fuera = [c for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
     en_calle = pedido.estado not in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA")
+    direcciones = {
+        "direccion_guia": direccion_en_una_linea(pedido.direccion),
+        "direccion_pendiente": direccion_en_una_linea(pedido.direccion_pendiente) if pedido.direccion_pendiente else "",
+    }
     if pedido.estado == "GUIA_GENERADA" and not fuera and not pedido.tiene_despachadas:
-        return {"puede_regresar_a_empaque": True}
+        return {**direcciones, "puede_regresar_a_empaque": True}
     if en_calle or fuera:
         guias = [g for g in pedido.guias.all() if g.es_activa]
         return {
+            **direcciones,
             "direccion_ya_salio": True,
             "cajas_fuera": [c.numero for c in fuera],
             "cajas_dentro": [c.numero for c in pedido.paquetes.all() if c.estado != Paquete.DESPACHADO],

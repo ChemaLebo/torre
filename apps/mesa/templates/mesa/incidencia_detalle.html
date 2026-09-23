@@ -52,13 +52,16 @@
     </div>
     {# Cambio de dirección con guía comprada (2026-09-23): cancelar y regresar a empaque, o avisar que ya salió. #}
     {% if puede_regresar_a_empaque %}
-    <form method="post" class="mt" onsubmit="return confirm('¿Cancelar la guía con el carrier y regresar {{ incidencia.pedido.folio }} a empaquetado? La dirección se toma de Shopify.');">{% csrf_token %}
+    <p class="small mt">La guía va a: <strong>{{ direccion_guia|default:"—" }}</strong><br>
+      {% if direccion_pendiente %}Shopify ahora dice: <strong>{{ direccion_pendiente }}</strong>{% else %}Shopify todavía no manda una dirección distinta: que el cliente la corrija en la orden; llega por webhook o en el siguiente sync.{% endif %}</p>
+    <form method="post" onsubmit="return confirm('¿Cancelar la guía con el carrier y regresar {{ incidencia.pedido.folio }} a empaquetado con la dirección nueva?');">{% csrf_token %}
       <input type="hidden" name="accion" value="regresar_a_empaque">
-      <button class="btn chico primario" type="submit">Cancelar guía y regresar a empaquetado</button>
-      <p class="small muted">Solo mientras nada haya salido. Torre usa la dirección que ya tenga de Shopify: corrígela ahí primero.</p>
+      <button class="btn chico primario" type="submit"{% if not direccion_pendiente %} disabled{% endif %}>Cancelar guía y regresar a empaquetado</button>
+      <p class="small muted">Solo mientras nada haya salido. Aplica la dirección nueva, cancela la guía y el pedido vuelve a la mesa sin dueño: quien lo tome recompra la guía y cierra la caja con foto.</p>
     </form>
     {% elif direccion_ya_salio %}
     <div class="banner warn mt"><span class="foco"></span>Ya salió{% if guias_fuera %} con {{ guias_fuera|join:", " }}{% endif %}{% if cajas_fuera %} (caja {{ cajas_fuera|join:", " }} fuera{% if cajas_dentro %}; en bodega la caja {{ cajas_dentro|join:", " }}{% endif %}){% endif %}: no se regresa a empaque. Se resuelve con el carrier o con el comprador.</div>
+    <p class="small mt">Viajó a: <strong>{{ direccion_guia|default:"—" }}</strong>{% if direccion_pendiente %}<br>Shopify ahora dice: <strong>{{ direccion_pendiente }}</strong>. El pedido conserva la dirección a la que viajó.{% endif %}</p>
     {% endif %}
     {% if puede_resolver %}
     <form method="post">{% csrf_token %}

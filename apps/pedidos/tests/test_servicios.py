@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from apps.catalogo.models import SKU
 from apps.core.models import Cliente, EventoAuditoria, EvidenciaFoto
+from apps.envios.models import Guia
 from apps.integraciones.models import Tienda
 from apps.pedidos import services
 from apps.pedidos.models import LineaPedido, Pedido
@@ -104,6 +105,41 @@ class IngestaTests(BaseServicios):
              self.captureOnCommitCallbacks(execute=True):
             pedido = services.ingerir_pedido_shopify(self.tienda, payload)
         return pedido, reservar, confirmacion, abrir
+
+    def _ultimo_evento(self, pedido, accion):
+        return EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id=str(pedido.pk), accion=accion,
+        ).order_by("-pk").first()
+
+    def test_direccion_nueva_se_aplica_sin_guia_y_queda_pendiente_con_guia(self):
+        """Chema 2026-09-23: la dirección a la que viaja el paquete no se pisa
+        desde Shopify una vez comprada la guía; la nueva queda pendiente para
+        Mesa, y se limpia si Shopify vuelve a la de la guía."""
+        pedido, *_ = self._ingerir(payload_shopify())
+        self._ingerir(payload_shopify())  # misma dirección: no se marca
+        self.assertNotIn("direccion", self._ultimo_evento(pedido, "ingesta_repetida").delta["campos"])
+        cambiado = payload_shopify()
+        cambiado["shipping_address"].update({"address1": "Av. Vallarta 500", "city": "Guadalajara", "zip": "44100"})
+        self._ingerir(cambiado)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.direccion["address1"], pedido.cp, pedido.es_local), ("Av. Vallarta 500", "44100", False))
+        self.assertIsNone(pedido.direccion_pendiente)
+        self.assertIn("direccion", self._ultimo_evento(pedido, "ingesta_repetida").delta["campos"])
+        # Con guía comprada la dirección se congela.
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="EST-1", proveedor="mock")
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.GUIA_GENERADA)
+        otra = payload_shopify()
+        otra["shipping_address"].update({"address1": "Calle 5 de Mayo 10", "city": "Colima", "zip": "28017"})
+        self._ingerir(otra)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.direccion["address1"], pedido.cp), ("Av. Vallarta 500", "44100"))
+        self.assertEqual(pedido.direccion_pendiente["address1"], "Calle 5 de Mayo 10")
+        campos = self._ultimo_evento(pedido, "ingesta_repetida").delta["campos"]
+        self.assertIn("direccion_pendiente", campos)
+        self.assertNotIn("direccion", campos)
+        self._ingerir(cambiado)  # Shopify regresa a la dirección de la guía
+        pedido.refresh_from_db()
+        self.assertIsNone(pedido.direccion_pendiente)
 
     def test_la_ingesta_escribe_el_link_al_portal_tras_el_commit(self):
         """Chema 2026-09-23: la orden de Shopify lleva un metafield con el link

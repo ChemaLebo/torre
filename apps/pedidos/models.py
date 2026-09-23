@@ -123,6 +123,10 @@ class Pedido(models.Model):
     comprador_tel = models.CharField(max_length=20, blank=True)
     comprador_email = models.EmailField(blank=True)
     direccion = models.JSONField(default=dict, blank=True)
+    # Dirección que Shopify tiene AHORA cuando la del pedido ya está congelada
+    # (guía comprada o algo en la calle; Chema 2026-09-23): la de la guía no se
+    # pisa; Mesa ve las dos y regresar_a_empaque aplica esta. null = sin diferencia.
+    direccion_pendiente = models.JSONField(null=True, blank=True)
     # Fulfillment del pedido ENTERO en Shopify (gid) cuando no se fulfillea por
     # caja (sin plan de cajas, entrega en bodega, líneas no separables): de él
     # cuelgan los eventos de avance (integraciones.services.registrar_evento_fulfillment).
@@ -338,6 +342,18 @@ class Pedido(models.Model):
         return EvidenciaFoto.objects.filter(
             entidad="pedido", entidad_id=str(self.pk), tipo="caja_cerrada",
         ).exists()
+
+    @property
+    def direccion_congelada(self):
+        """True cuando la dirección ya no se refresca sola desde Shopify: hay
+        guía activa, algo despachado, o el pedido salió del carril de la mesa
+        (guía generada en adelante, cancelado, retornado). Un cambio llega
+        entonces a `direccion_pendiente` y Mesa decide."""
+        if self.estado not in (self.PENDIENTE, self.EN_PICKING, self.EMPACADO):
+            return True
+        if self.tiene_despachadas:
+            return True
+        return any(g.es_activa for g in self.guias.all())
 
     @property
     def empaque_completo(self):

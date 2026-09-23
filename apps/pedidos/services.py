@@ -308,7 +308,8 @@ def ingerir_pedido_shopify(tienda, payload, origen="webhook"):
     por CP contra la zona local CDMX (bodega 01780) y reserva stock por línea vía
     inventario.reservar. Sin stock suficiente → el pedido queda PENDIENTE con
     incidencia_activa y se abre incidencia FAL (lazy).
-    Orden repetida: refresca datos de contacto/dirección; NO duplica ni
+    Orden repetida: refresca contacto; la dirección solo mientras no esté
+    congelada (con guía comprada queda en direccion_pendiente); NO duplica ni
     re-reserva. Orden con cancelled_at → pasa por la matriz de cancelación.
     Filtros de entrada (solo órdenes NUEVAS; decisión 2026-08-19): se ingiere
     únicamente lo pagado (paid/partially_refunded) y sin fulfillment previo.
@@ -511,18 +512,67 @@ def _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos):
         )
 
 
+_CLAVES_DIRECCION = ("address1", "address2", "city", "province", "province_code", "zip", "country_code")
+
+
+def _misma_direccion(a, b):
+    """Compara lo que decide a dónde viaja el paquete (calle, ciudad, estado,
+    CP, país) sin espacios ni mayúsculas; nombre y teléfono van aparte."""
+    def _forma(d):
+        return tuple(str((d or {}).get(k) or "").strip().lower() for k in _CLAVES_DIRECCION)
+    return _forma(a) == _forma(b)
+
+
+def direccion_en_una_linea(direccion):
+    """Dirección de Shopify (dict) en una línea, para Mesa y el portal."""
+    d = direccion or {}
+    partes = [d.get("address1"), d.get("address2"), d.get("city"), d.get("province") or d.get("province_code"), d.get("zip")]
+    return ", ".join(str(p).strip() for p in partes if p and str(p).strip())
+
+
+def _aplicar_direccion(pedido, direccion):
+    """Pone la dirección en el pedido y recalcula CP y es_local; regresa los
+    campos tocados (sin guardar)."""
+    pedido.direccion = direccion
+    campos = ["direccion"]
+    cp = str(direccion.get("zip") or "").strip()
+    if cp and cp != pedido.cp:
+        pedido.cp = cp
+        pedido.es_local = _es_local(cp)
+        campos += ["cp", "es_local"]
+    return campos
+
+
+def _refrescar_direccion(pedido, direccion):
+    """Dirección que llega en una ingesta repetida (Chema 2026-09-23). Sin
+    guía se aplica; con la dirección congelada (guía comprada, algo en la
+    calle, pedido cerrado) NO se pisa la dirección a la que viaja el paquete:
+    la nueva queda en `direccion_pendiente` para que Mesa la vea y decida
+    (regresar_a_empaque la aplica). Si Shopify vuelve a la dirección de la
+    guía, la pendiente se limpia. Regresa los campos tocados (sin guardar)."""
+    if _misma_direccion(pedido.direccion, direccion):
+        if pedido.direccion_pendiente is not None:
+            pedido.direccion_pendiente = None
+            return ["direccion_pendiente"]
+        return []
+    if not pedido.direccion_congelada:
+        campos = _aplicar_direccion(pedido, direccion)
+        if pedido.direccion_pendiente is not None:
+            pedido.direccion_pendiente = None
+            campos.append("direccion_pendiente")
+        return campos
+    if _misma_direccion(pedido.direccion_pendiente, direccion):
+        return []
+    pedido.direccion_pendiente = direccion
+    return ["direccion_pendiente"]
+
+
 def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
     """Rama idempotente del upsert: refresca datos blandos y aplica ediciones de cantidades."""
     campos = []
     direccion = payload.get("shipping_address")
     if direccion:
-        pedido.direccion = direccion
-        campos.append("direccion")
-        cp = str(direccion.get("zip") or "").strip()
-        if cp and cp != pedido.cp:
-            pedido.cp = cp
-            pedido.es_local = _es_local(cp)
-            campos += ["cp", "es_local"]
+        campos += _refrescar_direccion(pedido, direccion)
     nombre, tel, email = _datos_comprador(payload)
     for campo, valor in [("comprador_nombre", nombre), ("comprador_tel", tel), ("comprador_email", email)]:
         if valor and getattr(pedido, campo) != valor:
@@ -1867,26 +1917,17 @@ def despachar_a_corral(pedido, actor):
     return {"guias": guias, "mensajes": mensajes}
 
 
-def direccion_cambio_desde(pedido, ts):
-    """True si Shopify mandó la orden con otra dirección o CP después de `ts`
-    (evento ingesta_repetida con esos campos): la guía nueva saldría con la
-    dirección corregida."""
-    from apps.core.models import EventoAuditoria  # lazy por contrato
-    eventos = EventoAuditoria.objects.filter(
-        entidad="pedido", entidad_id=str(pedido.pk), accion="ingesta_repetida", ts__gt=ts,
-    )
-    return any({"direccion", "cp"} & set((e.delta or {}).get("campos") or []) for e in eventos)
-
-
 def regresar_a_empaque(pedido, actor, motivo=""):
     """Cambio de dirección con guía comprada y NADA en la calle (Chema
-    2026-09-23, incidencia "Cambio de dirección"): cancela con el carrier las
-    guías activas (envios.cancelar_guia), borra el cierre de las cajas (la
-    etiqueta cambia: foto de cierre nueva; la foto vieja queda como historia,
-    re-tipada), re-cotiza cada caja con la dirección vigente (puede cambiar
-    carrier y precio) y regresa el pedido GUIA_GENERADA → EMPACADO. El pedido
-    cae solo a "Completar empaquetado" ("sin guía") y "Reintentar guía"
-    compra la nueva. Con algo ya despachado → ValueError: eso es incidencia."""
+    2026-09-23, incidencia "Cambio de dirección"): aplica la dirección
+    pendiente (la que Shopify mandó con la guía ya comprada), cancela con el
+    carrier las guías activas (envios.cancelar_guia), borra el cierre de las
+    cajas (la etiqueta cambia: foto de cierre nueva; la foto vieja queda como
+    historia, re-tipada), re-cotiza cada caja con la dirección nueva (puede
+    cambiar carrier y precio), deja el pedido SIN dueño (lo toma quien esté en
+    la mesa) y lo regresa GUIA_GENERADA → EMPACADO. Cae solo a "Completar
+    empaquetado" ("sin guía") y "Reintentar guía" compra la nueva. Con algo ya
+    despachado → ValueError: eso se resuelve con el carrier o el comprador."""
     from apps.envios.adapters import ErrorCarrier  # lazy por contrato
     from apps.envios.models import Paquete  # lazy: modelo de otra app
     from apps.envios.services import cancelar_guia, recotizar_paquete  # lazy por contrato
@@ -1904,6 +1945,14 @@ def regresar_a_empaque(pedido, actor, motivo=""):
         )
     with transaction.atomic():
         fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        campos = ["asignado_a"]
+        fresco.asignado_a = None
+        aplicada = fresco.direccion_pendiente
+        if aplicada:
+            campos += _aplicar_direccion(fresco, aplicada)
+            fresco.direccion_pendiente = None
+            campos.append("direccion_pendiente")
+        fresco.save(update_fields=campos + ["actualizado"])
         canceladas = []
         for guia in [g for g in fresco.guias.all() if g.es_activa]:
             cancelar_guia(guia, actor, motivo=motivo or "Cambio de dirección: guía cancelada antes de salir")
@@ -1931,7 +1980,10 @@ def regresar_a_empaque(pedido, actor, motivo=""):
         )
         registrar_evento(
             "pedido", fresco.pk, "regresado_a_empaque", actor=actor, cliente=fresco.cliente,
-            delta={"guias_canceladas": canceladas, "cajas_recotizadas": recotizadas},
+            delta={
+                "guias_canceladas": canceladas, "cajas_recotizadas": recotizadas,
+                "direccion_aplicada": bool(aplicada),
+            },
             motivo=(motivo or "Cambio de dirección con guía comprada: etiqueta y foto de cierre nuevas.")[:300],
         )
     pedido.estado = fresco.estado
