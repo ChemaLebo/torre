@@ -141,6 +141,16 @@ la comparte cuando la tenga. Reparto acordado con Diego para Colima: 75% iMile /
 25% 99minutos, al azar por pedido y configurable por cliente, para medir
 incidencias por carrier (y después por estado destino); revisar mensualmente.
 
+**2026-09-23 (PED-00079, CP 24157):** iMile rechazó la localidad del catálogo
+("Ciudad del Carmen") y aceptó el municipio ("Carmen"). El catálogo de envia
+trae el nombre formal como localidad (Heroica Puebla de Zaragoza, Santiago de
+Querétaro) y el usual como municipio (Puebla, Querétaro); iMile parece usar el
+usual. Solución dirigida: `services._reintentar_con_municipio` (cualquier
+carrier, solo ante error de ciudad, una vez, municipio distinto; auditado). El
+catálogo se corrige a mano en /admin/ → Envíos → Localidades por CP cuando
+haga falta. Pendiente medir con más CPs foráneos si conviene mandar el
+municipio de entrada para iMile.
+
 **Hallazgos (2026-09-21, ciudad por CP; PED-00030 y PED-00034):** iMile valida
 el par CP↔ciudad contra su catálogo y el conector de envia NO lo traduce: pasa la
 ciudad tal como la tecleó el comprador en Shopify y rebota con error 1300

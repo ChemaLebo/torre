@@ -179,8 +179,10 @@ class CarrierAdapter:
         falta de cobertura es resultado, jamás excepción."""
         raise NotImplementedError
 
-    def generar(self, pedido, carrier, servicio, paquete=None):
-        """Genera la guía. Regresa dict: numero, etiqueta_url, costo, raw."""
+    def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
+        """Genera la guía. Regresa dict: numero, etiqueta_url, costo, raw.
+        `ciudad` fuerza la ciudad del destino (reintento con el municipio del
+        catálogo cuando el carrier rechazó la localidad; ver services)."""
         raise NotImplementedError
 
     def cancelar(self, guia):
@@ -301,7 +303,10 @@ class EnviaAdapter(CarrierAdapter):
         return localidad_por_cp(cp)
 
     @classmethod
-    def _destino(cls, pedido):
+    def _destino(cls, pedido, ciudad_forzada=None):
+        """Bloque destination de envia. `ciudad_forzada` sustituye a la ciudad
+        del catálogo: el reintento con el municipio cuando el carrier
+        rechazó la localidad (services._reintentar_con_municipio)."""
         from .cotizador import CP_ESTADO, estado_envia  # lazy: la misma tabla que usa el cotizador
 
         d = pedido.direccion or {}
@@ -327,6 +332,8 @@ class EnviaAdapter(CarrierAdapter):
         if localidad is not None and localidad.localidad:
             ciudad = localidad.localidad
             estado = localidad.estado or estado
+        if ciudad_forzada:
+            ciudad = ciudad_forzada
         return {
             "name": pedido.comprador_nombre or d.get("name", ""),
             "street": d.get("address1") or d.get("street") or d.get("calle", ""),
@@ -452,11 +459,11 @@ class EnviaAdapter(CarrierAdapter):
             return nodo
         return nodo
 
-    def _payload(self, pedido, carrier, servicio, paquete=None):
+    def _payload(self, pedido, carrier, servicio, paquete=None, ciudad=None):
         return self._sanear(
             {
                 "origin": self._origen(carrier),
-                "destination": self._destino(pedido),
+                "destination": self._destino(pedido, ciudad_forzada=ciudad),
                 "packages": self._paquetes(pedido, paquete=paquete, carrier=carrier),
                 "shipment": {"carrier": carrier, "service": servicio, "type": 1},
                 # /ship/generate/ exige settings con printFormat y printSize (enum de
@@ -604,9 +611,9 @@ class EnviaAdapter(CarrierAdapter):
         total = elegida.get("totalPrice") or elegida.get("total") or 0
         return Decimal(str(total)).quantize(Decimal("0.01"))
 
-    def generar(self, pedido, carrier, servicio, paquete=None):
+    def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
         cuerpo = self._post(
-            "/ship/generate/", self._payload(pedido, carrier, servicio, paquete=paquete)
+            "/ship/generate/", self._payload(pedido, carrier, servicio, paquete=paquete, ciudad=ciudad)
         )
         datos = cuerpo.get("data") or []
         if isinstance(datos, dict):
@@ -1059,7 +1066,7 @@ class Adapter99Minutos(CarrierAdapter):
             raise ErrorCarrier(f"La etiqueta de {tracking} no es un PDF válido")
         return pdf
 
-    def generar(self, pedido, carrier, servicio, paquete=None):
+    def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
         interno = f"{pedido.folio}-{paquete.numero if paquete is not None else 1}"
         envio = self._shipment(pedido, servicio, paquete, interno)
         resp = self._request("POST", "/api/v3/orders", json_body={"shipments": [envio]})
@@ -1297,7 +1304,7 @@ class MockAdapter(CarrierAdapter):
         folio = f"PU-MOCK-{next(self._consecutivo):04d}"
         return {"folio": folio, "costo": Decimal("85.00"), "raw": {"mock": True}}
 
-    def generar(self, pedido, carrier, servicio, paquete=None):
+    def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
         numero = f"MOCK-{next(self._consecutivo):04d}"
         while numero in self._registro:
             numero = f"MOCK-{next(self._consecutivo):04d}"

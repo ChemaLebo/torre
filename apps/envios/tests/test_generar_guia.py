@@ -55,6 +55,14 @@ class DestinoEnviaTests(TestCase):
         destino = EnviaAdapter._destino(self._pedido("97000", "YU"))
         self.assertEqual(destino["state"], "YU")
 
+    def test_ciudad_forzada_sustituye_a_la_del_catalogo(self):
+        from apps.envios.adapters import EnviaAdapter
+        from apps.envios.models import LocalidadCP
+        LocalidadCP.objects.create(cp="24157", localidad="Ciudad del Carmen", municipio="Carmen", estado="CM")
+        pedido = self._pedido("24157", "CAMP")
+        self.assertEqual(EnviaAdapter._destino(pedido)["city"], "Ciudad del Carmen")
+        self.assertEqual(EnviaAdapter._destino(pedido, ciudad_forzada="Carmen")["city"], "Carmen")
+
     def _numero(self, address1, address2=None, **extra):
         from types import SimpleNamespace
 
@@ -426,6 +434,100 @@ class PreferidoFallaAlGenerarTests(TestCase):
         self.assertEqual((evento.delta["carrier"], evento.delta["paquete"]), ("estafeta", 1))
         self.assertIn("1300", evento.motivo)
         self.assertFalse(EventoAuditoria.objects.filter(accion="carrier_prioritario_fallo").exists())
+
+
+ERROR_CIUDAD = "envia.com regresó error: {'code': 1300, 'description': 'External dependency failed', 'message': 'consignee city [Ciudad del Carmen] not exist'}"
+
+
+@override_settings(ENVIA_API_KEY="", TORRE=TORRE_CARRIERS_CLASICOS)
+class ReintentoConMunicipioTests(TestCase):
+    """Chema 2026-09-23 (PED-00079): el carrier rechaza la ciudad del catálogo
+    ("Ciudad del Carmen") pero acepta el municipio ("Carmen") → un reintento
+    dirigido con el municipio, mismo carrier; cualquier otro error, o
+    municipio igual a la localidad, se frena como siempre."""
+
+    def setUp(self):
+        from apps.envios.models import LocalidadCP, Paquete
+
+        MockAdapter.reiniciar()
+        self.cliente = crear_cliente()
+        self.tienda = crear_tienda(self.cliente)
+        self.pedido = crear_pedido(
+            self.cliente, self.tienda, cp="24157",
+            direccion={"address1": "Calle 31 #12", "city": "Ciudad del Carmen", "province_code": "CAMP", "zip": "24157"},
+        )
+        self.paquete = Paquete.objects.create(
+            pedido=self.pedido, numero=1, peso_kg=Decimal(3), carrier="estafeta", servicio="ground",
+        )
+        self.localidad = LocalidadCP.objects.create(
+            cp="24157", localidad="Ciudad del Carmen", municipio="Carmen", estado="CM",
+        )
+
+    def _generar_que_falla(self, mensaje, acepta=None):
+        """MockAdapter.generar que truena con `mensaje` salvo cuando la ciudad forzada es `acepta`."""
+        from apps.envios.adapters import ErrorCarrier
+        original = MockAdapter.generar
+        llamadas = []
+
+        def generar(self_, pedido_, carrier, servicio, paquete=None, ciudad=None):
+            llamadas.append(ciudad)
+            if acepta is not None and ciudad == acepta:
+                return original(self_, pedido_, carrier, servicio, paquete=paquete)
+            raise ErrorCarrier(mensaje)
+        return generar, llamadas
+
+    def test_rechazo_de_ciudad_reintenta_con_el_municipio(self):
+        from unittest.mock import patch
+
+        generar, llamadas = self._generar_que_falla(ERROR_CIUDAD, acepta="Carmen")
+        with patch.object(MockAdapter, "generar", autospec=True, side_effect=generar):
+            guia = services.generar_guia(self.pedido)
+        self.assertEqual(llamadas, [None, "Carmen"])
+        self.assertTrue(guia.numero)
+        evento = EventoAuditoria.objects.get(
+            entidad="pedido", entidad_id=str(self.pedido.pk), accion="guia_reintento_municipio",
+        )
+        self.assertTrue(evento.delta["ok"])
+        self.assertEqual((evento.delta["ciudad_rechazada"], evento.delta["municipio"]), ("Ciudad del Carmen", "Carmen"))
+        self.assertFalse(EventoAuditoria.objects.filter(accion="error_generacion_guia").exists())
+
+    def test_si_el_municipio_tambien_falla_se_frena_con_los_dos_mensajes(self):
+        from unittest.mock import patch
+
+        from apps.envios.adapters import ErrorCarrier
+
+        generar, llamadas = self._generar_que_falla(ERROR_CIUDAD)
+        with patch.object(MockAdapter, "generar", autospec=True, side_effect=generar), \
+                self.assertRaises(ErrorCarrier) as ctx:
+            services.generar_guia(self.pedido)
+        self.assertEqual(llamadas, [None, "Carmen"])
+        self.assertIn("municipio «Carmen»", str(ctx.exception))
+        self.assertFalse(Guia.objects.filter(pedido=self.pedido).exists())
+        error = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.pedido.pk), accion="error_generacion_guia")
+        self.assertIn("Carmen", error.motivo)
+
+    def test_otro_error_no_reintenta(self):
+        from unittest.mock import patch
+
+        from apps.envios.adapters import ErrorCarrier
+
+        generar, llamadas = self._generar_que_falla("envia.com regresó error: 1300 sin cobertura de origen", acepta="Carmen")
+        with patch.object(MockAdapter, "generar", autospec=True, side_effect=generar), self.assertRaises(ErrorCarrier):
+            services.generar_guia(self.pedido)
+        self.assertEqual(llamadas, [None])
+
+    def test_municipio_igual_a_la_localidad_no_reintenta(self):
+        from unittest.mock import patch
+
+        from apps.envios.adapters import ErrorCarrier
+
+        self.localidad.municipio = "ciudad del carmen"
+        self.localidad.save(update_fields=["municipio"])
+        generar, llamadas = self._generar_que_falla(ERROR_CIUDAD, acepta="Carmen")
+        with patch.object(MockAdapter, "generar", autospec=True, side_effect=generar), self.assertRaises(ErrorCarrier):
+            services.generar_guia(self.pedido)
+        self.assertEqual(llamadas, [None])
+        self.assertFalse(EventoAuditoria.objects.filter(accion="guia_reintento_municipio").exists())
 
 
 @override_settings(ENVIA_API_KEY="", TORRE=TORRE_CARRIERS_CLASICOS)

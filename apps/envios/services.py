@@ -9,6 +9,7 @@
 El pedido avanza aquí solo hacia EN_TRANSITO / ENTREGADO / RETORNADO.
 RECOLECTADO jamás lo pone el carrier: es el manifiesto físico (BLUEPRINT §1.4).
 """
+import re
 from datetime import timedelta
 from decimal import Decimal
 
@@ -233,8 +234,57 @@ def _guardar_etiqueta_pdf(guia, pdf):
         guia.save(update_fields=["etiqueta_url"])
 
 
+# El carrier rechazó la CIUDAD del destino contra su catálogo (iMile:
+# "consignee city [Ciudad del Carmen] not exist", "Zip Code [72830] does not
+# match city [Puebla]"). Es texto del conector, no un código: patrón.
+_RE_ERROR_CIUDAD = re.compile(r"city\s*\[[^\]]*\]\s*not exist|does not match city", re.IGNORECASE)
+
+
+def _reintentar_con_municipio(adapter, pedido, carrier, servicio, paquete, exc):
+    """Reintento dirigido (Chema 2026-09-23): el carrier rechazó la ciudad al
+    comprar y el catálogo del CP trae un municipio distinto de la localidad →
+    se compra UNA sola vez más con el municipio, mismo carrier y misma
+    cotización (iMile suele conocer el nombre corto: Carmen, Puebla,
+    Querétaro; la localidad trae el formal: Ciudad del Carmen, Heroica Puebla
+    de Zaragoza). Vale para cualquier carrier: el disparador es el texto del
+    error, no el carrier. Regresa los datos de la guía; None si no aplica
+    (otro error, sin catálogo, municipio vacío o igual a la localidad); si el
+    municipio también falla, ErrorCarrier con los dos mensajes. Auditado en
+    ambos casos (guia_reintento_municipio)."""
+    if not _RE_ERROR_CIUDAD.search(str(exc)):
+        return None
+    from .localidades import localidad_por_cp  # lazy: modelo + HTTP
+    localidad = localidad_por_cp(pedido.cp)
+    if localidad is None or not (localidad.municipio or "").strip():
+        return None
+    rechazada = (localidad.localidad or (pedido.direccion or {}).get("city") or "").strip()
+    municipio = localidad.municipio.strip()
+    if municipio.lower() == rechazada.lower():
+        return None
+    delta = {"carrier": carrier, "paquete": paquete.numero if paquete else None, "cp": pedido.cp,
+             "ciudad_rechazada": rechazada, "municipio": municipio}
+    try:
+        datos = adapter.generar(pedido, carrier, servicio, paquete=paquete, ciudad=municipio)
+    except ErrorCarrier as exc2:
+        registrar_evento(
+            "pedido", pedido.pk, "guia_reintento_municipio", cliente=pedido.cliente,
+            delta={**delta, "ok": False}, motivo=f"Tampoco con el municipio: {str(exc2)[:200]}",
+        )
+        raise ErrorCarrier(
+            f"{exc} · Se reintentó con el municipio «{municipio}» y también falló: {exc2}"
+        ) from exc2
+    registrar_evento(
+        "pedido", pedido.pk, "guia_reintento_municipio", cliente=pedido.cliente,
+        delta={**delta, "ok": True},
+        motivo=f"{carrier} rechazó la ciudad «{rechazada}»; la guía salió con el municipio «{municipio}».",
+    )
+    return datos
+
+
 def _crear_guia(pedido, carrier, servicio, paquete=None):
-    """Crea UNA guía (del pedido completo o de un paquete específico)."""
+    """Crea UNA guía (del pedido completo o de un paquete específico). Si el
+    carrier rechaza la ciudad, un reintento con el municipio del catálogo
+    (_reintentar_con_municipio) antes de darse por vencido."""
     ahora = timezone.now()
     sufijo = f"-{paquete.numero}" if paquete is not None else ""
 
@@ -255,25 +305,27 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
         try:
             datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)
         except ErrorCarrier as exc:
-            adapter = _respaldo_envia(adapter, pedido, carrier, exc)
-            if adapter is None:
-                registrar_evento(
-                    "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
-                    delta={"carrier": carrier, "servicio": servicio,
-                           "paquete": paquete.numero if paquete else None},
-                    motivo=str(exc)[:300],
-                )
-                raise
-            try:
-                datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)
-            except ErrorCarrier as exc2:
-                registrar_evento(
-                    "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
-                    delta={"carrier": carrier, "servicio": servicio, "respaldo": "envia",
-                           "paquete": paquete.numero if paquete else None},
-                    motivo=str(exc2)[:300],
-                )
-                raise
+            datos = _reintentar_con_municipio(adapter, pedido, carrier, servicio, paquete, exc)
+            if datos is None:
+                adapter = _respaldo_envia(adapter, pedido, carrier, exc)
+                if adapter is None:
+                    registrar_evento(
+                        "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
+                        delta={"carrier": carrier, "servicio": servicio,
+                               "paquete": paquete.numero if paquete else None},
+                        motivo=str(exc)[:300],
+                    )
+                    raise
+                try:
+                    datos = adapter.generar(pedido, carrier, servicio, paquete=paquete)
+                except ErrorCarrier as exc2:
+                    registrar_evento(
+                        "pedido", pedido.pk, "error_generacion_guia", cliente=pedido.cliente,
+                        delta={"carrier": carrier, "servicio": servicio, "respaldo": "envia",
+                               "paquete": paquete.numero if paquete else None},
+                        motivo=str(exc2)[:300],
+                    )
+                    raise
         costo = datos.get("costo") or costo_plan or Decimal("0.00")
         guia = Guia.objects.create(
             pedido=pedido, paquete=paquete, carrier=carrier, servicio=servicio,
