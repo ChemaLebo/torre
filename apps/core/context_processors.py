@@ -27,9 +27,23 @@ def _reingresos_pendientes(request):
     return reingresos_por_decidir().count()
 
 
+def _incidencias_abiertas(request):
+    """Incidencias sin cerrar de todos los clientes (Mesa): badge de Incidencias
+    en el menú. Chema 2026-09-23: "abiertas" = todo lo que no está CERRADA,
+    incluidas las resueltas que el cliente aún no confirma."""
+    if getattr(request, "rol", None) != "mesa" and not getattr(getattr(request, "user", None), "is_superuser", False):
+        return 0
+    try:
+        from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+    except ImportError:
+        return 0
+    return Incidencia.objects.exclude(estado=Incidencia.CERRADA).count()
+
+
 def torre(request):
     return {
         "reingresos_pendientes": _reingresos_pendientes(request),
+        "incidencias_abiertas": _incidencias_abiertas(request),
         "TORRE": {
             clave: settings.TORRE[clave]
             for clave in _CLAVES_TORRE_TEMPLATES
