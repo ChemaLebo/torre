@@ -1850,6 +1850,77 @@ def despachar_a_corral(pedido, actor):
     return {"guias": guias, "mensajes": mensajes}
 
 
+def direccion_cambio_desde(pedido, ts):
+    """True si Shopify mandó la orden con otra dirección o CP después de `ts`
+    (evento ingesta_repetida con esos campos): la guía nueva saldría con la
+    dirección corregida."""
+    from apps.core.models import EventoAuditoria  # lazy por contrato
+    eventos = EventoAuditoria.objects.filter(
+        entidad="pedido", entidad_id=str(pedido.pk), accion="ingesta_repetida", ts__gt=ts,
+    )
+    return any({"direccion", "cp"} & set((e.delta or {}).get("campos") or []) for e in eventos)
+
+
+def regresar_a_empaque(pedido, actor, motivo=""):
+    """Cambio de dirección con guía comprada y NADA en la calle (Chema
+    2026-09-23, incidencia "Cambio de dirección"): cancela con el carrier las
+    guías activas (envios.cancelar_guia), borra el cierre de las cajas (la
+    etiqueta cambia: foto de cierre nueva; la foto vieja queda como historia,
+    re-tipada), re-cotiza cada caja con la dirección vigente (puede cambiar
+    carrier y precio) y regresa el pedido GUIA_GENERADA → EMPACADO. El pedido
+    cae solo a "Completar empaquetado" ("sin guía") y "Reintentar guía"
+    compra la nueva. Con algo ya despachado → ValueError: eso es incidencia."""
+    from apps.envios.adapters import ErrorCarrier  # lazy por contrato
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.envios.services import cancelar_guia, recotizar_paquete  # lazy por contrato
+
+    if pedido.estado != Pedido.GUIA_GENERADA:
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display().lower()}: solo se regresa a "
+            "empaque un pedido con guía que aún no sale."
+        )
+    fuera = [c.numero for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
+    if fuera or pedido.tiene_despachadas:
+        raise ValueError(
+            f"{pedido.folio} ya salió (caja {', '.join(str(n) for n in fuera) or 'entera'}): "
+            "no se regresa a empaque; se resuelve con el carrier o el comprador."
+        )
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        canceladas = []
+        for guia in [g for g in fresco.guias.all() if g.es_activa]:
+            cancelar_guia(guia, actor, motivo=motivo or "Cambio de dirección: guía cancelada antes de salir")
+            canceladas.append(guia.numero)
+        recotizadas = []
+        for caja in fresco.paquetes.all():
+            campos = []
+            if caja.ts_cierre is not None or caja.foto_cierre_id:
+                caja.ts_cierre, caja.foto_cierre = None, None
+                campos += ["ts_cierre", "foto_cierre"]
+            if campos:
+                caja.save(update_fields=campos)
+            try:
+                recotizar_paquete(fresco, caja)
+                recotizadas.append(caja.numero)
+            except (ErrorCarrier, ValueError):
+                pass  # se queda con su carrier; la compra decide
+        # Cierre legacy (sin cajas): la foto vieja ya no cuenta como cierre.
+        EvidenciaFoto.objects.filter(
+            entidad="pedido", entidad_id=str(fresco.pk), tipo=TIPO_FOTO_CIERRE,
+        ).update(tipo="cierre_anulado")
+        fresco.transicionar(
+            Pedido.EMPACADO, actor=actor,
+            motivo=(motivo or "Cambio de dirección: guías canceladas, se compra guía nueva")[:300],
+        )
+        registrar_evento(
+            "pedido", fresco.pk, "regresado_a_empaque", actor=actor, cliente=fresco.cliente,
+            delta={"guias_canceladas": canceladas, "cajas_recotizadas": recotizadas},
+            motivo=(motivo or "Cambio de dirección con guía comprada: etiqueta y foto de cierre nuevas.")[:300],
+        )
+    pedido.estado = fresco.estado
+    return fresco
+
+
 def _lineas_de_cajas(cajas):
     """{pk: LineaPedido} de lo que viaja en esas cajas; un kit arrastra a sus
     hijas (el kardex despacha las hijas, nunca el kit virtual)."""

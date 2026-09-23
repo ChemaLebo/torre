@@ -556,6 +556,43 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
     return recoleccion
 
 
+def cancelar_guia(guia, actor, motivo=""):
+    """Cancela UNA guía comprada que aún no sale (cambio de dirección, Chema
+    2026-09-23): avisa al carrier por API (envia: POST /ship/cancel/;
+    99minutos: su cancel) best-effort y la deja CANCELADA en Torre pase lo que
+    pase con el carrier — auditado para que Mesa persiga la falla, pero Torre
+    ya no cuenta esa guía y puede comprar otra. Solo desde GUIA_CREADA: una
+    guía ya recolectada no se cancela, se resuelve como incidencia."""
+    if guia.estado != Guia.GUIA_CREADA:
+        raise ValueError(
+            f"La guía {guia.numero} está {guia.get_estado_display().lower()}: "
+            "solo se cancela una guía que aún no sale."
+        )
+    pedido = guia.pedido
+    ok, detalle = True, ""
+    if guia.carrier != CARRIER_LOCAL:
+        try:
+            adapter = get_adapter(guia.carrier, proveedor=guia.proveedor, cliente=pedido.cliente)
+            ok = bool(adapter.cancelar(guia))
+        except Exception as exc:  # noqa: BLE001 — best-effort: el carrier no bloquea la cancelación
+            ok, detalle = False, str(exc)[:200]
+    guia.transicionar(Guia.CANCELADA, actor=actor, motivo=motivo or "Guía cancelada antes de salir")
+    registrar_evento(
+        "guia", guia.pk, "cancelada_carrier" if ok else "cancelacion_carrier_fallida",
+        actor=actor, cliente=pedido.cliente,
+        delta={"numero": guia.numero, "carrier": guia.carrier, "proveedor": guia.proveedor, "detalle": detalle},
+        motivo=(motivo or f"Guía {guia.numero} cancelada.")[:300],
+    )
+    return ok
+
+
+def recotizar_paquete(pedido, paquete):
+    """Re-cotiza UNA caja contra la config vigente y la dirección actual del
+    pedido (cambio de dirección: puede cambiar carrier y precio). Envuelve
+    _replan_paquete; ErrorCarrier si nadie cotiza."""
+    return _replan_paquete(pedido, paquete, paquete.carrier)
+
+
 def registrar_manifiesto(carrier, corral, operador, salidas, chofer="", sin_escaneo=None):
     """La hoja que firma el chofer: un Manifiesto con folio por lo que subió a
     SU camión (Chema 2026-09-22). `salidas` = [(pedido, cajas)] tal como lo

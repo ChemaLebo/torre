@@ -24,6 +24,7 @@ class Guia(models.Model):
     RETENIDO = "RETENIDO"
     RETORNO = "RETORNO"
     EXCEPCION = "EXCEPCION"
+    CANCELADA = "CANCELADA"  # cancelada antes de salir (cambio de dirección, 2026-09-23)
 
     ESTADOS = [
         (GUIA_CREADA, "Guía creada"),
@@ -35,12 +36,13 @@ class Guia(models.Model):
         (RETENIDO, "Retenido"),
         (RETORNO, "Retorno al remitente"),
         (EXCEPCION, "Excepción"),
+        (CANCELADA, "Cancelada"),
     ]
 
     # El tracking real es ruidoso: los carriers se saltan estados y rebotan
     # entre EN_TRANSITO/EN_RUTA. Solo ENTREGADO y RETORNO son terminales.
     TRANSICIONES = {
-        GUIA_CREADA: {RECOLECTADO, EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
+        GUIA_CREADA: {RECOLECTADO, EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION, CANCELADA},
         RECOLECTADO: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
         EN_TRANSITO: {EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
         EN_RUTA: {EN_TRANSITO, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
@@ -49,12 +51,14 @@ class Guia(models.Model):
         EXCEPCION: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO},
         ENTREGADO: set(),
         RETORNO: set(),
+        CANCELADA: set(),
     }
 
-    ESTADOS_TERMINALES = frozenset({ENTREGADO, RETORNO})
-    # Solo un RETORNO desactiva la guía (permite reexpedir con guía nueva).
-    # Una EXCEPCION sigue viva: la Mesa la resuelve antes de regenerar nada.
-    ESTADOS_INACTIVOS = frozenset({RETORNO})
+    ESTADOS_TERMINALES = frozenset({ENTREGADO, RETORNO, CANCELADA})
+    # Un RETORNO o una CANCELADA (services.cancelar_guia, antes de salir)
+    # desactivan la guía y permiten comprar otra. Una EXCEPCION sigue viva:
+    # la Mesa la resuelve antes de regenerar nada.
+    ESTADOS_INACTIVOS = frozenset({RETORNO, CANCELADA})
 
     pedido = models.ForeignKey("pedidos.Pedido", on_delete=models.PROTECT, related_name="guias")
     paquete = models.ForeignKey(

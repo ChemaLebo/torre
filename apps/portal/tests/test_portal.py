@@ -264,6 +264,19 @@ class TestAccionesIncidencia(BasePortal):
         self.assertTrue(nueva.folio.startswith("INC-"))
         self.assertIsNotNone(nueva.sla_respuesta_limite)
 
+    def test_cambio_de_direccion_entra_por_el_portal_como_p1(self):
+        """Chema 2026-09-23: el cliente avisa el cambio de dirección con una
+        incidencia propia (CDR) que nace P1 para que Mesa cancele la guía a tiempo."""
+        self.entrar()
+        respuesta = self.client.post(reverse("portal:incidencia_nueva"), {
+            "pedido": str(self.pedido.pk),
+            "tipo": Incidencia.TIPO_CDR,
+            "descripcion": "Ya corregí la dirección en Shopify: Av. Vallarta 500.",
+        })
+        nueva = Incidencia.objects.filter(cliente=self.colima).latest("ts_apertura")
+        self.assertRedirects(respuesta, reverse("portal:incidencia_detalle", args=[nueva.pk]))
+        self.assertEqual((nueva.tipo, nueva.prioridad), (Incidencia.TIPO_CDR, Incidencia.P1))
+
     def test_nueva_incidencia_rechaza_pedido_ajeno(self):
         self.entrar()
         antes = Incidencia.objects.count()

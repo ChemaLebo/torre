@@ -55,7 +55,9 @@ class Pedido(models.Model):
         # GUIA_GENERADA → EN_TRANSITO cubre el caso raro de guía indexada por el
         # carrier antes de nuestro escaneo de salida; RECOLECTADO sigue siendo el
         # paso autoritativo del flujo normal (escaneo + manifiesto).
-        GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO},
+        # GUIA_GENERADA → EMPACADO: guías canceladas antes de salir por cambio
+        # de dirección (services.regresar_a_empaque); se compra guía nueva.
+        GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO, EMPACADO},
         # → CANCELADO desde la calle solo lo hace el cierre de una cancelación
         # tardía (Mesa decide el reingreso o resuelve la incidencia CAN).
         RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO},

@@ -286,6 +286,34 @@ como tardía para lo que salió.
 - Reporte de ventas / SLA: los ts_* se estampan una sola vez (la primera ola
   marca el SLA); una segunda salida días después no reabre el reloj.
 
+## Cambio de dirección con guía comprada — hecho 2026-09-23
+
+Chema: "tenemos un pedido en salida, no ha salido, si le cambio la dirección
+¿me lo regresa a empaquetado?" Hoy la ingesta repetida solo refresca la
+dirección; la guía ya comprada llevaba la vieja y todo era a mano. Ahora
+(ver CONVENTIONS → pedidos "Cambio de dirección con guía comprada", envios
+`cancelar_guia`, incidencias `CDR`): el cliente corrige en Shopify y levanta
+la incidencia "Cambio de dirección" desde el portal; Mesa, con el pedido en
+GUIA_GENERADA y nada en la calle, pulsa "Cancelar guía y regresar a
+empaquetado" y el piso vuelve a comprar la guía y a cerrar la caja.
+Migraciones: envios 0016 (`Guia.CANCELADA`), incidencias 0004 (tipo CDR).
+
+**Decisiones / queda:**
+- Multi-caja que ya salió parcialmente: sin botón (decisión conservadora de
+  Chema). La incidencia muestra "Ya salió con …" con las cajas fuera y las
+  que siguen en bodega; Mesa resuelve a mano con el carrier (redirección de
+  la caja que salió; la que sigue en bodega se puede cancelar desde el shell
+  con `cancelar_guia` + `recotizar_paquete` si hace falta).
+- Si el carrier rechaza la cancelación por API, la guía queda CANCELADA en
+  Torre de todos modos (evento `cancelacion_carrier_fallida`): Mesa la
+  cancela en el panel de envia para que no se cobre. No hay reintento.
+- El botón exige que la dirección nueva ya haya llegado por webhook
+  (`ingesta_repetida` con direccion/cp después de la guía). Si Shopify no la
+  mandó (webhook caído), Mesa corre `sync_shopify` (reconcilia y re-ingesta) o espera el
+  poller antes de regresar a empaque; el mensaje de error lo dice.
+- La incidencia no se resuelve sola al regresar a empaque: Mesa la cierra
+  cuando la nueva guía está comprada (queda la nota interna con el detalle).
+
 ## Auditoría usada como estado de negocio → columnas — hecho 2026-09-15
 
 `Paquete.ts_cierre` + `Paquete.foto_cierre` (migración envios 0009 con

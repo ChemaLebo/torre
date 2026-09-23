@@ -27,6 +27,7 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_FAL: Incidencia.P2,
     Incidencia.TIPO_DIR: Incidencia.P2,
     Incidencia.TIPO_DES: Incidencia.P3,
+    Incidencia.TIPO_CDR: Incidencia.P1,  # hay que cancelar la guía ANTES de que salga
 }
 
 

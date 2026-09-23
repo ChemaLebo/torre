@@ -77,6 +77,7 @@ class Incidencia(MaquinaEstados):
     TIPO_DIR = "DIR"   # dirección
     TIPO_CAN = "CAN"   # cancelación tardía
     TIPO_DES = "DES"   # descuadre de inventario
+    TIPO_CDR = "CDR"   # cambio de dirección con guía comprada (2026-09-23)
     TIPOS = [
         (TIPO_DAN, "Daño / rotura"),
         (TIPO_RET, "Retraso"),
@@ -85,6 +86,7 @@ class Incidencia(MaquinaEstados):
         (TIPO_DIR, "Dirección"),
         (TIPO_CAN, "Cancelación tardía"),
         (TIPO_DES, "Descuadre de inventario"),
+        (TIPO_CDR, "Cambio de dirección"),
     ]
 
     # ── Prioridades ──

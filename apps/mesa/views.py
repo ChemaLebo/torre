@@ -389,6 +389,26 @@ def _gestionar_incidencia(request, incidencia):
         resolver(incidencia, texto, request.user)
         return "Incidencia resuelta. El cliente puede confirmarla o reabrirla desde su portal."
 
+    if accion == "regresar_a_empaque":
+        # Cambio de dirección con guía comprada (Chema 2026-09-23): solo si
+        # nada ha salido y Torre ya recibió la dirección nueva desde Shopify.
+        from apps.pedidos.services import direccion_cambio_desde, regresar_a_empaque
+        pedido = incidencia.pedido
+        if pedido is None:
+            raise ValueError("La incidencia no está ligada a un pedido.")
+        guias = [g for g in pedido.guias.all() if g.es_activa]
+        if guias and not direccion_cambio_desde(pedido, min(g.creado for g in guias)):
+            raise ValueError(
+                "Torre aún no recibe la dirección nueva desde Shopify: corrígela en la orden y espera "
+                "el sync (o dispáralo en Salud de sync) antes de cancelar la guía."
+            )
+        regresar_a_empaque(pedido, request.user, motivo=f"Cambio de dirección ({incidencia.folio})")
+        responder(
+            incidencia, usuario, "mesa",
+            f"Guía cancelada y {pedido.folio} regresado a empaquetado: etiqueta y foto de cierre nuevas.",
+            interno=True,
+        )
+        return f"{pedido.folio} regresó a empaquetado: el piso compra la guía nueva con la dirección corregida."
     if accion == "cerrar":
         cerrar(incidencia, request.user)
         return "Incidencia cerrada. Si el pedido ya no tiene incidencias abiertas, quedó liberado."
@@ -517,6 +537,7 @@ def incidencia_detalle(request, pk):
         "fotos": fotos,
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,
+        **_contexto_cambio_direccion(incidencia),
         "puede_cerrar": incidencia.estado == Incidencia.RESUELTA,
     })
 
@@ -647,6 +668,31 @@ def pedidos(request):
         "clientes_filtro": Cliente.objects.all(),
         "filtro": {"cliente": cliente_id, "estado": estado, "canal": canal, "q": q},
     })
+
+
+def _contexto_cambio_direccion(incidencia):
+    """Qué puede hacer Mesa con una incidencia de dirección (CDR/DIR): regresar
+    a empaque si la guía no ha salido, o el aviso de que ya salió y con qué."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.incidencias.models import Incidencia
+    pedido = incidencia.pedido
+    if incidencia.tipo not in (Incidencia.TIPO_CDR, Incidencia.TIPO_DIR) or pedido is None:
+        return {}
+    if incidencia.estado not in Incidencia.ESTADOS_ABIERTOS:
+        return {}
+    fuera = [c for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
+    en_calle = pedido.estado not in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA")
+    if pedido.estado == "GUIA_GENERADA" and not fuera and not pedido.tiene_despachadas:
+        return {"puede_regresar_a_empaque": True}
+    if en_calle or fuera:
+        guias = [g for g in pedido.guias.all() if g.es_activa]
+        return {
+            "direccion_ya_salio": True,
+            "cajas_fuera": [c.numero for c in fuera],
+            "cajas_dentro": [c.numero for c in pedido.paquetes.all() if c.estado != Paquete.DESPACHADO],
+            "guias_fuera": [f"{g.carrier} {g.numero}" for g in guias],
+        }
+    return {}
 
 
 @rol_requerido("mesa")
