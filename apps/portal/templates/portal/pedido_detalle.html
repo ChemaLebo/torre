@@ -13,6 +13,8 @@
     <span class="pill {{ pill }}">{{ pedido.get_estado_display }}</span>
     {% if pedido.incidencia_activa %}<span class="pill accent">Con incidencia</span>{% endif %}
     {% if pedido.es_local %}<span class="pill">Entrega local</span>{% endif %}
+    {# El link "Pedido en Torre" de la orden de Shopify cae aquí (Chema 2026-09-23): la incidencia se levanta sin buscar el pedido. #}
+    <a class="btn primario" href="{% url 'portal:incidencia_nueva' %}?pedido={{ pedido.pk }}">Levantar incidencia</a>
   </div>
 </div>
 
@@ -83,6 +85,7 @@
       {% empty %}
         <p class="muted">Este pedido no tiene incidencias. Todo va limpio.</p>
       {% endfor %}
+      <a class="btn chico" href="{% url 'portal:incidencia_nueva' %}?pedido={{ pedido.pk }}">Levantar incidencia sobre este pedido</a>
     </div>
   </div>
 </div>

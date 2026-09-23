@@ -571,7 +571,12 @@ def incidencia_detalle(request, pk):
 
 @portal_requerido
 def incidencia_nueva(request):
-    form = FormNuevaIncidencia(request.cliente, request.POST or None)
+    # ?pedido=<pk> preselecciona el pedido (botón "Levantar incidencia" del
+    # detalle del pedido, a donde llega el link de la orden de Shopify). El
+    # queryset del form ya está acotado al cliente: un pk ajeno no selecciona nada.
+    pedido_id = request.GET.get("pedido", "")
+    inicial = {"pedido": int(pedido_id)} if pedido_id.isdigit() else {}
+    form = FormNuevaIncidencia(request.cliente, request.POST or None, initial=inicial)
     if request.method == "POST" and form.is_valid():
         from apps.incidencias.services import abrir_incidencia  # lazy: servicio de otra app
 

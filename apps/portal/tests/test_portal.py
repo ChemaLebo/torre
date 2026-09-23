@@ -277,6 +277,17 @@ class TestAccionesIncidencia(BasePortal):
         self.assertRedirects(respuesta, reverse("portal:incidencia_detalle", args=[nueva.pk]))
         self.assertEqual((nueva.tipo, nueva.prioridad), (Incidencia.TIPO_CDR, Incidencia.P1))
 
+    def test_detalle_del_pedido_lleva_a_levantar_incidencia_con_el_pedido_puesto(self):
+        """Chema 2026-09-23: el link de la orden de Shopify cae en el detalle del
+        pedido; desde ahí se levanta la incidencia sin buscar el pedido."""
+        self.entrar()
+        url_nueva = reverse("portal:incidencia_nueva") + f"?pedido={self.pedido.pk}"
+        self.assertContains(self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk])), url_nueva)
+        respuesta = self.client.get(url_nueva)
+        self.assertContains(respuesta, f'<option value="{self.pedido.pk}" selected>')
+        # Un pedido ajeno o basura no selecciona nada ni rompe la página.
+        self.assertEqual(self.client.get(reverse("portal:incidencia_nueva") + "?pedido=abc").status_code, 200)
+
     def test_nueva_incidencia_rechaza_pedido_ajeno(self):
         self.entrar()
         antes = Incidencia.objects.count()

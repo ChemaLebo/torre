@@ -122,7 +122,7 @@ Todo módulo se construye contra este documento. Las firmas de servicios y los n
 - **Command:** `digest_diario`.
 
 ### portal (solo vistas/templates; usa servicios de las demás)
-URLs obligatorias (namespace `portal`): `dashboard` (Hoy), `pedidos`, `pedido_detalle` (pk), `inventario`, `incidencias`, `incidencia_detalle` (pk) con form de respuesta + botón "marcar urgente", `incidencia_nueva`, `recepciones` (lista ASN + form anunciar), `exportar` (CSV: pedidos, inventario/kardex, incidencias).
+URLs obligatorias (namespace `portal`): `dashboard` (Hoy), `pedidos`, `pedido_detalle` (pk), `inventario`, `incidencias`, `incidencia_detalle` (pk) con form de respuesta + botón "marcar urgente", `incidencia_nueva`, `recepciones` (lista ASN + form anunciar), `exportar` (CSV: pedidos, inventario/kardex, incidencias). `pedido_detalle` trae el botón "Levantar incidencia" → `incidencia_nueva?pedido=<pk>` (preselecciona el pedido; el link "Pedido en Torre" de la orden de Shopify cae en ese detalle, 2026-09-23).
 - TODO filtrado por `request.cliente` (decorator `portal_requerido`). El detalle valida pertenencia (404 si no es suyo).
 - Dashboard "Hoy": banner semáforo del día, embudo de pedidos por estado, inventario crítico (bajo punto_reorden), incidencias abiertas con "quién tiene la pelota", salud de sync (último SyncLog por dirección con frescura "hace X min" — NUNCA la palabra "tiempo real"), widget corte del día (`settings.TORRE["CORTE_CONTRACTUAL"]`).
 - Detalle de pedido: pipeline con timestamps, fotos de evidencia, guía + tracking, conversaciones/incidencias ligadas.
