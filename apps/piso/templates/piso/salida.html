@@ -36,6 +36,13 @@
     <span class="pill accent">{{ grupo.listos|length }} pedido{{ grupo.listos|length|pluralize }}</span>
     {# La salida se registra escaneando la etiqueta interna de cada caja (Chema 2026-09-22): ya no hay palomitas aquí. #}
     <a class="btn primario" href="{{ grupo.registrar_url }}">Registrar salida{% if grupo.escaneadas %} · {{ grupo.escaneadas }} escaneada{{ grupo.escaneadas|pluralize }}{% endif %}</a>
+    {# "Salen todos": sin escanear una por una; el resumen sigue pidiendo confirmar. #}
+    <form method="post" action="{% url 'piso:salida_registrar' %}" onsubmit="return confirm('¿Todo lo de {{ grupo.carrier }} sube al camión? Lo confirmas en el siguiente paso.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="todos">
+      <input type="hidden" name="corral" value="{{ corral.codigo }}">
+      <input type="hidden" name="carrier" value="{{ grupo.carrier }}">
+      <button class="btn" type="submit">Salen todos</button>
+    </form>
   </div>
   <div class="tabla-wrap">
     <table>

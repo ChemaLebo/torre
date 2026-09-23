@@ -2390,6 +2390,17 @@ def salida_registrar(request):
                 lista.remove(valor)
             _guardar_escaneo(request, datos)
             return redirect(_url_registrar(corral, carrier))
+        if accion == "todos":
+            # "Salen todos" (Chema 2026-09-23): todo lo pendiente del carrier a
+            # la lista, y directo al resumen; ahí se confirma, como siempre.
+            for unidad in _unidades_salida(listos):
+                clave = "cajas" if unidad["tipo"] == "caja" else "pedidos"
+                if unidad["id"] not in datos[clave]:
+                    datos[clave].append(unidad["id"])
+                if unidad["id"] in datos["faltan"][clave]:
+                    datos["faltan"][clave].remove(unidad["id"])
+            _guardar_escaneo(request, datos)
+            return redirect(f"{reverse('piso:salida_resumen')}?corral={quote(corral)}&carrier={quote(carrier)}")
         if accion == "cancelar":
             _limpiar_escaneo(request, corral, carrier)
             messages.info(request, f"Salida de {carrier} descartada: nada se registró.")

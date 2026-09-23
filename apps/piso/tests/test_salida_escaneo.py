@@ -240,6 +240,19 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.EMPACADO, Paquete.DESPACHADO, Pedido.PARCIALMENTE_DESPACHADO))
         self.assertEqual([l.paquete_id for l in Manifiesto.objects.get().lineas.all()], [c2.pk])
 
+    def test_salen_todos_llena_la_lista_y_abre_el_resumen(self):
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        entero = self._pedido_entero()
+        salida = self.client.get(reverse("piso:salida"))
+        self.assertContains(salida, "Salen todos")
+        r = self.client.post(self.url, {"accion": "todos", "corral": "SAL-OTRO", "carrier": "puntopost"})
+        self.assertRedirects(r, reverse("piso:salida_resumen") + PARAMS, fetch_redirect_response=False)
+        resumen = self.client.get(reverse("piso:salida_resumen") + PARAMS)
+        for valor in (f'name="paquete_id" value="{c1.pk}" checked', f'name="paquete_id" value="{c2.pk}" checked',
+                      f'name="pedido_id" value="{entero.pk}" checked'):
+            self.assertContains(resumen, valor)
+        self.assertNotContains(resumen, "Se quedan en el corral")
+
     def test_sin_escanear_no_hay_resumen_y_descartar_limpia(self):
         r = self.client.get(reverse("piso:salida_resumen") + PARAMS)
         self.assertRedirects(r, self.url, fetch_redirect_response=False)
