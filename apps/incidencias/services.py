@@ -293,7 +293,7 @@ def abrir_sin_paqueteria(pedido, detalle):
     )
     registrar_evento(
         "pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente,
-        delta={"incidencia": incidencia.folio, "cp": pedido.cp}, motivo=texto[:300],
+        delta={"incidencia": str(getattr(incidencia, "folio", "") or ""), "cp": pedido.cp}, motivo=texto[:300],
     )
     return incidencia
 

@@ -968,10 +968,10 @@ def _avisar_sin_paqueteria(pedido, detalle):
     si el módulo no existe)."""
     try:
         from apps.incidencias.services import abrir_sin_paqueteria
-    except ImportError:
+        return abrir_sin_paqueteria(pedido, detalle)
+    except Exception:  # noqa: BLE001 — la incidencia es aviso; el error de guía se levanta igual
         registrar_evento("pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente, motivo=detalle[:300])
         return None
-    return abrir_sin_paqueteria(pedido, detalle)
 
 
 def _abrir_incidencia(pedido, tipo, texto, prioridad=None):

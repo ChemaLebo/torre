@@ -228,11 +228,12 @@ def _planificar_best_effort(pedido, force=False):
         except ValueError as exc:
             # Ningún carrier cotiza (Chema 2026-09-24): incidencia interna
             # "Sin paquetería que cotice" en vez de silencio; Mesa elige.
+            # Best-effort: el aviso jamás tumba el alta ya committeada.
             try:
                 from apps.incidencias.services import abrir_sin_paqueteria  # lazy
                 abrir_sin_paqueteria(pedido, str(exc))
-            except ImportError:
-                pass
+            except Exception:  # noqa: BLE001 — sin incidencia queda el evento y el wizard avisa al reintentar
+                registrar_evento("pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente, motivo=str(exc)[:300])
     transaction.on_commit(_planificar)
 
 
