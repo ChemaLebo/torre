@@ -209,10 +209,20 @@ class RevisarCajaTests(PisoTestCase):
 
     def test_cierre_legacy_ofrece_cambiar_sus_fotos_sueltas(self):
         # Pedido sin plan de cajas: sus fotos cuelgan del pedido, no de una caja.
+        # Con 20 kg el plan que nace en la guía traería dos cajas y desde el
+        # 2026-09-24 eso manda a reempacar (ReempaquePendiente): el legacy de
+        # una caja implícita se prueba con un pedido que cabe en una sola.
         Paquete.objects.filter(pedido=self.pedido).delete()
+        linea = self.pedido.lineas.get()
+        linea.cantidad = 4
+        linea.cantidad_pickeada = 4
+        linea.save(update_fields=["cantidad", "cantidad_pickeada"])
+        self.pedido.peso_esperado_gr = self.sku.peso_gr * 4
+        self.pedido.save(update_fields=["peso_esperado_gr"])
         pedido = self.dejar_empacado(self.pedido)
         from apps.envios.services import generar_guia
         generar_guia(pedido)
+        self.assertEqual(pedido.paquetes.count(), 1)
         contenido = self._fotos("contenido").get()
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, 'value="cerrar_legacy"')

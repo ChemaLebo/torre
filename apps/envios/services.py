@@ -40,6 +40,13 @@ class SinPaqueteria(ErrorCarrier):
     Mesa elige paquetería en la incidencia interna que nace con esto."""
 
 
+class ReempaquePendiente(ErrorCarrier):
+    """El pedido se empacó entero (sin plan) y el plan que nace al pedir la
+    guía trae varias cajas: no se compran guías para cajas que nadie ha
+    pesado; el wizard vuelve al paso de caja (Chema 2026-09-24: el reempaque
+    solo toca a los que quedan en más de una caja)."""
+
+
 def _carrier_forzado(pedido):
     return (getattr(pedido, "carrier_forzado", "") or "").strip()
 
@@ -471,14 +478,20 @@ def generar_guias(pedido):
     # si el carrier falla, la carta se queda con el pedido (es el dato del
     # fallo que se quiere medir), no se revierte con la guía.
     carriers_del_pedido(pedido)
-    sin_plan = None
+    sin_plan, recien = None, False
     with transaction.atomic():
         paquetes = list(pedido.paquetes.select_for_update().all())
         if not paquetes:
             try:
                 paquetes = planificar_envio(pedido)
+                recien = True
             except ValueError as exc:
                 sin_plan = exc
+    if recien and len(paquetes) > 1 and pedido.estado == "EMPACADO":
+        raise ReempaquePendiente(
+            f"El plan de {pedido.folio} salió en {len(paquetes)} cajas y el pedido se empacó entero: "
+            "pésalas caja por caja (el wizard ya las muestra) y la guía se compra al terminar."
+        )
     if sin_plan is not None:
         # Ningún carrier cotiza: antes se caía al camino legacy y se compraba
         # UNA guía con el pedido entero (cajas de 30 kg, PED-00103..109).

@@ -10,7 +10,8 @@ from apps.core.models import EventoAuditoria
 from apps.envios.adapters import ErrorCarrier, MockAdapter
 from apps.envios.models import Guia, Paquete
 from apps.envios.services import (
-    CARRIER_POOL_ENVIA, SinPaqueteria, carrier_preferido, carriers_del_pedido, elegir_carrier,
+    CARRIER_POOL_ENVIA, ReempaquePendiente, SinPaqueteria, carrier_preferido, carriers_del_pedido,
+    elegir_carrier,
 )
 from apps.incidencias.models import Incidencia
 from apps.incidencias.services import sin_paqueteria_abierta
@@ -93,6 +94,37 @@ class SinPaqueteriaTests(PisoTestCase):
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)
         self.assertEqual(sorted(g.carrier for g in pedido.guias.all()), ["estafeta", "estafeta"])
+
+    def test_un_plan_de_una_caja_no_deshace_el_empaque(self):
+        """Chema 2026-09-24: el reempaque solo toca a los que quedan en más de
+        una caja; con una sola, la caja empacada ES la del plan."""
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))  # 4 kg: una caja
+        with self.assertRaises(SinPaqueteria):
+            services.generar_guia(pedido)
+        with override_settings(TORRE=POOL_CLASICO):
+            resultado = services.replanear_con_carrier(pedido, "estafeta", self.operador, incidencia=sin_paqueteria_abierta(pedido))
+        self.assertEqual(len(resultado["cajas"]), 1)
+        pedido.refresh_from_db()
+        self.assertEqual(_que_falta_empaque(pedido), "sin guía")
+        self.login_piso()
+        respuesta = self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk]))
+        self.assertEqual(respuesta.context["paso"], "cierre")  # nada que volver a pesar
+        with override_settings(TORRE=POOL_CLASICO):
+            services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.estado, pedido.guias.count()), (Pedido.GUIA_GENERADA, 1))
+
+    @override_settings(TORRE=POOL_CLASICO)
+    def test_plan_de_varias_cajas_al_pedir_guia_no_compra_hasta_pesarlas(self):
+        """Pedido empacado entero cuyo plan nace al reintentar la guía con
+        varias cajas: sin guías para cajas sin pesar; el wizard las pide."""
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=12))  # 24 kg: dos cajas
+        with self.assertRaises(ReempaquePendiente):
+            services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.estado, pedido.paquetes.count(), pedido.guias.count()), (Pedido.EMPACADO, 2, 0))
+        self.login_piso()
+        self.assertEqual(self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk])).context["paso"], "caja")
 
     def test_la_lista_de_envia_por_precio_como_paqueteria(self):
         pedido = self.crear_pedido(cantidad=2)

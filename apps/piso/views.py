@@ -1397,11 +1397,13 @@ def _caja_cerrada(paquete):
 
 
 def _por_reempacar(pedido):
-    """Cajas planeadas sin empacar y ninguna en la calle: el pedido (aunque
-    ya sea EMPACADO por el empaque entero) se pesa caja por caja."""
+    """Plan de MÁS de una caja con cajas planeadas sin empacar y ninguna en
+    la calle: el pedido (aunque ya sea EMPACADO por el empaque entero) se
+    pesa caja por caja. Un plan de una sola caja es la caja que ya se empacó:
+    no se deshace nada (Chema 2026-09-24)."""
     cajas = list(pedido.paquetes.all())
     pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
-    return bool(pendientes) and not any(c.estado == Paquete.DESPACHADO for c in cajas)
+    return len(cajas) > 1 and bool(pendientes) and not any(c.estado == Paquete.DESPACHADO for c in cajas)
 
 
 def _que_falta_empaque(pedido):
@@ -1841,14 +1843,15 @@ def _despachar_y_avisar(request, pedido, destino):
     paso de cierre (botón Reintentar guía); un error de impresora avisa y el
     flujo continúa (la reimpresión vive en Salida).
     """
-    from apps.envios.services import SinPaqueteria  # lazy por contrato
+    from apps.envios.services import ReempaquePendiente, SinPaqueteria  # lazy por contrato
     from apps.pedidos.services import despachar_a_corral  # lazy por contrato
     try:
         resultado = despachar_a_corral(pedido, request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
-    except SinPaqueteria as exc:
-        # Ningún carrier cotiza: no hay plan ni guía; lo resuelve Mesa (Chema 2026-09-24).
+    except (SinPaqueteria, ReempaquePendiente) as exc:
+        # Sin paquetería (lo resuelve Mesa) o plan de varias cajas sin pesar
+        # (el wizard las pide): avisos tal cual, no "el carrier no respondió".
         messages.error(request, str(exc))
     except Exception as exc:  # ErrorCarrier u otra falla del adapter: el piso debe saberlo
         messages.error(
