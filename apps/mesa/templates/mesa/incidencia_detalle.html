@@ -11,6 +11,7 @@
     <span class="pill {% if incidencia.prioridad == 'P1' %}crit{% elif incidencia.prioridad == 'P2' %}warn{% endif %}">{{ incidencia.get_prioridad_display }}</span>
     <span class="pill {% if incidencia.abierta %}accent{% else %}ok{% endif %}">{{ incidencia.get_estado_display }}</span>
     {% if incidencia.abierta %}<span class="pill {{ incidencia.reloj_pill }}">{{ incidencia.reloj_texto }}</span>{% endif %}
+    {% if incidencia.interna %}<span class="pill warn" title="De la bodega: el cliente no la ve en su portal ni recibe aviso">Interna · bodega</span>{% endif %}
   </div>
 </div>
 
@@ -65,6 +66,18 @@
     {% elif direccion_ya_salio %}
     <div class="banner warn mt"><span class="foco"></span>Ya salió{% if guias_fuera %} con {{ guias_fuera|join:", " }}{% endif %}{% if cajas_fuera %} (caja {{ cajas_fuera|join:", " }} fuera{% if cajas_dentro %}; en bodega la caja {{ cajas_dentro|join:", " }}{% endif %}){% endif %}: no se regresa a empaque. Se resuelve con el carrier o con el comprador.</div>
     <p class="small mt">Viajó a: <strong>{{ direccion_guia|default:"—" }}</strong>{% if direccion_pendiente %}<br>Shopify ahora dice: <strong>{{ direccion_pendiente }}</strong>. El pedido conserva la dirección a la que viajó.{% endif %}</p>
+    {% endif %}
+    {# Sin paquetería que cotice (2026-09-24): Mesa elige y el pedido se replanea con ella. #}
+    {% if puede_replanear %}
+    <form method="post" class="mt" onsubmit="return confirm('¿Replanear las cajas de {{ incidencia.pedido.folio }} con esta paquetería? Queda forzada para el pedido.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="replanear_carrier">
+      <label for="sel-carrier">Paquetería para {{ incidencia.pedido.folio }} (CP {{ incidencia.pedido.cp }})</label>
+      <select id="sel-carrier" name="carrier">
+        {% for codigo, nombre in opciones_paqueteria %}<option value="{{ codigo }}">{{ nombre }}</option>{% endfor %}
+      </select>
+      <button class="btn chico primario mt" type="submit">Replanear cajas con esta paquetería</button>
+      <p class="small muted">Queda forzada para este pedido: el plan de cajas y la guía se compran con ella. Si cotiza, la incidencia se cierra sola; si tampoco cotiza, sigue abierta con el error.</p>
+    </form>
     {% endif %}
     {% if puede_resolver %}
     <form method="post">{% csrf_token %}

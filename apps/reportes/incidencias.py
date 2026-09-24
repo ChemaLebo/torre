@@ -88,6 +88,8 @@ def generar(cliente, inicio, fin, filtros, es_mesa):
         Incidencia.objects.filter(cliente=cliente, ts_apertura__gte=inicio, ts_apertura__lt=fin)
         .select_related("pedido", "sku").order_by("ts_apertura", "pk")
     )
+    if not es_mesa:
+        qs = qs.filter(interna=False)  # las internas son de la bodega, no del cliente
     if filtros.get("tipo"):
         qs = qs.filter(tipo=filtros["tipo"])
     if filtros.get("abiertas"):

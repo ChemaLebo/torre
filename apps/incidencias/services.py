@@ -28,6 +28,7 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_DIR: Incidencia.P2,
     Incidencia.TIPO_DES: Incidencia.P3,
     Incidencia.TIPO_CDR: Incidencia.P1,  # hay que cancelar la guía ANTES de que salga
+    Incidencia.TIPO_PAQ: Incidencia.P1,  # el pedido no puede salir hasta elegir paquetería
 }
 
 
@@ -72,11 +73,15 @@ def auto_pausadas(cliente):
     return bool(hasta) and timezone.localdate() <= hasta
 
 
-def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None, orden=None):
+def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None, orden=None,
+                     interna=False):
     """Abre una incidencia con folio y relojes SLA. N por pedido permitidas.
     `orden`: la recepción (OrdenEntrada) de la que nace, para las DES de recepción.
     Con las automáticas pausadas (auto_pausadas) una de origen "auto" NO nace:
     regresa None, no toca el pedido y deja el evento "auto_omitida" con el texto.
+    `interna` (Chema 2026-09-24): incidencia de la bodega, no del cliente: no se
+    pausa, no le avisa al cliente, no marca pedido.incidencia_activa (el
+    portal muestra ese flag) y el portal jamás la lista.
 
     - SLA de primera respuesta: 30 min si origen=comprador, 2 h en los demás
       casos (valores canónicos de settings.TORRE).
@@ -84,7 +89,7 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
     - Congela la evidencia del pedido y marca pedido.incidencia_activa.
     - Notifica al cliente vía mensajeria (lazy; tolera módulo ausente).
     """
-    if origen == Incidencia.ORIGEN_AUTO and auto_pausadas(cliente):
+    if origen == Incidencia.ORIGEN_AUTO and not interna and auto_pausadas(cliente):
         referencia = (
             getattr(pedido, "folio", None) or getattr(orden, "folio", None)
             or getattr(sku, "codigo", None) or cliente.slug
@@ -115,6 +120,7 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
         orden=orden,
         tipo=tipo,
         origen=origen,
+        interna=interna,
         prioridad=prioridad or PRIORIDAD_DEFAULT_POR_TIPO.get(tipo, Incidencia.P2),
         ts_apertura=ahora,
         sla_respuesta_limite=limite_respuesta,
@@ -129,7 +135,7 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
 
     if pedido is not None:
         _congelar_evidencia_pedido(pedido)
-        if not pedido.incidencia_activa:
+        if not interna and not pedido.incidencia_activa:
             pedido.incidencia_activa = True
             pedido.save(update_fields=["incidencia_activa"])
 
@@ -150,12 +156,13 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
         motivo=texto[:300],
     )
 
-    try:
-        from apps.mensajeria.services import notificar_cliente_incidencia
-    except ImportError:
-        pass  # mensajeria aún no existe: la apertura no se bloquea por la notificación
-    else:
-        notificar_cliente_incidencia(incidencia)
+    if not interna:
+        try:
+            from apps.mensajeria.services import notificar_cliente_incidencia
+        except ImportError:
+            pass  # mensajeria aún no existe: la apertura no se bloquea por la notificación
+        else:
+            notificar_cliente_incidencia(incidencia)
 
     # Web Push a la Mesa, best-effort TOTAL: un push caído o sin VAPID
     # JAMÁS bloquea la apertura de la incidencia.
@@ -250,13 +257,44 @@ def cerrar(incidencia, actor):
     pedido = incidencia.pedido
     if pedido is not None:
         quedan_abiertas = (
-            Incidencia.objects.filter(pedido=pedido)
+            Incidencia.objects.filter(pedido=pedido, interna=False)  # las internas no cuentan para el flag
             .exclude(estado=Incidencia.CERRADA)
             .exists()
         )
         if not quedan_abiertas and pedido.incidencia_activa:
             pedido.incidencia_activa = False
             pedido.save(update_fields=["incidencia_activa"])
+    return incidencia
+
+
+def sin_paqueteria_abierta(pedido):
+    """La incidencia interna "Sin paquetería que cotice" abierta del pedido, o None."""
+    return (
+        Incidencia.objects.filter(pedido=pedido, tipo=Incidencia.TIPO_PAQ, interna=True)
+        .exclude(estado=Incidencia.CERRADA).order_by("-pk").first()
+    )
+
+
+def abrir_sin_paqueteria(pedido, detalle):
+    """Ningún carrier cotiza el pedido (plan de cajas imposible; Chema
+    2026-09-24): incidencia interna automática P1, una por pedido. Si ya hay
+    una abierta, solo se agrega el detalle nuevo al timeline (un reintento no
+    duplica). Nunca se pausa: es de la bodega. Mesa la resuelve eligiendo
+    paquetería (pedidos.services.replanear_con_carrier)."""
+    texto = (detalle or "Ningún carrier cotiza el pedido.")[:900]
+    abierta = sin_paqueteria_abierta(pedido)
+    if abierta is not None:
+        ultimo = abierta.mensajes.order_by("-pk").first()
+        if ultimo is None or ultimo.texto != texto:
+            responder(abierta, "Torre", MensajeIncidencia.ROL_SISTEMA, texto)
+        return abierta
+    incidencia = abrir_incidencia(
+        pedido.cliente, Incidencia.TIPO_PAQ, Incidencia.ORIGEN_AUTO, pedido=pedido, texto=texto, interna=True,
+    )
+    registrar_evento(
+        "pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente,
+        delta={"incidencia": incidencia.folio, "cp": pedido.cp}, motivo=texto[:300],
+    )
     return incidencia
 
 

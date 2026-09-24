@@ -331,6 +331,26 @@ class TestAccionesIncidencia(BasePortal):
         self.assertIn("Ver orden en Shopify", html)
         self.assertIn("https://colima-mx.myshopify.com/admin/orders/8398059995298", html)
 
+    def test_las_incidencias_internas_no_existen_para_el_portal(self):
+        """Chema 2026-09-24: las de la bodega ("Sin paquetería que cotice") no
+        se listan, no abren, no cuentan en el badge ni salen en el CSV."""
+        limpio = Pedido.objects.create(cliente=self.colima, origen="manual", comprador_nombre="Sin incidencia", cp="28017")
+        interna = abrir_incidencia(self.colima, Incidencia.TIPO_PAQ, Incidencia.ORIGEN_AUTO,
+                                   pedido=limpio, texto="Nadie cotiza", interna=True)
+        self.entrar()
+        self.assertNotIn(interna.folio, self.client.get(reverse("portal:incidencias")).content.decode())
+        self.assertEqual(self.client.get(reverse("portal:incidencia_detalle", args=[interna.pk])).status_code, 404)
+        self.assertNotIn(interna.folio, self.client.get(reverse("portal:exportar"), {"csv": "incidencias"}).content.decode())
+        detalle = self.client.get(reverse("portal:pedido_detalle", args=[limpio.pk])).content.decode()
+        self.assertNotIn(interna.folio, detalle)
+        self.assertNotIn("Con incidencia", detalle)  # la interna no marca incidencia_activa
+        hoy = self.client.get(reverse("portal:dashboard")).content.decode()
+        self.assertNotIn(interna.folio, hoy)
+        # El badge del menú solo cuenta las públicas sin cerrar.
+        publicas = Incidencia.objects.filter(cliente=self.colima, interna=False).exclude(estado=Incidencia.CERRADA).count()
+        self.assertIn(f'Incidencias <span class="pill warn">{publicas}</span>', hoy)
+        self.assertNotIn(f'Incidencias <span class="pill warn">{publicas + 1}</span>', hoy)
+
     def test_nueva_incidencia_rechaza_pedido_ajeno(self):
         self.entrar()
         antes = Incidencia.objects.count()

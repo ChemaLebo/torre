@@ -500,6 +500,8 @@ def _incidencias_abiertas(cliente):
     abiertas = Incidencia.objects.filter(
         cliente=cliente, estado__in=ESTADOS_INCIDENCIA_ABIERTOS,
     ).order_by(orden)
+    if "interna" in campos:
+        abiertas = abiertas.filter(interna=False)  # las de la bodega no van al cliente
     resumen = []
     for inc in abiertas:
         tipo = TIPO_INCIDENCIA_LEGIBLE.get(inc.tipo, inc.tipo)

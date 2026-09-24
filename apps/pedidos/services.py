@@ -223,9 +223,113 @@ def _planificar_best_effort(pedido, force=False):
         try:
             from apps.envios.cotizador import planificar_envio  # lazy
             planificar_envio(pedido, force=force)
-        except (ImportError, ValueError):
+        except ImportError:
             pass
+        except ValueError as exc:
+            # Ningún carrier cotiza (Chema 2026-09-24): incidencia interna
+            # "Sin paquetería que cotice" en vez de silencio; Mesa elige.
+            try:
+                from apps.incidencias.services import abrir_sin_paqueteria  # lazy
+                abrir_sin_paqueteria(pedido, str(exc))
+            except ImportError:
+                pass
     transaction.on_commit(_planificar)
+
+
+def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
+    """Mesa fuerza una paquetería para el pedido (Chema 2026-09-24, desde la
+    incidencia "Sin paquetería que cotice"): `carrier` = un carrier o "envia"
+    (la lista de envia.com por precio). Queda en Pedido.carrier_forzado y
+    manda sobre reglas, reparto e integración del cliente. Según el pedido:
+    - cajas solo planeadas (o ninguna): se replanea desde cero con ella;
+    - cajas ya empacadas (físicas): se recotiza cada caja, sin repartirlas;
+    - con guía comprada y nada en la calle: se cancelan las guías y el pedido
+      regresa a empaque (regresar_a_empaque) recotizando con ella.
+    Un pedido empacado entero (sin cajas) que queda con varias cajas vuelve a
+    la mesa sin dueño: se reempaca por caja. Si la paquetería tampoco cotiza,
+    no cambia nada (ValueError) y queda la nota en la incidencia; si cotiza,
+    la incidencia se resuelve y cierra sola. Regresa {"modo", "cajas"}."""
+    from apps.envios.adapters import ErrorCarrier  # lazy por contrato
+    from apps.envios.cotizador import planificar_envio  # lazy por contrato
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.envios.services import (  # lazy por contrato
+        carriers_del_pedido, etiqueta_paqueteria, opciones_paqueteria, recotizar_paquete,
+    )
+
+    carrier = (carrier or "").strip()
+    if carrier not in dict(opciones_paqueteria()):
+        raise ValueError("Elige una paquetería de la lista.")
+    etiqueta = etiqueta_paqueteria(carrier)
+    if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display().lower()}: la paquetería solo se cambia antes de salir."
+        )
+    fuera = [c.numero for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
+    if fuera or pedido.tiene_despachadas:
+        raise ValueError(f"{pedido.folio} ya salió (caja {', '.join(str(n) for n in fuera) or 'entera'}): no se replanea.")
+    fallo = None
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        anterior = fresco.carrier_forzado
+        fresco.carrier_forzado = carrier
+        fresco.save(update_fields=["carrier_forzado", "actualizado"])
+        try:
+            # Savepoint: si la paquetería tampoco cotiza, el plan anterior
+            # (que el replaneo forzado tira antes de cotizar) se queda intacto.
+            with transaction.atomic():
+                cajas_previas = list(fresco.paquetes.all())
+                if fresco.estado == Pedido.GUIA_GENERADA:
+                    regresar_a_empaque(fresco, actor, motivo=f"Cambio de paquetería a {etiqueta}")
+                    modo = "recotizadas"
+                elif any(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in cajas_previas):
+                    for caja in cajas_previas:
+                        recotizar_paquete(fresco, caja)  # la caja física se queda; solo cambia carrier y precio
+                    modo = "recotizadas"
+                else:
+                    planificar_envio(fresco, force=True)
+                    modo = "replaneadas"
+                cajas = list(fresco.paquetes.all().order_by("numero"))
+                permitidos = set(carriers_del_pedido(fresco))
+                fallidas = [c.numero for c in cajas if c.carrier not in permitidos]
+                if fallidas:
+                    raise ValueError(f"la caja {', '.join(str(n) for n in fallidas)} se quedó sin tarifa de {etiqueta}")
+        except (ValueError, ErrorCarrier) as exc:
+            fallo = exc
+            fresco.carrier_forzado = anterior
+            fresco.save(update_fields=["carrier_forzado", "actualizado"])
+    if fallo is not None:
+        # Fuera del atomic: la nota y el evento sí se guardan aunque se levante el error.
+        registrar_evento(
+            "pedido", fresco.pk, "replaneo_carrier_fallido", actor=actor, cliente=fresco.cliente,
+            delta={"carrier": carrier}, motivo=str(fallo)[:300],
+        )
+        if incidencia is not None:
+            from apps.incidencias.models import MensajeIncidencia  # lazy: modelo de otra app
+            from apps.incidencias.services import responder  # lazy por contrato
+            responder(incidencia, "Torre", MensajeIncidencia.ROL_SISTEMA,
+                      f"{etiqueta} tampoco cotiza {fresco.folio} (CP {fresco.cp}): {str(fallo)[:300]}")
+        raise ValueError(f"{etiqueta} tampoco cotiza {fresco.folio} (CP {fresco.cp}): {fallo}") from fallo
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=fresco.pk)
+        if modo == "replaneadas" and fresco.estado == Pedido.EMPACADO and fresco.asignado_a_id:
+            # Se empacó entero sin plan y ahora hay cajas: lo reempaca quien esté en la mesa.
+            fresco.asignado_a = None
+            fresco.save(update_fields=["asignado_a", "actualizado"])
+        resumen = [(c.numero, c.carrier, float(c.precio_cotizado or 0)) for c in cajas]
+        registrar_evento(
+            "pedido", fresco.pk, "replaneo_carrier", actor=actor, cliente=fresco.cliente,
+            delta={"carrier": carrier, "modo": modo, "cajas": resumen},
+            motivo=f"Mesa forzó {etiqueta}: {len(cajas)} caja(s) {modo}.",
+        )
+        if incidencia is not None and incidencia.abierta:
+            from apps.incidencias.services import cerrar, resolver  # lazy por contrato
+            detalle = ", ".join(f"caja {n} {c} ${p:.2f}" for n, c, p in resumen)
+            resolver(incidencia, f"Replaneado con {etiqueta}: {detalle}.", actor)
+            cerrar(incidencia, actor)
+    pedido.carrier_forzado = fresco.carrier_forzado
+    pedido.estado = fresco.estado
+    pedido.asignado_a = fresco.asignado_a
+    return {"modo": modo, "cajas": cajas}
 
 
 def _enviar_confirmacion_best_effort(pedido):
@@ -1583,7 +1687,9 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
             f"La caja {fresco.numero} de {pedido.folio} ya está "
             f"{fresco.get_estado_display().lower()}; no se empaca dos veces."
         )
-    if pedido.estado != Pedido.EN_PICKING:
+    if pedido.estado not in (Pedido.EN_PICKING, Pedido.EMPACADO):
+        # EMPACADO entra solo para el REEMPAQUE por caja (Chema 2026-09-24):
+        # el pedido se empacó entero sin plan y Mesa replaneó las cajas.
         raise ValueError(
             f"El pedido {pedido.folio} no se puede empacar: está {pedido.get_estado_display()} "
             "y el empaque solo aplica a pedidos en picking."
@@ -1638,14 +1744,26 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
 
     cajas = list(pedido.paquetes.all())
     if all(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in cajas):
-        # Última caja: el pedido completo queda EMPACADO con el peso real
-        # total. peso_ya_verificado: cada caja ya pasó báscula contra SU plan
-        # (que incluye el margen de empaque) — la suma NO se revalida contra
-        # el peso_esperado_gr NETO del pedido.
-        empacar(
-            pedido, actor, sum(c.peso_real_gr or 0 for c in cajas), fotos=[],
-            peso_ya_verificado=True,
-        )
+        if pedido.estado == Pedido.EMPACADO:
+            # Reempaque por caja: el pedido ya confirmó su pick y ya es
+            # EMPACADO; solo se actualiza el peso real total (sin segundo
+            # confirmar_pick ni transición).
+            pedido.peso_real_gr = sum(c.peso_real_gr or 0 for c in cajas)
+            pedido.save(update_fields=["peso_real_gr", "actualizado"])
+            registrar_evento(
+                "pedido", pedido.pk, "reempacado_por_caja", actor=actor, cliente=pedido.cliente,
+                delta={"cajas": [(c.numero, c.peso_real_gr) for c in cajas]},
+                motivo="Pedido empacado entero que Mesa replaneó en cajas: reempacado caja por caja.",
+            )
+        else:
+            # Última caja: el pedido completo queda EMPACADO con el peso real
+            # total. peso_ya_verificado: cada caja ya pasó báscula contra SU plan
+            # (que incluye el margen de empaque) — la suma NO se revalida contra
+            # el peso_esperado_gr NETO del pedido.
+            empacar(
+                pedido, actor, sum(c.peso_real_gr or 0 for c in cajas), fotos=[],
+                peso_ya_verificado=True,
+            )
     # La instancia del caller refleja el estado real (las vistas la usan).
     if fresco is not paquete:
         paquete.estado = fresco.estado

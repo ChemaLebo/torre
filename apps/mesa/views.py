@@ -393,6 +393,24 @@ def _gestionar_incidencia(request, incidencia):
         resolver(incidencia, texto, request.user)
         return "Incidencia resuelta. El cliente puede confirmarla o reabrirla desde su portal."
 
+    if accion == "replanear_carrier":
+        # "Sin paquetería que cotice" (Chema 2026-09-24): Mesa elige la
+        # paquetería y el pedido se replanea con ella; la incidencia se
+        # resuelve sola si cotiza.
+        from apps.envios.services import etiqueta_paqueteria  # lazy por contrato
+        from apps.pedidos.services import replanear_con_carrier  # lazy por contrato
+        pedido = incidencia.pedido
+        if pedido is None:
+            raise ValueError("La incidencia no está ligada a un pedido.")
+        carrier = (request.POST.get("carrier") or "").strip()
+        resultado = replanear_con_carrier(pedido, carrier, request.user, incidencia=incidencia)
+        cajas = resultado["cajas"]
+        detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in cajas)
+        que = "recotizadas" if resultado["modo"] == "recotizadas" else "planeadas"
+        return (
+            f"{pedido.folio} con {etiqueta_paqueteria(carrier)}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} "
+            f"{que} ({detalle}). La incidencia quedó cerrada; el piso sigue con el empaque."
+        )
     if accion == "regresar_a_empaque":
         # Cambio de dirección con guía comprada (Chema 2026-09-23): solo si
         # nada ha salido y Shopify ya mandó una dirección distinta (pendiente).
@@ -544,6 +562,7 @@ def incidencia_detalle(request, pk):
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,
         **_contexto_cambio_direccion(incidencia),
+        **_contexto_sin_paqueteria(incidencia),
         "url_shopify": url_orden_shopify(incidencia.pedido) if incidencia.pedido else "",
         "guias": guias_del_pedido(incidencia.pedido) if incidencia.pedido else [],
         "puede_cerrar": incidencia.estado == Incidencia.RESUELTA,
@@ -666,6 +685,9 @@ def pedidos(request):
             (g, url_rastreo_carrier(g.carrier, g.numero))
             for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.es_activa
         ]
+        # Incidencia interna "Sin paquetería que cotice" abierta: tag con link (2026-09-24).
+        from apps.incidencias.services import sin_paqueteria_abierta  # lazy por contrato
+        pedido.sin_paqueteria = sin_paqueteria_abierta(pedido)
 
     return render(request, "mesa/pedidos.html", {
         "seccion": "pedidos",
@@ -676,6 +698,22 @@ def pedidos(request):
         "clientes_filtro": Cliente.objects.all(),
         "filtro": {"cliente": cliente_id, "estado": estado, "canal": canal, "q": q},
     })
+
+
+def _contexto_sin_paqueteria(incidencia):
+    """Selector de paquetería en la incidencia interna "Sin paquetería que
+    cotice": solo abierta, con pedido y con el pedido aún en bodega."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.envios.services import opciones_paqueteria  # lazy por contrato
+    from apps.incidencias.models import Incidencia
+    pedido = incidencia.pedido
+    if incidencia.tipo != Incidencia.TIPO_PAQ or pedido is None or not incidencia.abierta:
+        return {}
+    en_bodega = pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA")
+    fuera = any(c.estado == Paquete.DESPACHADO for c in pedido.paquetes.all()) or pedido.tiene_despachadas
+    if not en_bodega or fuera:
+        return {}
+    return {"puede_replanear": True, "opciones_paqueteria": opciones_paqueteria()}
 
 
 def _contexto_cambio_direccion(incidencia):

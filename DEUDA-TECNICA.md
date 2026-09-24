@@ -286,6 +286,30 @@ como tardía para lo que salió.
 - Reporte de ventas / SLA: los ts_* se estampan una sola vez (la primera ola
   marca el SLA); una segunda salida días después no reabre el reloj.
 
+## Sin paquetería que cotice — hecho 2026-09-24
+
+Con el switch de Colima a 99minutos directo ningún pedido tuvo plan de cajas
+(Torre cotizaba con Nacional, que la cuenta no tiene) y `generar_guias` caía
+al camino legacy: una guía con el pedido entero, cajas de 30 kg (PED-00103 a
+00109). Ahora (ver CONVENTIONS → pedidos "Sin paquetería que cotice",
+incidencias `interna`/`PAQ`, envios `SinPaqueteria`): sin plan no se compra
+nada, nace la incidencia interna automática (jamás se pausa, el cliente no la
+ve) y Mesa elige paquetería en la incidencia; el pedido se replanea con ella
+(`Pedido.carrier_forzado`, migración pedidos 0015; incidencias 0005).
+
+**Queda / decisiones de Chema:**
+- Cobertura de 99minutos: la cuenta de WOP no tiene Nacional; Sprint cubre
+  CDMX y Monterrey, nada a Jalisco ni Michoacán (2026-09-24). Chema espera
+  la lista de CPs de 99minutos (`GET /api/v3/coverage/zipcodes/MEX?deliveryType=NXD`).
+  Mientras, los foráneos sin cobertura salen por iMile eligiéndolo en la
+  incidencia, pedido por pedido.
+- Futuro, cuando entre iMile directo (Chema): el planificador intenta iMile
+  y 99minutos y solo si AMBOS fallan abre la incidencia; hoy es manual.
+- La ReglaEnvio de Colima "local → estafeta" (era para envia.com) manda
+  sobre el switch: Chema la borra en /admin/.
+- El plan sigue optimizando por precio entre particiones (Chema descartó un
+  plan físico independiente del carrier el 2026-09-24).
+
 ## Cambio de dirección con guía comprada — hecho 2026-09-23
 
 Chema: "tenemos un pedido en salida, no ha salido, si le cambio la dirección

@@ -66,7 +66,7 @@
     <tbody>
       {% for inc in incidencias %}
       <tr class="fila-link">
-        <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+        <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>{% if inc.interna %} <span class="pill warn" title="De la bodega: el cliente no la ve">interna</span>{% endif %}</td>
         <td>{{ inc.get_tipo_display }}</td>
         <td class="small">{{ inc.get_origen_display }}</td>
         <td><span class="pill {% if inc.prioridad == 'P1' %}crit{% elif inc.prioridad == 'P2' %}warn{% endif %}">{{ inc.prioridad }}</span></td>

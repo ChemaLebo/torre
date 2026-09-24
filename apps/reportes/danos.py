@@ -47,7 +47,7 @@ def generar(cliente, inicio, fin, filtros, es_mesa):
     )
     por_pk = {p.pk: p for p in entregados}
     danos = list(
-        Incidencia.objects.filter(tipo=Incidencia.TIPO_DAN, pedido_id__in=list(por_pk))
+        Incidencia.objects.filter(tipo=Incidencia.TIPO_DAN, pedido_id__in=list(por_pk), interna=False)
         .order_by("ts_apertura")
     )
     comp = compensaciones_por_incidencia(danos)

@@ -30,6 +30,36 @@ SERVICIO_DEFAULT = "ground"  # Paquetexpress terrestre vía envia.com
 PROVEEDOR_ENVIA = "envia"
 PROVEEDOR_99MIN = "99minutos"
 PROVEEDOR_MOCK = "mock"
+# Valor de Pedido.carrier_forzado que significa "la lista de envia.com por precio".
+CARRIER_POOL_ENVIA = "envia"
+
+
+class SinPaqueteria(ErrorCarrier):
+    """Ningún carrier cotiza el pedido: no hay plan de cajas y NO se compra
+    guía (Chema 2026-09-24: "si no cotiza o no hay plan, que salga un aviso").
+    Mesa elige paquetería en la incidencia interna que nace con esto."""
+
+
+def _carrier_forzado(pedido):
+    return (getattr(pedido, "carrier_forzado", "") or "").strip()
+
+
+def opciones_paqueteria():
+    """[(código, etiqueta)] para el selector de Mesa: 99minutos directo, iMile,
+    la lista de envia por precio y cada carrier de esa lista por separado."""
+    base = [
+        ("noventa9Minutos", "99minutos directo"),
+        ("imile", "iMile (vía envia.com)"),
+        (CARRIER_POOL_ENVIA, "envia.com: el más barato de su lista"),
+    ]
+    vistos = {c for c, _ in base}
+    return base + [
+        (c, f"{c} (vía envia.com)") for c in settings.TORRE["CARRIERS_COTIZAR"] if c not in vistos
+    ]
+
+
+def etiqueta_paqueteria(codigo):
+    return dict(opciones_paqueteria()).get(codigo, codigo)
 
 
 def url_rastreo_carrier(carrier, numero):
@@ -127,6 +157,9 @@ def elegir_carrier(pedido):
     "local" se saltan y los pedidos es_local viajan con su carrier real; las
     guías "local" ya emitidas no se tocan (datos viejos).
     """
+    forzado = _carrier_forzado(pedido)
+    if forzado and forzado != CARRIER_POOL_ENVIA:
+        return (forzado, SERVICIO_DEFAULT)  # Mesa lo decidió para este pedido: gana a todo
     flota = _flota_propia()
     regla = _regla_aplicable(pedido, flota)
     if regla is not None:
@@ -178,7 +211,13 @@ def carriers_del_pedido(pedido):
     no consume carta) o la carta del pedido; cliente 99minutos directo:
     noventa9Minutos; los demás: la lista blanca CARRIERS_COTIZAR (las reglas
     no acotan el plan de esos clientes: PREFIEREN, ver carrier_preferido). Lo
-    usan el planificador y el replan."""
+    usan el planificador y el replan. La paquetería forzada por Mesa
+    (Pedido.carrier_forzado) manda sobre todo lo demás."""
+    forzado = _carrier_forzado(pedido)
+    if forzado == CARRIER_POOL_ENVIA:
+        return list(settings.TORRE["CARRIERS_COTIZAR"])
+    if forzado:
+        return [forzado]
     if _cliente_reparte(pedido.cliente):
         flota = _flota_propia()
         regla = _regla_aplicable(pedido, flota)
@@ -200,7 +239,11 @@ def carrier_preferido(pedido):
     las cajas del plan) el resto de carriers_del_pedido compite por precio.
     Una regla con carrier "local" sin flota propia no prefiere nada (carril
     muerto, igual que en elegir_carrier); con flota, el atajo local del
-    planificador decide antes de cotizar."""
+    planificador decide antes de cotizar. Forzada por Mesa: esa (o "" si
+    forzó la lista de envia: manda el precio)."""
+    forzado = _carrier_forzado(pedido)
+    if forzado:
+        return "" if forzado == CARRIER_POOL_ENVIA else forzado
     regla = _regla_aplicable(pedido, _flota_propia())
     if regla is not None:
         return "" if regla[0] == CARRIER_LOCAL else regla[0]
@@ -428,13 +471,21 @@ def generar_guias(pedido):
     # si el carrier falla, la carta se queda con el pedido (es el dato del
     # fallo que se quiere medir), no se revierte con la guía.
     carriers_del_pedido(pedido)
+    sin_plan = None
     with transaction.atomic():
         paquetes = list(pedido.paquetes.select_for_update().all())
         if not paquetes:
             try:
                 paquetes = planificar_envio(pedido)
-            except ValueError:
-                paquetes = []
+            except ValueError as exc:
+                sin_plan = exc
+    if sin_plan is not None:
+        # Ningún carrier cotiza: antes se caía al camino legacy y se compraba
+        # UNA guía con el pedido entero (cajas de 30 kg, PED-00103..109).
+        # Ahora no se compra nada: incidencia interna y aviso al piso.
+        incidencia = _avisar_sin_paqueteria(pedido, str(sin_plan))
+        folio_inc = f" Mesa elige paquetería en la incidencia {incidencia.folio}." if incidencia else ""
+        raise SinPaqueteria(f"{sin_plan} No hay plan de cajas y no se compra guía.{folio_inc}")
 
     guias = []
     error_pendiente = None
@@ -910,6 +961,17 @@ def _transicionar_pedido(pedido, destino, motivo=""):
         except ValueError:
             break
     return avanzo
+
+
+def _avisar_sin_paqueteria(pedido, detalle):
+    """Incidencia interna "Sin paquetería que cotice" (lazy por contrato; None
+    si el módulo no existe)."""
+    try:
+        from apps.incidencias.services import abrir_sin_paqueteria
+    except ImportError:
+        registrar_evento("pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente, motivo=detalle[:300])
+        return None
+    return abrir_sin_paqueteria(pedido, detalle)
 
 
 def _abrir_incidencia(pedido, tipo, texto, prioridad=None):

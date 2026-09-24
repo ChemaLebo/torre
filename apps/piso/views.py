@@ -1396,11 +1396,21 @@ def _caja_cerrada(paquete):
     return paquete.ts_cierre is not None
 
 
+def _por_reempacar(pedido):
+    """Cajas planeadas sin empacar y ninguna en la calle: el pedido (aunque
+    ya sea EMPACADO por el empaque entero) se pesa caja por caja."""
+    cajas = list(pedido.paquetes.all())
+    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
+    return bool(pendientes) and not any(c.estado == Paquete.DESPACHADO for c in cajas)
+
+
 def _que_falta_empaque(pedido):
     """Qué le falta a un pedido para salir de la mesa de empaque, en corto (Mi turno)."""
     cajas = list(pedido.paquetes.all())
+    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
+    if pedido.estado == Pedido.EMPACADO and pendientes and _por_reempacar(pedido):
+        return "sin empacar: caja " + ", ".join(str(c.numero) for c in pendientes)
     if pedido.estado == Pedido.EN_PICKING:
-        pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
         if cajas and len(pendientes) < len(cajas):
             return "sin empacar: caja " + ", ".join(str(c.numero) for c in pendientes)
         return "por empacar"
@@ -1484,6 +1494,10 @@ def empaque_pedido(request, pk):
     # PARCIALMENTE_DESPACHADO: ya salió alguna caja; las que siguen en bodega
     # toman aquí su foto de cierre para poder subir al siguiente manifiesto.
     elegida = _caja_elegida(request, pedido)
+    if pedido.estado == Pedido.EMPACADO and _por_reempacar(pedido):
+        # Se empacó entero sin plan y Mesa replaneó las cajas (Chema
+        # 2026-09-24): el wizard vuelve al paso de caja hasta pesarlas todas.
+        return _render_paso_empacar(request, pedido, elegida)
     if pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         return _render_cierre_o_exito(request, pedido, elegida)
     if pedido.estado != Pedido.EN_PICKING:
@@ -1827,10 +1841,14 @@ def _despachar_y_avisar(request, pedido, destino):
     paso de cierre (botón Reintentar guía); un error de impresora avisa y el
     flujo continúa (la reimpresión vive en Salida).
     """
+    from apps.envios.services import SinPaqueteria  # lazy por contrato
     from apps.pedidos.services import despachar_a_corral  # lazy por contrato
     try:
         resultado = despachar_a_corral(pedido, request.user)
     except ValueError as exc:
+        messages.error(request, str(exc))
+    except SinPaqueteria as exc:
+        # Ningún carrier cotiza: no hay plan ni guía; lo resuelve Mesa (Chema 2026-09-24).
         messages.error(request, str(exc))
     except Exception as exc:  # ErrorCarrier u otra falla del adapter: el piso debe saberlo
         messages.error(
@@ -1900,7 +1918,8 @@ def _empaque_caja(request, pedido):
         return destino
 
     pedido.refresh_from_db()
-    if pedido.estado != Pedido.EMPACADO:
+    quedan = pedido.paquetes.filter(estado__in=(Paquete.PLANEADO, Paquete.EN_EMPAQUE)).exists()
+    if pedido.estado != Pedido.EMPACADO or quedan:
         messages.success(
             request,
             f"Caja {paquete.numero} verificada ({paquete.peso_real_gr} g). Sigue la próxima caja.",

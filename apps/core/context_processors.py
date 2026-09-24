@@ -45,14 +45,14 @@ def _incidencias_abiertas(request):
         return 0
     qs = Incidencia.objects.exclude(estado=Incidencia.CERRADA)
     if rol == "portal":
-        qs = qs.filter(cliente=cliente)
+        qs = qs.filter(cliente=cliente, interna=False)  # las internas son de la bodega
     return qs.count()
 
 
 def torre(request):
     return {
         "reingresos_pendientes": _reingresos_pendientes(request),
-        "incidencias_abiertas": _incidencias_abiertas(request),
+        "badge_incidencias": _incidencias_abiertas(request),  # nombre propio: el dashboard del portal usa incidencias_abiertas
         "TORRE": {
             clave: settings.TORRE[clave]
             for clave in _CLAVES_TORRE_TEMPLATES

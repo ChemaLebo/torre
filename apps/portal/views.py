@@ -296,7 +296,7 @@ def dashboard(request):
     ]
 
     abiertas = list(
-        Incidencia.objects.filter(cliente=cliente, estado__in=Incidencia.ESTADOS_ABIERTOS)
+        Incidencia.objects.filter(cliente=cliente, estado__in=Incidencia.ESTADOS_ABIERTOS, interna=False)
         .select_related("pedido")
         .order_by("prioridad", "ts_apertura")
     )
@@ -422,7 +422,7 @@ def pedido_detalle(request, pk):
     fotos = EvidenciaFoto.objects.filter(
         entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio],
     )
-    incidencias_pedido = [_decorar_incidencia(i) for i in pedido.incidencias.all()]
+    incidencias_pedido = [_decorar_incidencia(i) for i in pedido.incidencias.filter(interna=False)]
     if pedido.estado == Pedido.RETORNADO:
         # Chema 2026-09-23 (PED-00039): no prometer una incidencia que no existe.
         especial = ("crit", especial[1] + (
@@ -493,7 +493,7 @@ def _movimiento_legible(mov):
 @portal_requerido
 def incidencias(request):
     todas = list(
-        Incidencia.objects.filter(cliente=request.cliente)
+        Incidencia.objects.filter(cliente=request.cliente, interna=False)  # las internas son de la bodega
         .select_related("pedido")
         .order_by("-ts_apertura")
     )
@@ -513,7 +513,7 @@ def incidencias(request):
 def incidencia_detalle(request, pk):
     incidencia = get_object_or_404(
         Incidencia.objects.select_related("pedido", "sku").prefetch_related("compensaciones"),
-        pk=pk, cliente=request.cliente,
+        pk=pk, cliente=request.cliente, interna=False,
     )
     nombre = request.user.get_full_name() or request.user.username
     form = FormRespuestaIncidencia()
@@ -948,7 +948,7 @@ def _csv_incidencias(request):
         "Primera respuesta", "Resuelta", "Cerrada",
     ])
     qs = (
-        Incidencia.objects.filter(cliente=request.cliente)
+        Incidencia.objects.filter(cliente=request.cliente, interna=False)
         .select_related("pedido")
         .order_by("-ts_apertura")
     )

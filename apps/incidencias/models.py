@@ -78,6 +78,7 @@ class Incidencia(MaquinaEstados):
     TIPO_CAN = "CAN"   # cancelación tardía
     TIPO_DES = "DES"   # descuadre de inventario
     TIPO_CDR = "CDR"   # cambio de dirección con guía comprada (2026-09-23)
+    TIPO_PAQ = "PAQ"   # sin paquetería que cotice el pedido (2026-09-24; interna)
     TIPOS = [
         (TIPO_DAN, "Daño / rotura"),
         (TIPO_RET, "Retraso"),
@@ -87,6 +88,7 @@ class Incidencia(MaquinaEstados):
         (TIPO_CAN, "Cancelación tardía"),
         (TIPO_DES, "Descuadre de inventario"),
         (TIPO_CDR, "Cambio de dirección"),
+        (TIPO_PAQ, "Sin paquetería que cotice"),
     ]
 
     # ── Prioridades ──
@@ -146,6 +148,11 @@ class Incidencia(MaquinaEstados):
     tipo = models.CharField(max_length=3, choices=TIPOS)
     prioridad = models.CharField(max_length=2, choices=PRIORIDADES, default=P2)
     origen = models.CharField(max_length=10, choices=ORIGENES, default=ORIGEN_MANUAL)
+    # Interna = de la bodega, no del cliente (Chema 2026-09-24): jamás aparece
+    # en el portal ni en sus reportes, no le avisa al cliente, no marca
+    # pedido.incidencia_activa y no se pausa con las automáticas. Mesa la ve
+    # y la trabaja igual.
+    interna = models.BooleanField(default=False)
     estado = models.CharField(max_length=24, choices=ESTADOS, default=ABIERTA, db_index=True)
     dueno = models.CharField(max_length=120, blank=True, help_text="Quién tiene la pelota")
     ts_apertura = models.DateTimeField(default=timezone.now, db_index=True)

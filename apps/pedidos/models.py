@@ -138,6 +138,11 @@ class Pedido(models.Model):
     # por pedido (envios.reparto.sacar_carta) y aquí queda para que todas las
     # llamadas a elegir_carrier (plan, cada paquete, corral de Salida) coincidan.
     reparto_carrier = models.CharField(max_length=40, blank=True)
+    # Paquetería que Mesa forzó para ESTE pedido desde la incidencia "Sin
+    # paquetería que cotice" (Chema 2026-09-24): un carrier, o "envia" = el
+    # más barato de la lista de envia.com. Manda sobre reglas, reparto y la
+    # integración del cliente (envios.services.carriers_del_pedido).
+    carrier_forzado = models.CharField(max_length=40, blank=True)
     parcial_de_orden = models.BooleanField(
         default=False,
         help_text="La orden de Shopify se dividió entre locations: este pedido ampara solo NUESTRO ticket",
