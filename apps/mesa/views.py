@@ -326,6 +326,7 @@ def incidencias(request):
     estado = request.GET.get("estado", "").strip()
     tipo = request.GET.get("tipo", "").strip()
     cliente_id = request.GET.get("cliente", "").strip()
+    origen = request.GET.get("origen", "").strip()  # Chema 2026-09-24: distinguir automáticas de las del cliente/comprador
     if estado == "abiertas":
         qs = qs.filter(estado__in=Incidencia.ESTADOS_ABIERTOS)
     elif estado:
@@ -334,6 +335,8 @@ def incidencias(request):
         qs = qs.filter(tipo=tipo)
     if cliente_id:
         qs = qs.filter(cliente_id=cliente_id)
+    if origen:
+        qs = qs.filter(origen=origen)
 
     filas = [_anotar_reloj_sla(inc, ahora) for inc in qs]
     # Abiertas primero, ordenadas por reloj; cerradas después, recientes arriba.
@@ -348,8 +351,9 @@ def incidencias(request):
         "incidencias": filas,
         "tipos": Incidencia.TIPOS,
         "estados": Incidencia.ESTADOS,
+        "origenes": Incidencia.ORIGENES,
         "clientes_filtro": Cliente.objects.all(),
-        "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id},
+        "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id, "origen": origen},
         "abiertas_n": sum(1 for i in filas if i.abierta),
         # Clientes con las automáticas pausadas hoy: se avisa arriba para que nadie busque lo que no nació.
         "pausas": Cliente.objects.filter(incidencias_auto_pausadas_hasta__gte=timezone.localdate()).order_by("nombre"),

@@ -37,6 +37,15 @@
       </select>
     </div>
     <div style="flex:1;min-width:160px">
+      <label for="f-origen">Origen</label>
+      <select id="f-origen" name="origen">
+        <option value="">Todos</option>
+        {% for clave, nombre in origenes %}
+        <option value="{{ clave }}" {% if filtro.origen == clave %}selected{% endif %}>{{ nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:160px">
       <label for="f-cliente">Cliente</label>
       <select id="f-cliente" name="cliente">
         <option value="">Todos</option>
@@ -52,13 +61,14 @@
 <div class="tabla-wrap">
   <table>
     <thead>
-      <tr><th>Folio</th><th>Tipo</th><th>Prioridad</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Dueño</th><th>Reloj SLA</th></tr>
+      <tr><th>Folio</th><th>Tipo</th><th>Origen</th><th>Prioridad</th><th>Cliente</th><th>Pedido</th><th>Estado</th><th>Dueño</th><th>Reloj SLA</th></tr>
     </thead>
     <tbody>
       {% for inc in incidencias %}
       <tr class="fila-link">
         <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
         <td>{{ inc.get_tipo_display }}</td>
+        <td class="small">{{ inc.get_origen_display }}</td>
         <td><span class="pill {% if inc.prioridad == 'P1' %}crit{% elif inc.prioridad == 'P2' %}warn{% endif %}">{{ inc.prioridad }}</span></td>
         <td>{{ inc.cliente.nombre }}</td>
         <td class="mono">{% if inc.pedido %}{{ inc.pedido.folio }}{% else %}—{% endif %}</td>
@@ -67,7 +77,7 @@
         <td>{% if inc.abierta %}<span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span>{% else %}<span class="small">cerró su reloj</span>{% endif %}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="8" class="muted centro">Nada con esos filtros. Ajusta la búsqueda.</td></tr>
+      <tr><td colspan="9" class="muted centro">Nada con esos filtros. Ajusta la búsqueda.</td></tr>
       {% endfor %}
     </tbody>
   </table>
