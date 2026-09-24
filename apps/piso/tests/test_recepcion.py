@@ -365,7 +365,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self._contar(2)
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
         self.assertContains(respuesta, 'id="anaquel-sugerido">RES-CUAR')
-        self.assertContains(respuesta, "Zona de desborde")
+        self.assertContains(respuesta, "reservas, vendible")  # el plan ya nombra la zona (2026-09-24)
         self.assertNotContains(respuesta, ">CUARENTENA<")
         self.assertContains(respuesta, 'value="RES-CUAR" placeholder="PIC-1-I-F-1"')
         # Confirmar tal cual (prellenado) → vendible en la zona, con lote, y el plan avanza su paso "sin espacio".
@@ -375,7 +375,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual((saldo.ubicacion.codigo, saldo.lote.codigo, saldo.cantidad), ("RES-CUAR", "L-ASN", 2))
         self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.CUARENTENA).exists())
         paso = OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]
-        self.assertEqual((paso["ubicacion"], paso["ubicadas"]), (None, 2))
+        self.assertEqual((paso["ubicacion"], paso["ubicadas"]), ("RES-CUAR", 2))
         self.assertTrue(EventoAuditoria.objects.filter(entidad="sku", entidad_id=self.sku.codigo, accion="a_desborde").exists())
         # Vacío sigue siendo cuarentena, a mano.
         self._contar(1)

@@ -755,6 +755,8 @@ def recepcion_ubicar(request, pk):
         messages.error(request, "Escanea un producto de la orden para ubicarlo.")
         return volver
     sku = lineas[0].sku
+    if request.method == "POST" and request.POST.get("accion") == "nueva_tarima":
+        return _recepcion_nueva_tarima(request, orden, sku)
     if request.method == "POST":
         return _recepcion_ubicar_pieza(request, orden, sku, lineas)
 
@@ -823,16 +825,54 @@ def recepcion_ubicar(request, pk):
         anaquel = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
         if anaquel is not None:
             ocupacion_anaquel = ocupacion(anaquel)
-            vecinos = sorted(ocupacion_anaquel["por_sku"], key=lambda f: (f["sku"].pk != sku.pk, f["sku"].codigo))
+            filas = ocupacion_anaquel["por_sku"]
+            if not filas and ocupacion_anaquel["estado"] in ("sin_medidas", "ilimitado"):
+                from apps.inventario.services import contenido_ubicacion  # lazy por contrato
+                filas = contenido_ubicacion(anaquel)  # zona de desborde / tarima: sin capacidad, pero sí contenido
+            vecinos = sorted(filas, key=lambda f: (f["sku"].pk != sku.pk, f["sku"].codigo))
+    # 4) Tarimas (Chema 2026-09-24): las que hay con su contenido, para
+    #    ubicar en la misma o abrir otra; lo que va en tarima es vendible.
+    from apps.inventario.services import contenido_ubicacion, tarimas_activas  # lazy por contrato
+    tarimas = []
+    for tarima in tarimas_activas():
+        contenido = contenido_ubicacion(tarima)
+        tarimas.append({
+            "codigo": tarima.codigo,
+            "piezas": sum(f["piezas"] for f in contenido),
+            "contenido": ", ".join(f"{f['sku'].codigo} ×{f['piezas']}" for f in contenido),
+        })
     contexto.update({
         "paso": paso,
         "desborde": desborde,
         # Cuántas del SKU van todavía en ese anaquel según el plan: la referencia para no meter de más.
         "faltan_paso": (paso["cantidad"] - paso["ubicadas"]) if paso else 0,
         "anaquel": anaquel, "vecinos": vecinos, "ocupacion_anaquel": ocupacion_anaquel,
-        "ubicaciones_destino": Ubicacion.objects.filter(tipo=Ubicacion.PICKING, activo=True).order_by("codigo"),
+        "ubicaciones_destino": Ubicacion.objects.filter(
+            tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA), activo=True,
+        ).order_by("codigo"),
+        "tarimas": tarimas,
+        "tarima_actual": request.session.get("recepcion_tarima", ""),
+        # Recién creada una tarima (o elegida a mano en la URL), va prellenada.
+        "ubicacion_preseleccionada": (request.GET.get("ubicacion") or "").strip(),
     })
     return render(request, "piso/recepcion_ubicar.html", contexto)
+
+
+def _recepcion_nueva_tarima(request, orden, sku):
+    """POST accion=nueva_tarima desde Ubicar: crea la siguiente TAR-nn y vuelve
+    a la pantalla con esa tarima prellenada (mismo SKU y lote)."""
+    from urllib.parse import urlencode
+
+    from apps.inventario.services import crear_tarima  # lazy por contrato
+
+    tarima = crear_tarima(request.user)
+    request.session["recepcion_tarima"] = tarima.codigo
+    messages.success(request, f"Tarima {tarima.codigo} creada: etiquétala y ubica ahí lo que va en ella.")
+    params = {"sku": sku.pk, "ubicacion": tarima.codigo}
+    for campo in ("lote", "fecha_caducidad"):
+        if (request.POST.get(campo) or "").strip():
+            params[campo] = request.POST[campo].strip()
+    return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?{urlencode(params)}")
 
 
 def _recepcion_ubicar_pieza(request, orden, sku, lineas):
@@ -889,6 +929,8 @@ def _recepcion_ubicar_pieza(request, orden, sku, lineas):
         messages.error(request, str(exc))
         return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
     piezas = "1 pieza" if cantidad == 1 else f"{cantidad} piezas"
+    if destino is not None and destino.codigo.startswith("TAR-"):
+        request.session["recepcion_tarima"] = destino.codigo  # la última tarima usada, para la siguiente pieza
     if destino is None:
         messages.warning(request, f"{sku.codigo}: sin anaquel con espacio, {piezas} a cuarentena. Escanea la siguiente.")
     elif not codigo_ubicacion:

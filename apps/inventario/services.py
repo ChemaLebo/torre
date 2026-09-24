@@ -1873,12 +1873,17 @@ def planear_acomodo(orden, actor=None):
     línea: lo anunciado que no ha llegado más lo que ya está en recepción
     (en_putaway) de ese SKU. Las líneas se planean de clase A a C para que la
     alta rotación tome los mejores anaqueles, apartando virtualmente lo que
-    cada SKU va ocupando (sin doble asignación). Lo que no cabe queda como
-    paso sin anaquel: va a cuarentena (ilimitada, decisión de Chema
-    2026-09-17). Se guarda en orden.plan_acomodo y se audita."""
+    cada SKU va ocupando (sin doble asignación). Lo que no cabe (o no tiene
+    medidas) va como paso a la zona de desborde (TORRE["ZONA_DESBORDE"],
+    reserva vendible; Chema 2026-09-24: "que se vaya al anaquel de Reservas y
+    cuente como disponible"); solo sin zona configurada queda como paso sin
+    anaquel: cuarentena. Se guarda en orden.plan_acomodo y se audita."""
     from apps.catalogo.services import clases_rotacion  # lazy por contrato
 
     clases = clases_rotacion(orden.cliente)
+    desborde = zona_desborde()
+    destino_sobrante = desborde.codigo if desborde is not None else None
+    a_donde = f"a {destino_sobrante} (reservas, vendible)" if desborde is not None else "a cuarentena"
     lineas = list(orden.lineas.select_related("sku"))
     lineas.sort(key=lambda l: (clases.get(l.sku_id, "C"), l.sku.codigo, l.lote_codigo or ""))
     # Lo ya ubicado según el plan anterior, por (sku, lote): no se vuelve a
@@ -1929,15 +1934,18 @@ def planear_acomodo(orden, actor=None):
             })
             continue
         plan = sugerir_anaquel(sku, pendientes, reservas, lote=lote or None)
-        if not plan:  # sin medidas: todo a cuarentena hasta que Mesa las capture
-            plan = [{"ubicacion": None, "cantidad": pendientes, "motivo": "sin medidas del producto: a cuarentena"}]
+        if not plan:  # sin medidas: a la zona de desborde (o cuarentena) hasta que Mesa las capture
+            plan = [{"ubicacion": None, "cantidad": pendientes, "motivo": f"sin medidas del producto: {a_donde}"}]
         for paso in plan:
             u = paso["ubicacion"]
             if u is not None:
                 reservas.setdefault(u.codigo, []).append((sku, paso["cantidad"], lote or None))
-            motivo = paso["motivo"] if u is not None else "sin anaquel con espacio: a cuarentena"
+            motivo = paso["motivo"] if u is not None else f"sin anaquel con espacio: {a_donde}"
+            if paso["motivo"].startswith("sin medidas"):
+                motivo = paso["motivo"]
             pasos.append({
-                "sku_id": sku.pk, "sku": sku.codigo, "lote": lote, "ubicacion": u.codigo if u else None,
+                "sku_id": sku.pk, "sku": sku.codigo, "lote": lote,
+                "ubicacion": u.codigo if u else destino_sobrante,
                 "cantidad": paso["cantidad"], "ubicadas": 0, "motivo": motivo,
             })
     orden.plan_acomodo = {
@@ -2022,13 +2030,58 @@ def zona_desborde():
     ).first()
 
 
+# ── Tarimas (Chema 2026-09-24) ───────────────────────────────────────────────
+# Una tarima es una ubicación de reserva TAR-nn que el piso crea desde Ubicar
+# cuando el producto no va a un anaquel: lo que vive ahí es vendible y se
+# sabe en qué tarima está. Sin medidas ni prioridad: el plan no la sugiere.
+PREFIJO_TARIMA = "TAR-"
+
+
+def _numero_tarima(codigo):
+    sufijo = str(codigo or "")[len(PREFIJO_TARIMA):]
+    return int(sufijo) if sufijo.isdigit() else 0
+
+
+def tarimas_activas():
+    """Tarimas activas en orden numérico (TAR-01, TAR-02, …)."""
+    tarimas = Ubicacion.objects.filter(tipo=Ubicacion.RESERVA, activo=True, codigo__startswith=PREFIJO_TARIMA)
+    return sorted(tarimas, key=lambda u: (_numero_tarima(u.codigo), u.codigo))
+
+
+def contenido_ubicacion(ubicacion):
+    """Qué vive en una ubicación sin medidas (tarima, zona de desborde):
+    [{"sku", "piezas", "lotes"}] por SKU, de mayor a menor. `ocupacion` no lo
+    da para ubicaciones sin medidas (no hay capacidad que estimar)."""
+    piezas, lotes = {}, {}
+    for s in Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "lote"):
+        piezas[s.sku] = piezas.get(s.sku, 0) + s.cantidad
+        if s.lote_id:
+            lotes.setdefault(s.sku, set()).add(s.lote.codigo)
+    return sorted(
+        ({"sku": sku, "piezas": n, "capacidad": None, "lotes": sorted(lotes.get(sku, ()))} for sku, n in piezas.items()),
+        key=lambda f: (-f["piezas"], f["sku"].codigo),
+    )
+
+
+def crear_tarima(actor=None):
+    """Tarima nueva: la siguiente TAR-nn (reserva, activa). Auditada."""
+    with transaction.atomic():
+        existentes = Ubicacion.objects.select_for_update().filter(codigo__startswith=PREFIJO_TARIMA)
+        numero = max((_numero_tarima(u.codigo) for u in existentes), default=0) + 1
+        tarima = Ubicacion.objects.create(codigo=f"{PREFIJO_TARIMA}{numero:02d}", tipo=Ubicacion.RESERVA, activo=True)
+    registrar_evento(
+        "ubicacion", tarima.codigo, "tarima_creada", actor=actor,
+        motivo="Tarima creada desde Ubicar en recepción; lo que se ubique ahí es vendible.",
+    )
+    return tarima
+
+
 def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
     """`cantidad` piezas (default una, la recién contada): a su anaquel
     (ubicar) o, sin anaquel (ubicacion=None), a la zona de desborde si existe
     (vendible con su lote; evento a_desborde) y si no, a cuarentena por falta
-    de espacio; avanza el plan. Una pieza que cae en la zona de desborde —por
-    el plan o tecleada a mano— avanza el paso "sin espacio" del plan, no un
-    paso de anaquel."""
+    de espacio; avanza el plan, primero el paso de esa misma ubicación (la
+    zona de desborde incluida: desde 2026-09-24 el plan la nombra)."""
     cantidad = _validar_cantidad(cantidad, "ubicar")
     codigo_lote = lote.codigo if lote is not None else None
     desborde = zona_desborde()
@@ -2040,7 +2093,7 @@ def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
         ubicacion = desborde
     ubicar(sku, cantidad, ubicacion, lote, actor)
     es_desborde = desborde is not None and ubicacion.pk == desborde.pk
-    _avanzar_plan(orden, sku, None if es_desborde else ubicacion.codigo, codigo_lote, cantidad)
+    _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote, cantidad)
     if es_desborde:
         registrar_evento(
             "sku", sku.codigo, "a_desborde", actor=actor, cliente=sku.cliente,

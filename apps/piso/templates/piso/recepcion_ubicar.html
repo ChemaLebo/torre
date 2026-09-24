@@ -92,7 +92,7 @@
 
   <label for="ubicacion" class="mt">Anaquel (cámbialo si lo acomodaste en otro; vacío = cuarentena)</label>
   <input type="text" name="ubicacion" id="ubicacion" class="mono" autocomplete="off" list="ubicaciones-destino"
-         value="{% if paso and paso.ubicacion %}{{ paso.ubicacion }}{% elif desborde %}{{ desborde.codigo }}{% endif %}" placeholder="PIC-1-I-F-1">
+         value="{% if ubicacion_preseleccionada %}{{ ubicacion_preseleccionada }}{% elif paso and paso.ubicacion %}{{ paso.ubicacion }}{% elif desborde %}{{ desborde.codigo }}{% endif %}" placeholder="PIC-1-I-F-1">
   <datalist id="ubicaciones-destino">
     {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
   </datalist>
@@ -101,7 +101,29 @@
   <input type="number" name="cantidad" id="cantidad" min="1" max="{{ por_ubicar }}" inputmode="numeric" value="{{ cantidad_default }}" autocomplete="off">
   <div class="small muted">Tienes {{ por_ubicar }} contada{{ por_ubicar|pluralize }} sin ubicar (es el máximo; ubicar ya no cuenta: para sumar, <a href="{% url 'piso:recepcion_contar' orden.pk %}?sku={{ sku.pk }}">cuenta más</a>){% if paso and paso.ubicacion %}. En este anaquel van {{ faltan_paso }} según el plan; si pones más, el sobrante sigue en el siguiente anaquel del plan{% endif %}.</div>
 
+  {# Tarimas (Chema 2026-09-24): ubicar en una tarima existente o abrir otra; lo que va ahí es vendible. #}
+  <div class="mt" id="tarimas">
+    <div class="eyebrow">O en una tarima</div>
+    {% if tarimas %}
+    <div class="fila" style="flex-wrap:wrap;gap:6px">
+      {% for t in tarimas %}
+      <button class="btn chico{% if t.codigo == tarima_actual %} primario{% endif %}" type="button" data-tarima="{{ t.codigo }}" title="{{ t.contenido|default:'vacía' }}">{{ t.codigo }} · {{ t.piezas }} pza{{ t.piezas|pluralize }}{% if t.codigo == tarima_actual %} · última usada{% endif %}</button>
+      {% endfor %}
+    </div>
+    <div class="small muted mt">{% for t in tarimas %}{{ t.codigo }}: {{ t.contenido|default:"vacía" }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
+    {% else %}
+    <div class="small muted">Todavía no hay tarimas abiertas.</div>
+    {% endif %}
+  </div>
   <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADAS · siguiente</button></div>
+</form>
+
+<form method="post" class="mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="nueva_tarima">
+  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
+  <input type="hidden" name="lote" value="{{ lote }}">
+  <input type="hidden" name="fecha_caducidad" value="{{ caducidad }}">
+  <button class="btn bloque" type="submit">Nueva tarima (abre TAR-siguiente y la deja elegida)</button>
 </form>
 
 <form method="post" class="mt">{% csrf_token %}
@@ -113,6 +135,13 @@
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+  // Botón de tarima: pone su código en el campo de ubicación (el envío sigue siendo UBICADAS).
+  var campoUbicacion = document.getElementById("ubicacion");
+  document.querySelectorAll("[data-tarima]").forEach(function (boton) {
+    boton.addEventListener("click", function () {
+      if (campoUbicacion) { campoUbicacion.value = boton.dataset.tarima; campoUbicacion.focus(); }
+    });
+  });
   var inputLote = document.getElementById("lote");
   var inputCad = document.getElementById("fecha_caducidad");
   var lista = document.getElementById("lotes-sku");
