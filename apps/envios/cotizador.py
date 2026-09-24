@@ -463,9 +463,12 @@ def _planificar(pedido, force, carriers, preferido=None):
             viables.append((costo, len(bins), bins, opciones))
 
     if not viables:
+        # Con quién se intentó (Chema 2026-09-24): la incidencia "Sin
+        # paquetería" y la nota del replaneo lo muestran tal cual.
+        intentados = ", ".join(carriers) if carriers else "ninguno configurado"
         raise ValueError(
             f"Ningún carrier cotiza el pedido {pedido.folio} a CP {pedido.cp} "
-            f"con paquetes ≤{max_kg} kg. Revisar con Mesa de Control."
+            f"con paquetes ≤{max_kg} kg (se intentó con: {intentados}). Revisar con Mesa de Control."
         )
 
     costo_elegido, _, bins_elegidos, opciones = min(viables, key=lambda v: (v[0], v[1]))

@@ -38,6 +38,8 @@ class SinPaqueteriaTests(PisoTestCase):
         self.assertIsNotNone(inc)
         self.assertTrue(inc.interna)
         self.assertEqual(pedido.paquetes.count(), 0)
+        # La incidencia dice con quién se intentó.
+        self.assertTrue(inc.mensajes.filter(texto__contains="se intentó con: fantasma").exists())
 
     def test_sin_plan_no_se_compra_guia_entera(self):
         pedido = self.dejar_empacado(self.crear_pedido(cantidad=12))  # 24 kg empacados "entero"
