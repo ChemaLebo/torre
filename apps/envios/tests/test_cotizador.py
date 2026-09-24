@@ -200,6 +200,32 @@ class TestPlanParcial(BaseCotizador):
         self.assertEqual(cotizador.planificar_envio(pedido), [caja])
         self.assertEqual(Paquete.objects.filter(pedido=pedido).count(), 1)
 
+    def test_caja_con_guia_cancelada_vuelve_a_ser_viva_y_se_replanea(self):
+        """2026-09-24: con guías cancelables (cambio de dirección o de
+        paquetería) una caja cuya única guía está CANCELADA ya no es fija: el
+        replaneo forzado la tira y planea de nuevo; la guía cancelada conserva
+        su registro (paquete en null)."""
+        from apps.envios.models import Guia
+        pedido = self.pedido_con("06600", [(self.six, 1)])
+        caja = cotizador.planificar_envio(pedido)[0]
+        cancelada = Guia.objects.create(pedido=pedido, paquete=caja, carrier=caja.carrier, numero="MOCK-1", estado=Guia.CANCELADA)
+        plan = cotizador.planificar_envio(pedido, force=True)
+        self.assertEqual(len(plan), 1)
+        self.assertNotEqual(plan[0].pk, caja.pk)
+        self.assertFalse(Paquete.objects.filter(pk=caja.pk).exists())
+        cancelada.refresh_from_db()
+        self.assertIsNone(cancelada.paquete)
+
+    def test_particiones_prueban_capacidades_intermedias(self):
+        """Cinco unidades de 6 kg con tope de 20: además de una por caja (9 kg)
+        y de 3+2 (19 kg), se evalúa 2+2+1 (12 kg) para carriers que no cotizan
+        cajas grandes."""
+        unidades = [(object(), Decimal("6"), 1)] * 5
+        firmas = {tuple(sorted(len(b) for b in bins)) for bins in cotizador._particiones_candidatas(unidades, Decimal(20))}
+        self.assertIn((1, 1, 1, 1, 1), firmas)
+        self.assertIn((1, 2, 2), firmas)
+        self.assertIn((2, 3), firmas)
+
 
 class TestPlanificarEnvio(BaseCotizador):
     def test_16kg_se_divide_en_dos_puntopost(self):

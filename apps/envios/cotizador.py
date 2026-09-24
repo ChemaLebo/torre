@@ -317,12 +317,16 @@ def _peso_bin(unidades_bin):
 
 
 def _particiones_candidatas(unidades, max_kg):
-    """Particiones a evaluar: junta / chunks ≤9 (puntopost) / mitades / chunks ≤max."""
+    """Particiones a evaluar: junta / chunks ≤9 (puntopost) / chunks a 12 y
+    15 kg (2026-09-24: 99minutos no cotiza cajas grandes y sin tallas
+    intermedias el único plan viable era una unidad por caja, PED-00109 en 5
+    cajas) / mitades / chunks ≤max."""
     candidatas = []
     total = sum(u[1] for u in unidades) * MARGEN_EMPAQUE
     if total <= max_kg:
         candidatas.append([list(unidades)])
-    for capacidad in (9, max_kg - 1, max_kg):
+    capacidades = sorted({c for c in (Decimal(9), Decimal(12), Decimal(15), max_kg - 1, max_kg) if c <= max_kg})
+    for capacidad in capacidades:
         bins = _bins_por_capacidad(unidades, capacidad)
         if bins:
             candidatas.append(bins)
@@ -409,7 +413,10 @@ def _planificar(pedido, force, carriers, preferido=None):
     solo con lo pendiente (lo que ya viaja en las fijas queda fuera),
     numeradas después de las que salieron; regresa fijas + nuevas."""
     existentes = list(pedido.paquetes.prefetch_related("lineas", "guias"))
-    fijas = [p for p in existentes if p.estado == Paquete.DESPACHADO or bool(p.guias.all())]
+    # Fija = ya salió o tiene guía VIVA; una caja cuya guía se canceló vuelve
+    # a ser viva y se replanea (2026-09-24: con guías cancelables, contar
+    # cualquier guía dejaba las cajas clavadas para siempre).
+    fijas = [p for p in existentes if p.estado == Paquete.DESPACHADO or any(g.es_activa for g in p.guias.all())]
     vivas = [p for p in existentes if p not in fijas]
     if vivas and not force:
         return existentes
