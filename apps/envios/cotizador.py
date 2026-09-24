@@ -151,16 +151,27 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
 
     Cada carrier faltante se cotiza a través del adapter de su proveedor
     (services.get_adapter_cotizacion): el planificador no sabe quién responde.
-    Cliente con integración 99minutos → UN solo carrier directo y SIN
+    Los carriers que viajan por un proveedor DIRECTO (99minutos: por el flip
+    del cliente o por TORRE["PROVEEDOR_POR_CARRIER"]) se cotizan sin
     CotizacionCache: el caché no distingue proveedor y mezclaría tarifas de
-    envia con las directas. `carriers` acota la lista (la carta del reparto
-    por porcentajes); sin él, la lista blanca CARRIERS_COTIZAR."""
+    envia con las directas. `carriers` acota la lista (la carta del reparto,
+    la paquetería forzada por Mesa); sin él, cliente 99minutos = solo
+    noventa9Minutos y los demás la lista blanca CARRIERS_COTIZAR."""
+    from .services import PROVEEDOR_99MIN, _proveedor_para, cotizar_lane_carrier  # lazy: evita ciclo
+
     peso = _redondear_peso(peso_kg)
     dims = dims or dims_para(peso)
-    if cliente is not None and getattr(cliente, "integracion_envios", "") == "99minutos":
-        from .services import cotizar_lane_carrier  # lazy: evita ciclo en carga
-        return [cotizar_lane_carrier("noventa9Minutos", cp_destino, peso, dims, cliente=cliente)]
-    carriers = list(carriers) if carriers else settings.TORRE["CARRIERS_COTIZAR"]
+    if not carriers:
+        if cliente is not None and getattr(cliente, "integracion_envios", "") == "99minutos":
+            carriers = ["noventa9Minutos"]
+        else:
+            carriers = settings.TORRE["CARRIERS_COTIZAR"]
+    carriers = list(carriers)
+    directos = {c for c in carriers if _proveedor_para(c, cliente) == PROVEEDOR_99MIN}
+    filas_directas = {
+        c: cotizar_lane_carrier(c, cp_destino, peso, dims, cliente=cliente) for c in carriers if c in directos
+    }
+    carriers_cache = [c for c in carriers if c not in directos]
     vigencia = timezone.now() - timedelta(days=settings.TORRE["COTIZACION_CACHE_DIAS"])
     # Un "no cotiza" puede ser falla transitoria de la API: caduca en horas,
     # no en días, para no dejar un lane bueno envenenado una semana.
@@ -171,10 +182,8 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
         if not c.ok and c.ts < vigencia_negativos:
             continue
         cache[c.carrier] = c
-    faltantes = [c for c in carriers if c not in cache]
+    faltantes = [c for c in carriers_cache if c not in cache]
     if faltantes:
-        from .services import cotizar_lane_carrier  # lazy: evita ciclo en carga
-
         def _cotizar(carrier):
             return cotizar_lane_carrier(carrier, cp_destino, peso, dims)
 
@@ -188,11 +197,15 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
             )
             cache[fila["carrier"]] = obj
 
-    return [
-        {"carrier": c.carrier, "servicio": c.servicio, "precio": c.precio,
-         "estimado": c.estimado_entrega, "ok": c.ok}
-        for c in (cache[nombre] for nombre in carriers if nombre in cache)
-    ]
+    filas = []
+    for nombre in carriers:
+        if nombre in filas_directas:
+            filas.append(filas_directas[nombre])
+        elif nombre in cache:
+            c = cache[nombre]
+            filas.append({"carrier": c.carrier, "servicio": c.servicio, "precio": c.precio,
+                          "estimado": c.estimado_entrega, "ok": c.ok})
+    return filas
 
 
 def carrier_prioritario():

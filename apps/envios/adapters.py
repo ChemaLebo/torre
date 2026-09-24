@@ -728,16 +728,32 @@ CODIGOS_ESTADO_99MIN = {
     8003: "EXCEPCION",  # cancelada fuera de Torre
 }
 
+# Enum de deliveryType de POST /api/v3/orders (docs 2026-06). NextDay (NXD)
+# existe en tarifas y cobertura pero NO en este enum: no se compra con él.
 _DELIVERY_TYPES_99MIN = {"NAL", "SPT", "SMD", "99M", "CO2F", "RET", "TLM", "P2P"}
-# Servicio de Torre → deliveryType nativo; "ground" (el default del ruteo) = NAL.
-SERVICIOS_99MIN = {"ground": "NAL", "": "NAL", "express": "SPT", "same_day": "SMD"}
+# Nombres de servicio (de Torre y los que 99minutos regresa al cotizar,
+# "Sprint"/"SameDay"...) → código del enum. Lo que no mapea usa el tipo
+# configurado (settings.NOVENTA9_DELIVERY_TYPE, hoy SPT).
+SERVICIOS_99MIN = {
+    "express": "SPT", "sprint": "SPT", "same_day": "SMD", "sameday": "SMD",
+    "nacional": "NAL", "99minutos": "99M", "co2free": "CO2F", "retorno": "RET",
+}
 
 
 def delivery_type_99min(servicio):
+    """Código de deliveryType para comprar: el del enum si ya viene como
+    código, el mapa de nombres si es un nombre conocido, y si no el tipo
+    configurado ("ground", vacío, "NextDay"…)."""
     codigo = (servicio or "").strip()
     if codigo.upper() in _DELIVERY_TYPES_99MIN:
         return codigo.upper()
-    return SERVICIOS_99MIN.get(codigo.lower(), "NAL")
+    return SERVICIOS_99MIN.get(codigo.lower().replace(" ", ""), delivery_type_configurado())
+
+
+def delivery_type_configurado():
+    """settings.NOVENTA9_DELIVERY_TYPE validado contra el enum (default SPT)."""
+    tipo = str(getattr(settings, "NOVENTA9_DELIVERY_TYPE", "SPT") or "SPT").strip().upper()
+    return tipo if tipo in _DELIVERY_TYPES_99MIN else "SPT"
 
 
 class Adapter99Minutos(CarrierAdapter):
@@ -747,7 +763,7 @@ class Adapter99Minutos(CarrierAdapter):
     OJO unidades: 99minutos habla GRAMOS donde envia habla KG."""
 
     PROVEEDOR = "99minutos"
-    PAIS = "MEX"  # verificar en sandbox (MEX vs MX)
+    PAIS = "MEX"  # enum LocationCountryEnum de la API v3 (MEX, COL, CHL, PER)
     _token_cache = {"token": "", "expira": 0.0}  # compartido entre instancias
 
     def __init__(self):
@@ -829,16 +845,16 @@ class Adapter99Minutos(CarrierAdapter):
 
     # ── cotización por lane ──
     def _size_para(self, peso_kg, dims):
+        return self._size_para_gramos(int(Decimal(str(peso_kg)) * 1000), dims)
+
+    def _size_para_gramos(self, peso_gr, dims):
+        """Talla (xs…xxl) de GET /shipping/rates/sizes para peso en gramos y
+        medidas en cm; la exige cada item de /orders (2026-09-24)."""
         largo, ancho, alto = dims or (30, 25, 20)
         resp = self._request(
             "GET",
             "/api/v3/shipping/rates/sizes",
-            params={
-                "weight": int(Decimal(str(peso_kg)) * 1000),
-                "width": ancho,
-                "height": alto,
-                "depth": largo,
-            },
+            params={"weight": int(peso_gr), "width": ancho, "height": alto, "depth": largo},
         )
         cuerpo = self._json(resp, "/shipping/rates/sizes")
         datos = cuerpo.get("data") if isinstance(cuerpo, dict) else cuerpo
@@ -850,6 +866,11 @@ class Adapter99Minutos(CarrierAdapter):
 
     @staticmethod
     def _mejor_tarifa(cuerpo):
+        """(precio, servicio, estimado) de la tarifa más barata de la respuesta
+        de /shipping/rates/zipcodes (2026-09-24, cuenta real): el total con IVA
+        vive en `prices.total`, el servicio en `deliveryType` ("Sprint") y la
+        promesa en `eta` (addedDays + dateTime). Se toleran las formas planas
+        (totalPrice / deliveryEstimate) de la doc vieja."""
         datos = cuerpo.get("data") if isinstance(cuerpo, dict) else cuerpo
         if isinstance(datos, dict):
             datos = [datos]
@@ -859,29 +880,33 @@ class Adapter99Minutos(CarrierAdapter):
         for opcion in datos:
             if not isinstance(opcion, dict):
                 continue
-            crudo = (
-                opcion.get("totalPrice")
-                or opcion.get("price")
-                or opcion.get("amount")
-                or opcion.get("total")
-            )
+            precios = opcion.get("prices") if isinstance(opcion.get("prices"), dict) else {}
+            crudo = precios.get("total")
+            if crudo is None:
+                crudo = (
+                    opcion.get("totalPrice")
+                    or opcion.get("price")
+                    or opcion.get("amount")
+                    or opcion.get("total")
+                )
             if crudo is None:
                 continue
             try:
                 precio = Decimal(str(crudo)).quantize(Decimal("0.01"))
             except (InvalidOperation, ValueError):
                 continue
-            opciones.append(
-                (
-                    precio,
-                    str(opcion.get("deliveryType") or opcion.get("service") or "NAL"),
-                    str(
-                        opcion.get("deliveryEstimate")
-                        or opcion.get("estimatedDelivery")
-                        or ""
-                    ),
-                )
-            )
+            servicio = delivery_type_99min(str(opcion.get("deliveryType") or opcion.get("service") or ""))
+            eta = opcion.get("eta") if isinstance(opcion.get("eta"), dict) else {}
+            if eta.get("addedDays") is not None or eta.get("dateTime"):
+                dias = eta.get("addedDays")
+                fecha = str(eta.get("dateTime") or "")[:10]
+                estimado = " · ".join(p for p in (
+                    f"{dias} día{'s' if str(dias) != '1' else ''}" if dias is not None else "",
+                    f"llega {fecha}" if fecha else "",
+                ) if p)
+            else:
+                estimado = str(opcion.get("deliveryEstimate") or opcion.get("estimatedDelivery") or "")
+            opciones.append((precio, servicio, estimado[:60]))
         return min(opciones, key=lambda o: o[0]) if opciones else None
 
     def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
@@ -895,7 +920,9 @@ class Adapter99Minutos(CarrierAdapter):
         }
         try:
             size = self._size_para(peso_kg, dims)
-            params = {"delivery_type": "NAL"}
+            # Sin delivery_type 99minutos responde NextDay, que no se puede
+            # comprar (no está en el enum de /orders): se cotiza lo que se compra.
+            params = {"delivery_type": delivery_type_configurado()}
             if size:
                 params["size"] = size
             resp = self._request(
@@ -953,6 +980,14 @@ class Adapter99Minutos(CarrierAdapter):
             return ""
         return tel if tel.startswith("+") else f"+52{tel}"
 
+    def _size_item(self, peso_gr, dims):
+        """Talla del item para /orders; "unknown" (valor válido del enum) si
+        el endpoint de tallas falla: la talla no debe tumbar la compra."""
+        try:
+            return self._size_para_gramos(peso_gr, dims) or "unknown"
+        except ErrorCarrier:
+            return "unknown"
+
     def _shipment(self, pedido, servicio, paquete, interno):
         bodega = self._origen_info()
         d = pedido.direccion or {}
@@ -963,10 +998,14 @@ class Adapter99Minutos(CarrierAdapter):
             {
                 "internalKey": interno,
                 "deliveryType": delivery_type_99min(servicio),
-                # Empacado = listo: disponible para recolección desde YA
-                # (+5 min de colchón por relojes de servidor). No hay form de
-                # programación — la regla ES el valor.
-                "pickUpAfter": (timezone.now() + timedelta(minutes=5)).isoformat(),
+                # El esquema de /orders exige `options`; ahí va pickUpAfter:
+                # empacado = listo, disponible para recolección desde YA
+                # (+5 min de colchón por relojes de servidor). Las notas van
+                # impresas en la etiqueta: el folio ayuda en bodega.
+                "options": {
+                    "pickUpAfter": (timezone.now() + timedelta(minutes=5)).isoformat(),
+                    "notes": interno,
+                },
                 "sender": {
                     "firstName": bodega.get("company")
                     or bodega.get("name")
@@ -1014,6 +1053,7 @@ class Adapter99Minutos(CarrierAdapter):
                 },
                 "items": [
                     {
+                        "size": self._size_item(peso_gr, (largo, ancho, alto)),  # obligatoria en /orders
                         "description": contenido,
                         "weight": peso_gr,  # GRAMOS — no confundir con los KG de envia
                         "length": largo,
@@ -1023,6 +1063,19 @@ class Adapter99Minutos(CarrierAdapter):
                 ],
             }
         )
+
+    @staticmethod
+    def _internal_key(pedido, paquete):
+        """internalKey única por caja e intento. 99minutos responde 202 a una
+        clave repetida y Torre recupera esa guía (idempotencia ante un timeout);
+        pero una guía CANCELADA y recomprada (cambio de dirección, cambio de
+        paquetería) necesita clave nueva o recuperaría la cancelada: se agrega
+        el número de intento cuando ya hay guías registradas para esa caja."""
+        from .models import Guia  # lazy: modelo de la misma app, evita ciclo en carga
+
+        base = f"{pedido.folio}-{paquete.numero if paquete is not None else 1}"
+        previas = Guia.objects.filter(pedido=pedido, paquete=paquete).count()
+        return base if not previas else f"{base}-r{previas}"
 
     def _tracking_de_orden(self, cuerpo):
         datos = cuerpo.get("data") or {}
@@ -1067,7 +1120,7 @@ class Adapter99Minutos(CarrierAdapter):
         return pdf
 
     def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
-        interno = f"{pedido.folio}-{paquete.numero if paquete is not None else 1}"
+        interno = self._internal_key(pedido, paquete)
         envio = self._shipment(pedido, servicio, paquete, interno)
         resp = self._request("POST", "/api/v3/orders", json_body={"shipments": [envio]})
         if resp.status_code == 202:

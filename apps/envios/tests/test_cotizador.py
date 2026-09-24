@@ -345,7 +345,26 @@ class TestReempaque(BaseCotizador):
 
 
 class CotizadorIntegracionClienteTests(TestCase):
-    """Cliente en 99minutos directo: un solo carrier, sin CotizacionCache."""
+    """Cliente en 99minutos directo: un solo carrier, sin CotizacionCache. Y
+    con el mapa global (2026-09-24: 99minutos directo para todos cuando hay
+    cuenta) el carrier directo tampoco pasa por el caché aunque el cliente
+    esté en envia; los demás carriers de la lista sí."""
+
+    def test_carrier_directo_por_mapa_no_usa_cache_y_el_resto_si(self):
+        cliente = crear_cliente()  # integración envia
+        directa = {"carrier": "noventa9Minutos", "servicio": "SPT", "precio": Decimal("110"), "estimado": "", "ok": True}
+        envia = {"carrier": "estafeta", "servicio": "ground", "precio": Decimal("150"), "estimado": "", "ok": True}
+        mapa = {**settings.TORRE, "PROVEEDOR_POR_CARRIER": {"noventa9Minutos": "99minutos"}}
+        with override_settings(TORRE=mapa), \
+             patch("apps.envios.services.cotizar_lane_carrier",
+                   side_effect=lambda c, *a, **k: directa if c == "noventa9Minutos" else envia) as clc:
+            filas = cotizador.cotizar_lane("44100", 3, cliente=cliente, carriers=["noventa9Minutos", "estafeta"])
+            filas_otra_vez = cotizador.cotizar_lane("44100", 3, cliente=cliente, carriers=["noventa9Minutos", "estafeta"])
+        self.assertEqual([f["carrier"] for f in filas], ["noventa9Minutos", "estafeta"])
+        self.assertEqual(filas_otra_vez[0], directa)
+        # estafeta se cachea (1 llamada en total); la directa se cotiza cada vez (2).
+        self.assertEqual(sorted(c.args[0] for c in clc.call_args_list), ["estafeta", "noventa9Minutos", "noventa9Minutos"])
+        self.assertEqual(list(CotizacionCache.objects.values_list("carrier", flat=True)), ["estafeta"])
 
     def test_cliente_directo_cotiza_un_carrier_sin_cache(self):
         cliente = crear_cliente(integracion_envios="99minutos")

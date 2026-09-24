@@ -41,10 +41,19 @@ class Adapter99MinutosTests(TestCase):
         self.adapter = Adapter99Minutos()
 
     def test_delivery_type_mapea_servicios_de_torre(self):
-        self.assertEqual(delivery_type_99min("ground"), "NAL")
-        self.assertEqual(delivery_type_99min(""), "NAL")
+        """2026-09-24: la cuenta no tiene Nacional; lo que no mapea usa el
+        tipo configurado (SPT), y los nombres que 99minutos regresa al
+        cotizar ("Sprint") se traducen al código del enum de /orders."""
+        self.assertEqual(delivery_type_99min("ground"), "SPT")
+        self.assertEqual(delivery_type_99min(""), "SPT")
         self.assertEqual(delivery_type_99min("SPT"), "SPT")
         self.assertEqual(delivery_type_99min("same_day"), "SMD")
+        self.assertEqual(delivery_type_99min("Sprint"), "SPT")
+        self.assertEqual(delivery_type_99min("NextDay"), "SPT")  # NXD no existe en el enum
+        with override_settings(NOVENTA9_DELIVERY_TYPE="NAL"):
+            self.assertEqual(delivery_type_99min("ground"), "NAL")
+        with override_settings(NOVENTA9_DELIVERY_TYPE="NXD"):
+            self.assertEqual(delivery_type_99min("ground"), "SPT")  # fuera del enum: SPT
 
     def test_token_se_cachea_entre_llamadas(self):
         with patch("apps.envios.adapters.requests.post", return_value=_token_ok()) as post, \
@@ -63,17 +72,38 @@ class Adapter99MinutosTests(TestCase):
         self.assertEqual(post.call_count, 2)  # token inicial + re-auth
 
     def test_cotizar_lane_feliz(self):
+        """Respuesta real de la cuenta (2026-09-24): precio con IVA en
+        prices.total, servicio "Sprint", promesa en eta; se cotiza con el
+        tipo configurado (SPT) y la talla."""
         respuestas = [
-            _resp(200, {"data": {"size": "m"}}),  # sizes
-            _resp(200, {"data": [{"totalPrice": 145.5, "deliveryType": "NAL",
-                                  "deliveryEstimate": "2-4 días"}]}),
+            _resp(200, {"data": {"size": "l"}}),  # sizes
+            _resp(200, {"data": [{
+                "deliveryType": "Sprint", "size": "l",
+                "cityToCity": {"value": False, "category": "FORANEOB"},
+                "prices": {"flat": 113.00, "iva": 18.08, "total": 131.08},
+                "eta": {"addedDays": 4, "dateTime": "2026-09-28T23:59:59-06:00"},
+            }]}),
+        ]
+        with patch("apps.envios.adapters.requests.post", return_value=_token_ok()), \
+             patch("apps.envios.adapters.requests.request", side_effect=respuestas) as req:
+            fila = self.adapter.cotizar_lane("noventa9Minutos", "64460", 8)
+        self.assertTrue(fila["ok"])
+        self.assertEqual(fila["precio"], Decimal("131.08"))
+        self.assertEqual(fila["servicio"], "SPT")
+        self.assertEqual(fila["estimado"], "4 días · llega 2026-09-28")
+        params = req.call_args_list[1].kwargs["params"]
+        self.assertEqual((params["delivery_type"], params["size"]), ("SPT", "l"))
+
+    def test_cotizar_lane_tolera_la_forma_plana_de_la_doc_vieja(self):
+        respuestas = [
+            _resp(200, {"data": {"size": "m"}}),
+            _resp(200, {"data": [{"totalPrice": 145.5, "deliveryType": "NAL", "deliveryEstimate": "2-4 días"}]}),
         ]
         with patch("apps.envios.adapters.requests.post", return_value=_token_ok()), \
              patch("apps.envios.adapters.requests.request", side_effect=respuestas):
             fila = self.adapter.cotizar_lane("noventa9Minutos", "44100", 8)
-        self.assertTrue(fila["ok"])
-        self.assertEqual(fila["precio"], Decimal("145.50"))
-        self.assertEqual(fila["servicio"], "NAL")
+        self.assertEqual((fila["ok"], fila["precio"], fila["servicio"], fila["estimado"]),
+                         (True, Decimal("145.50"), "NAL", "2-4 días"))
 
     def test_cotizar_lane_412_es_sin_cobertura(self):
         respuestas = [_resp(200, {"data": {"size": "m"}}), _resp(412, {"message": "no coverage"})]
@@ -88,9 +118,13 @@ class Adapter99MinutosTests(TestCase):
         tienda = crear_tienda(cliente)
         return crear_pedido(cliente, tienda)
 
-    def test_generar_manda_gramos_e_internal_key_y_decodifica_pdf(self):
+    def test_generar_manda_gramos_talla_options_e_internal_key_y_decodifica_pdf(self):
+        """El esquema de /orders exige `options` (con pickUpAfter) y `size` en
+        cada item (el 400 "size: This field is required" de PED-00103); se
+        compra con el tipo configurado (SPT)."""
         pedido = self._pedido()
         respuestas = [
+            _resp(200, {"data": {"size": "m"}}),  # sizes del item
             _resp(201, {"data": {"shipments": [{"trackingId": 12345}]}}),
             _resp(200, {"data": [{"id": "12345", "pdf": base64.b64encode(PDF_FALSO).decode()}]}),
         ]
@@ -100,17 +134,42 @@ class Adapter99MinutosTests(TestCase):
         self.assertEqual(datos["numero"], "12345")
         self.assertEqual(datos["etiqueta_pdf"], PDF_FALSO)
         self.assertEqual(datos["etiqueta_url"], "")
-        envio = req.call_args_list[0].kwargs["json"]["shipments"][0]
+        envio = req.call_args_list[1].kwargs["json"]["shipments"][0]
         self.assertEqual(envio["internalKey"], f"{pedido.folio}-1")
-        self.assertIn("pickUpAfter", envio)  # empacado = listo para recolección
-        self.assertEqual(envio["deliveryType"], "NAL")
+        self.assertNotIn("pickUpAfter", envio)
+        self.assertIn("pickUpAfter", envio["options"])  # empacado = listo para recolección
+        self.assertEqual(envio["deliveryType"], "SPT")
+        self.assertEqual(envio["items"][0]["size"], "m")
         self.assertEqual(envio["items"][0]["weight"], 1200)  # GRAMOS, no KG
-        etiqueta = req.call_args_list[1].kwargs["json"]
+        etiqueta = req.call_args_list[2].kwargs["json"]
         self.assertEqual(etiqueta["guides"][0]["size"], "zebra")
+
+    def test_talla_caida_no_tumba_la_compra(self):
+        pedido = self._pedido()
+        respuestas = [
+            _resp(500, {"message": "boom"}),  # sizes falla → "unknown"
+            _resp(201, {"data": {"shipments": [{"trackingId": 12345}]}}),
+            _resp(200, {"data": [{"id": "12345", "pdf": base64.b64encode(PDF_FALSO).decode()}]}),
+        ]
+        with patch("apps.envios.adapters.requests.post", return_value=_token_ok()), \
+             patch("apps.envios.adapters.requests.request", side_effect=respuestas) as req:
+            self.adapter.generar(pedido, "noventa9Minutos", "ground")
+        self.assertEqual(req.call_args_list[1].kwargs["json"]["shipments"][0]["items"][0]["size"], "unknown")
+
+    def test_internal_key_cambia_tras_una_guia_cancelada(self):
+        """Una clave repetida devuelve 202 y recupera la guía existente: tras
+        cancelar (cambio de dirección o de paquetería) la recompra lleva otra."""
+        from apps.envios.models import Guia
+
+        pedido = self._pedido()
+        Guia.objects.create(pedido=pedido, carrier="noventa9Minutos", numero="111", proveedor="99minutos",
+                            estado=Guia.CANCELADA)
+        self.assertEqual(self.adapter._internal_key(pedido, None), f"{pedido.folio}-1-r1")
 
     def test_generar_202_recupera_la_guia_existente(self):
         pedido = self._pedido()
         respuestas = [
+            _resp(200, {"data": {"size": "m"}}),
             _resp(202, {"message": "duplicated"}),
             _resp(200, {"data": {"trackingId": 777, "status": 1002}}),
             _resp(200, {"data": [{"id": "777", "pdf": base64.b64encode(PDF_FALSO).decode()}]}),
@@ -123,6 +182,7 @@ class Adapter99MinutosTests(TestCase):
     def test_generar_sin_pdf_valido_truena(self):
         pedido = self._pedido()
         respuestas = [
+            _resp(200, {"data": {"size": "m"}}),
             _resp(201, {"data": {"shipments": [{"trackingId": 5}]}}),
             _resp(200, {"data": [{"id": "5", "pdf": base64.b64encode(b"no soy pdf").decode()}]}),
         ]

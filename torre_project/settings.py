@@ -355,6 +355,15 @@ NOVENTA9_API_BASE = os.environ.get("NOVENTA9_API_BASE", "https://delivery.99minu
 NOVENTA9_MODO = os.environ.get("NOVENTA9_MODO", "off")
 if "test" in sys.argv:
     NOVENTA9_MODO = "off"
+# Tipo de entrega con el que Torre cotiza y compra en 99minutos (2026-09-24):
+# la cuenta de WOP no tiene Nacional (NAL) y Sprint (SPT) cotiza local y
+# foráneo donde hay cobertura; NextDay no está en el enum de /orders.
+NOVENTA9_DELIVERY_TYPE = os.environ.get("NOVENTA9_DELIVERY_TYPE", "SPT")
+# Con el directo de 99minutos en "full", el carrier noventa9Minutos viaja por
+# él para TODOS los clientes (nadie compra 99minutos vía envia teniendo cuenta
+# propia); el flip por cliente (integracion_envios) sigue mandando "solo 99".
+if NOVENTA9_MODO == "full" and NOVENTA9_API_KEY:
+    TORRE["PROVEEDOR_POR_CARRIER"].setdefault("noventa9Minutos", "99minutos")
 # Fallback runtime: si el directo de 99minutos falla, re-cotizar/re-generar ese
 # carrier por envia (tarifa de envia, auditado con evento). Default apagado.
 NOVENTA9_FALLBACK_ENVIA = os.environ.get("NOVENTA9_FALLBACK_ENVIA", "0") == "1"
