@@ -87,8 +87,16 @@
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% elif not pedido.sin_paqueteria %}<span class="small">—</span>{% endif %}{% if pedido.sin_paqueteria %} <a class="pill crit" href="{% url 'mesa:incidencia_detalle' pedido.sin_paqueteria.pk %}" title="Ningún carrier cotiza: elige paquetería en la incidencia">Sin paquetería · {{ pedido.sin_paqueteria.folio }}</a>{% endif %}{% if pedido.reingreso_estado %} <span class="pill">{{ pedido.get_reingreso_estado_display }}</span>{% endif %}{% if pedido.piezas_sin_inventario %} <span class="pill crit">Sin inventario · {{ pedido.piezas_sin_inventario }} pza{{ pedido.piezas_sin_inventario|pluralize }}</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
         <td>
-          {% if pedido.cancelable or pedido.estado == "PENDIENTE" %}
+          {% if pedido.cancelable or pedido.estado == "PENDIENTE" or pedido.puede_cancelar_guias %}
           <div class="fila">
+            {% if pedido.puede_cancelar_guias %}
+            <form method="post" onsubmit="return confirm('¿Cancelar las guías de {{ pedido.folio }} con el carrier y regresarlo a empaquetado? El piso recompra la guía.');">
+              {% csrf_token %}
+              <input type="hidden" name="accion" value="cancelar_guias">
+              <input type="hidden" name="folio" value="{{ pedido.folio }}">
+              <button class="btn chico" type="submit" title="Cancela las guías con el carrier, recotiza y regresa el pedido a empaquetado sin dueño">Cancelar guías</button>
+            </form>
+            {% endif %}
             {% if pedido.estado == "PENDIENTE" %}
             <form method="post">
               {% csrf_token %}

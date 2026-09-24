@@ -609,6 +609,25 @@ def _pedidos_cancelar(request):
     )
 
 
+def _pedidos_cancelar_guias(request):
+    """Botón por renglón (Chema 2026-09-24): cancela las guías de un pedido que
+    aún no sale y lo regresa a empaque sin dueño (pedidos.regresar_a_empaque:
+    cancelación con el carrier, cierre de cajas borrado, recotización). Para
+    rehacer guías compradas con la paquetería equivocada (PED-00108/109)."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import regresar_a_empaque
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    fresco = regresar_a_empaque(pedido, request.user, motivo="Guías canceladas desde Mesa")
+    canceladas = [g.numero for g in fresco.guias.all() if g.estado == "CANCELADA"]
+    return (
+        f"{pedido.folio}: guía{'s' if len(canceladas) != 1 else ''} {', '.join(canceladas) or '—'} cancelada"
+        f"{'s' if len(canceladas) != 1 else ''}; el pedido regresó a empaquetado sin dueño. "
+        "El piso recompra la guía con 'Reintentar guía' y vuelve a cerrar la caja."
+    )
+
+
 def _pedidos_reintentar_reservas(request):
     """Botón por renglón: reintenta las reservas de UN pedido (palanca de prioridad)."""
     from apps.pedidos.models import Pedido
@@ -627,7 +646,14 @@ def pedidos(request):
 
     if request.method == "POST":
         accion = request.POST.get("accion")
-        if accion == "cancelar":
+        if accion == "cancelar_guias":
+            try:
+                exito = _pedidos_cancelar_guias(request)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, exito)
+        elif accion == "cancelar":
             try:
                 exito = _pedidos_cancelar(request)
             except ValueError as exc:
@@ -676,6 +702,11 @@ def pedidos(request):
     for pedido in filas:
         pedido.pill = PILL_PEDIDO.get(pedido.estado, "")
         pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
+        # Guías compradas y nada en la calle: se pueden cancelar y recomprar (2026-09-24).
+        pedido.puede_cancelar_guias = (
+            pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
+            and not any(c.estado == "DESPACHADO" for c in pedido.paquetes.all())
+        )
         # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
         pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
         # Guías vivas con su rastreo público (Chema 2026-09-23: ver el número
