@@ -1,9 +1,10 @@
-"""Línea de tiempo de pedidos (Chema 2026-09-25): por pedido y por caja, cada
-hora del camino (recibido, picking terminado, empacado, guía, salida de
-bodega, recolectado por el carrier, en tránsito, entregado), el compromiso de
-entrega, el manifiesto con el que salió cada caja y todos los eventos que
-reportó la paquetería. La misma construcción sirve a Mesa (todos los
-clientes) y al portal (su cliente).
+"""Línea de tiempo de pedidos (Chema 2026-09-25): UNA FILA POR PAQUETE (caja),
+sin acordeones. Cada fila trae las horas del pedido (recibido, picking
+terminado, empacado) y las de esa caja: guía comprada, salida de bodega (el
+manifiesto), recolección reportada por el carrier, en tránsito, en ruta,
+entregado, el compromiso de entrega y el último evento de la paquetería. Un
+pedido de tres cajas son tres filas. La misma construcción sirve a Mesa
+(todos los clientes) y al portal (su cliente).
 """
 from datetime import timedelta
 
@@ -13,11 +14,6 @@ from django.utils import timezone
 from apps.envios.models import Guia, LineaManifiesto, Paquete
 from apps.pedidos.models import Pedido
 
-PASOS = [
-    ("creado", "Recibido"), ("ts_picking", "Picking"), ("ts_empacado", "Empacado"), ("ts_guia", "Guía"),
-    ("ts_recolectado", "Salió de bodega"), ("ts_recolectado_carrier", "Recolectado por carrier"),
-    ("ts_en_transito", "En tránsito"), ("ts_entregado", "Entregado"),
-]
 DIAS_DEFAULT = 14
 
 
@@ -39,48 +35,78 @@ def filtrar(qs, filtros):
     return qs
 
 
-def _fila_guia(guia, manifiestos):
-    eventos = [
-        {"ts": e.ts_carrier or e.ts_visto, "estado": e.estado, "descripcion": e.descripcion or e.crudo}
-        for e in guia.eventos.all()
-    ]
-    linea = manifiestos.get(guia.pk)
+def _primer_evento(guia, estados):
+    for e in guia.eventos.all():  # ordenados por hora del carrier
+        if e.estado in estados and e.ts_carrier is not None:
+            return e.ts_carrier
+    return None
+
+
+def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy):
+    """Una fila de la tabla: la caja (o el envío entero, legacy) con su guía."""
+    linea = manifiestos.get(guia.pk) if guia else None
+    eventos = list(guia.eventos.all()) if guia else []
+    ultimo = eventos[-1] if eventos else None
+    entregada = bool(guia and guia.estado == Guia.ENTREGADO)
+    salida = linea.manifiesto.ts if linea else None
+    if salida is None and pedido.ts_recolectado and (caja is None or caja.estado == Paquete.DESPACHADO):
+        salida = pedido.ts_recolectado  # salida sin hoja (antes del manifiesto con folio)
+    en_transito = _primer_evento(guia, {Guia.EN_TRANSITO}) if guia else None
+    if en_transito is None and guia and guia.estado in (Guia.EN_TRANSITO, Guia.EN_RUTA, Guia.ENTREGADO):
+        en_transito = pedido.ts_en_transito
+    entregado = _primer_evento(guia, {Guia.ENTREGADO}) if guia else None
+    if entregado is None and entregada:
+        entregado = pedido.ts_entregado
+    compromiso = guia.fecha_compromiso if guia and guia.es_activa and not entregada else None
     return {
-        "carrier": guia.carrier, "numero": guia.numero, "estado": guia.get_estado_display(), "activa": guia.es_activa,
+        "pedido": pedido,
+        "caja": caja.numero if caja else None, "total_cajas": total_cajas,
+        "caja_estado": caja.get_estado_display() if caja else "",
+        "guia": guia,
         "manifiesto": linea.manifiesto if linea else None,
-        "recolectado_carrier": guia.ts_recolectado_carrier,
-        "compromiso": guia.fecha_compromiso, "dias_promesa": guia.dias_promesa,
-        "entregado": guia.estado == Guia.ENTREGADO, "eventos": eventos,
+        "ts": {
+            "recibido": pedido.creado, "picking": pedido.ts_picking, "empacado": pedido.ts_empacado,
+            "guia": guia.creado if guia else None,
+            "salida": salida,
+            "recolectado_carrier": guia.ts_recolectado_carrier if guia else None,
+            "en_transito": en_transito,
+            "en_ruta": _primer_evento(guia, {Guia.EN_RUTA}) if guia else None,
+            "entregado": entregado,
+        },
+        "compromiso": compromiso,
+        "vencido": bool(compromiso) and compromiso < hoy and not entregada,
+        "dias_promesa": guia.dias_promesa if guia else None,
+        "ultimo_evento": ultimo.descripcion or ultimo.crudo if ultimo else (guia.ultimo_evento if guia else ""),
+        "ultimo_evento_ts": (ultimo.ts_carrier or ultimo.ts_visto) if ultimo else None,
+        "eventos": len(eventos),
     }
 
 
 def construir(pedidos):
-    """[{pedido, pasos: [(etiqueta, ts)], compromiso, cajas: [{numero, estado, guias: [...]}]}]
-    para los pedidos dados (ya filtrados). Un pedido sin plan de cajas se
-    muestra como una sola caja implícita con sus guías."""
+    """Filas por paquete para los pedidos dados (ya filtrados), en el orden de
+    los pedidos y de sus cajas. Un pedido sin plan de cajas es una fila por
+    guía (o una sola fila sin guía)."""
     pedidos = list(
         pedidos.select_related("cliente", "tienda")
         .prefetch_related("guias__eventos", "paquetes__guias__eventos")
     )
     lineas = LineaManifiesto.objects.filter(pedido__in=pedidos).select_related("manifiesto")
     por_guia = {l.guia_id: l for l in lineas if l.guia_id}
+    hoy = timezone.localdate()
     filas = []
     for p in pedidos:
-        cajas = []
-        for caja in sorted(p.paquetes.all(), key=lambda c: c.numero):
-            guias = [_fila_guia(g, por_guia) for g in sorted(caja.guias.all(), key=lambda g: g.pk)]
-            cajas.append({"numero": caja.numero, "estado": caja.get_estado_display(),
-                          "fuera": caja.estado == Paquete.DESPACHADO, "guias": guias})
-        sueltas = [g for g in p.guias.all() if g.paquete_id is None]
-        if sueltas or not cajas:
-            cajas.append({"numero": None, "estado": p.get_estado_display(), "fuera": p.ts_recolectado is not None,
-                          "guias": [_fila_guia(g, por_guia) for g in sorted(sueltas, key=lambda g: g.pk)]})
-        compromisos = [g["compromiso"] for c in cajas for g in c["guias"] if g["compromiso"] and g["activa"] and not g["entregado"]]
-        filas.append({
-            "pedido": p,
-            "pasos": [(etiqueta, getattr(p, campo)) for campo, etiqueta in PASOS],
-            "compromiso": max(compromisos) if compromisos else None,
-            "vencido": bool(compromisos) and max(compromisos) < timezone.localdate() and p.ts_entregado is None,
-            "cajas": cajas,
-        })
+        cajas = sorted(p.paquetes.all(), key=lambda c: c.numero)
+        sueltas = sorted((g for g in p.guias.all() if g.paquete_id is None), key=lambda g: g.pk)
+        total = len(cajas) or max(len(sueltas), 1)
+        for caja in cajas:
+            guias = sorted(caja.guias.all(), key=lambda g: g.pk)
+            guia = next((g for g in guias if g.es_activa), guias[-1] if guias else None)
+            filas.append(_fila(p, caja, guia, total, por_guia, hoy))
+        if not cajas:
+            for guia in sueltas or [None]:
+                filas.append(_fila(p, None, guia, total, por_guia, hoy))
+        elif sueltas:  # guías viejas sin caja de un pedido que sí tiene plan
+            for guia in sueltas:
+                if guia.es_activa:
+                    filas.append(_fila(p, None, guia, total, por_guia, hoy))
     return filas

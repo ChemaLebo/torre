@@ -1,6 +1,7 @@
-"""Línea de tiempo (Chema 2026-09-25) en Mesa y portal: pasos con hora por
-pedido, y por caja el manifiesto, la recolección del carrier, el compromiso y
-los eventos de la paquetería; el portal solo ve lo suyo."""
+"""Línea de tiempo (Chema 2026-09-25) en Mesa y portal: una fila por
+paquete con las horas del pedido y de su caja (guía, manifiesto, recolección
+del carrier, tránsito, entrega), el compromiso y el último evento de la
+paquetería; el portal solo ve lo suyo."""
 from datetime import date, datetime
 
 from django.contrib.auth import get_user_model
@@ -27,6 +28,9 @@ class LineaTiempoTests(TestCase):
         EventoGuia.objects.create(guia=guia, estado="RECOLECTADO", crudo="Shipped", descripcion="Shipped", ts_carrier=ts)
         hoja = Manifiesto.objects.create(folio="MAN-2026-0007", carrier="imile", corral="SAL-OTRO", chofer="Luis")
         LineaManifiesto.objects.create(manifiesto=hoja, pedido=self.pedido, paquete=caja, guia=guia, numero_guia=guia.numero, caja=1)
+        # Segunda caja del mismo pedido, aún en bodega: su propia fila.
+        caja2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=4, carrier="imile", estado=Paquete.EMPACADO)
+        Guia.objects.create(pedido=self.pedido, paquete=caja2, carrier="imile", numero="6092426140198", proveedor="envia", dias_promesa=5)
         self.ajeno = crear_pedido(self.otro, crear_tienda(self.otro))
 
     def _mesa(self):
@@ -37,9 +41,10 @@ class LineaTiempoTests(TestCase):
     def test_mesa_muestra_pasos_caja_manifiesto_y_eventos(self):
         self._mesa()
         html = self.client.get(reverse("mesa:linea_tiempo")).content.decode()
-        for esperado in (self.pedido.folio, "#4074", "24/Sep 19:52", "MAN-2026-0007", "(Luis)", "recolectado por la paquetería el 24/Sep 19:52",
-                         "compromiso 29/Sep", "Shipped", "imile 6092426140197", self.ajeno.folio):
+        for esperado in (self.pedido.folio, "#4074", "24/Sep 19:52", "MAN-2026-0007 · Luis", "29/Sep", "Shipped",
+                         "6092426140197", "6092426140198", "1 de 2", "2 de 2", "5 días desde la salida", self.ajeno.folio):
             self.assertIn(esperado, html)
+        self.assertNotIn('<details class="colapsable"', html)  # sin acordeones en la tabla: una fila por paquete (el menú sí usa details)
         filtrado = self.client.get(reverse("mesa:linea_tiempo"), {"q": "#4074"}).content.decode()
         self.assertIn(self.pedido.folio, filtrado)
         self.assertNotIn(self.ajeno.folio, filtrado)

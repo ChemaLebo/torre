@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Línea de tiempo{% endblock %}
 {% block content %}
-{# Línea de tiempo de pedidos (Chema 2026-09-25): un renglón por pedido con la hora de cada paso; el acordeón del renglón abre cada caja con su manifiesto, la recolección del carrier, el compromiso y los eventos de la paquetería. Misma plantilla para Mesa (todos los clientes) y portal (su cliente). #}
+{# Línea de tiempo (Chema 2026-09-25): UNA FILA POR PAQUETE, sin acordeones. Un pedido de varias cajas ocupa varias filas; cada una con las horas del pedido y las de su caja/guía, el compromiso y el último evento de la paquetería. Misma plantilla para Mesa y portal. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">{% if es_mesa %}Mesa · Pedidos{% else %}Tu operación{% endif %}</div>
     <h1>Línea de tiempo</h1>
-    <div class="small"><b>{{ total }}</b> pedido{{ total|pluralize }}{% if total > 300 %} · se muestran los 300 más recientes{% endif %}</div>
+    <div class="small"><b>{{ total }}</b> pedido{{ total|pluralize }} · {{ filas|length }} paquete{{ filas|length|pluralize }}{% if total > 300 %} · se muestran los 300 pedidos más recientes{% endif %}</div>
   </div>
 </div>
 
@@ -33,7 +33,7 @@
 <div class="tabla-wrap">
   <table>
     <thead>
-      <tr><th>Pedido</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>Entregado</th><th>Compromiso</th></tr>
+      <tr><th>Pedido</th><th>Caja</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
     </thead>
     <tbody>
       {% for f in filas %}
@@ -44,40 +44,22 @@
           {% if es_mesa %}<div class="small muted">{{ f.pedido.cliente.nombre }}</div>{% endif %}
           <span class="pill {% if f.pedido.estado == 'ENTREGADO' %}ok{% elif f.pedido.estado == 'CANCELADO' or f.pedido.estado == 'RETORNADO' %}crit{% else %}accent{% endif %}">{{ f.pedido.get_estado_display }}</span>
         </td>
-        {% for etiqueta, ts in f.pasos %}<td class="mono small">{% if ts %}{{ ts|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>{% endfor %}
-        <td class="mono small">{% if f.compromiso %}<span class="pill {% if f.vencido %}crit{% else %}{% endif %}">{{ f.compromiso|date:"d/M" }}{% if f.vencido %} · vencido{% endif %}</span>{% elif f.pedido.ts_entregado %}<span class="muted">entregado</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-      </tr>
-      <tr>
-        <td colspan="10" style="padding-top:0">
-          <details class="colapsable">
-            <summary class="small">Por caja · {{ f.cajas|length }} caja{{ f.cajas|length|pluralize }}</summary>
-            <div class="colapsable-cuerpo">
-              {% for c in f.cajas %}
-              <div class="mb">
-                <b>{% if c.numero %}Caja {{ c.numero }}{% else %}Envío{% endif %}</b> · {{ c.estado }}
-                {% for g in c.guias %}
-                <div class="small" style="margin-left:12px">
-                  <span class="mono">{{ g.carrier }} {{ g.numero }}</span> · {{ g.estado }}{% if not g.activa %} (inactiva){% endif %}
-                  {% if g.manifiesto %} · salió con <span class="mono">{{ g.manifiesto.folio }}</span> el {{ g.manifiesto.ts|date:"d/M H:i" }}{% if g.manifiesto.chofer %} ({{ g.manifiesto.chofer }}){% endif %}{% endif %}
-                  {% if g.recolectado_carrier %} · recolectado por la paquetería el {{ g.recolectado_carrier|date:"d/M H:i" }}{% endif %}
-                  {% if g.compromiso and not g.entregado %} · compromiso {{ g.compromiso|date:"d/M" }}{% elif g.dias_promesa and not g.entregado %} · promesa {{ g.dias_promesa }} día{{ g.dias_promesa|pluralize }} desde la salida{% endif %}
-                  {% if g.eventos %}
-                  <ul style="margin:4px 0 0 16px">
-                    {% for e in g.eventos %}<li class="mono small">{{ e.ts|date:"d/M H:i" }} · {{ e.descripcion }}</li>{% endfor %}
-                  </ul>
-                  {% else %}<div class="muted">Sin eventos de la paquetería todavía.</div>{% endif %}
-                </div>
-                {% empty %}
-                <div class="small muted" style="margin-left:12px">Sin guía.</div>
-                {% endfor %}
-              </div>
-              {% endfor %}
-            </div>
-          </details>
-        </td>
+        <td class="mono small">{% if f.caja %}{{ f.caja }} de {{ f.total_cajas }}{% else %}envío{% endif %}{% if f.caja_estado %}<div class="muted">{{ f.caja_estado }}</div>{% endif %}</td>
+        <td class="small">{% if f.guia %}{{ f.guia.carrier }}<div class="mono">{{ f.guia.numero }}</div><span class="pill {% if f.guia.estado == 'ENTREGADO' %}ok{% elif f.guia.estado == 'RETORNO' or f.guia.estado == 'INTENTO_FALLIDO' or f.guia.estado == 'EXCEPCION' or f.guia.estado == 'CANCELADA' %}crit{% elif f.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}">{{ f.guia.get_estado_display }}</span>{% else %}<span class="muted">sin guía</span>{% endif %}</td>
+        <td class="mono small">{{ f.ts.recibido|date:"d/M H:i" }}</td>
+        <td class="mono small">{% if f.ts.picking %}{{ f.ts.picking|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.empacado %}{{ f.ts.empacado|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.guia %}{{ f.ts.guia|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.salida %}{{ f.ts.salida|date:"d/M H:i" }}{% if f.manifiesto %}<div class="muted" title="Manifiesto{% if f.manifiesto.chofer %} · chofer {{ f.manifiesto.chofer }}{% endif %}">{{ f.manifiesto.folio }}{% if f.manifiesto.chofer %} · {{ f.manifiesto.chofer }}{% endif %}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.recolectado_carrier %}{{ f.ts.recolectado_carrier|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.en_transito %}{{ f.ts.en_transito|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.en_ruta %}{{ f.ts.en_ruta|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.entregado %}{{ f.ts.entregado|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.compromiso %}<span class="pill {% if f.vencido %}crit{% endif %}">{{ f.compromiso|date:"d/M" }}{% if f.vencido %} · vencido{% endif %}</span>{% elif f.ts.entregado %}<span class="muted">entregado</span>{% elif f.dias_promesa %}<span class="muted" title="Se cuenta desde la salida">{{ f.dias_promesa }} día{{ f.dias_promesa|pluralize }} desde la salida</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="small">{% if f.ultimo_evento %}{{ f.ultimo_evento }}{% if f.ultimo_evento_ts %}<div class="mono muted">{{ f.ultimo_evento_ts|date:"d/M H:i" }}{% if f.eventos > 1 %} · {{ f.eventos }} eventos{% endif %}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="10" class="muted centro">Sin pedidos con esos filtros.</td></tr>
+      <tr><td colspan="14" class="muted centro">Sin pedidos con esos filtros.</td></tr>
       {% endfor %}
     </tbody>
   </table>
