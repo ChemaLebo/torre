@@ -12,7 +12,6 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.envios.models import Guia, LineaManifiesto, Paquete
-from apps.pedidos.models import Pedido
 
 DIAS_DEFAULT = 14
 
