@@ -495,6 +495,7 @@ def _planificar(pedido, force, carriers, preferido=None):
             largo_cm=largo, ancho_cm=ancho, alto_cm=alto,
             carrier=opcion["carrier"], servicio=opcion["servicio"],
             precio_cotizado=opcion["precio"],
+            estimado_entrega=str(opcion.get("estimado") or "")[:60],
             fuera_de_meta=opcion["precio"] > meta,
             ahorro_plan_mxn=ahorro,
         )

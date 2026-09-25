@@ -172,6 +172,13 @@ TORRE = {
     "COBERTURA_AMPLIADA_PCT": 1.2,
     "SIN_MOVIMIENTO_LOCAL_HORAS": 24,
     "SIN_MOVIMIENTO_FORANEO_HORAS": 72,
+    # Compromiso de entrega (Chema 2026-09-25): días que promete el carrier
+    # (del cotizador) contados desde la SALIDA de bodega; local = día
+    # siguiente siempre; foráneo sin dato = default. Calendario: lunes a
+    # sábado, salvo los carriers que entregan todos los días (iMile).
+    "DIAS_PROMESA_LOCAL": 1,
+    "DIAS_PROMESA_FORANEO_DEFAULT": 5,
+    "CARRIERS_CALENDARIO_TODOS_LOS_DIAS": ["imile"],
     # Bodega real: Av. Torres de Ixtapantongo 380 Local E, Olivar de los Padres,
     # Álvaro Obregón, CDMX, CP 01780. Entrega local propia: $100 flat por paquete
     # ≤20 kg, cobertura CDMX (00-16) + metropolitano EdoMex/Toluca (50-57).

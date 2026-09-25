@@ -84,6 +84,11 @@ class Guia(models.Model):
     estado = models.CharField(max_length=20, choices=ESTADOS, default=GUIA_CREADA, db_index=True)
     ultimo_evento = models.CharField(max_length=300, blank=True)
     ts_ultimo_movimiento = models.DateTimeField(null=True, blank=True)
+    # Compromiso de entrega (Chema 2026-09-25): días prometidos por el carrier
+    # al comprar (o la regla local = día siguiente) y la fecha límite, que se
+    # estampa cuando la caja SALE (manifiesto, o recolección del carrier).
+    dias_promesa = models.PositiveSmallIntegerField(null=True, blank=True)
+    fecha_compromiso = models.DateField(null=True, blank=True)
     raw = models.JSONField(default=dict, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
@@ -191,6 +196,7 @@ class Paquete(models.Model):
     carrier = models.CharField(max_length=40)
     servicio = models.CharField(max_length=60, blank=True)
     precio_cotizado = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    estimado_entrega = models.CharField(max_length=60, blank=True, help_text="Promesa del carrier al cotizar (\"2-4 días\", \"4 días · llega …\")")
     fuera_de_meta = models.BooleanField(
         default=False, help_text="La mejor tarifa excede TORRE['TARIFA_OBJETIVO_MXN']"
     )

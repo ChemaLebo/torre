@@ -2213,6 +2213,14 @@ def marcar_recolectado(pedido, actor, paquetes=None):
                 Paquete.DESPACHADO, actor=actor,
                 motivo=f"Caja {caja.numero} de {pedido.folio} subió al camión (manifiesto firmado).",
             )
+        # Compromiso de entrega (Chema 2026-09-25): la fecha límite corre
+        # desde que la caja sale; el carrier puede haberla estampado antes
+        # (recolección primero), y entonces no se mueve.
+        from apps.envios.services import estampar_compromiso  # lazy por contrato
+        pks_salen = {c.pk for c in salen}
+        for guia in pedido.guias.all():
+            if guia.es_activa and (guia.paquete_id is None or guia.paquete_id in pks_salen):
+                estampar_compromiso(guia)
         quedan = [c for c in pendientes if c not in salen]
         sin_inventario = sorted({l.sku.codigo for l in pedido.lineas_faltantes})
         if quedan:

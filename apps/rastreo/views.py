@@ -143,6 +143,7 @@ def _contexto(pedido):
             "estado": ESTADO_GUIA_HUMANO.get(guia.estado, "En proceso") if guia
                        else ("Empacado" if paquete.estado == "EMPACADO" else "En preparación"),
             "entregado": bool(guia and guia.estado == "ENTREGADO"),
+            "compromiso": guia.fecha_compromiso if guia and guia.estado != "ENTREGADO" else None,
         })
     if not paquetes:  # pedido sin plan: se muestra como un solo envío (legacy)
         guia = next((g for g in pedido.guias.all() if g.es_activa), None)

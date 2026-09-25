@@ -81,6 +81,7 @@
           <div>{% if url %}<a class="mono" href="{{ url }}" target="_blank" rel="noopener" title="Rastreo público de {{ g.carrier }}">{{ g.numero }} ↗</a>{% else %}<span class="mono">{{ g.numero }}</span>{% endif %}
             · {{ g.carrier }}{% if g.paquete %} · caja {{ g.paquete.numero }}{% endif %}
             <span class="pill {% if g.estado == 'ENTREGADO' %}ok{% elif g.estado == 'RETORNO' or g.estado == 'INTENTO_FALLIDO' or g.estado == 'EXCEPCION' %}crit{% elif g.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ g.ultimo_evento }}">{{ g.get_estado_display }}</span>
+            {% if g.fecha_compromiso and g.estado != 'ENTREGADO' %}<span class="muted" title="Compromiso de entrega">· llega {{ g.fecha_compromiso|date:"d/M" }}</span>{% elif g.dias_promesa and g.estado == 'GUIA_CREADA' %}<span class="muted" title="Se cuenta desde la salida">· {{ g.dias_promesa }} día{{ g.dias_promesa|pluralize }} desde la salida</span>{% endif %}
           </div>
           {% empty %}—{% endfor %}
         </td>

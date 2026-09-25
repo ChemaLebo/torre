@@ -331,6 +331,66 @@ def _reintentar_con_municipio(adapter, pedido, carrier, servicio, paquete, exc):
     return datos
 
 
+# ── Compromiso de entrega (Chema 2026-09-25) ────────────────────────────────
+
+_RE_DIAS = re.compile(r"(\d{1,2})(?:\s*(?:-|–|a|to)\s*(\d{1,2}))?\s*(?:d[ií]as?|days?|h[áa]biles)", re.IGNORECASE)
+
+
+def dias_desde_estimado(texto):
+    """Días prometidos a partir del estimado del cotizador: "2-4 días" → 4,
+    "4 días · llega 2026-09-28" → 4, "1-2 days" → 2, "día siguiente"/"next
+    day" → 1; None si no trae días."""
+    texto = str(texto or "")
+    m = _RE_DIAS.search(texto)
+    if m:
+        return max(int(g) for g in m.groups() if g)
+    if re.search(r"siguiente|next\s*day", texto, re.IGNORECASE):
+        return 1
+    return None
+
+
+def calendario_todos_los_dias(carrier):
+    return (carrier or "") in settings.TORRE.get("CARRIERS_CALENDARIO_TODOS_LOS_DIAS", [])
+
+
+def fecha_compromiso(desde, dias, carrier):
+    """Fecha límite: `dias` a partir de `desde` (salida), contando lunes a
+    sábado (los domingos no cuentan) salvo los carriers que entregan todos
+    los días (iMile)."""
+    d = timezone.localtime(desde).date()
+    todos = calendario_todos_los_dias(carrier)
+    restantes = max(int(dias or 0), 0)
+    while restantes > 0:
+        d += timedelta(days=1)
+        if todos or d.weekday() != 6:
+            restantes -= 1
+    return d
+
+
+def dias_promesa_de(pedido, carrier, paquete=None):
+    """Días que se prometen al comprar la guía: local = día siguiente
+    (regla de Chema, sin importar el carrier); foráneo = lo que dijo el
+    carrier al cotizar (Paquete.estimado_entrega) o el default."""
+    torre = settings.TORRE
+    if pedido.es_local:
+        return int(torre.get("DIAS_PROMESA_LOCAL", 1))
+    dias = dias_desde_estimado(getattr(paquete, "estimado_entrega", "") if paquete is not None else "")
+    return dias or int(torre.get("DIAS_PROMESA_FORANEO_DEFAULT", 5))
+
+
+def estampar_compromiso(guia, desde=None):
+    """Fija `Guia.fecha_compromiso` cuando la caja sale (manifiesto o
+    recolección del carrier): salida + días prometidos. Idempotente: no
+    mueve una fecha ya estampada."""
+    if guia.fecha_compromiso is not None or not guia.es_activa:
+        return guia.fecha_compromiso
+    if guia.dias_promesa is None:
+        guia.dias_promesa = dias_promesa_de(guia.pedido, guia.carrier, guia.paquete)
+    guia.fecha_compromiso = fecha_compromiso(desde or timezone.now(), guia.dias_promesa, guia.carrier)
+    guia.save(update_fields=["dias_promesa", "fecha_compromiso"])
+    return guia.fecha_compromiso
+
+
 def _crear_guia(pedido, carrier, servicio, paquete=None):
     """Crea UNA guía (del pedido completo o de un paquete específico). Si el
     carrier rechaza la ciudad, un reintento con el municipio del catálogo
@@ -343,6 +403,7 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
                        else Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100))))
         guia = Guia.objects.create(
             pedido=pedido, paquete=paquete, carrier=carrier, servicio=servicio,
+            dias_promesa=dias_promesa_de(pedido, carrier, paquete),
             numero=f"LOCAL-{pedido.folio}{sufijo}",
             costo_cotizado=costo_local, costo_preferencial=costo_local,
             etiqueta_url="", proveedor="local", estado=Guia.GUIA_CREADA,
@@ -379,6 +440,7 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
         costo = datos.get("costo") or costo_plan or Decimal("0.00")
         guia = Guia.objects.create(
             pedido=pedido, paquete=paquete, carrier=carrier, servicio=servicio,
+            dias_promesa=dias_promesa_de(pedido, carrier, paquete),
             numero=datos["numero"],
             costo_cotizado=costo_plan or costo,
             costo_preferencial=costo,
@@ -427,7 +489,8 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
     paquete.carrier = mejor["carrier"]
     paquete.servicio = mejor["servicio"]
     paquete.precio_cotizado = mejor["precio"]
-    paquete.save(update_fields=["carrier", "servicio", "precio_cotizado"])
+    paquete.estimado_entrega = str(mejor.get("estimado") or "")[:60]
+    paquete.save(update_fields=["carrier", "servicio", "precio_cotizado", "estimado_entrega"])
     registrar_evento(
         "pedido", pedido.pk, "replan_paquete", cliente=pedido.cliente,
         delta={"paquete": paquete.numero, "antes": carrier_viejo,

@@ -156,6 +156,7 @@
     {% if p.guia %}
     <div class="guia">{{ p.carrier }} · Guía <code>{{ p.guia }}</code></div>
     {% endif %}
+    {% if p.compromiso %}<div class="guia">Llega a más tardar el {{ p.compromiso|date:"j \d\e F" }}</div>{% endif %}
   </div>
   {% endfor %}
 
