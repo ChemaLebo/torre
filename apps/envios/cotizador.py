@@ -157,7 +157,7 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
     envia con las directas. `carriers` acota la lista (la carta del reparto,
     la paquetería forzada por Mesa); sin él, cliente 99minutos = solo
     noventa9Minutos y los demás la lista blanca CARRIERS_COTIZAR."""
-    from .services import PROVEEDOR_99MIN, _proveedor_para, cotizar_lane_carrier  # lazy: evita ciclo
+    from .services import PROVEEDORES_DIRECTOS, _proveedor_para, cotizar_lane_carrier  # lazy: evita ciclo
 
     peso = _redondear_peso(peso_kg)
     dims = dims or dims_para(peso)
@@ -167,7 +167,7 @@ def cotizar_lane(cp_destino, peso_kg, dims=None, cliente=None, carriers=None):
         else:
             carriers = settings.TORRE["CARRIERS_COTIZAR"]
     carriers = list(carriers)
-    directos = {c for c in carriers if _proveedor_para(c, cliente) == PROVEEDOR_99MIN}
+    directos = {c for c in carriers if _proveedor_para(c, cliente) in PROVEEDORES_DIRECTOS}
     filas_directas = {
         c: cotizar_lane_carrier(c, cp_destino, peso, dims, cliente=cliente) for c in carriers if c in directos
     }

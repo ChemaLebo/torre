@@ -283,6 +283,7 @@ TORRE = {
         "fedex": "https://www.fedex.com/fedextrack/?trknbr={numero}",
         "dhl": "https://www.dhl.com/mx-es/home/tracking/tracking-express.html?submit=1&tracking-id={numero}",
         "noventa9Minutos": "https://tracking.99minutos.com/search/{numero}",
+        "imile": "https://www.imile.com/mx/track?waybillNo={numero}",
     },
     # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
     # ventana (acuerdo con el founder). El sync recurrente no se acota.
@@ -371,9 +372,26 @@ NOVENTA9_DELIVERY_TYPE = os.environ.get("NOVENTA9_DELIVERY_TYPE", "SPT")
 # propia); el flip por cliente (integracion_envios) sigue mandando "solo 99".
 if NOVENTA9_MODO == "full" and NOVENTA9_API_KEY:
     TORRE["PROVEEDOR_POR_CARRIER"].setdefault("noventa9Minutos", "99minutos")
-# Fallback runtime: si el directo de 99minutos falla, re-cotizar/re-generar ese
-# carrier por envia (tarifa de envia, auditado con evento). Default apagado.
+# iMile directo (proveedor "imile"; API v3 de openapi.imile.com, 2026-09-25;
+# doc local en docs/imile-api/). Sin key o modo "off" el carrier imile sigue
+# por envia.com. Pruebas: IMILE_API_BASE=https://test-openapi.52imile.cn.
+IMILE_API_KEY = os.environ.get("IMILE_API_KEY", "")  # customerId:secretKey
+IMILE_API_BASE = os.environ.get("IMILE_API_BASE", "https://openapi.imile.com")
+IMILE_MODO = os.environ.get("IMILE_MODO", "off")  # off | cotizar | full
+if "test" in sys.argv:
+    IMILE_MODO = "off"
+IMILE_PRODUCT_CODE = os.environ.get("IMILE_PRODUCT_CODE", "")  # logisticsProductCode que asigna iMile a la cuenta
+IMILE_SIGN_METHOD = os.environ.get("IMILE_SIGN_METHOD", "MD5")  # MD5 | SHA256
+IMILE_TIME_ZONE = os.environ.get("IMILE_TIME_ZONE", "-6")  # zona del caller que exige su sobre común
+IMILE_HS_CODE_DEFAULT = os.environ.get("IMILE_HS_CODE_DEFAULT", "")  # skuHsCode; vacío = no se manda (confirmar con iMile)
+IMILE_DIAS_PROMESA = os.environ.get("IMILE_DIAS_PROMESA", "")  # días de promesa foránea (su API no da EDD); vacío = default
+if IMILE_MODO == "full" and IMILE_API_KEY:
+    TORRE["PROVEEDOR_POR_CARRIER"].setdefault("imile", "imile")
+# Fallback runtime: si el directo (99minutos / iMile) falla, re-cotizar o
+# re-generar ese carrier por envia (tarifa de envia, auditado con evento).
+# Default apagado.
 NOVENTA9_FALLBACK_ENVIA = os.environ.get("NOVENTA9_FALLBACK_ENVIA", "0") == "1"
+IMILE_FALLBACK_ENVIA = os.environ.get("IMILE_FALLBACK_ENVIA", "0") == "1"
 # Check de báscula en empaque: "bloquear" | "avisar" | "off". Off por default:
 # el peso esperado suma solo productos (la tara de la caja aún no existe en el
 # sistema) y bloquear/avisar gritaría en cada empaque legítimo. La escalera:

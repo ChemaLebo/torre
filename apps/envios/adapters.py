@@ -7,8 +7,10 @@ La selección vive en `services.get_adapter()`.
 """
 
 import base64
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
+import hashlib
 import itertools
+import json
 import re
 import time
 import unicodedata
@@ -191,6 +193,11 @@ class CarrierAdapter:
 
     def rastrear(self, numero):
         """Regresa dict: estado (canónico o None), descripcion, ts_evento, raw."""
+        raise NotImplementedError
+
+    def agendar_recoleccion(self, carrier, fecha, hora_desde, hora_hasta, guias, instrucciones=""):
+        """Agenda UNA recolección por todas las guías; regresa {"folio", "costo"}.
+        No todo proveedor lo ofrece (99minutos: pickup nativo en la orden)."""
         raise NotImplementedError
 
 
@@ -1273,6 +1280,436 @@ def _interpolar(tabla, peso):
     (p1, c1), (p2, c2) = puntos[-2], puntos[-1]
     pendiente = (c2 - c1) / (p2 - p1)
     return Decimal(str(round(c2 + (peso - p2) * pendiente, 2)))
+
+
+# ── iMile directo (API v3, openapi.imile.com; doc bajada a docs/imile-api/) ──
+# Estado de rastreo de iMile (latestStatus / locusType de /client/track) →
+# canónico de Guia. El diccionario oficial NO está en su portal (2026-09-25):
+# estos nombres salen de los ejemplos de su doc y de sus integradores; lo que
+# no mapea cae al texto del evento (normalizar_estado_envia). Confirmar con
+# iMile al recibir credenciales.
+ESTADOS_IMILE_EXACTOS = {
+    "submitorder": "GUIA_CREADA", "submitted": "GUIA_CREADA", "ordercreated": "GUIA_CREADA",
+    "pickedup": "RECOLECTADO", "pickup": "RECOLECTADO", "collected": "RECOLECTADO", "picked": "RECOLECTADO",
+    "arrive": "EN_TRANSITO", "arrived": "EN_TRANSITO", "depart": "EN_TRANSITO", "departed": "EN_TRANSITO",
+    "intransit": "EN_TRANSITO", "transit": "EN_TRANSITO", "shipped": "EN_TRANSITO", "sorting": "EN_TRANSITO",
+    "outfordelivery": "EN_RUTA", "delivering": "EN_RUTA", "dispatched": "EN_RUTA",
+    "delivered": "ENTREGADO", "signed": "ENTREGADO", "pod": "ENTREGADO",
+    "deliveryfailed": "INTENTO_FALLIDO", "failed": "INTENTO_FALLIDO", "ndr": "INTENTO_FALLIDO", "rejected": "INTENTO_FALLIDO",
+    "returnarrive": "RETORNO", "returned": "RETORNO", "returndelivered": "RETORNO", "rts": "RETORNO",
+    "cancelorder": "EXCEPCION", "cancelled": "EXCEPCION", "canceled": "EXCEPCION", "lost": "EXCEPCION", "damaged": "EXCEPCION",
+    "onhold": "RETENIDO", "hold": "RETENIDO",
+}
+# Contención, en orden de prioridad (lo específico antes que lo genérico).
+_ESTADOS_IMILE_CONTIENEN = [
+    ("cancel", "EXCEPCION"), ("lost", "EXCEPCION"), ("damage", "EXCEPCION"),
+    ("return", "RETORNO"), ("rts", "RETORNO"),
+    ("fail", "INTENTO_FALLIDO"), ("ndr", "INTENTO_FALLIDO"), ("reject", "INTENTO_FALLIDO"), ("notdeliver", "INTENTO_FALLIDO"),
+    ("hold", "RETENIDO"),
+    ("delivered", "ENTREGADO"), ("signed", "ENTREGADO"), ("pod", "ENTREGADO"),
+    ("outfordelivery", "EN_RUTA"), ("delivering", "EN_RUTA"), ("dispatch", "EN_RUTA"),
+    ("pick", "RECOLECTADO"), ("collect", "RECOLECTADO"),
+    ("arriv", "EN_TRANSITO"), ("depart", "EN_TRANSITO"), ("transit", "EN_TRANSITO"), ("sort", "EN_TRANSITO"), ("ship", "EN_TRANSITO"),
+    ("submit", "GUIA_CREADA"), ("created", "GUIA_CREADA"),
+]
+_TOKEN_IMILE_INVALIDO = {"402", "407", "408"}
+VALOR_DECLARADO_COTIZACION = 500.0  # MXN: valor de referencia para cotizar un lane sin pedido
+
+
+def normalizar_estado_imile(estado, tipo="", detalle=""):
+    """latestStatus de iMile → estado canónico de Guia (None si no se reconoce)."""
+    clave = re.sub(r"[^a-z]", "", str(estado or "").lower())
+    if clave in ESTADOS_IMILE_EXACTOS:
+        return ESTADOS_IMILE_EXACTOS[clave]
+    for fragmento, canon in _ESTADOS_IMILE_CONTIENEN:
+        if fragmento in clave:
+            return canon
+    if str(tipo or "").lower() == "cancelorder":
+        return "EXCEPCION"
+    return normalizar_estado_envia(str(estado or "")) or normalizar_estado_envia(str(detalle or ""))
+
+
+def _parsear_fecha_imile(texto, zona=None):
+    """"yyyy-MM-dd HH:mm:ss" de iMile + su zona ("GMT-06:00", "-6", "+8") →
+    datetime aware con la hora EXACTA del carrier (no la del poll); sin zona
+    se asume la de Torre. None si no parsea."""
+    texto = str(texto or "").strip()
+    if not texto:
+        return None
+    dt = parse_datetime(texto) or parse_datetime(texto.replace(" ", "T"))
+    if dt is None:
+        return None
+    if timezone.is_aware(dt):
+        return dt
+    m = re.search(r"([+-])\s*(\d{1,2})(?::?(\d{2}))?", str(zona or ""))
+    if m:
+        signo = 1 if m.group(1) == "+" else -1
+        desfase = timedelta(hours=int(m.group(2)), minutes=int(m.group(3) or 0))
+        return dt.replace(tzinfo=dt_timezone(signo * desfase))
+    return timezone.make_aware(dt, timezone.get_default_timezone())
+
+
+def _nombre_estado_cp(cp):
+    """Nombre del estado por prefijo de CP ("Ciudad de México", "Jalisco") para
+    los campos `province` de iMile; "" si no se infiere."""
+    from apps.mesa.finanzas import NOMBRE_ESTADO  # lazy por contrato
+
+    from .cotizador import CP_ESTADO  # lazy: evita ciclo en carga
+
+    cp = str(cp or "").strip()
+    codigo = CP_ESTADO.get(cp[:2]) if len(cp) >= 2 else None
+    return NOMBRE_ESTADO.get(codigo, "") if codigo else ""
+
+
+def _decimal_imile(valor):
+    try:
+        return Decimal(str(valor)).quantize(Decimal("0.01")) if valor is not None else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+class ErrorImile(ErrorCarrier):
+    """ErrorCarrier con el `code` de la API de iMile (30001 orderNo duplicado,
+    407 token inválido, 40025 ciudad inexistente…)."""
+
+    def __init__(self, mensaje, codigo=""):
+        super().__init__(mensaje)
+        self.codigo = str(codigo or "")
+
+
+class AdapterImile(CarrierAdapter):
+    """API directa de iMile (openapi v3; doc 2026-09-25 en docs/imile-api/, con
+    la firma validada contra su ejemplo). Todo es POST JSON con un sobre común
+    (customerId, signMethod, format, version, timestamp, timeZone, accessToken)
+    firmado con la secretKey: MD5/SHA256 en mayúsculas de secretKey + llaves
+    ordenadas ASCII con su valor + el JSON COMPACTO de `param` + secretKey.
+    Token de 2 h (/auth/accessToken/grant); createOrder regresa la guía
+    (expressNo) y la etiqueta 6×4 en base64; track por guía con la hora y la
+    zona del carrier; cancelación solo antes de la recolección. Unidades: kg
+    y cm (volumen en cm³). Sandbox con el mismo contrato vía IMILE_API_BASE.
+    Lo que falta confirmar con iMile: logisticsProductCode de la cuenta,
+    diccionario de estados de track y si RFC/CURP aplican a envíos domésticos."""
+
+    PROVEEDOR = "imile"
+    PAIS = "MEX"
+    VERSION = "1.0.0"
+    ORDER_TYPE_ENVIO = "100"
+    SERVICIO = "standard"
+    _token_cache = {"token": "", "expira": 0.0}  # compartido entre instancias
+
+    def __init__(self):
+        self.base = str(getattr(settings, "IMILE_API_BASE", "https://openapi.imile.com") or "").rstrip("/")
+        credencial = getattr(settings, "IMILE_API_KEY", "") or ""
+        self.customer_id, _, self.secret = credencial.partition(":")
+        self.sign_method = (getattr(settings, "IMILE_SIGN_METHOD", "MD5") or "MD5").upper()
+        self.time_zone = str(getattr(settings, "IMILE_TIME_ZONE", "-6") or "-6")
+        self.product_code = getattr(settings, "IMILE_PRODUCT_CODE", "") or ""
+
+    @classmethod
+    def reiniciar_token(cls):
+        cls._token_cache = {"token": "", "expira": 0.0}
+
+    # ── sobre común, firma y transporte ──
+    def firmar(self, comunes, param_json):
+        """Firma del sobre: hash(secretKey + Σ llave+valor en orden ASCII (sin
+        `param` ni `sign`) + JSON compacto de param + secretKey), en MAYÚSCULAS."""
+        cadena = self.secret + "".join(f"{k}{comunes[k]}" for k in sorted(comunes)) + param_json + self.secret
+        algoritmo = hashlib.sha256 if self.sign_method == "SHA256" else hashlib.md5
+        return algoritmo(cadena.encode("utf-8")).hexdigest().upper()
+
+    def _comunes(self, con_token):
+        comunes = {
+            "customerId": self.customer_id, "signMethod": self.sign_method, "format": "json",
+            "version": self.VERSION, "timestamp": str(int(time.time() * 1000)), "timeZone": self.time_zone,
+        }
+        if con_token:
+            comunes["accessToken"] = self._token()
+        return comunes
+
+    def _llamar(self, ruta, param, con_token=True, reintento=True):
+        """POST firmado. Regresa el cuerpo con code "200"; un token vencido o
+        inválido (402/407/408) re-autentica UNA vez; otro code → ErrorImile."""
+        comunes = self._comunes(con_token)
+        # El JSON de `param` se firma tal cual viaja: mismos separadores y orden.
+        param_json = json.dumps(param, separators=(",", ":"), ensure_ascii=False)
+        cuerpo = dict(comunes)
+        cuerpo["sign"] = self.firmar(comunes, param_json)
+        cuerpo["param"] = param
+        datos = json.dumps(cuerpo, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        try:
+            resp = requests.post(
+                f"{self.base}{ruta}", data=datos,
+                headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise ErrorCarrier(f"No se pudo contactar a iMile ({ruta}): {exc}") from exc
+        if resp.status_code != 200:
+            raise ErrorImile(f"iMile respondió HTTP {resp.status_code} en {ruta}: {resp.text[:300]}", codigo=str(resp.status_code))
+        try:
+            respuesta = resp.json()
+        except ValueError as exc:
+            raise ErrorCarrier(f"Respuesta de iMile no es JSON ({ruta})") from exc
+        codigo = str(respuesta.get("code") or "")
+        if codigo == "200":
+            return respuesta
+        if codigo in _TOKEN_IMILE_INVALIDO and con_token and reintento:
+            type(self).reiniciar_token()
+            return self._llamar(ruta, param, con_token=True, reintento=False)
+        raise ErrorImile(f"iMile {codigo} en {ruta}: {respuesta.get('message') or 'sin mensaje'}", codigo=codigo)
+
+    def _token(self):
+        cache = type(self)._token_cache
+        if cache["token"] and cache["expira"] > time.time():
+            return cache["token"]
+        respuesta = self._llamar("/auth/accessToken/grant", {"grantType": "clientCredential"}, con_token=False, reintento=False)
+        datos = respuesta.get("data") or {}
+        token = str(datos.get("accessToken") or "")
+        if not token:
+            raise ErrorCarrier("iMile no regresó accessToken")
+        cache["token"] = token
+        cache["expira"] = time.time() + max(int(datos.get("expiresIn") or 7200) - 120, 60)
+        return token
+
+    # ── partes del envío ──
+    @staticmethod
+    def _origen_info():
+        return dict(getattr(settings, "ENVIA_ORIGEN", None) or ORIGEN_DEFAULT)
+
+    def _remitente(self):
+        b = self._origen_info()
+        return {
+            "contacts": (b.get("name") or b.get("company") or "WOP Fulfillment")[:50],
+            "contactCompany": b.get("company") or "",
+            "phone": Adapter99Minutos._telefono(b.get("phone")),
+            "email": b.get("email") or "",
+            "addressType": "warehouse",
+            "country": self.PAIS,
+            "province": _nombre_estado_cp(b.get("postalCode")) or "Ciudad de México",
+            "city": b.get("city") or "",
+            "zipCode": str(b.get("postalCode") or ""),
+            "street": b.get("street") or "",
+            "externalNo": str(b.get("number") or ""),
+            "address": ", ".join(filter(None, [b.get("street"), b.get("district"), b.get("city")])),
+        }
+
+    @staticmethod
+    def _localidad(cp):
+        try:
+            from .localidades import localidad_por_cp  # lazy: modelo + HTTP al catálogo de envia
+            return localidad_por_cp(cp)
+        except Exception:  # noqa: BLE001 — sin catálogo se manda lo de Shopify
+            return None
+
+    def _destinatario(self, pedido, ciudad_forzada=None):
+        """consigneeInfo: la ciudad del catálogo por CP (iMile valida el par
+        CP↔ciudad; `ciudad_forzada` = el municipio del reintento dirigido),
+        el estado por prefijo de CP y el número exterior separado."""
+        d = pedido.direccion or {}
+        cp = str(pedido.cp or d.get("zip") or "").strip()
+        localidad = self._localidad(cp)
+        ciudad = (ciudad_forzada or (localidad.localidad if localidad else "") or d.get("city") or "").strip()
+        provincia = _nombre_estado_cp(cp) or str(d.get("province") or "")
+        nombre = (pedido.comprador_nombre or d.get("name") or "Comprador").strip()
+        return {
+            "contacts": nombre[:50],
+            "phone": Adapter99Minutos._telefono(pedido.comprador_tel or d.get("phone")),
+            "email": pedido.comprador_email or d.get("email") or "",
+            "addressType": "customer",
+            "country": self.PAIS,
+            "province": provincia,
+            "city": ciudad,
+            "zipCode": cp,
+            "street": str(d.get("address1") or "")[:100],
+            "externalNo": EnviaAdapter._numero_exterior(d),
+            "address": ", ".join(filter(None, [d.get("address1"), d.get("address2"), ciudad, provincia, cp]))[:200],
+            "address2": str(d.get("address2") or "")[:100],
+        }
+
+    @staticmethod
+    def _lineas(pedido, paquete):
+        """[(sku, cantidad)] de la caja (PaqueteLinea) o de lo que surte el pedido."""
+        if paquete is not None:
+            return [(pl.linea_pedido.sku, pl.cantidad) for pl in paquete.lineas.select_related("linea_pedido__sku")]
+        return [(l.sku, l.pendiente) for l in pedido.lineas_por_surtir]
+
+    def _valor_declarado(self, pedido, paquete):
+        total = sum(float(sku.precio_declarado or 0) * cantidad for sku, cantidad in self._lineas(pedido, paquete))
+        if paquete is None or total <= 0:
+            return float(pedido.valor_declarado or 0) or total
+        return total
+
+    def _paquete_info(self, pedido, paquete):
+        peso_gr, largo, ancho, alto, _contenido = Adapter99Minutos._fisico(pedido, paquete)
+        largo, ancho, alto = (int(x or 0) for x in (largo, ancho, alto))
+        return {
+            "paymentMethod": "PPD", "collectingMoney": 0,
+            "clientDeclaredValue": round(self._valor_declarado(pedido, paquete), 2), "clientDeclaredCurrency": "Local",
+            "goodsType": "Normal", "isValuables": 0,
+            "length": largo, "width": ancho, "high": alto,
+            "totalVolume": (largo * ancho * alto) or 1,
+            "grossWeight": round(max(int(peso_gr), 1) / 1000, 3), "totalCount": 1,
+        }
+
+    def _skus(self, pedido, paquete):
+        hs = getattr(settings, "IMILE_HS_CODE_DEFAULT", "") or ""
+        skus = []
+        for sku, cantidad in self._lineas(pedido, paquete):
+            nombre = (sku.descripcion or sku.codigo)[:50]
+            item = {
+                "skuNo": sku.codigo[:50], "skuName": nombre, "skuLocalName": nombre,
+                "skuQty": max(int(cantidad or 0), 1),
+                "skuDeclaredValue": round(float(sku.precio_declarado or 0), 2),
+                "skuWeight": round(max(int(sku.peso_gr or 0), 1) / 1000, 3),
+            }
+            if hs:
+                item["skuHsCode"] = hs  # "Customs Code (Required for Mexico)": confirmar si aplica a doméstico
+            skus.append(item)
+        if not skus:
+            skus.append({"skuNo": "MERCANCIA", "skuName": "Mercancía", "skuLocalName": "Mercancía", "skuQty": 1,
+                         "skuDeclaredValue": round(float(pedido.valor_declarado or 0), 2), "skuWeight": 1.0})
+        return skus
+
+    def _estimado(self):
+        dias = str(getattr(settings, "IMILE_DIAS_PROMESA", "") or "").strip()
+        return f"{dias} día{'s' if dias != '1' else ''}" if dias.isdigit() else ""
+
+    # ── cotización ──
+    def _param_tarifa(self, cp_destino, ciudad_destino, peso_kg, dims, valor):
+        largo, ancho, alto = (int(x or 0) for x in (dims or (30, 25, 20)))
+        origen = self._origen_info()
+        return {
+            "senderInfo": {"country": self.PAIS, "province": _nombre_estado_cp(origen.get("postalCode")) or "",
+                           "city": origen.get("city") or "", "zipCode": str(origen.get("postalCode") or "")},
+            "consigneeInfo": {"country": self.PAIS, "province": _nombre_estado_cp(cp_destino) or "",
+                              "city": ciudad_destino or "", "zipCode": str(cp_destino)},
+            "orderType": self.ORDER_TYPE_ENVIO, "paymentMethod": "PPD", "goodsType": "Normal",
+            "totalWeight": round(float(peso_kg), 3), "totalVolume": (largo * ancho * alto) or 1,
+            "clientDeclaredValue": round(float(valor), 2), "clientDeclaredCurrency": "Local",
+        }
+
+    def cotizar_lane(self, carrier, cp_destino, peso_kg, dims=None):
+        sin_cobertura = {"carrier": carrier, "servicio": "", "precio": None, "estimado": "", "ok": False}
+        localidad = self._localidad(cp_destino)
+        param = self._param_tarifa(cp_destino, localidad.localidad if localidad else "", peso_kg, dims, VALOR_DECLARADO_COTIZACION)
+        try:
+            datos = self._llamar("/client/order/calShippingFee", param).get("data") or {}
+        except ErrorCarrier as exc:
+            return {**sin_cobertura, "detalle": str(exc)[:200]}  # sin cobertura o sin cuenta: resultado, no excepción
+        precio = _decimal_imile(datos.get("totalAmount"))
+        if precio is None:
+            return sin_cobertura
+        return {"carrier": carrier, "servicio": self.SERVICIO, "precio": precio, "estimado": self._estimado(), "ok": True}
+
+    def cotizar(self, pedido, carrier, servicio, paquete=None):
+        peso_gr, largo, ancho, alto, _ = Adapter99Minutos._fisico(pedido, paquete)
+        destino = self._destinatario(pedido)
+        param = self._param_tarifa(destino["zipCode"], destino["city"], max(int(peso_gr), 1) / 1000, (largo, ancho, alto),
+                                   self._valor_declarado(pedido, paquete))
+        datos = self._llamar("/client/order/calShippingFee", param).get("data") or {}
+        precio = _decimal_imile(datos.get("totalAmount"))
+        if precio is None:
+            raise ErrorCarrier(f"iMile no regresó tarifa para {pedido.folio} (CP {destino['zipCode']})")
+        return precio
+
+    # ── generación ──
+    @staticmethod
+    def _pdf(b64, numero):
+        if not b64:
+            raise ErrorCarrier(f"iMile no regresó la etiqueta (imileAwb) de la guía {numero}")
+        try:
+            pdf = base64.b64decode(b64)
+        except (ValueError, TypeError) as exc:
+            raise ErrorCarrier(f"La etiqueta de {numero} no se pudo decodificar") from exc
+        if not pdf.startswith(b"%PDF"):
+            raise ErrorCarrier(f"La etiqueta de {numero} no es un PDF válido")
+        return pdf
+
+    def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
+        if not self.product_code:
+            raise ErrorCarrier("iMile: falta IMILE_PRODUCT_CODE (el logisticsProductCode que asigna iMile a la cuenta).")
+        orden = Adapter99Minutos._internal_key(pedido, paquete)  # única por caja e intento
+        param = {
+            "orderNo": orden, "orderType": self.ORDER_TYPE_ENVIO,
+            "serviceInfo": {"logisticsProductCode": self.product_code, "pickupService": 0, "deliveryService": "Delivery"},
+            "packageInfo": self._paquete_info(pedido, paquete),
+            "skuInfos": self._skus(pedido, paquete),
+            "senderInfo": self._remitente(),
+            "consigneeInfo": self._destinatario(pedido, ciudad_forzada=ciudad),
+        }
+        try:
+            datos = self._llamar("/client/order/v2/createOrder", param).get("data") or {}
+        except ErrorImile as exc:
+            if exc.codigo != "30001":
+                raise
+            # orderNo duplicado (un timeout previo): la guía ya existe allá;
+            # se recupera con su etiqueta en vez de comprar otra.
+            datos = self._llamar("/client/order/reprintOrder", {"orderCode": orden, "orderCodeType": "2"}).get("data") or {}
+        numero = str(datos.get("expressNo") or "")
+        if not numero:
+            raise ErrorCarrier("iMile no regresó expressNo (número de guía)")
+        return {
+            "numero": numero,
+            "etiqueta_url": "",
+            "etiqueta_pdf": self._pdf(datos.get("imileAwb"), numero),
+            "costo": None,  # el rate ya vive en el plan (precio_cotizado)
+            "raw": {"proveedor": "imile", "expressNo": numero, "orderNo": orden,
+                    "subWaybillNo": datos.get("subWaybillNo") or []},
+        }
+
+    def cancelar(self, guia):
+        """Solo antes de la recolección (después es por su portal); el orderCode
+        es nuestro orderNo, guardado en raw al generar."""
+        orden = (guia.raw or {}).get("orderNo") or Adapter99Minutos._internal_key(guia.pedido, guia.paquete).rsplit("-r", 1)[0]
+        self._llamar("/client/order/deleteOrder", {"orderCode": orden, "waybillNo": guia.numero})
+        return True
+
+    # ── rastreo ──
+    def rastrear(self, numero):
+        """/client/track/getOne por número de guía, en español: historial
+        completo (locus) con la hora y la zona que reporta iMile."""
+        respuesta = self._llamar("/client/track/getOne", {"orderType": "1", "language": "3", "orderNo": str(numero)})
+        datos = respuesta.get("data") or {}
+        if isinstance(datos, list):
+            datos = datos[0] if datos else {}
+        historial = []
+        for e in datos.get("locus") or []:
+            if not isinstance(e, dict):
+                continue
+            sitio = str(e.get("latestSite") or "").strip()
+            detalle = str(e.get("locusDetailed") or e.get("latestStatus") or "").strip()
+            historial.append({
+                "estado": normalizar_estado_imile(e.get("latestStatus"), e.get("locusType"), detalle) or "",
+                "crudo": str(e.get("latestStatus") or e.get("locusType") or "")[:80],
+                "descripcion": (f"{detalle} · {sitio}" if sitio and sitio not in detalle else detalle)[:300],
+                "ts": _parsear_fecha_imile(e.get("latestStatusTime"), e.get("timeZone") or datos.get("timeZone")),
+                "raw": e,
+            })
+        historial.sort(key=lambda h: (h["ts"] is None, h["ts"] or 0))
+        estado = normalizar_estado_imile(datos.get("latestStatus"), datos.get("locusType"))
+        if estado is None and historial:
+            estado = historial[-1]["estado"] or None
+        ultimo = " · ".join(filter(None, [str(datos.get("latestStatus") or ""), str(datos.get("latestSite") or "")]))
+        return {
+            "estado": estado,
+            "descripcion": (ultimo or (historial[-1]["descripcion"] if historial else ""))[:300],
+            "ts_evento": _parsear_fecha_imile(datos.get("latestStatusTime"), datos.get("timeZone"))
+                         or (historial[-1]["ts"] if historial else None),
+            "raw": datos,
+            "eventos": historial,
+        }
+
+    # ── recolección ──
+    def agendar_recoleccion(self, carrier, fecha, hora_desde, hora_hasta, guias, instrucciones=""):
+        """/order/pick/notify: una visita por todas las guías (solo guías sin
+        chofer asignado, día hábil, ventana 09:00-18:00 hora local)."""
+        respuesta = self._llamar("/order/pick/notify", {
+            "waybillNos": [g.numero for g in guias], "pickDate": fecha.isoformat(),
+            "pickStart": f"{int(hora_desde):02d}:00", "pickEnd": f"{int(hora_hasta):02d}:00", "returnBatchNo": True,
+        })
+        datos = respuesta.get("data")
+        folio = datos.get("batchNo") if isinstance(datos, dict) else datos
+        return {"folio": str(folio or ""), "costo": None}
 
 
 class MockAdapter(CarrierAdapter):

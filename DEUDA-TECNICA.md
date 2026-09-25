@@ -174,13 +174,32 @@ municipio ("Othón P. Blanco"); la fila guarda los dos, cambiar es una línea.
 Para la integración directa: la API de iMile validará ciudad igual, así que
 este catálogo (o el suyo, si lo publican) es parte del adapter.
 
-**Por hacer:** adapter `AdapterImile` en `apps/envios/adapters.py` con el mismo
-contrato que `Adapter99Minutos` (cotizar, generar, rastrear, cancelar,
-recolección si la API lo da), credenciales y modo por env (`IMILE_API_KEY`,
-`IMILE_MODO` off|cotizar|full, como 99minutos), proveedor "imile" en
-`PROVEEDOR_POR_CARRIER`, patrón de rastreo público en `RASTREO_CARRIER_URL`,
-y tests con respuestas grabadas. Antes: conseguir credenciales y documentación
-de la API de iMile México y confirmar cobertura de origen.
+**Hecho en código (2026-09-25, sin credenciales todavía):** `AdapterImile` en
+`apps/envios/adapters.py` con el contrato de `Adapter99Minutos` más
+`agendar_recoleccion` (detalle en CONVENTIONS → Adapters): firma validada
+contra el ejemplo de su doc, token, cotización, compra con etiqueta base64,
+cancelación, tracking con la hora exacta del carrier y recolección; settings
+`IMILE_*`; proveedor "imile" en `PROVEEDOR_POR_CARRIER` con `IMILE_MODO=full`;
+Salida ofrece su recolección; `RASTREO_CARRIER_URL["imile"]`; pruebas con
+respuestas grabadas (`apps/envios/tests/test_adapter_imile.py`). Nada se
+activa sin `IMILE_API_KEY`: hasta entonces iMile sigue por envia.com.
+
+**Falta de iMile (pedir al recibir la cuenta):** customerId + secretKey de
+sandbox y de producción; el `logisticsProductCode` de la cuenta
+(`IMILE_PRODUCT_CODE`, obligatorio para comprar); el diccionario de
+`latestStatus`/`locusType` de `/client/track` (`ESTADOS_IMILE_EXACTOS` es
+provisional: lo que no mapee queda como evento sin mover la guía); si
+`taxID`/`idNo` (RFC/CURP) y `skuHsCode` aplican a envíos domésticos (hoy no se
+mandan; `IMILE_HS_CODE_DEFAULT` enciende el segundo); si su recolección cobra;
+la promesa por zona (`IMILE_DIAS_PROMESA`: su API no da fecha estimada).
+Primer paso con credenciales: `IMILE_MODO=cotizar` + `IMILE_API_BASE` de
+sandbox, comparar tarifas contra envia; luego una compra de prueba y confirmar
+que `https://www.imile.com/mx/track?waybillNo=<guía>` abre la guía (parámetro
+leído del código de su página, no probado con una guía real). Doble intento
+(Chema): Colima con `integracion_envios="envia"` y `CARRIERS_COTIZAR` con
+`imile` y `noventa9Minutos`, ambos directos por `PROVEEDOR_POR_CARRIER`; el
+planificador elige por regla/precio y solo si ninguno cotiza abre la
+incidencia PAQ.
 
 ## Canal de venta: crudo en el pedido, traducción en tabla administrable
 
@@ -227,8 +246,9 @@ y estafeta, Mérida forzado a paquetexpress por regla.
 **Queda:**
 - Fallback automático como opción por cliente, cuando las integraciones
   lleven tiempo limpias (hoy: sin plan/guía, visible en Salida, Mesa decide).
-- Al existir AdapterImile (sección iMile): agregar "imile" a
-  `envios.reparto.carriers_elegibles` y a `TORRE["PROVEEDOR_POR_CARRIER"]`;
+- AdapterImile ya existe (2026-09-25; `PROVEEDOR_POR_CARRIER["imile"]` lo
+  agrega settings con `IMILE_MODO=full`): al activarlo, agregar "imile" a
+  `envios.reparto.carriers_elegibles`;
   pasar los pesos de Colima a imile 75 / noventa9Minutos 25.
 - Evento "forzado" cuando gana una ReglaEnvio: NO se registra (elegir_carrier
   corre varias veces por pedido, sería ruido); el reporte lo deriva de "guía
@@ -315,7 +335,8 @@ ve) y Mesa elige paquetería en la incidencia; el pedido se replanea con ella
   Mientras, los foráneos sin cobertura salen por iMile eligiéndolo en la
   incidencia, pedido por pedido.
 - Futuro, cuando entre iMile directo (Chema): el planificador intenta iMile
-  y 99minutos y solo si AMBOS fallan abre la incidencia; hoy es manual.
+  y 99minutos y solo si AMBOS fallan abre la incidencia; hoy es manual. Con
+  `AdapterImile` (2026-09-25) ya es solo configuración: ver sección iMile.
 - La ReglaEnvio de Colima "local → estafeta" (era para envia.com) manda
   sobre el switch: Chema la borra en /admin/.
 - El plan sigue optimizando por precio entre particiones (Chema descartó un

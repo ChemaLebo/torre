@@ -2152,6 +2152,12 @@ def _carrier_de_caja(caja, pedido):
     return (guia.carrier if guia else _carrier_probable(pedido)) or "?"
 
 
+def _acepta_recoleccion(carrier):
+    """Los carriers de TORRE["CARRIERS_PICKUP"] (vía envia) y iMile directo (2026-09-25)."""
+    from apps.envios.services import carrier_acepta_recoleccion  # lazy por contrato
+    return carrier_acepta_recoleccion(carrier)
+
+
 def _pedidos_en_salida():
     """Entradas listas en el corral (empaque completo: guía y foto de cierre
     en cada caja; los que esperan inventario no), decoradas para la tabla y el
@@ -2578,11 +2584,10 @@ def salida(request):
 
     from apps.envios.models import Recoleccion
     hoy = _tz.localdate()
-    pickup_map = settings.TORRE.get("CARRIERS_PICKUP") or {}
     agendadas = {r.carrier: r for r in Recoleccion.objects.filter(fecha__gte=hoy)}
     for grupo in grupos.values():
         for gc in grupo["carriers"]:
-            gc["puede_recolectar"] = bool(pickup_map.get(gc["carrier"]))
+            gc["puede_recolectar"] = _acepta_recoleccion(gc["carrier"])
             gc["recoleccion"] = agendadas.get(gc["carrier"])
             # Registrar salida por escaneo: lo que este operador ya lleva escaneado.
             gc["registrar_url"] = _url_registrar(grupo["codigo"], gc["carrier"])

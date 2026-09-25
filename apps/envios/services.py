@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from apps.core.services import registrar_evento
 
-from .adapters import Adapter99Minutos, EnviaAdapter, ErrorCarrier, MockAdapter
+from .adapters import Adapter99Minutos, AdapterImile, EnviaAdapter, ErrorCarrier, MockAdapter
 from .models import EventoGuia, Guia, LineaManifiesto, Manifiesto, Paquete, Recoleccion, ReglaEnvio
 
 CARRIER_LOCAL = "local"
@@ -29,7 +29,10 @@ SERVICIO_DEFAULT = "ground"  # Paquetexpress terrestre vía envia.com
 
 PROVEEDOR_ENVIA = "envia"
 PROVEEDOR_99MIN = "99minutos"
+PROVEEDOR_IMILE = "imile"
 PROVEEDOR_MOCK = "mock"
+# Proveedores con API propia (no envia): el cotizador no cachea sus tarifas.
+PROVEEDORES_DIRECTOS = frozenset({PROVEEDOR_99MIN, PROVEEDOR_IMILE})
 # Valor de Pedido.carrier_forzado que significa "la lista de envia.com por precio".
 CARRIER_POOL_ENVIA = "envia"
 
@@ -56,7 +59,7 @@ def opciones_paqueteria():
     la lista de envia por precio y cada carrier de esa lista por separado."""
     base = [
         ("noventa9Minutos", "99minutos directo"),
-        ("imile", "iMile (vía envia.com)"),
+        ("imile", "iMile directo" if _imile_habilitado("full") else "iMile (vía envia.com)"),
         (CARRIER_POOL_ENVIA, "envia.com: el más barato de su lista"),
     ]
     vistos = {c for c, _ in base}
@@ -103,6 +106,8 @@ def get_adapter(carrier=None, proveedor=None, cliente=None):
         return MockAdapter()
     if elegido == PROVEEDOR_99MIN and _99min_habilitado("full"):
         return Adapter99Minutos()
+    if elegido == PROVEEDOR_IMILE and _imile_habilitado("full"):
+        return AdapterImile()
     return _adapter_envia_generar()
 
 
@@ -110,6 +115,34 @@ def _99min_habilitado(modo_requerido):
     modo = getattr(settings, "NOVENTA9_MODO", "off")
     habil = modo == "full" if modo_requerido == "full" else modo != "off"
     return bool(getattr(settings, "NOVENTA9_API_KEY", "")) and habil
+
+
+def _imile_habilitado(modo_requerido):
+    """iMile directo (2026-09-25): IMILE_API_KEY + IMILE_MODO ("full" compra;
+    "cotizar" solo tarifas). Sin credenciales el carrier sigue por envia."""
+    modo = getattr(settings, "IMILE_MODO", "off")
+    habil = modo == "full" if modo_requerido == "full" else modo != "off"
+    return bool(getattr(settings, "IMILE_API_KEY", "")) and habil
+
+
+def _fallback_envia_de(proveedor):
+    """Respaldo runtime por envia cuando un directo falla: cada proveedor con
+    su flag (NOVENTA9_FALLBACK_ENVIA, IMILE_FALLBACK_ENVIA); default apagado."""
+    flag = {PROVEEDOR_99MIN: "NOVENTA9_FALLBACK_ENVIA", PROVEEDOR_IMILE: "IMILE_FALLBACK_ENVIA"}.get(proveedor)
+    return bool(flag and getattr(settings, flag, False))
+
+
+def etiqueta_proveedor(proveedor):
+    """Nombre legible del proveedor para eventos y avisos ("99minutos", "iMile", "envia")."""
+    return {PROVEEDOR_99MIN: "99minutos", PROVEEDOR_IMILE: "iMile", PROVEEDOR_ENVIA: "envia"}.get(proveedor, proveedor or "envia")
+
+
+def carrier_acepta_recoleccion(carrier):
+    """Salida ofrece "Programar recolección" para los carriers de
+    TORRE["CARRIERS_PICKUP"] (vía envia) y para iMile directo (/order/pick/notify)."""
+    if (settings.TORRE.get("CARRIERS_PICKUP") or {}).get(carrier):
+        return True
+    return _proveedor_para(carrier) == PROVEEDOR_IMILE and _imile_habilitado("full")
 
 
 def _adapter_envia_generar():
@@ -127,19 +160,21 @@ def _adapter_envia_cotizacion():
 def get_adapter_cotizacion(carrier, cliente=None):
     """Adapter para COTIZAR ese carrier. Mismo routing que get_adapter pero el
     gating es modo != "off": cotizar no cuesta dinero, generar sí exige "full"."""
-    if _proveedor_para(carrier, cliente) == PROVEEDOR_99MIN and _99min_habilitado("cotizar"):
+    proveedor = _proveedor_para(carrier, cliente)
+    if proveedor == PROVEEDOR_99MIN and _99min_habilitado("cotizar"):
         return Adapter99Minutos()
+    if proveedor == PROVEEDOR_IMILE and _imile_habilitado("cotizar"):
+        return AdapterImile()
     return _adapter_envia_cotizacion()
 
 
 def cotizar_lane_carrier(carrier, cp_destino, peso_kg, dims=None, cliente=None):
-    """Fila de UN carrier vía su proveedor. Con NOVENTA9_FALLBACK_ENVIA, un
-    fallo del directo de 99minutos re-cotiza ese carrier por envia."""
+    """Fila de UN carrier vía su proveedor. Con el flag de respaldo del directo
+    (NOVENTA9_FALLBACK_ENVIA / IMILE_FALLBACK_ENVIA), un fallo del directo
+    re-cotiza ese carrier por envia."""
     adapter = get_adapter_cotizacion(carrier, cliente)
     fila = adapter.cotizar_lane(carrier, cp_destino, peso_kg, dims)
-    if fila.get("ok") or getattr(adapter, "PROVEEDOR", "") != PROVEEDOR_99MIN:
-        return fila
-    if not getattr(settings, "NOVENTA9_FALLBACK_ENVIA", False):
+    if fila.get("ok") or not _fallback_envia_de(getattr(adapter, "PROVEEDOR", "")):
         return fila
     return _adapter_envia_cotizacion().cotizar_lane(carrier, cp_destino, peso_kg, dims)
 
@@ -258,16 +293,16 @@ def carrier_preferido(pedido):
 
 
 def _respaldo_envia(adapter, pedido, carrier, exc):
-    """Con NOVENTA9_FALLBACK_ENVIA: un fallo del directo de 99minutos reintenta
-    UNA vez por envia (tarifa de envia, auditado). Sin flag → None (surface)."""
-    if getattr(adapter, "PROVEEDOR", "") != PROVEEDOR_99MIN:
-        return None
-    if not getattr(settings, "NOVENTA9_FALLBACK_ENVIA", False):
+    """Con el flag de respaldo del directo (NOVENTA9_FALLBACK_ENVIA /
+    IMILE_FALLBACK_ENVIA): un fallo del directo reintenta UNA vez por envia
+    (tarifa de envia, auditado). Sin flag → None (surface)."""
+    proveedor = getattr(adapter, "PROVEEDOR", "")
+    if not _fallback_envia_de(proveedor):
         return None
     registrar_evento(
         "pedido", pedido.pk, "fallback_envia", cliente=pedido.cliente,
         delta={"carrier": carrier},
-        motivo=f"99minutos directo falló ({str(exc)[:200]}); se reintenta por envia.",
+        motivo=f"{etiqueta_proveedor(proveedor)} directo falló ({str(exc)[:200]}); se reintenta por envia.",
     )
     return _adapter_envia_generar()
 
@@ -642,7 +677,7 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
     cobra al balance). Solo carriers en TORRE["CARRIERS_PICKUP"] — 99minutos
     no entra: su pickup es nativo (pickUpAfter en el create).
     """
-    if not (settings.TORRE.get("CARRIERS_PICKUP") or {}).get(carrier):
+    if not carrier_acepta_recoleccion(carrier):
         raise ValueError(
             f"{carrier} no acepta recolección programada por este medio: "
             "entrega en sucursal (drop-off) o revisa la config."
@@ -657,10 +692,13 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
             f"Ya hay recolección de {carrier} para el {fecha} "
             f"(folio {existente.folio_carrier or 's/n'}); jamás doble booking — el fee se cobra."
         )
-    adapter = _adapter_envia_generar()
-    resultado = adapter.agendar_recoleccion(
-        carrier, fecha, hora_desde, hora_hasta, guias, instrucciones,
-    )
+    adapter = get_adapter(carrier=carrier)  # el proveedor del carrier (envia, o iMile directo)
+    try:
+        resultado = adapter.agendar_recoleccion(
+            carrier, fecha, hora_desde, hora_hasta, guias, instrucciones,
+        )
+    except NotImplementedError as exc:
+        raise ValueError(f"{carrier} no agenda recolección desde Torre (su recolección es nativa).") from exc
     recoleccion = Recoleccion.objects.create(
         carrier=carrier, fecha=fecha,
         hora_desde=int(hora_desde), hora_hasta=int(hora_hasta),
