@@ -780,6 +780,26 @@ def _contexto_cambio_direccion(incidencia):
 
 
 @rol_requerido("mesa")
+def linea_tiempo(request):
+    """Línea de tiempo de pedidos, todos los clientes (Chema 2026-09-25):
+    pasos con hora por pedido y, desplegado, cada caja con su manifiesto,
+    recolección del carrier, compromiso y eventos de la paquetería."""
+    from apps.pedidos.linea_tiempo import construir, filtrar  # lazy por contrato
+    from apps.pedidos.models import Pedido
+
+    filtros = {k: (request.GET.get(k) or "").strip() for k in ("desde", "hasta", "estado", "q", "cliente")}
+    qs = Pedido.objects.all().order_by("-creado")
+    if filtros["cliente"]:
+        qs = qs.filter(cliente_id=filtros["cliente"])
+    qs = filtrar(qs, filtros)
+    return render(request, "pedidos/linea_tiempo.html", {
+        "seccion": "linea_tiempo", "es_mesa": True, "filas": construir(qs[:300]), "total": qs.count(),
+        "estados": Pedido.ESTADOS, "clientes_filtro": Cliente.objects.all(), "filtro": filtros,
+        "url_base": reverse("mesa:linea_tiempo"), "url_pedido": "mesa:pedidos",
+    })
+
+
+@rol_requerido("mesa")
 def manifiestos(request):
     """Manifiestos de salida (Chema 2026-09-22: se consultan en Mesa): lista
     por fecha y carrier con sus pedidos y el link a la hoja imprimible."""

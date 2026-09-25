@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Línea de tiempo{% endblock %}
+{% block content %}
+{# Línea de tiempo de pedidos (Chema 2026-09-25): un renglón por pedido con la hora de cada paso; el acordeón del renglón abre cada caja con su manifiesto, la recolección del carrier, el compromiso y los eventos de la paquetería. Misma plantilla para Mesa (todos los clientes) y portal (su cliente). #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">{% if es_mesa %}Mesa · Pedidos{% else %}Tu operación{% endif %}</div>
+    <h1>Línea de tiempo</h1>
+    <div class="small"><b>{{ total }}</b> pedido{{ total|pluralize }}{% if total > 300 %} · se muestran los 300 más recientes{% endif %}</div>
+  </div>
+</div>
+
+<form method="get" class="card mb fila" style="flex-wrap:wrap;gap:8px;align-items:flex-end">
+  <div><label for="f-desde">Recibidos desde</label><input type="date" name="desde" id="f-desde" value="{{ filtro.desde }}"></div>
+  <div><label for="f-hasta">hasta</label><input type="date" name="hasta" id="f-hasta" value="{{ filtro.hasta }}"></div>
+  <div><label for="f-estado">Estado</label>
+    <select name="estado" id="f-estado"><option value="">Todos</option>
+      {% for clave, nombre in estados %}<option value="{{ clave }}" {% if filtro.estado == clave %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
+    </select></div>
+  {% if es_mesa %}
+  <div><label for="f-cliente">Cliente</label>
+    <select name="cliente" id="f-cliente"><option value="">Todos</option>
+      {% for c in clientes_filtro %}<option value="{{ c.pk }}" {% if filtro.cliente == c.pk|stringformat:"s" %}selected{% endif %}>{{ c.nombre }}</option>{% endfor %}
+    </select></div>
+  {% endif %}
+  <div><label for="f-q">Buscar</label><input type="text" name="q" id="f-q" value="{{ filtro.q }}" placeholder="PED-00109, #4074, comprador"></div>
+  <button class="btn" type="submit">Filtrar</button>
+  {% if filtro.desde or filtro.hasta or filtro.estado or filtro.q or filtro.cliente %}<a class="btn chico" href="{{ url_base }}">Quitar filtros</a>{% endif %}
+</form>
+
+<p class="small muted">Sin fechas se muestran los últimos 14 días. "Salió de bodega" es el manifiesto; "Recolectado por carrier" es lo que reportó la paquetería (puede llegar antes). El compromiso corre desde la salida.</p>
+
+<div class="tabla-wrap">
+  <table>
+    <thead>
+      <tr><th>Pedido</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>Entregado</th><th>Compromiso</th></tr>
+    </thead>
+    <tbody>
+      {% for f in filas %}
+      <tr>
+        <td>
+          <a class="mono" href="{% if es_mesa %}{% url 'mesa:pedidos' %}?q={{ f.pedido.folio }}{% else %}{% url 'portal:pedido_detalle' f.pedido.pk %}{% endif %}">{{ f.pedido.folio }}</a>
+          {% if f.pedido.orden_shopify_legible %}<div class="small mono">{{ f.pedido.orden_shopify_legible }}</div>{% endif %}
+          {% if es_mesa %}<div class="small muted">{{ f.pedido.cliente.nombre }}</div>{% endif %}
+          <span class="pill {% if f.pedido.estado == 'ENTREGADO' %}ok{% elif f.pedido.estado == 'CANCELADO' or f.pedido.estado == 'RETORNADO' %}crit{% else %}accent{% endif %}">{{ f.pedido.get_estado_display }}</span>
+        </td>
+        {% for etiqueta, ts in f.pasos %}<td class="mono small">{% if ts %}{{ ts|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>{% endfor %}
+        <td class="mono small">{% if f.compromiso %}<span class="pill {% if f.vencido %}crit{% else %}{% endif %}">{{ f.compromiso|date:"d/M" }}{% if f.vencido %} · vencido{% endif %}</span>{% elif f.pedido.ts_entregado %}<span class="muted">entregado</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      <tr>
+        <td colspan="10" style="padding-top:0">
+          <details class="colapsable">
+            <summary class="small">Por caja · {{ f.cajas|length }} caja{{ f.cajas|length|pluralize }}</summary>
+            <div class="colapsable-cuerpo">
+              {% for c in f.cajas %}
+              <div class="mb">
+                <b>{% if c.numero %}Caja {{ c.numero }}{% else %}Envío{% endif %}</b> · {{ c.estado }}
+                {% for g in c.guias %}
+                <div class="small" style="margin-left:12px">
+                  <span class="mono">{{ g.carrier }} {{ g.numero }}</span> · {{ g.estado }}{% if not g.activa %} (inactiva){% endif %}
+                  {% if g.manifiesto %} · salió con <span class="mono">{{ g.manifiesto.folio }}</span> el {{ g.manifiesto.ts|date:"d/M H:i" }}{% if g.manifiesto.chofer %} ({{ g.manifiesto.chofer }}){% endif %}{% endif %}
+                  {% if g.recolectado_carrier %} · recolectado por la paquetería el {{ g.recolectado_carrier|date:"d/M H:i" }}{% endif %}
+                  {% if g.compromiso and not g.entregado %} · compromiso {{ g.compromiso|date:"d/M" }}{% elif g.dias_promesa and not g.entregado %} · promesa {{ g.dias_promesa }} día{{ g.dias_promesa|pluralize }} desde la salida{% endif %}
+                  {% if g.eventos %}
+                  <ul style="margin:4px 0 0 16px">
+                    {% for e in g.eventos %}<li class="mono small">{{ e.ts|date:"d/M H:i" }} · {{ e.descripcion }}</li>{% endfor %}
+                  </ul>
+                  {% else %}<div class="muted">Sin eventos de la paquetería todavía.</div>{% endif %}
+                </div>
+                {% empty %}
+                <div class="small muted" style="margin-left:12px">Sin guía.</div>
+                {% endfor %}
+              </div>
+              {% endfor %}
+            </div>
+          </details>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="10" class="muted centro">Sin pedidos con esos filtros.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

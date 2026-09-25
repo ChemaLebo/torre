@@ -11,6 +11,7 @@ urlpatterns = [
     path("incidencias/<int:pk>/", views.incidencia_detalle, name="incidencia_detalle"),
     path("pedidos/", views.pedidos, name="pedidos"),
     path("pedidos/nuevo/", views.pedido_nuevo, name="pedido_nuevo"),
+    path("pedidos/linea-de-tiempo/", views.linea_tiempo, name="linea_tiempo"),
     path("inventario/", views.inventario, name="inventario"),
     path("inventario/reconciliar/", views.inventario_reconciliar, name="inventario_reconciliar"),
     path("inventario/conteo.csv", views.inventario_exportar_conteo, name="inventario_exportar_conteo"),

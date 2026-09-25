@@ -15,6 +15,7 @@ from django.contrib import messages
 from django.db.models import Count, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 
 from apps.catalogo.models import SKU
@@ -407,6 +408,21 @@ def _pipeline(pedido):
             paso["actual"] = True
             break
     return pasos
+
+
+@portal_requerido
+def linea_tiempo(request):
+    """Línea de tiempo de los pedidos del cliente (Chema 2026-09-25): mismos
+    pasos y detalle por caja que en Mesa, acotado a request.cliente."""
+    from apps.pedidos.linea_tiempo import construir, filtrar  # lazy por contrato
+
+    filtros = {k: (request.GET.get(k) or "").strip() for k in ("desde", "hasta", "estado", "q")}
+    qs = filtrar(Pedido.objects.filter(cliente=request.cliente).order_by("-creado"), filtros)
+    return render(request, "pedidos/linea_tiempo.html", {
+        "seccion": "linea_tiempo", "es_mesa": False, "filas": construir(qs[:300]), "total": qs.count(),
+        "estados": Pedido.ESTADOS, "filtro": filtros,
+        "url_base": reverse("portal:linea_tiempo"), "url_pedido": "portal:pedido_detalle",
+    })
 
 
 @portal_requerido

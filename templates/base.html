@@ -66,6 +66,7 @@ window.addEventListener("load", function () {
         <summary>Tu operación</summary>
         <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'portal:dashboard' %}">Hoy</a>
         <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'portal:pedidos' %}">Pedidos</a>
+        <a class="nav-link {% if seccion == 'linea_tiempo' %}activo{% endif %}" href="{% url 'portal:linea_tiempo' %}">Línea de tiempo</a>
         <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'portal:recepciones' %}">Recepciones</a>
         <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'portal:incidencias' %}">Incidencias{% if badge_incidencias %} <span class="pill warn">{{ badge_incidencias }}</span>{% endif %}</a>
       </details>
@@ -101,6 +102,7 @@ window.addEventListener("load", function () {
         <summary>Operación</summary>
         <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'mesa:dashboard' %}">Torre de control</a>
         <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'mesa:pedidos' %}">Pedidos</a>
+        <a class="nav-link {% if seccion == 'linea_tiempo' %}activo{% endif %}" href="{% url 'mesa:linea_tiempo' %}">Línea de tiempo</a>
         <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones{% if reingresos_pendientes %} <span class="pill warn">{{ reingresos_pendientes }}</span>{% endif %}</a>
         <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'mesa:incidencias' %}">Incidencias{% if badge_incidencias %} <span class="pill warn">{{ badge_incidencias }}</span>{% endif %}</a>
         <a class="nav-link {% if seccion == 'bodega' %}activo{% endif %}" href="{% url 'mesa:bodega' %}">Bodega</a>
