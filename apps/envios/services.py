@@ -877,6 +877,14 @@ def _procesar_rastreo(guia, info, ahora):
         # Resincroniza pedidos rezagados (p. ej. el manifiesto se marcó
         # después del primer escaneo del carrier).
         _transicionar_pedido(pedido, "EN_TRANSITO", motivo=descripcion)
+    elif (
+        guia.estado == Guia.ENTREGADO and pedido.estado in ("RECOLECTADO", "EN_TRANSITO")
+        and _estado_por_guias(pedido) == "ENTREGADO"
+    ):
+        # La guía ya estaba entregada cuando se registró la salida (2026-09-25:
+        # pedidos que salieron sin manifiesto): sin cambio de estado no
+        # corrían los efectos y el pedido se quedaba en RECOLECTADO.
+        _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion or "Entregado según el carrier")
 
     if guia.estado not in Guia.ESTADOS_TERMINALES and not hubo_movimiento:
         resultado["incidencias"] += _revisar_sin_movimiento(guia, ahora)

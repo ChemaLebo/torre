@@ -165,6 +165,18 @@ class PollTrackingTests(TestCase):
         fulfillment2.assert_not_called()
         self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="recolectado_por_carrier").exists())
 
+    def test_pedido_rezagado_con_guia_ya_entregada_se_cierra_en_el_siguiente_poll(self):
+        """2026-09-25 (PED-00053): salió sin manifiesto, el carrier la entregó y
+        luego se registró la salida; sin cambio de estado de la guía el pedido
+        se quedaba RECOLECTADO para siempre."""
+        pedido, guia = self._pedido_recolectado()
+        Guia.objects.filter(pk=guia.pk).update(estado="ENTREGADO", ultimo_evento="Delivered")
+        guia.refresh_from_db()
+        services._procesar_rastreo(guia, {"estado": "ENTREGADO", "descripcion": "Delivered", "raw": {}}, timezone.now())
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "ENTREGADO")
+        self.assertIsNotNone(pedido.ts_entregado)
+
     def test_guias_locales_no_se_rastrean(self):
         # Guía carrier "local" (flota propia / datos viejos): el poller la
         # ignora. Se genera con el flag encendido porque sin flota
