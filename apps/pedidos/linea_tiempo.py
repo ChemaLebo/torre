@@ -31,6 +31,10 @@ def filtrar(qs, filtros):
     q = (filtros.get("q") or "").strip()
     if q:
         qs = qs.filter(Q(folio__icontains=q) | Q(shopify_order_name__icontains=q) | Q(comprador_nombre__icontains=q))
+    if filtros.get("guia_estado"):
+        # Estatus del PAQUETE (su guía), no del pedido: se acota aquí y se
+        # afina por fila en construir (un pedido puede tener cajas en estados distintos).
+        qs = qs.filter(guias__estado=filtros["guia_estado"]).distinct()
     return qs
 
 
@@ -81,10 +85,11 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy):
     }
 
 
-def construir(pedidos):
+def construir(pedidos, guia_estado=""):
     """Filas por paquete para los pedidos dados (ya filtrados), en el orden de
     los pedidos y de sus cajas. Un pedido sin plan de cajas es una fila por
-    guía (o una sola fila sin guía)."""
+    guía (o una sola fila sin guía). `guia_estado` deja solo las filas cuya
+    guía está en ese estatus (filtro "estatus del paquete")."""
     pedidos = list(
         pedidos.select_related("cliente", "tienda")
         .prefetch_related("guias__eventos", "paquetes__guias__eventos")
@@ -108,4 +113,6 @@ def construir(pedidos):
             for guia in sueltas:
                 if guia.es_activa:
                     filas.append(_fila(p, None, guia, total, por_guia, hoy))
+    if guia_estado:
+        filas = [f for f in filas if f["guia"] is not None and f["guia"].estado == guia_estado]
     return filas

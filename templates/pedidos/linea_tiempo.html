@@ -13,9 +13,13 @@
 <form method="get" class="card mb fila" style="flex-wrap:wrap;gap:8px;align-items:flex-end">
   <div><label for="f-desde">Recibidos desde</label><input type="date" name="desde" id="f-desde" value="{{ filtro.desde }}"></div>
   <div><label for="f-hasta">hasta</label><input type="date" name="hasta" id="f-hasta" value="{{ filtro.hasta }}"></div>
-  <div><label for="f-estado">Estado</label>
+  <div><label for="f-estado">Estado del pedido</label>
     <select name="estado" id="f-estado"><option value="">Todos</option>
       {% for clave, nombre in estados %}<option value="{{ clave }}" {% if filtro.estado == clave %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
+    </select></div>
+  <div><label for="f-guia-estado">Estatus del paquete</label>
+    <select name="guia_estado" id="f-guia-estado"><option value="">Todos</option>
+      {% for clave, nombre in estados_guia %}<option value="{{ clave }}" {% if filtro.guia_estado == clave %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
     </select></div>
   {% if es_mesa %}
   <div><label for="f-cliente">Cliente</label>
@@ -25,7 +29,7 @@
   {% endif %}
   <div><label for="f-q">Buscar</label><input type="text" name="q" id="f-q" value="{{ filtro.q }}" placeholder="PED-00109, #4074, comprador"></div>
   <button class="btn" type="submit">Filtrar</button>
-  {% if filtro.desde or filtro.hasta or filtro.estado or filtro.q or filtro.cliente %}<a class="btn chico" href="{{ url_base }}">Quitar filtros</a>{% endif %}
+  {% if filtro.desde or filtro.hasta or filtro.estado or filtro.guia_estado or filtro.q or filtro.cliente %}<a class="btn chico" href="{{ url_base }}">Quitar filtros</a>{% endif %}
 </form>
 
 <p class="small muted">Sin fechas se muestran los últimos 14 días. "Salió de bodega" es el manifiesto; "Recolectado por carrier" es lo que reportó la paquetería (puede llegar antes). El compromiso corre desde la salida.</p>

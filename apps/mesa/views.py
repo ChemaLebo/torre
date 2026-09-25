@@ -787,14 +787,17 @@ def linea_tiempo(request):
     from apps.pedidos.linea_tiempo import construir, filtrar  # lazy por contrato
     from apps.pedidos.models import Pedido
 
-    filtros = {k: (request.GET.get(k) or "").strip() for k in ("desde", "hasta", "estado", "q", "cliente")}
+    from apps.envios.models import Guia  # lazy: modelo de otra app
+
+    filtros = {k: (request.GET.get(k) or "").strip() for k in ("desde", "hasta", "estado", "guia_estado", "q", "cliente")}
     qs = Pedido.objects.all().order_by("-creado")
     if filtros["cliente"]:
         qs = qs.filter(cliente_id=filtros["cliente"])
     qs = filtrar(qs, filtros)
     return render(request, "pedidos/linea_tiempo.html", {
-        "seccion": "linea_tiempo", "es_mesa": True, "filas": construir(qs[:300]), "total": qs.count(),
-        "estados": Pedido.ESTADOS, "clientes_filtro": Cliente.objects.all(), "filtro": filtros,
+        "seccion": "linea_tiempo", "es_mesa": True, "filas": construir(qs[:300], filtros["guia_estado"]),
+        "total": qs.count(), "estados": Pedido.ESTADOS, "estados_guia": Guia.ESTADOS,
+        "clientes_filtro": Cliente.objects.all(), "filtro": filtros,
         "url_base": reverse("mesa:linea_tiempo"), "url_pedido": "mesa:pedidos",
     })
 

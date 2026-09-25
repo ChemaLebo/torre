@@ -416,11 +416,13 @@ def linea_tiempo(request):
     pasos y detalle por caja que en Mesa, acotado a request.cliente."""
     from apps.pedidos.linea_tiempo import construir, filtrar  # lazy por contrato
 
-    filtros = {k: (request.GET.get(k) or "").strip() for k in ("desde", "hasta", "estado", "q")}
+    from apps.envios.models import Guia  # lazy: modelo de otra app
+
+    filtros = {k: (request.GET.get(k) or "").strip() for k in ("desde", "hasta", "estado", "guia_estado", "q")}
     qs = filtrar(Pedido.objects.filter(cliente=request.cliente).order_by("-creado"), filtros)
     return render(request, "pedidos/linea_tiempo.html", {
-        "seccion": "linea_tiempo", "es_mesa": False, "filas": construir(qs[:300]), "total": qs.count(),
-        "estados": Pedido.ESTADOS, "filtro": filtros,
+        "seccion": "linea_tiempo", "es_mesa": False, "filas": construir(qs[:300], filtros["guia_estado"]),
+        "total": qs.count(), "estados": Pedido.ESTADOS, "estados_guia": Guia.ESTADOS, "filtro": filtros,
         "url_base": reverse("portal:linea_tiempo"), "url_pedido": "portal:pedido_detalle",
     })
 

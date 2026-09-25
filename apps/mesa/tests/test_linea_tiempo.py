@@ -48,6 +48,10 @@ class LineaTiempoTests(TestCase):
         filtrado = self.client.get(reverse("mesa:linea_tiempo"), {"q": "#4074"}).content.decode()
         self.assertIn(self.pedido.folio, filtrado)
         self.assertNotIn(self.ajeno.folio, filtrado)
+        # Estatus del paquete: solo la caja recolectada, no la que sigue en bodega.
+        por_paquete = self.client.get(reverse("mesa:linea_tiempo"), {"guia_estado": "RECOLECTADO"})
+        self.assertEqual([f["caja"] for f in por_paquete.context["filas"]], [1])
+        self.assertEqual(self.client.get(reverse("mesa:linea_tiempo"), {"guia_estado": "ENTREGADO"}).context["filas"], [])
 
     def test_portal_solo_ve_lo_suyo(self):
         karina = get_user_model().objects.create_user("karina", password="x12345678")
