@@ -141,6 +141,20 @@ class IngestaTests(BaseServicios):
         pedido.refresh_from_db()
         self.assertIsNone(pedido.direccion_pendiente)
 
+    def test_la_ingesta_guarda_el_nombre_de_la_orden_y_lo_completa_despues(self):
+        """Chema 2026-09-25: el "name" de Shopify ("#5501234") es lo que usa
+        servicio al cliente; se guarda al ingerir y se completa en una repetida."""
+        payload = payload_shopify()
+        pedido, *_ = self._ingerir(payload)
+        self.assertEqual(pedido.shopify_order_name, "#5501234")
+        self.assertEqual(pedido.orden_shopify_legible, "#5501234")
+        Pedido.objects.filter(pk=pedido.pk).update(shopify_order_name="")
+        self._ingerir(payload)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.shopify_order_name, "#5501234")
+        pedido.shopify_order_name = ""
+        self.assertEqual(pedido.orden_shopify_legible, "#5501234")  # sin nombre aún: el id
+
     def test_la_ingesta_escribe_el_link_al_portal_tras_el_commit(self):
         """Chema 2026-09-23: la orden de Shopify lleva un metafield con el link
         al pedido en el portal; sale en on_commit y solo para órdenes nuevas."""

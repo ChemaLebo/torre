@@ -233,7 +233,7 @@ def filas_csv(renglones, ruta_evidencia):
         por_etapa = {e["clave"]: e["fotos"] for e in r["etapas"]}
         urls = [ruta_evidencia(f["foto"]) for e in r["etapas"] for f in e["fotos"]]
         filas.append([
-            p.folio, p.shopify_order_id or "", p.cliente.nombre, p.get_canal_display(), p.comprador_nombre,
+            p.folio, p.orden_shopify_legible, p.cliente.nombre, p.get_canal_display(), p.comprador_nombre,
             p.get_estado_display(), timezone.localtime(p.creado).strftime("%Y-%m-%d %H:%M"),
             guia.carrier if guia else "", guia.numero if guia else "", r["rastreo_url"],
             "; ".join(i["incidencia"].folio for i in r["incidencias"]),

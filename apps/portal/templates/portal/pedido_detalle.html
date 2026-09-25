@@ -7,7 +7,7 @@
   <div>
     <div class="eyebrow"><a href="{% url 'portal:pedidos' %}">Pedidos</a> / {{ pedido.folio }}</div>
     <h1>{{ pedido.folio }}</h1>
-    {% if url_shopify %}<div class="small"><a class="mono" href="{{ url_shopify }}" target="_blank" rel="noopener" title="Abrir la orden en el admin de Shopify">Orden #{{ pedido.shopify_order_id }} en Shopify ↗</a></div>{% endif %}
+    {% if url_shopify %}<div class="small"><a class="mono" href="{{ url_shopify }}" target="_blank" rel="noopener" title="Abrir la orden en el admin de Shopify (id {{ pedido.shopify_order_id }})">Orden {{ pedido.orden_shopify_legible }} en Shopify ↗</a></div>{% endif %}
   </div>
   <div class="fila">
     <span class="pill {{ pill }}">{{ pedido.get_estado_display }}</span>

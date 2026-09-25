@@ -126,7 +126,7 @@
   <div class="estado-hero">
     <h1>{{ estado_titulo }}</h1>
     <p>{% if nombre_pila %}{{ nombre_pila }}, {% endif %}{{ estado_descripcion }}</p>
-    <div class="folio">PEDIDO {{ pedido.folio }}</div>
+    <div class="folio">PEDIDO {{ pedido.folio }}{% if pedido.shopify_order_name %} · ORDEN {{ pedido.shopify_order_name }}{% endif %}</div>
   </div>
 
   <div class="linea-tiempo">

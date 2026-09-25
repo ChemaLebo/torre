@@ -672,6 +672,11 @@ def _refrescar_direccion(pedido, direccion):
     return ["direccion_pendiente"]
 
 
+def _nombre_orden(payload):
+    """El "name" de la orden de Shopify ("#4074"), recortado al campo."""
+    return str(payload.get("name") or "").strip()[:40]
+
+
 def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
     """Rama idempotente del upsert: refresca datos blandos y aplica ediciones de cantidades."""
     campos = []
@@ -691,6 +696,10 @@ def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
     if nota and nota != pedido.nota_regalo:
         pedido.nota_regalo = nota
         campos.append("nota_regalo")
+    nombre_orden = _nombre_orden(payload)
+    if nombre_orden and nombre_orden != pedido.shopify_order_name:
+        pedido.shopify_order_name = nombre_orden
+        campos.append("shopify_order_name")
     if campos:
         pedido.save(update_fields=campos + ["actualizado"])
     if not cancelada:
@@ -956,6 +965,7 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
         tienda=tienda,
         cliente=cliente,
         shopify_order_id=shopify_order_id,
+        shopify_order_name=_nombre_orden(payload),
         origen=origen,
         canal=canal,
         canal_fuente=canal_fuente,

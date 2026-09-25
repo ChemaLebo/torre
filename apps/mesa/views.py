@@ -696,6 +696,7 @@ def pedidos(request):
             Q(folio__icontains=q)
             | Q(comprador_nombre__icontains=q)
             | Q(shopify_order_id__icontains=q)
+            | Q(shopify_order_name__icontains=q)  # "#4074", como lo busca servicio al cliente
         )
 
     filas = list(qs[:200])

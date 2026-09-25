@@ -75,7 +75,7 @@
         {% for g in guias %}
           <p class="small">Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a class="mono" href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}<span class="mono">{{ g.numero }}</span>{% endif %}{% if not g.activa %} <span class="muted">({{ g.estado|lower }})</span>{% endif %}</p>
         {% endfor %}
-        {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener" title="Orden #{{ incidencia.pedido.shopify_order_id }} en el admin de Shopify">Ver orden en Shopify ↗</a>{% endif %}
+        {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener" title="Orden {{ incidencia.pedido.orden_shopify_legible }} en el admin de Shopify">Ver orden {{ incidencia.pedido.orden_shopify_legible }} en Shopify ↗</a>{% endif %}
       {% endif %}
       {% if incidencia.sku %}
         <p class="small">Producto: <span class="mono">{{ incidencia.sku.codigo }}</span> · {{ incidencia.sku.descripcion }}</p>

@@ -27,7 +27,7 @@ class ExpedienteIncidenciaTests(TestCase):
         pedido = crear_pedido(self.cliente, self.tienda, shopify_order_id="8401962139810")
         html = self._detalle(pedido)
         self.assertIn(f"https://{self.tienda.dominio}/admin/orders/8401962139810", html)
-        self.assertIn("Ver orden en Shopify", html)
+        self.assertIn("Ver orden #8401962139810 en Shopify", html)
 
     def test_lista_todas_las_guias_una_por_caja(self):
         from decimal import Decimal
@@ -50,4 +50,4 @@ class ExpedienteIncidenciaTests(TestCase):
 
     def test_pedido_manual_no_tiene_link(self):
         pedido = Pedido.objects.create(cliente=self.cliente, origen="manual", comprador_nombre="Ana", cp="44100")
-        self.assertNotIn("Ver orden en Shopify", self._detalle(pedido))
+        self.assertNotIn("en Shopify", self._detalle(pedido))

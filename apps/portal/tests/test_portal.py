@@ -328,7 +328,7 @@ class TestAccionesIncidencia(BasePortal):
         self.assertIn("EST-1", html)
         self.assertIn("Guía caja 2: estafeta", html)
         self.assertIn("EST-2", html)
-        self.assertIn("Ver orden en Shopify", html)
+        self.assertIn("Ver orden #8398059995298 en Shopify", html)
         self.assertIn("https://colima-mx.myshopify.com/admin/orders/8398059995298", html)
 
     def test_las_incidencias_internas_no_existen_para_el_portal(self):
@@ -350,6 +350,16 @@ class TestAccionesIncidencia(BasePortal):
         publicas = Incidencia.objects.filter(cliente=self.colima, interna=False).exclude(estado=Incidencia.CERRADA).count()
         self.assertIn(f'Incidencias <span class="pill warn">{publicas}</span>', hoy)
         self.assertNotIn(f'Incidencias <span class="pill warn">{publicas + 1}</span>', hoy)
+
+    def test_la_orden_de_shopify_se_muestra_por_su_nombre(self):
+        """Chema 2026-09-25: en pantalla va el nombre ("#4074"); el link sigue con el id."""
+        Pedido.objects.filter(pk=self.pedido.pk).update(tienda=self.tienda, shopify_order_id="8398059995298", shopify_order_name="#4074")
+        self.entrar()
+        detalle = self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk])).content.decode()
+        self.assertIn("Orden #4074 en Shopify", detalle)
+        self.assertIn("/admin/orders/8398059995298", detalle)
+        self.assertIn("#4074 ↗", self.client.get(reverse("portal:pedidos")).content.decode())
+        self.assertIn("Ver orden #4074 en Shopify", self.client.get(reverse("portal:incidencia_detalle", args=[self.incidencia.pk])).content.decode())
 
     def test_nueva_incidencia_rechaza_pedido_ajeno(self):
         self.entrar()

@@ -99,6 +99,9 @@ class Pedido(models.Model):
     )
     cliente = models.ForeignKey("core.Cliente", on_delete=models.PROTECT, related_name="pedidos")
     shopify_order_id = models.CharField(max_length=40, blank=True, default="")
+    # "Nombre" de la orden en Shopify ("#4074"): lo que usa servicio al cliente
+    # (Chema 2026-09-25). El link al admin sigue con el ID; en pantalla va este.
+    shopify_order_name = models.CharField(max_length=40, blank=True, default="")
     folio = models.CharField(max_length=12, unique=True, blank=True, editable=False)
     origen = models.CharField(max_length=15, choices=ORIGENES, default="webhook")
     # Canal de venta (de dónde vino la compra), distinto de `origen` (cómo llegó
@@ -347,6 +350,14 @@ class Pedido(models.Model):
         return EvidenciaFoto.objects.filter(
             entidad="pedido", entidad_id=str(self.pk), tipo="caja_cerrada",
         ).exists()
+
+    @property
+    def orden_shopify_legible(self):
+        """Cómo se nombra la orden de Shopify en pantalla: su nombre ("#4074")
+        o, si aún no se conoce, "#<id>"; "" para pedidos sin orden."""
+        if self.shopify_order_name:
+            return self.shopify_order_name
+        return f"#{self.shopify_order_id}" if self.shopify_order_id else ""
 
     @property
     def direccion_congelada(self):
