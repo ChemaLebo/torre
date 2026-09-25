@@ -45,3 +45,6 @@ PLAN-BUILDS.md
 REVIEW-MANTENIBILIDAD.md
 docs/FILE_INVENTORY.md
 docs/MAINTAINABILITY_REVIEW.md
+# Documentación de la API de iMile bajada de developer.imile.com (2026-09-25):
+# referencia local para el adapter; se regenera con el script anotado en memoria.
+docs/imile-api/
