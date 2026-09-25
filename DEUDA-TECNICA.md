@@ -286,6 +286,17 @@ como tardía para lo que salió.
 - Reporte de ventas / SLA: los ts_* se estampan una sola vez (la primera ola
   marca el SLA); una segunda salida días después no reabre el reloj.
 
+## Recolección del carrier como estatus aparte — hecho 2026-09-25
+
+Ver CONVENTIONS → envios `poll_tracking`. Queda: (1) un pedido GUIA_GENERADA
+cuya guía pasa a EN_TRANSITO salta a EN_TRANSITO por la transición vieja
+(GUIA_GENERADA → EN_TRANSITO) y desaparece de Salida sin manifiesto ni
+kardex; con el estatus nuevo conviene que se quede en Salida pre-marcado
+hasta el manifiesto (decidir con Chema). (2) Poller de Retraso pendiente
+(Chema 2026-09-25: promesa en vez de silencio, una incidencia por pedido,
+solo tras la salida, cierre solo al entregar). (3) Salida automática por
+evento del carrier (sin manifiesto): Chema "no estoy seguro".
+
 ## Sin paquetería que cotice — hecho 2026-09-24
 
 Con el switch de Colima a 99minutos directo ningún pedido tuvo plan de cajas

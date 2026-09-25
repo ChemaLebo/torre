@@ -89,6 +89,10 @@ class Guia(models.Model):
     # estampa cuando la caja SALE (manifiesto, o recolección del carrier).
     dias_promesa = models.PositiveSmallIntegerField(null=True, blank=True)
     fecha_compromiso = models.DateField(null=True, blank=True)
+    # Estatus aparte de la salida de bodega (Chema 2026-09-25): cuándo el
+    # carrier reportó que recogió el paquete. Puede llegar ANTES del
+    # manifiesto (escanean mientras hacemos Salida) y manda sobre él.
+    ts_recolectado_carrier = models.DateTimeField(null=True, blank=True)
     raw = models.JSONField(default=dict, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 

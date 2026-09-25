@@ -69,6 +69,7 @@
           <span class="small">Último movimiento {{ guia.movio_hace }}</span>
         </div>
         {% if guia.ultimo_evento %}<p class="small mt">“{{ guia.ultimo_evento }}”</p>{% endif %}
+        {% if guia.ts_recolectado_carrier %}<p class="small mt">Recolectado por la paquetería: {{ guia.ts_recolectado_carrier|date:"d/M/Y H:i" }}</p>{% endif %}
         {% if guia.fecha_compromiso and guia.estado != 'ENTREGADO' %}<p class="small mt">Compromiso de entrega: <b>{{ guia.fecha_compromiso|date:"d/M/Y" }}</b></p>{% elif guia.dias_promesa and guia.estado == 'GUIA_CREADA' %}<p class="small mt">Compromiso: {{ guia.dias_promesa }} día{{ guia.dias_promesa|pluralize }} a partir de la salida de bodega.</p>{% endif %}
       {% else %}
         <p class="muted">Todavía no hay guía: se genera en cuanto el pedido queda empacado y verificado.</p>

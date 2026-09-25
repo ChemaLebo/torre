@@ -75,6 +75,7 @@
         <td>
           <span class="pill {{ pedido.pill }}">{{ pedido.get_estado_display }}</span>
           {% if pedido.parcial_de_orden %}<span class="pill accent" title="La orden se dividió entre locations: este pedido ampara solo nuestro ticket">parcial</span>{% endif %}
+          {% if pedido.ts_recolectado_carrier and pedido.estado == 'GUIA_GENERADA' %}<span class="pill warn" title="El carrier ya reportó la recolección y Torre no tiene manifiesto: regístralo en Salida (sale pre-marcado)">recolectado por carrier · sin manifiesto</span>{% endif %}
         </td>
         <td class="small">
           {% for g, url in pedido.guias_vivas %}

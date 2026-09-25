@@ -867,6 +867,8 @@ def _procesar_rastreo(guia, info, ahora):
         guia.save(update_fields=sorted(set(campos)))
 
     _guardar_eventos(guia, info, estado_nuevo if cambio else "", hubo_movimiento, ahora)
+    if guia.estado in _ESTADOS_YA_RECOLECTADA and guia.ts_recolectado_carrier is None:
+        _registrar_recoleccion_carrier(guia, info.get("ts_evento") or ahora, descripcion)
 
     if cambio:
         resultado["actualizada"] = 1
@@ -879,6 +881,45 @@ def _procesar_rastreo(guia, info, ahora):
     if guia.estado not in Guia.ESTADOS_TERMINALES and not hubo_movimiento:
         resultado["incidencias"] += _revisar_sin_movimiento(guia, ahora)
     return resultado
+
+
+# El carrier ya tiene el paquete en cualquiera de estos estados.
+_ESTADOS_YA_RECOLECTADA = {Guia.RECOLECTADO, Guia.EN_TRANSITO, Guia.EN_RUTA, Guia.ENTREGADO}
+
+
+def _registrar_recoleccion_carrier(guia, ts, descripcion=""):
+    """Estatus "recolectado por el carrier" (Chema 2026-09-25), separado de la
+    salida de bodega: estampa la guía y el pedido (la primera guía), fija el
+    compromiso de entrega desde esa hora y, si Torre aún no registró la
+    salida de esa caja, dispara el fulfillment en Shopify y la plantilla B
+    (los dos idempotentes: el manifiesto posterior no los repite). No mueve
+    cajas ni kardex: la salida física la sigue registrando el manifiesto,
+    que en Salida aparece pre-marcado "ya salió"."""
+    pedido = guia.pedido
+    guia.ts_recolectado_carrier = ts
+    guia.save(update_fields=["ts_recolectado_carrier"])
+    estampar_compromiso(guia, ts)
+    primera = pedido.ts_recolectado_carrier is None
+    if primera:
+        pedido.ts_recolectado_carrier = ts
+        pedido.save(update_fields=["ts_recolectado_carrier"])
+    if guia.paquete_id is not None:
+        en_bodega = guia.paquete.estado != Paquete.DESPACHADO
+    else:
+        en_bodega = pedido.estado in ("EMPACADO", "GUIA_GENERADA")
+    registrar_evento(
+        "pedido", pedido.pk, "recolectado_por_carrier", cliente=pedido.cliente,
+        delta={"guia": guia.numero, "carrier": guia.carrier,
+               "caja": guia.paquete.numero if guia.paquete_id else None,
+               "ts": ts.isoformat(), "sin_manifiesto": en_bodega},
+        motivo=(descripcion or "El carrier reportó la recolección")[:300],
+    )
+    if en_bodega:
+        try:
+            from apps.pedidos.services import avisar_recoleccion_carrier  # lazy por contrato
+            avisar_recoleccion_carrier(pedido, guia, notificar=primera)
+        except Exception:  # noqa: BLE001 — el aviso jamás detiene el rastreo
+            pass
 
 
 def _estado_por_guias(pedido):

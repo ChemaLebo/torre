@@ -191,6 +191,18 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertContains(hoja_html, "Ya habían salido antes, sin escaneo (1)")
         self.assertContains(hoja_html, "<b>1</b> caja")  # el chofer firma solo por la escaneada
 
+    def test_recolectada_por_el_carrier_llega_premarcada_como_ya_salio(self):
+        """Chema 2026-09-25: si el carrier ya reportó la recolección, la caja
+        sale de "por escanear" y en el resumen viene con "ya salió" palomeada."""
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        Guia.objects.filter(pk=c2.guia_activa.pk).update(ts_recolectado_carrier=timezone.now())
+        pantalla = self.client.get(self.url)
+        self.assertEqual([u["id"] for u in pantalla.context["faltan"]], [c2.pk])
+        self.assertEqual([u["id"] for u in pantalla.context["se_quedan"]], [c1.pk])
+        resumen = self.client.get(reverse("piso:salida_resumen") + PARAMS)
+        self.assertContains(resumen, f'name="ya_salio_paquete_id" value="{c2.pk}" checked')
+        self.assertContains(resumen, "recolectada por la paquetería")
+
     def test_no_esta_sin_palomita_no_se_toca_y_si_esta_lo_regresa(self):
         pedido, c1, c2 = self._pedido_dos_cajas()
         self._escanear(obtener_o_crear_token_etiqueta(c1.guia_activa))

@@ -6,6 +6,7 @@ from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from apps.core.models import EventoAuditoria
 from apps.envios import services
 from apps.envios.adapters import MockAdapter
 from apps.envios.models import Guia, ReglaEnvio
@@ -130,6 +131,39 @@ class PollTrackingTests(TestCase):
         services.poll_tracking()
         self.assertTrue(Incidencia.objects.filter(pedido=pedido_local, tipo="RET").exists())
         self.assertFalse(Incidencia.objects.filter(pedido=pedido_foraneo, tipo="RET").exists())
+
+    def test_recoleccion_del_carrier_es_estatus_aparte_y_avisa_una_vez(self):
+        """Chema 2026-09-25: el carrier recoge antes del manifiesto → se estampa
+        ts_recolectado_carrier (guía y pedido), el compromiso corre desde ahí,
+        Shopify y el comprador se enteran una vez; el manifiesto no lo mueve."""
+        from datetime import datetime
+
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO", es_local=True)
+        guia = services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "GUIA_GENERADA")
+        ts = timezone.make_aware(datetime(2026, 9, 24, 19, 52))
+        with patch("apps.integraciones.services.marcar_fulfillment") as fulfillment, \
+             patch("apps.mensajeria.services.enviar_en_camino") as en_camino, \
+             self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(guia, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": ts, "raw": {}}, timezone.now())
+        guia.refresh_from_db()
+        pedido.refresh_from_db()
+        self.assertEqual((guia.estado, guia.ts_recolectado_carrier, pedido.ts_recolectado_carrier), ("RECOLECTADO", ts, ts))
+        self.assertEqual(pedido.estado, "GUIA_GENERADA")  # la salida física sigue siendo el manifiesto
+        self.assertEqual(guia.fecha_compromiso, ts.date() + timedelta(days=1))  # local: día siguiente desde la recolección
+        en_camino.assert_called_once_with(pedido)
+        fulfillment.assert_called_once()
+        self.assertTrue(fulfillment.call_args.kwargs.get("notificar"))
+        with patch("apps.integraciones.services.marcar_fulfillment") as fulfillment2, \
+             patch("apps.mensajeria.services.enviar_en_camino") as en_camino2, \
+             self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(guia, {"estado": "EN_TRANSITO", "descripcion": "In transit", "ts_evento": ts + timedelta(hours=5), "raw": {}}, timezone.now())
+        guia.refresh_from_db()
+        self.assertEqual(guia.ts_recolectado_carrier, ts)  # segundo evento: no se vuelve a estampar ni a avisar
+        en_camino2.assert_not_called()
+        fulfillment2.assert_not_called()
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="recolectado_por_carrier").exists())
 
     def test_guias_locales_no_se_rastrean(self):
         # Guía carrier "local" (flota propia / datos viejos): el poller la

@@ -162,6 +162,9 @@ class Pedido(models.Model):
     ts_empacado = models.DateTimeField(null=True, blank=True)
     ts_guia = models.DateTimeField(null=True, blank=True)
     ts_recolectado = models.DateTimeField(null=True, blank=True)
+    # Recolección reportada por el carrier (primera guía), aparte de la salida
+    # de bodega por manifiesto (ts_recolectado). Chema 2026-09-25.
+    ts_recolectado_carrier = models.DateTimeField(null=True, blank=True)
     ts_en_transito = models.DateTimeField(null=True, blank=True)
     ts_entregado = models.DateTimeField(null=True, blank=True)
     # Flag ortogonal: un pedido EN_TRANSITO puede tener incidencia; no es estado terminal.

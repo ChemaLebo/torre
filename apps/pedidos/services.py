@@ -2145,6 +2145,27 @@ def cajas_por_salir(pedido):
     return [c for c in cajas if c.estado == Paquete.EMPACADO]
 
 
+def avisar_recoleccion_carrier(pedido, guia, notificar=True):
+    """El carrier recogió una caja que Torre aún no registró en Salida (Chema
+    2026-09-25): el comprador y Shopify se enteran ya (plantilla B y
+    fulfillment de ESA caja), una sola vez; cuando llegue el manifiesto,
+    marcar_recolectado vuelve a llamarlos y ambos son idempotentes."""
+    if notificar:
+        try:
+            from apps.mensajeria.services import enviar_en_camino  # lazy — plantilla B
+            enviar_en_camino(pedido)
+        except Exception:  # noqa: BLE001, S110 — best-effort
+            pass
+    cajas = [guia.paquete] if guia.paquete_id else None
+    def _fulfillment():
+        try:
+            from apps.integraciones.services import marcar_fulfillment  # lazy
+            marcar_fulfillment(pedido, cajas=cajas, notificar=notificar)
+        except Exception:  # noqa: BLE001, S110 — best-effort
+            pass
+    transaction.on_commit(_fulfillment)
+
+
 def marcar_recolectado(pedido, actor, paquetes=None):
     """GUIA_GENERADA / PARCIALMENTE_DESPACHADO → RECOLECTADO (o
     PARCIALMENTE_DESPACHADO si solo salieron algunas cajas): escaneo de

@@ -36,9 +36,9 @@
     <p class="small muted">Marca "ya salió" solo si estás seguro de que se fue antes sin registro. Se registra su salida, pero en el manifiesto va aparte, fuera de lo que firma el chofer hoy.</p>
     {% for u in faltan %}
     <label class="corral-fila">
-      <input type="checkbox" name="{% if u.tipo == 'caja' %}ya_salio_paquete_id{% else %}ya_salio_pedido_id{% endif %}" value="{{ u.id }}">
+      <input type="checkbox" name="{% if u.tipo == 'caja' %}ya_salio_paquete_id{% else %}ya_salio_pedido_id{% endif %}" value="{{ u.id }}"{% if u.recolectada %} checked{% endif %}>
       <span class="crece">
-        <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span> · <b>ya salió</b>
+        <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span> · <b>ya salió</b>{% if u.recolectada %} <span class="pill ok" title="El carrier ya reportó la recolección">recolectada por la paquetería {{ u.recolectada|date:"d/M H:i" }}</span>{% endif %}
         <div class="small muted">{{ u.pedido.cliente.nombre }} · {{ u.pedido.destino }}</div>
       </span>
     </label>

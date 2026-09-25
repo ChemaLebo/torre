@@ -2229,11 +2229,14 @@ def _unidades_salida(listos):
                 unidades.append({
                     "tipo": "caja", "id": caja.pk, "pedido": pedido, "caja": caja,
                     "guia": caja.guia.numero if caja.guia else "",
+                    # El carrier ya la recogió (Chema 2026-09-25): sale pre-marcada "ya salió".
+                    "recolectada": caja.guia.ts_recolectado_carrier if caja.guia else None,
                 })
         else:
             unidades.append({
                 "tipo": "pedido", "id": pedido.pk, "pedido": pedido, "caja": None,
                 "guia": pedido.guia.numero if pedido.guia else "",
+                "recolectada": pedido.guia.ts_recolectado_carrier if pedido.guia else None,
             })
     return unidades
 
@@ -2284,8 +2287,8 @@ def _partir_escaneo(listos, datos):
         clave = "cajas" if unidad["tipo"] == "caja" else "pedidos"
         if unidad["id"] in datos[clave]:
             escaneadas.append(unidad)
-        elif unidad["id"] in datos["faltan"][clave]:
-            faltan.append(unidad)
+        elif unidad["id"] in datos["faltan"][clave] or unidad.get("recolectada"):
+            faltan.append(unidad)  # "No está en salida", o el carrier ya la recogió
         else:
             se_quedan.append(unidad)
     return escaneadas, faltan, se_quedan
