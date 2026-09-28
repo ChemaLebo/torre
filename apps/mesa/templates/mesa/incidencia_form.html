@@ -1,5 +1,6 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% load static %}
 {% block title %}Nueva incidencia · Mesa{% endblock %}
+{% block head %}<script defer src="{% static 'js/buscador_pedido.js' %}"></script>{% endblock %}
 {% block content %}
 <div class="topbar">
   <div>
@@ -13,8 +14,11 @@
     <form method="post">
       {% csrf_token %}
       {{ form.non_field_errors }}
-      <label for="{{ form.pedido.id_for_label }}">{{ form.pedido.label }}</label>
+      {# Campo predictivo (Chema 2026-09-28): escribe folio, # de Shopify o comprador y elige; el oculto lleva el id. #}
+      <label for="pedido-buscar">{{ form.pedido.label }}</label>
       {{ form.pedido }}
+      <input type="search" id="pedido-buscar" value="{{ form.texto_pedido_inicial }}" placeholder="Escribe el folio, el # de Shopify o el comprador y elige de la lista" autocomplete="off" data-buscador-pedido="{{ form.pedido.id_for_label }}" data-opciones="pedidos-opciones">
+      {{ form.opciones_pedido|json_script:"pedidos-opciones" }}
       <div class="small muted">Pedidos desde el mes pasado, de todos los clientes. El cliente de la incidencia es el del pedido.</div>
       {{ form.pedido.errors }}
       <div class="grid g3 mt">

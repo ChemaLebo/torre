@@ -285,6 +285,11 @@ td { padding: 10px 14px; border-bottom: 1px solid var(--hair); vertical-align: m
 tr:last-child td { border-bottom: none; }
 tr.fila-link { cursor: pointer; }
 tr.fila-link:hover td { background: var(--panel-2); }
+/* Campo predictivo de pedido (static/js/buscador_pedido.js). */
+.sugerencias { position: relative; z-index: 5; margin-top: 4px; border: 1px solid var(--hair-2); border-radius: var(--r); background: var(--panel); box-shadow: var(--card-shadow); max-height: 300px; overflow-y: auto; }
+.sugerencia { display: block; width: 100%; text-align: left; padding: 10px 12px; background: none; border: 0; border-bottom: 1px solid var(--hair); color: var(--ink); font-family: var(--mono); font-size: 13px; cursor: pointer; }
+.sugerencia:last-child { border-bottom: none; }
+.sugerencia:hover, .sugerencia.activa { background: var(--panel-2); }
 /* Orden por columna y buscador por tabla (static/js/tablas.js). */
 th.ordenable { cursor: pointer; user-select: none; }
 th.ordenable::after { content: " ↕"; opacity: .35; }

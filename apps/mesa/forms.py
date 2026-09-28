@@ -294,9 +294,13 @@ class FormNuevaIncidenciaMesa(forms.Form):
     porque el cliente de una incidencia SIEMPRE es el del pedido. SKU
     opcional, tipo, prioridad (vacía = la del tipo), interna y el texto."""
 
+    # Oculto: lo llena el campo predictivo (static/js/buscador_pedido.js).
     pedido = forms.ModelChoiceField(
-        queryset=None, label="Pedido", empty_label="Elige el pedido",
-        error_messages={"required": "Elige el pedido: el cliente de la incidencia es el del pedido."},
+        queryset=None, label="Pedido", widget=forms.HiddenInput,
+        error_messages={
+            "required": "Elige el pedido de la lista: el cliente de la incidencia es el del pedido.",
+            "invalid_choice": "Ese pedido no está en la lista: elígelo de las sugerencias.",
+        },
     )
     sku = forms.CharField(
         required=False, label="SKU (opcional)", max_length=60,
@@ -327,12 +331,28 @@ class FormNuevaIncidenciaMesa(forms.Form):
             self.fields["pedido"].initial = pedido_inicial.pk
         campo = self.fields["pedido"]
         campo.queryset = recientes.select_related("cliente").order_by("-creado")
-        campo.label_from_instance = lambda p: " · ".join(x for x in [
+        campo.label_from_instance = self.etiqueta_pedido
+        # "Sin paquetería que cotice" la abre el planificador, no una persona.
+        self.fields["tipo"].choices = [(c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c != Incidencia.TIPO_PAQ]
+
+    @staticmethod
+    def etiqueta_pedido(p):
+        """"PED-00047 · #33713 · Dulce Espinoza · Cervecería de Colima · Entregado"."""
+        return " · ".join(x for x in [
             p.folio, getattr(p, "shopify_order_name", "") or "", p.comprador_nombre or "",
             p.cliente.nombre, p.get_estado_display(),
         ] if x)
-        # "Sin paquetería que cotice" la abre el planificador, no una persona.
-        self.fields["tipo"].choices = [(c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c != Incidencia.TIPO_PAQ]
+
+    def opciones_pedido(self):
+        """[{id, texto}] para el campo predictivo, y el texto del prellenado."""
+        return [{"id": p.pk, "texto": self.etiqueta_pedido(p)} for p in self.fields["pedido"].queryset]
+
+    def texto_pedido_inicial(self):
+        valor = self["pedido"].value()
+        if not valor:
+            return ""
+        pedido = self.fields["pedido"].queryset.filter(pk=valor).first()
+        return self.etiqueta_pedido(pedido) if pedido else ""
 
     def clean(self):
         datos = super().clean()

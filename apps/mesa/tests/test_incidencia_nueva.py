@@ -31,7 +31,11 @@ class IncidenciaNuevaMesaTests(TestCase):
         self.assertContains(self.client.get(reverse("mesa:incidencias")), self.url)
         self.assertContains(self.client.get(reverse("mesa:pedidos")), f"{self.url}?pedido={self.pedido.pk}")
         html = self.client.get(f"{self.url}?pedido={self.pedido.pk}").content.decode()
-        self.assertIn(f'<option value="{self.pedido.pk}" selected>{self.pedido.folio} · #33713 · Ana Compradora · {self.cliente.nombre} · Empacado</option>', html)
+        etiqueta = f"{self.pedido.folio} · #33713 · Ana Compradora · {self.cliente.nombre} · Empacado"
+        self.assertIn(f'name="pedido" value="{self.pedido.pk}"', html)  # el oculto prellenado
+        self.assertIn(f'value="{etiqueta}"', html)  # y el texto visible
+        self.assertIn('data-buscador-pedido=', html)
+        self.assertIn("js/buscador_pedido.js", html)
         self.assertNotIn('name="cliente"', html)  # el cliente es el del pedido, siempre
         self.assertNotIn("PAQ ·", html)  # esa la abre el planificador
         self.assertEqual(self.client.get(f"{self.url}?pedido=abc").status_code, 200)
@@ -62,15 +66,18 @@ class IncidenciaNuevaMesaTests(TestCase):
         from django.utils import timezone
 
         respuesta = self.client.post(self.url, {"pedido": "", "tipo": "DES", "texto": "Descuadre"})
-        self.assertContains(respuesta, "Elige el pedido: el cliente de la incidencia es el del pedido.")
+        self.assertContains(respuesta, "Elige el pedido de la lista: el cliente de la incidencia es el del pedido.")
         self.assertFalse(Incidencia.objects.exists())
         viejo = crear_pedido(self.cliente, self.tienda)
         Pedido.objects.filter(pk=viejo.pk).update(creado=timezone.now() - timedelta(days=90))
+        import json
+
         html = self.client.get(self.url).content.decode()
-        self.assertIn(f'<option value="{self.pedido.pk}">', html)
-        self.assertNotIn(f'<option value="{viejo.pk}">', html)  # fuera de la ventana: no estorba
+        opciones = json.loads(html.split('id="pedidos-opciones"')[1].split(">", 1)[1].split("</script>")[0])
+        self.assertIn(self.pedido.pk, [o["id"] for o in opciones])
+        self.assertNotIn(viejo.pk, [o["id"] for o in opciones])  # fuera de la ventana: no estorba
         html = self.client.get(f"{self.url}?pedido={viejo.pk}").content.decode()
-        self.assertIn(f'<option value="{viejo.pk}" selected>', html)  # prellenado aunque sea viejo
+        self.assertIn(f'name="pedido" value="{viejo.pk}"', html)  # prellenado aunque sea viejo
         respuesta = self.client.post(self.url, {"pedido": viejo.pk, "tipo": "RET", "texto": "x"})
         self.assertEqual(respuesta.status_code, 200)  # fuera de la lista sin prellenar: no se acepta
 
