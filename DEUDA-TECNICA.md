@@ -201,6 +201,25 @@ leído del código de su página, no probado con una guía real). Doble intento
 planificador elige por regla/precio y solo si ninguno cotiza abre la
 incidencia PAQ.
 
+## Reposición y reembolso — hecho 2026-09-28
+
+Compensaciones que ejecutan (CONVENTIONS → incidencias/pedidos/integraciones).
+Lo que quedó fuera, para cuando haga falta:
+- La reposición de un pedido que se entregó en bodega (`entregar_sin_guia`) no
+  cierra sola su compensación: solo el tracking del carrier
+  (`envios._transicionar_pedido`) llama a `compensaciones_por_entrega`. Mesa la
+  marca PAGADA a mano.
+- Kits: se reponen por componente (el formulario ofrece los line items
+  originales sin componentes; un kit como línea se rechaza con mensaje).
+- Shopify no se entera de la reposición más allá del expediente de Torre al
+  que la orden ya apunta; una nota en la orden (`orderUpdate`, `write_orders`)
+  es una llamada si Chema la quiere.
+- Reembolso de monto libre: usa el último SALE/CAPTURE exitoso como
+  transacción padre; órdenes con varios pagos o pasarela manual: Shopify
+  registra el refund y el dinero se mueve fuera.
+- Cupón: sigue siendo registro (monto + referencia); crear el código de
+  descuento en Shopify por API es otra pieza.
+
 ## Canal de venta: crudo en el pedido, traducción en tabla administrable
 
 **Estado (2026-09-14):** `Pedido.canal` se calcula en la ingesta con
