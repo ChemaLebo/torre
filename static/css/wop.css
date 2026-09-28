@@ -292,6 +292,8 @@ th.ordenable[aria-sort="ascending"]::after { content: " ↑"; opacity: 1; color:
 th.ordenable[aria-sort="descending"]::after { content: " ↓"; opacity: 1; color: var(--accent-hot); }
 .tabla-buscador { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--hair); }
 .tabla-buscador input[type="search"] { max-width: 320px; margin: 0; }
+/* Los buscadores (tablas.js, filtros) visten como cualquier input: sin la píldora nativa de WebKit. */
+input[type="search"] { -webkit-appearance: none; appearance: none; }
 tr[hidden] { display: none; }
 
 /* ── Pills de estado ── */
@@ -348,7 +350,7 @@ dialog.modal .modal-lista { max-height: 40vh; overflow: auto; }
 
 /* ── Formularios ── */
 label { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-50); margin: 14px 0 6px; }
-input[type="text"], input[type="password"], input[type="number"], input[type="email"],
+input[type="text"], input[type="search"], input[type="password"], input[type="number"], input[type="email"],
 input[type="date"], input[type="datetime-local"], input[type="file"], select, textarea {
   width: 100%; padding: 10px 12px;
   background: var(--panel-2); color: var(--ink);
@@ -367,7 +369,7 @@ input[type="date"], input[type="datetime-local"] { color-scheme: dark; }
 @media (pointer: coarse) {
   .btn { min-height: 48px; }
   .btn-tema { width: 48px; height: 48px; }
-  input[type="text"], input[type="password"], input[type="number"], input[type="email"],
+  input[type="text"], input[type="search"], input[type="password"], input[type="number"], input[type="email"],
   input[type="date"], input[type="datetime-local"], input[type="file"], select, textarea {
     min-height: 48px; font-size: 16px;
   }
