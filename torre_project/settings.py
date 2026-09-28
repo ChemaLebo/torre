@@ -195,6 +195,10 @@ TORRE = {
     # La zona sale del CP DE DESTINO, nunca del carrier que eligió el ruteo.
     # Metro = GDL, Puebla, Qro. Monterrey se factura NACIONAL (decisión 5-ago-2026).
     "CP_METRO_PREFIJOS": ["44", "45", "72", "76"],
+    # Zonas de COBRO por CP (finanzas y reporte de costos): rangos del archivo,
+    # con las bandas de 99minutos (Chema 2026-09-28). Los prefijos de arriba
+    # solo deciden es_local (ruteo/promesa), ya no el cobro.
+    "ZONAS_CP_ARCHIVO": "",  # vacío = config/zonas_cp.csv
     # ── Import de catálogo por CSV (Mesa → catálogo del cliente) ──
     "IMPORT_CSV_MAX_MB": 2,
     "IMPORT_CSV_MAX_FILAS": 5000,

@@ -7,10 +7,9 @@ que el carrier le cobra a WOP; `bloque_kg` queda solo como tope informativo
 por caja. `facturar_guias` es la única fuente: el reporte "Costo por
 entrega" (Mesa y portal) y el resumen mensual salen de ahí.
 
-Zonas de facturación (por prefijo de CP del pedido):
-  local    → TORRE["CP_LOCAL_PREFIJOS"]  (CDMX + metro hasta Toluca)
-  metro    → TORRE["CP_METRO_PREFIJOS"]  (GDL, Puebla, Qro — MTY es nacional)
-  nacional → resto del país
+Zonas de facturación (por CP del pedido): rangos de config/zonas_cp.csv,
+armados con las bandas de 99minutos (mesa.zonas); fuera de todo rango es
+nacional. Aplica a toda guía, la haya llevado quien sea.
 Fallback sin CP: se infiere del carrier de la primera guía (local/puntopost).
 
 El peso facturable descuenta el margen de empaque (+5% de cotizador): el
@@ -81,17 +80,11 @@ def tarifario_de(cliente):
 
 
 def zona_de_cp(cp):
-    """Zona de facturación por prefijo de CP; None si no hay CP."""
-    cp = str(cp or "").strip()
-    if len(cp) < 2:
-        return None
-    torre = settings.TORRE
-    prefijo = cp[:2]
-    if prefijo in {str(p).zfill(2) for p in torre["CP_LOCAL_PREFIJOS"]}:
-        return "local"
-    if prefijo in {str(p).zfill(2) for p in torre["CP_METRO_PREFIJOS"]}:
-        return "metro"
-    return "nacional"
+    """Zona de cobro por CP destino según config/zonas_cp.csv (bandas de
+    99minutos, Chema 2026-09-28); None sin CP válido."""
+    from .zonas import zona_de_cp as _zona  # lazy: lee el archivo una vez
+
+    return _zona(cp)
 
 
 def zona_de_carrier(carrier):

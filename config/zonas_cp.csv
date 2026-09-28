@@ -1,0 +1,12 @@
+# Zonas de cobro por CP destino (Chema 2026-09-28): siguen las BANDAS DE 99MINUTOS,
+# no las de ningún otro carrier; aplican a toda guía, sin importar quién la llevó.
+# Solo para cobrar y para el reporte "Costo por entrega": el ruteo no lee esto.
+# Rango inclusivo de CP (5 dígitos) y zona: local | metro | nacional.
+# Un CP fuera de todo rango es NACIONAL. El primer rango que coincide manda.
+# Mientras llega la lista de 99minutos, los rangos son los de siempre.
+cp_desde,cp_hasta,zona
+00000,16999,local
+50000,57999,local
+44000,45999,metro
+72000,72999,metro
+76000,76999,metro
