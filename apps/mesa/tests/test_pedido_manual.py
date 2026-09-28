@@ -271,6 +271,22 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, reservada=reservada)
         return pedido
 
+    def test_el_boton_de_reservas_sale_en_parciales_que_esperan_inventario(self):
+        """2026-09-28: el servicio acepta PARCIALMENTE_DESPACHADO, pero el botón
+        solo salía en PENDIENTE; un parcial esperando stock no tenía palanca.
+        Un parcial con todo reservado (manifiesto por caja) no lo necesita."""
+        import re
+
+        from apps.pedidos.models import Pedido
+
+        espera = self._pedido_con_linea(reservada=False)
+        sin_faltantes = self._pedido_con_linea(reservada=True)
+        Pedido.objects.filter(pk__in=[espera.pk, sin_faltantes.pk]).update(estado=Pedido.PARCIALMENTE_DESPACHADO)
+        html = self.client.get(self.url).content.decode()
+        con_boton = re.findall(r'value="reintentar_reservas">\s*<input type="hidden" name="folio" value="([^"]+)"', html)
+        self.assertIn(espera.folio, con_boton)
+        self.assertNotIn(sin_faltantes.folio, con_boton)
+
     def test_reintento_parcial_avisa_en_warning_y_completo_en_success(self):
         # El color del flash refleja el resultado: quedan líneas sin reservar
         # → warning (amarillo); todo reservado → success (verde).

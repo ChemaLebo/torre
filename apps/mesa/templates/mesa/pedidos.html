@@ -99,7 +99,8 @@
               <button class="btn chico" type="submit" title="Cancela las guías con el carrier, recotiza y regresa el pedido a empaquetado sin dueño">Cancelar guías</button>
             </form>
             {% endif %}
-            {% if pedido.estado == "PENDIENTE" %}
+            {# También en un parcial que espera inventario (Chema 2026-09-28): el servicio ya lo aceptaba, el botón no salía. #}
+            {% if pedido.estado == "PENDIENTE" or pedido.estado == "PARCIALMENTE_DESPACHADO" and pedido.tiene_faltantes %}
             <form method="post">
               {% csrf_token %}
               <input type="hidden" name="accion" value="reintentar_reservas">
