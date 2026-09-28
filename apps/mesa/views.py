@@ -783,9 +783,7 @@ def pedidos(request):
         pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
         # Guías compradas y nada en la calle: se pueden cancelar y recomprar (2026-09-24).
         # Cambiar paquetería (2026-09-28): antes de salir; incluye "Sin guía".
-        pedido.puede_cambiar_paqueteria = (
-            pedido.estado in ESTADOS_CAMBIO_PAQUETERIA and not pedido.tiene_despachadas
-        )
+        pedido.puede_cambiar_paqueteria = pedido.estado in ESTADOS_CAMBIO_PAQUETERIA
         pedido.puede_cancelar_guias = (
             pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
             and not any(c.estado == "DESPACHADO" for c in pedido.paquetes.all())

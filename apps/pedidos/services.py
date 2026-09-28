@@ -340,9 +340,10 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
         raise ValueError(
             f"{pedido.folio} está {pedido.get_estado_display().lower()}: la paquetería solo se cambia antes de salir."
         )
-    fuera = [c.numero for c in pedido.paquetes.all() if c.estado == Paquete.DESPACHADO]
-    if fuera or pedido.tiene_despachadas:
-        raise ValueError(f"{pedido.folio} ya salió (caja {', '.join(str(n) for n in fuera) or 'entera'}): no se replanea.")
+    # Segunda ola o reposición (2026-09-28): lo que ya salió (cajas
+    # despachadas o con guía viva) es fijo; solo se replanea lo de ESTA ola.
+    if not pedido.lineas_por_surtir and pedido.estado != Pedido.GUIA_GENERADA:
+        raise ValueError(f"{pedido.folio} ya salió entero: no hay nada que replanear.")
     fallo = None
     with transaction.atomic():
         fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
@@ -353,18 +354,22 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
             # Savepoint: si la paquetería tampoco cotiza, el plan anterior
             # (que el replaneo forzado tira antes de cotizar) se queda intacto.
             with transaction.atomic():
-                cajas_previas = list(fresco.paquetes.all())
+                fijas = {
+                    c.pk for c in fresco.paquetes.all()
+                    if c.estado == Paquete.DESPACHADO or any(g.es_activa for g in c.guias.all())
+                }
+                vivas = [c for c in fresco.paquetes.all() if c.pk not in fijas]
                 if fresco.estado == Pedido.GUIA_GENERADA:
                     regresar_a_empaque(fresco, actor, motivo=f"Cambio de paquetería a {etiqueta}")
                     modo = "recotizadas"
-                elif any(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in cajas_previas):
-                    for caja in cajas_previas:
+                elif any(c.estado == Paquete.EMPACADO for c in vivas):
+                    for caja in vivas:
                         recotizar_paquete(fresco, caja)  # la caja física se queda; solo cambia carrier y precio
                     modo = "recotizadas"
                 else:
                     planificar_envio(fresco, force=True)
                     modo = "replaneadas"
-                cajas = list(fresco.paquetes.all().order_by("numero"))
+                cajas = [c for c in fresco.paquetes.all().order_by("numero") if c.pk not in fijas]
                 permitidos = set(carriers_del_pedido(fresco))
                 fallidas = [c.numero for c in cajas if c.carrier not in permitidos]
                 if fallidas:
