@@ -71,7 +71,6 @@ class CompensacionesTests(TestCase):
         self.assertEqual(comp.estado, Compensacion.COTIZADA)
 
     def test_validaciones(self):
-        retraso = abrir_incidencia(self.cliente, Incidencia.TIPO_RET, Incidencia.ORIGEN_AUTO, pedido=self.pedido, texto="x")
         suelta = abrir_incidencia(self.cliente, Incidencia.TIPO_DES, Incidencia.ORIGEN_AUTO, texto="sin pedido")
         casos = [
             (suelta, "reposicion", {"lineas": [(self.l1, 1)]}),           # sin pedido no aplica
