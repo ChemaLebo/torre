@@ -9,6 +9,7 @@ from apps.catalogo.models import SKU
 from apps.core.models import PerfilUsuario
 from apps.envios.tests.base import crear_cliente, crear_pedido, crear_tienda
 from apps.incidencias.models import Incidencia, MensajeIncidencia
+from apps.pedidos.models import Pedido
 
 
 class IncidenciaNuevaMesaTests(TestCase):
@@ -22,7 +23,7 @@ class IncidenciaNuevaMesaTests(TestCase):
         self.url = reverse("mesa:incidencia_nueva")
 
     def _abrir(self, **extra):
-        datos = {"pedido": self.pedido.folio, "tipo": Incidencia.TIPO_DAN, "texto": "Llegó la caja rota."}
+        datos = {"pedido": self.pedido.pk, "tipo": Incidencia.TIPO_DAN, "texto": "Llegó la caja rota."}
         datos.update(extra)
         return self.client.post(self.url, datos, follow=True)
 
@@ -30,8 +31,8 @@ class IncidenciaNuevaMesaTests(TestCase):
         self.assertContains(self.client.get(reverse("mesa:incidencias")), self.url)
         self.assertContains(self.client.get(reverse("mesa:pedidos")), f"{self.url}?pedido={self.pedido.pk}")
         html = self.client.get(f"{self.url}?pedido={self.pedido.pk}").content.decode()
-        self.assertIn(f'value="{self.pedido.folio}"', html)
-        self.assertIn(f'<option value="{self.cliente.pk}" selected', html)
+        self.assertIn(f'<option value="{self.pedido.pk}" selected>{self.pedido.folio} · #33713 · Ana Compradora · {self.cliente.nombre} · Empacado</option>', html)
+        self.assertNotIn('name="cliente"', html)  # el cliente es el del pedido, siempre
         self.assertNotIn("PAQ ·", html)  # esa la abre el planificador
         self.assertEqual(self.client.get(f"{self.url}?pedido=abc").status_code, 200)
 
@@ -50,21 +51,28 @@ class IncidenciaNuevaMesaTests(TestCase):
 
     def test_por_numero_de_orden_con_sku_prioridad_e_interna(self):
         sku = SKU.objects.create(cliente=self.cliente, codigo="SIX-COL", descripcion="Six")
-        respuesta = self._abrir(pedido="33713", sku="six-col", prioridad="P3", interna="on", tipo=Incidencia.TIPO_FAL)
+        respuesta = self._abrir(sku="six-col", prioridad="P3", interna="on", tipo=Incidencia.TIPO_FAL)
         inc = Incidencia.objects.get(pedido=self.pedido)
         self.assertEqual((inc.sku, inc.prioridad, inc.interna, inc.tipo), (sku, "P3", True, "FAL"))
         self.assertEqual(respuesta.status_code, 200)
 
-    def test_sin_pedido_exige_cliente_y_el_pedido_desconocido_avisa(self):
+    def test_el_pedido_es_obligatorio_y_el_desplegable_trae_los_recientes_mas_el_prellenado(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
         respuesta = self.client.post(self.url, {"pedido": "", "tipo": "DES", "texto": "Descuadre"})
-        self.assertContains(respuesta, "Elige el cliente o captura un pedido.")
-        respuesta = self.client.post(self.url, {"pedido": "PED-99999", "tipo": "DES", "texto": "x"})
-        self.assertContains(respuesta, "No encuentro el pedido PED-99999")
+        self.assertContains(respuesta, "Elige el pedido: el cliente de la incidencia es el del pedido.")
         self.assertFalse(Incidencia.objects.exists())
-        respuesta = self.client.post(self.url, {"cliente": self.cliente.pk, "tipo": "DES", "texto": "Descuadre"}, follow=True)
-        inc = Incidencia.objects.get()
-        self.assertIsNone(inc.pedido)
-        self.assertEqual(inc.cliente, self.cliente)
+        viejo = crear_pedido(self.cliente, self.tienda)
+        Pedido.objects.filter(pk=viejo.pk).update(creado=timezone.now() - timedelta(days=90))
+        html = self.client.get(self.url).content.decode()
+        self.assertIn(f'<option value="{self.pedido.pk}">', html)
+        self.assertNotIn(f'<option value="{viejo.pk}">', html)  # fuera de la ventana: no estorba
+        html = self.client.get(f"{self.url}?pedido={viejo.pk}").content.decode()
+        self.assertIn(f'<option value="{viejo.pk}" selected>', html)  # prellenado aunque sea viejo
+        respuesta = self.client.post(self.url, {"pedido": viejo.pk, "tipo": "RET", "texto": "x"})
+        self.assertEqual(respuesta.status_code, 200)  # fuera de la lista sin prellenar: no se acepta
 
     def test_segundo_reporte_del_mismo_tipo_se_agrupa_y_lo_dice(self):
         self._abrir()

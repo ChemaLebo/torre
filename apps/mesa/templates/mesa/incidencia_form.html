@@ -13,19 +13,10 @@
     <form method="post">
       {% csrf_token %}
       {{ form.non_field_errors }}
-      <div class="grid g2">
-        <div>
-          <label for="{{ form.pedido.id_for_label }}">{{ form.pedido.label }}</label>
-          {{ form.pedido }}
-          <div class="small muted">Folio de Torre o número de orden de Shopify. Vacío = incidencia sin pedido.</div>
-          {{ form.pedido.errors }}
-        </div>
-        <div>
-          <label for="{{ form.cliente.id_for_label }}">{{ form.cliente.label }}</label>
-          {{ form.cliente }}
-          {{ form.cliente.errors }}
-        </div>
-      </div>
+      <label for="{{ form.pedido.id_for_label }}">{{ form.pedido.label }}</label>
+      {{ form.pedido }}
+      <div class="small muted">Pedidos desde el mes pasado, de todos los clientes. El cliente de la incidencia es el del pedido.</div>
+      {{ form.pedido.errors }}
       <div class="grid g3 mt">
         <div>
           <label for="{{ form.tipo.id_for_label }}">{{ form.tipo.label }}</label>
@@ -58,6 +49,7 @@
     <ul class="timeline">
       <li class="hito"><span class="cuando">Un caso por tipo y pedido</span>Si el pedido ya tiene abierta una del mismo tipo, lo que escribas se suma a ese folio.</li>
       <li><span class="cuando">Prioridad</span>Vacía toma la del tipo: daño, retorno, cancelación y cambio de dirección nacen P1.</li>
+      <li><span class="cuando">Cliente</span>Siempre el del pedido; por eso el pedido es obligatorio.</li>
       <li><span class="cuando">Interna</span>Queda solo en Mesa: sin aviso al cliente, sin marcar el pedido y fuera del portal.</li>
     </ul>
   </div>

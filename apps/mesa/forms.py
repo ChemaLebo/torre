@@ -4,9 +4,11 @@ Mismo estilo que apps/portal/forms.py: forms.Form planos (no ModelForm) con
 error_messages en español. El copy aquí es operativo — le habla a la Mesa,
 no a Karina. Los querysets/choices con datos de negocio salen de settings.TORRE.
 """
+from datetime import timedelta
 from decimal import Decimal
 
 from django import forms
+from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
@@ -286,18 +288,15 @@ class FormCliente(forms.Form):
 
 
 class FormNuevaIncidenciaMesa(forms.Form):
-    """Levantar una incidencia desde Mesa (Chema 2026-09-28): pedido por folio
-    o por número de orden de Shopify, SKU opcional, tipo, prioridad (vacía =
-    la del tipo), interna (el cliente no la ve) y el texto. Resuelve pedido,
-    SKU y cliente en clean(): sin pedido hay que elegir cliente."""
+    """Levantar una incidencia desde Mesa (Chema 2026-09-28), igual que en el
+    portal: el pedido se elige de un desplegable (los de todos los clientes
+    desde el mes pasado, más el prellenado si es más viejo) y es obligatorio,
+    porque el cliente de una incidencia SIEMPRE es el del pedido. SKU
+    opcional, tipo, prioridad (vacía = la del tipo), interna y el texto."""
 
-    cliente = forms.ModelChoiceField(
-        queryset=Cliente.objects.filter(activo=True).order_by("nombre"), required=False,
-        label="Cliente", empty_label="El del pedido",
-    )
-    pedido = forms.CharField(
-        required=False, label="Pedido", max_length=40,
-        widget=forms.TextInput(attrs={"placeholder": "PED-00047 o #33713", "autocomplete": "off"}),
+    pedido = forms.ModelChoiceField(
+        queryset=None, label="Pedido", empty_label="Elige el pedido",
+        error_messages={"required": "Elige el pedido: el cliente de la incidencia es el del pedido."},
     )
     sku = forms.CharField(
         required=False, label="SKU (opcional)", max_length=60,
@@ -316,34 +315,29 @@ class FormNuevaIncidenciaMesa(forms.Form):
         error_messages={"required": "Escribe qué pasó: sin texto no hay incidencia."},
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, pedido_inicial=None, **kwargs):
         super().__init__(*args, **kwargs)
         from apps.incidencias.models import Incidencia  # lazy por contrato
+        from apps.pedidos.models import Pedido  # lazy por contrato
 
+        inicio = (timezone.localdate().replace(day=1) - timedelta(days=1)).replace(day=1)
+        recientes = Pedido.objects.filter(creado__date__gte=inicio)
+        if pedido_inicial is not None:
+            recientes = Pedido.objects.filter(models.Q(pk=pedido_inicial.pk) | models.Q(creado__date__gte=inicio))
+            self.fields["pedido"].initial = pedido_inicial.pk
+        campo = self.fields["pedido"]
+        campo.queryset = recientes.select_related("cliente").order_by("-creado")
+        campo.label_from_instance = lambda p: " · ".join(x for x in [
+            p.folio, getattr(p, "shopify_order_name", "") or "", p.comprador_nombre or "",
+            p.cliente.nombre, p.get_estado_display(),
+        ] if x)
         # "Sin paquetería que cotice" la abre el planificador, no una persona.
         self.fields["tipo"].choices = [(c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c != Incidencia.TIPO_PAQ]
 
     def clean(self):
         datos = super().clean()
-        from apps.pedidos.models import Pedido  # lazy por contrato
-
-        cliente = datos.get("cliente")
-        referencia = (datos.get("pedido") or "").strip()
-        pedido = None
-        if referencia:
-            candidatos = Pedido.objects.filter(cliente=cliente) if cliente else Pedido.objects.all()
-            nombre = referencia if referencia.startswith("#") else f"#{referencia}"
-            pedido = (
-                candidatos.filter(folio__iexact=referencia).first()
-                or candidatos.filter(shopify_order_name__iexact=nombre).first()
-                or candidatos.filter(shopify_order_name__iexact=referencia).first()
-            )
-            if pedido is None:
-                self.add_error("pedido", f"No encuentro el pedido {referencia}: usa el folio PED-… o el número de orden de Shopify.")
-            elif cliente is None:
-                cliente = pedido.cliente
-        if cliente is None and not self.errors:
-            self.add_error("cliente", "Elige el cliente o captura un pedido.")
+        pedido = datos.get("pedido")
+        cliente = pedido.cliente if pedido is not None else None
         sku = None
         codigo = (datos.get("sku") or "").strip()
         if codigo and cliente is not None:

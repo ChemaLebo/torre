@@ -379,13 +379,9 @@ def incidencia_nueva(request):
     from apps.mesa.forms import FormNuevaIncidenciaMesa
     from apps.pedidos.models import Pedido
 
-    inicial = {}
     pedido_id = request.GET.get("pedido", "")
-    if pedido_id.isdigit():
-        pedido = Pedido.objects.filter(pk=int(pedido_id)).select_related("cliente").first()
-        if pedido is not None:
-            inicial = {"pedido": pedido.folio, "cliente": pedido.cliente}
-    form = FormNuevaIncidenciaMesa(request.POST or None, initial=inicial)
+    prellenado = Pedido.objects.filter(pk=int(pedido_id)).first() if pedido_id.isdigit() else None
+    form = FormNuevaIncidenciaMesa(request.POST or None, pedido_inicial=prellenado)
     if request.method == "POST" and form.is_valid():
         datos = form.cleaned_data
         incidencia = abrir_incidencia(
