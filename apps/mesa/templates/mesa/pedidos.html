@@ -99,6 +99,7 @@
               <button class="btn chico" type="submit" title="Cancela las guías con el carrier, recotiza y regresa el pedido a empaquetado sin dueño">Cancelar guías</button>
             </form>
             {% endif %}
+            <a class="btn chico" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}" title="Abre una incidencia con este pedido ya puesto">Levantar incidencia</a>
             {# También en un parcial que espera inventario (Chema 2026-09-28): el servicio ya lo aceptaba, el botón no salía. #}
             {% if pedido.estado == "PENDIENTE" or pedido.estado == "PARCIALMENTE_DESPACHADO" and pedido.tiene_faltantes %}
             <form method="post">

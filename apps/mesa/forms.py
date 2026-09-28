@@ -285,6 +285,75 @@ class FormCliente(forms.Form):
         return datos
 
 
+class FormNuevaIncidenciaMesa(forms.Form):
+    """Levantar una incidencia desde Mesa (Chema 2026-09-28): pedido por folio
+    o por número de orden de Shopify, SKU opcional, tipo, prioridad (vacía =
+    la del tipo), interna (el cliente no la ve) y el texto. Resuelve pedido,
+    SKU y cliente en clean(): sin pedido hay que elegir cliente."""
+
+    cliente = forms.ModelChoiceField(
+        queryset=Cliente.objects.filter(activo=True).order_by("nombre"), required=False,
+        label="Cliente", empty_label="El del pedido",
+    )
+    pedido = forms.CharField(
+        required=False, label="Pedido", max_length=40,
+        widget=forms.TextInput(attrs={"placeholder": "PED-00047 o #33713", "autocomplete": "off"}),
+    )
+    sku = forms.CharField(
+        required=False, label="SKU (opcional)", max_length=60,
+        widget=forms.TextInput(attrs={"placeholder": "Código del producto", "autocomplete": "off"}),
+    )
+    tipo = forms.ChoiceField(label="Tipo")
+    prioridad = forms.ChoiceField(
+        required=False, label="Prioridad",
+        choices=[("", "La del tipo"), ("P1", "P1 · crítica"), ("P2", "P2 · normal"), ("P3", "P3 · baja")],
+    )
+    interna = forms.BooleanField(
+        required=False, label="Interna (de la bodega: el cliente no la ve ni recibe aviso)",
+    )
+    texto = forms.CharField(
+        label="Qué pasó", widget=forms.Textarea(attrs={"rows": 5, "placeholder": "Con detalle: es lo que lee el cliente."}),
+        error_messages={"required": "Escribe qué pasó: sin texto no hay incidencia."},
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from apps.incidencias.models import Incidencia  # lazy por contrato
+
+        # "Sin paquetería que cotice" la abre el planificador, no una persona.
+        self.fields["tipo"].choices = [(c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c != Incidencia.TIPO_PAQ]
+
+    def clean(self):
+        datos = super().clean()
+        from apps.pedidos.models import Pedido  # lazy por contrato
+
+        cliente = datos.get("cliente")
+        referencia = (datos.get("pedido") or "").strip()
+        pedido = None
+        if referencia:
+            candidatos = Pedido.objects.filter(cliente=cliente) if cliente else Pedido.objects.all()
+            nombre = referencia if referencia.startswith("#") else f"#{referencia}"
+            pedido = (
+                candidatos.filter(folio__iexact=referencia).first()
+                or candidatos.filter(shopify_order_name__iexact=nombre).first()
+                or candidatos.filter(shopify_order_name__iexact=referencia).first()
+            )
+            if pedido is None:
+                self.add_error("pedido", f"No encuentro el pedido {referencia}: usa el folio PED-… o el número de orden de Shopify.")
+            elif cliente is None:
+                cliente = pedido.cliente
+        if cliente is None and not self.errors:
+            self.add_error("cliente", "Elige el cliente o captura un pedido.")
+        sku = None
+        codigo = (datos.get("sku") or "").strip()
+        if codigo and cliente is not None:
+            sku = SKU.objects.filter(cliente=cliente, codigo__iexact=codigo).first()
+            if sku is None:
+                self.add_error("sku", f"{cliente.nombre} no tiene el SKU {codigo}.")
+        datos["cliente_obj"], datos["pedido_obj"], datos["sku_obj"] = cliente, pedido, sku
+        return datos
+
+
 class FormTarifario(forms.Form):
     """Editor del tarifario del cliente: guarda SOLO los overrides.
 

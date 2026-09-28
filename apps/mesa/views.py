@@ -360,6 +360,42 @@ def incidencias(request):
     })
 
 
+@rol_requerido("mesa")
+def incidencia_nueva(request):
+    """Levantar una incidencia desde Mesa (Chema 2026-09-28): la puerta que
+    faltaba (antes solo el cliente, el comprador y las automáticas). Pasa por
+    incidencias.abrir_incidencia como todas: folio, SLA, aviso al cliente y
+    auditoría; con `?pedido=<pk>` llega con el pedido puesto desde la lista."""
+    from apps.incidencias.models import Incidencia
+    from apps.incidencias.services import abrir_incidencia
+    from apps.mesa.forms import FormNuevaIncidenciaMesa
+    from apps.pedidos.models import Pedido
+
+    inicial = {}
+    pedido_id = request.GET.get("pedido", "")
+    if pedido_id.isdigit():
+        pedido = Pedido.objects.filter(pk=int(pedido_id)).select_related("cliente").first()
+        if pedido is not None:
+            inicial = {"pedido": pedido.folio, "cliente": pedido.cliente}
+    form = FormNuevaIncidenciaMesa(request.POST or None, initial=inicial)
+    if request.method == "POST" and form.is_valid():
+        datos = form.cleaned_data
+        incidencia = abrir_incidencia(
+            datos["cliente_obj"], datos["tipo"], Incidencia.ORIGEN_MANUAL,
+            pedido=datos["pedido_obj"], sku=datos["sku_obj"], texto=datos["texto"],
+            prioridad=datos.get("prioridad") or None, interna=bool(datos.get("interna")),
+        )
+        if getattr(incidencia, "agrupada", False):
+            messages.warning(
+                request,
+                f"El pedido ya tenía abierto un caso de ese tipo: tu reporte quedó en {incidencia.folio}.",
+            )
+        else:
+            messages.success(request, f"Incidencia {incidencia.folio} abierta ({incidencia.get_tipo_display()}, {incidencia.prioridad}).")
+        return redirect("mesa:incidencia_detalle", pk=incidencia.pk)
+    return render(request, "mesa/incidencia_form.html", {"seccion": "incidencias", "form": form})
+
+
 def _gestionar_incidencia(request, incidencia):
     """Despacha la acción POST del detalle. Regresa mensaje de éxito o lanza ValueError."""
     from apps.incidencias.models import Compensacion, ReclamacionCarrier

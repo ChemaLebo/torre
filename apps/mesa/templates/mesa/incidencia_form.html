@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Nueva incidencia · Mesa{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{% url 'mesa:incidencias' %}">Incidencias</a> / Nueva</div>
+    <h1>Nueva incidencia</h1>
+  </div>
+  <div class="quien">Misma puerta que el portal: folio, reloj de SLA y aviso al cliente (salvo interna).</div>
+</div>
+<div class="grid g2">
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <div class="grid g2">
+        <div>
+          <label for="{{ form.pedido.id_for_label }}">{{ form.pedido.label }}</label>
+          {{ form.pedido }}
+          <div class="small muted">Folio de Torre o número de orden de Shopify. Vacío = incidencia sin pedido.</div>
+          {{ form.pedido.errors }}
+        </div>
+        <div>
+          <label for="{{ form.cliente.id_for_label }}">{{ form.cliente.label }}</label>
+          {{ form.cliente }}
+          {{ form.cliente.errors }}
+        </div>
+      </div>
+      <div class="grid g3 mt">
+        <div>
+          <label for="{{ form.tipo.id_for_label }}">{{ form.tipo.label }}</label>
+          {{ form.tipo }}
+          {{ form.tipo.errors }}
+        </div>
+        <div>
+          <label for="{{ form.prioridad.id_for_label }}">{{ form.prioridad.label }}</label>
+          {{ form.prioridad }}
+          {{ form.prioridad.errors }}
+        </div>
+        <div>
+          <label for="{{ form.sku.id_for_label }}">{{ form.sku.label }}</label>
+          {{ form.sku }}
+          {{ form.sku.errors }}
+        </div>
+      </div>
+      <label class="mt" for="{{ form.texto.id_for_label }}">{{ form.texto.label }}</label>
+      {{ form.texto }}
+      {{ form.texto.errors }}
+      <label class="mt" style="display:flex;gap:8px;align-items:center">{{ form.interna }} {{ form.interna.label }}</label>
+      <div class="fila mt">
+        <button class="btn primario" type="submit">Abrir incidencia</button>
+        <a class="btn" href="{% url 'mesa:incidencias' %}">Cancelar</a>
+      </div>
+    </form>
+  </div>
+  <div class="card">
+    <div class="titulo"><h3>Cómo se comporta</h3></div>
+    <ul class="timeline">
+      <li class="hito"><span class="cuando">Un caso por tipo y pedido</span>Si el pedido ya tiene abierta una del mismo tipo, lo que escribas se suma a ese folio.</li>
+      <li><span class="cuando">Prioridad</span>Vacía toma la del tipo: daño, retorno, cancelación y cambio de dirección nacen P1.</li>
+      <li><span class="cuando">Interna</span>Queda solo en Mesa: sin aviso al cliente, sin marcar el pedido y fuera del portal.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

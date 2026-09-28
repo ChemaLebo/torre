@@ -7,7 +7,10 @@
     <div class="eyebrow">Mesa de Control</div>
     <h1>Incidencias</h1>
   </div>
-  <div class="quien"><b>{{ abiertas_n }}</b> abiertas de {{ incidencias|length }} en la vista</div>
+  <div class="fila">
+    <div class="quien"><b>{{ abiertas_n }}</b> abiertas de {{ incidencias|length }} en la vista</div>
+    <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}">Nueva incidencia</a>
+  </div>
 </div>
 
 {% if pausas %}
