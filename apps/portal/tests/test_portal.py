@@ -195,6 +195,53 @@ class TestAislamientoTenant(BasePortal):
         self.assertEqual(respuesta.status_code, 404)
 
 
+class TestCompensacionesPortal(BasePortal):
+    """Chema 2026-09-28: el cliente pide reposición o reembolso eligiendo sus
+    line items (se ejecuta al enviar) y aprueba lo que propuso Mesa."""
+
+    def _linea(self):
+        from decimal import Decimal
+
+        from apps.catalogo.models import SKU
+        from apps.pedidos.models import LineaPedido
+
+        sku, _ = SKU.objects.get_or_create(cliente=self.colima, codigo="SIX-COMP", defaults={"descripcion": "Six", "precio_declarado": Decimal("300")})
+        return LineaPedido.objects.create(pedido=self.pedido, sku=sku, cantidad=2)
+
+    def test_el_cliente_crea_una_reposicion_y_se_ejecuta_sola(self):
+        from unittest.mock import MagicMock, patch
+
+        from apps.incidencias.models import Compensacion
+
+        self.entrar()
+        linea = self._linea()
+        url = reverse("portal:incidencia_detalle", args=[self.incidencia.pk])
+        self.assertContains(self.client.get(url), f'name="linea_{linea.pk}"')
+        with patch("apps.pedidos.services.reponer_lineas", return_value=[MagicMock(cantidad=1)]) as reponer:
+            respuesta = self.client.post(url, {
+                "accion": "compensacion_crear", "tipo": "reposicion", f"linea_{linea.pk}": "1", f"cantidad_{linea.pk}": "1",
+            }, follow=True)
+        reponer.assert_called_once()
+        comp = Compensacion.objects.get(incidencia=self.incidencia)
+        self.assertEqual((comp.estado, comp.creada_por), (Compensacion.APROBADA, "cliente"))
+        self.assertContains(respuesta, "Reposición aprobada")
+
+    def test_el_cliente_aprueba_lo_que_propuso_mesa_y_ve_los_errores(self):
+        from apps.incidencias.models import Compensacion
+        from apps.incidencias.services import crear_compensacion
+
+        self.entrar()
+        comp = crear_compensacion(self.incidencia, "cupon", None, "mesa", monto="100")
+        url = reverse("portal:incidencia_detalle", args=[self.incidencia.pk])
+        self.assertContains(self.client.get(url), 'value="compensacion_aprobar"')
+        self.client.post(url, {"accion": "compensacion_aprobar", "compensacion_id": comp.pk}, follow=True)
+        comp.refresh_from_db()
+        self.assertEqual(comp.estado, Compensacion.APROBADA)
+        self.assertTrue(comp.aprobo)  # lo aprobó alguien del cliente
+        respuesta = self.client.post(url, {"accion": "compensacion_crear", "tipo": "reposicion"}, follow=True)
+        self.assertContains(respuesta, "Elige qué productos se reponen.")
+
+
 class TestAccionesIncidencia(BasePortal):
     def test_responder_agrega_mensaje_visible(self):
         self.entrar()

@@ -535,11 +535,37 @@ def incidencia_detalle(request, pk):
     )
     nombre = request.user.get_full_name() or request.user.username
     form = FormRespuestaIncidencia()
+    from apps.incidencias.services import lineas_para_compensar, opciones_compensacion  # lazy: servicio de otra app
 
     if request.method == "POST":
         from apps.incidencias.services import responder  # lazy: servicio de otra app
 
-        if request.POST.get("accion") == "urgente":
+        accion = request.POST.get("accion")
+        if accion in ("compensacion_crear", "compensacion_aprobar"):
+            # Reposición y reembolso (Chema 2026-09-28): lo que el cliente propone
+            # se aprueba y ejecuta solo; lo que propuso Mesa lo aprueba aquí.
+            from apps.incidencias.models import Compensacion  # lazy
+            from apps.incidencias.services import (  # lazy
+                aprobar_compensacion, crear_compensacion, resumen_ejecucion, seleccion_desde_post,
+            )
+
+            try:
+                if accion == "compensacion_crear":
+                    comp = crear_compensacion(
+                        incidencia, request.POST.get("tipo", ""), request.user, "cliente",
+                        lineas=seleccion_desde_post(request.POST, incidencia), monto=request.POST.get("monto") or None,
+                        reembolsar_envio=bool(request.POST.get("reembolsar_envio")),
+                        avisar_comprador=bool(request.POST.get("avisar_comprador")), aprobar=True,
+                    )
+                else:
+                    comp = get_object_or_404(Compensacion, pk=request.POST.get("compensacion_id"), incidencia=incidencia)
+                    aprobar_compensacion(comp, request.user, "cliente")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, resumen_ejecucion(comp))
+            return redirect("portal:incidencia_detalle", pk=incidencia.pk)
+        if accion == "urgente":
             if incidencia.prioridad == Incidencia.P1:
                 messages.info(request, "Esta incidencia ya está marcada como urgente.")
             elif not incidencia.abierta:
@@ -592,6 +618,8 @@ def incidencia_detalle(request, pk):
         "incidencia": incidencia,
         "timeline": timeline,
         "compensaciones": incidencia.compensaciones.all(),
+        "opciones_compensacion": opciones_compensacion(incidencia) if incidencia.abierta else [],
+        "lineas_pedido": lineas_para_compensar(incidencia),
         "form": form,
         "puede_urgente": incidencia.abierta and incidencia.prioridad != Incidencia.P1,
     })

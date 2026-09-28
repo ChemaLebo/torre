@@ -472,29 +472,34 @@ def _gestionar_incidencia(request, incidencia):
         return "Incidencia cerrada. Si el pedido ya no tiene incidencias abiertas, quedó liberado."
 
     if accion == "compensacion_crear":
-        tipo = request.POST.get("tipo", "")
-        if tipo not in dict(Compensacion.TIPOS):
-            raise ValueError("Elige el tipo de compensación.")
-        try:
-            monto = Decimal(str(request.POST.get("monto", "")).strip())
-        except InvalidOperation:
-            raise ValueError("Captura el monto de la compensación en MXN (ej. 450.00).")
-        if monto <= 0:
-            raise ValueError("El monto de la compensación debe ser mayor a cero.")
-        comp = Compensacion.objects.create(incidencia=incidencia, tipo=tipo, monto=monto)
-        registrar_evento(
-            "compensacion", comp.pk, "creada", actor=request.user, cliente=incidencia.cliente,
-            delta={"incidencia": incidencia.folio, "tipo": tipo, "monto": str(monto)},
+        from apps.incidencias.services import crear_compensacion, resumen_ejecucion, seleccion_desde_post
+        comp = crear_compensacion(
+            incidencia, request.POST.get("tipo", ""), request.user, "mesa",
+            lineas=seleccion_desde_post(request.POST, incidencia), monto=request.POST.get("monto") or None,
+            reembolsar_envio=bool(request.POST.get("reembolsar_envio")),
+            avisar_comprador=bool(request.POST.get("avisar_comprador")),
+            aprobar=bool(request.POST.get("aprobar")),
         )
-        return f"Compensación cotizada: {comp.get_tipo_display()} por ${monto} MXN."
-
+        return resumen_ejecucion(comp)
+    if accion in ("compensacion_aprobar", "compensacion_ejecutar"):
+        from apps.incidencias.services import aprobar_compensacion, ejecutar_reembolso, resumen_ejecucion
+        comp = get_object_or_404(Compensacion, pk=request.POST.get("compensacion_id"), incidencia=incidencia)
+        if accion == "compensacion_aprobar":
+            aprobar_compensacion(comp, request.user)
+        else:
+            ejecutar_reembolso(comp, request.user)
+        return resumen_ejecucion(comp)
     if accion == "compensacion_avanzar":
+        from apps.incidencias.services import aprobar_compensacion, resumen_ejecucion
         comp = get_object_or_404(
             Compensacion, pk=request.POST.get("compensacion_id"), incidencia=incidencia
         )
         nuevo = request.POST.get("nuevo_estado", "")
         if nuevo not in dict(Compensacion.ESTADOS):
             raise ValueError("Estado de compensación desconocido.")
+        if nuevo == Compensacion.APROBADA:
+            aprobar_compensacion(comp, request.user)
+            return resumen_ejecucion(comp)
         if nuevo == Compensacion.PAGADA:
             referencia = (request.POST.get("referencia_pago") or "").strip()
             if referencia:
@@ -545,6 +550,7 @@ def _gestionar_incidencia(request, incidencia):
 @rol_requerido("mesa")
 def incidencia_detalle(request, pk):
     from apps.incidencias.models import Compensacion, Incidencia, ReclamacionCarrier
+    from apps.incidencias.services import lineas_para_compensar, opciones_compensacion  # lazy por contrato
     from apps.envios.services import guias_del_pedido  # lazy por contrato
     from apps.pedidos.reportes import url_orden_shopify  # lazy por contrato
 
@@ -594,6 +600,8 @@ def incidencia_detalle(request, pk):
         "compensaciones": compensaciones,
         "reclamaciones": reclamaciones,
         "tipos_compensacion": Compensacion.TIPOS,
+        "opciones_compensacion": opciones_compensacion(incidencia),
+        "lineas_pedido": lineas_para_compensar(incidencia),
         "fotos": fotos,
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,

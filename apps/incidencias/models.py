@@ -324,6 +324,22 @@ class Compensacion(MaquinaEstados):
     aprobo = models.CharField(max_length=120, blank=True)
     fecha_pago = models.DateField(null=True, blank=True)
     referencia_pago = models.CharField(max_length=120, blank=True)
+    # Ejecución (Chema 2026-09-28): reposición y reembolso ya no son solo
+    # registro. `lineas` = [{"linea_id", "sku", "cantidad"}] elegidas del
+    # pedido (todas, una o cualquier combinación); `reembolsar_envio` suma el
+    # envío al refund; `avisar_comprador` = el correo de reembolso de Shopify;
+    # `creada_por` = quién la propuso (lo que propone el cliente se aprueba
+    # solo); `nota` = detalle de la ejecución (folio a picking, id del refund,
+    # rechazo de Shopify).
+    CREADA_MESA = "mesa"
+    CREADA_CLIENTE = "cliente"
+    lineas = models.JSONField(default=list, blank=True)
+    reembolsar_envio = models.BooleanField(default=False)
+    avisar_comprador = models.BooleanField(default=True)
+    creada_por = models.CharField(
+        max_length=10, choices=[(CREADA_MESA, "Mesa de Control"), (CREADA_CLIENTE, "el cliente")], default=CREADA_MESA,
+    )
+    nota = models.CharField(max_length=300, blank=True)
 
     class Meta:
         ordering = ["-id"]
@@ -332,6 +348,16 @@ class Compensacion(MaquinaEstados):
 
     def __str__(self):
         return f"{self.incidencia.folio} · {self.get_tipo_display()} ${self.monto} · {self.estado}"
+
+    @property
+    def resumen_lineas(self):
+        """"2× SIX-COL, 1× C12": lo elegido del pedido; "" sin líneas."""
+        return ", ".join(f"{l.get('cantidad')}× {l.get('sku')}" for l in (self.lineas or []))
+
+    @property
+    def ejecutable(self):
+        """Reposición y reembolso hacen algo al aprobarse; el cupón es registro."""
+        return self.tipo in (self.TIPO_REPOSICION, self.TIPO_REEMBOLSO)
 
     def _cliente_auditoria(self):
         return self.incidencia.cliente

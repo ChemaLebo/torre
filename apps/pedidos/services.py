@@ -156,6 +156,81 @@ def reintentar_reservas_pedido(pedido, actor):
     )
 
 
+# Desde dónde se repone: producto en la calle o ya entregado. Antes de salir
+# el pedido simplemente se corrige.
+ESTADOS_REPOSICION = (
+    Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.ENTREGA_PRESUNTA, Pedido.ENTREGADO,
+    Pedido.RETORNADO, Pedido.PARCIALMENTE_DESPACHADO,
+)
+
+
+def reponer_lineas(pedido, seleccion, actor, incidencia=None):
+    """Reposición de producto (Chema 2026-09-28) sobre un pedido con producto
+    en la calle o entregado. `seleccion` = [(línea, cantidad)] de sus line
+    items: todos, uno o cualquier combinación. Cada renglón nace como línea
+    nueva del MISMO pedido ligada a la original (reposicion_de), se reserva del
+    inventario (sin stock queda faltante y espera, como cualquier línea) y el
+    pedido regresa a PENDIENTE sin dueño con un plan de cajas solo de lo
+    repuesto: el piso lo toma con EMPEZAR y sigue picking → empaque → guía →
+    salida; al entregarse la reposición el pedido vuelve a ENTREGADO. Lo que
+    ya salió se estampa como despachado (pedidos anteriores al fulfillment
+    parcial no lo tenían) para no planearlo dos veces. Shopify no se toca: la
+    orden ya está fulfilled. Regresa las líneas nuevas."""
+    if pedido.estado not in ESTADOS_REPOSICION:
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display()}: solo se repone lo que ya salió o se "
+            "entregó; antes de eso se corrige el pedido."
+        )
+    limpias = []
+    for linea, cantidad in seleccion:
+        cantidad = int(cantidad or 0)
+        if cantidad <= 0:
+            continue
+        if linea.pedido_id != pedido.pk:
+            raise ValueError(f"La línea {linea.pk} no es de {pedido.folio}.")
+        if cantidad > linea.cantidad:
+            raise ValueError(f"{linea.sku.codigo}: no se reponen {cantidad} piezas de una línea de {linea.cantidad}.")
+        if linea.parte_de_kit_id or getattr(linea.sku, "es_kit", False):
+            raise ValueError(f"{linea.sku.codigo}: los kits se reponen por componente; elige el producto, no el kit.")
+        limpias.append((linea, cantidad))
+    if not limpias:
+        raise ValueError("Elige al menos un producto con piezas a reponer.")
+    folio_inc = getattr(incidencia, "folio", "") or ""
+    with transaction.atomic():
+        if pedido.estado != Pedido.PARCIALMENTE_DESPACHADO:
+            # Ya salió todo lo reservado: los pedidos anteriores al fulfillment
+            # parcial no traen cantidad_despachada y el plan los repetiría.
+            for linea in pedido.lineas.all():
+                if linea.reservada and linea.cantidad_despachada < linea.cantidad:
+                    linea.cantidad_despachada = linea.cantidad
+                    linea.save(update_fields=["cantidad_despachada"])
+        nuevas, sin_stock = [], []
+        for linea, cantidad in limpias:
+            nueva = LineaPedido.objects.create(pedido=pedido, sku=linea.sku, cantidad=cantidad, reposicion_de=linea)
+            if not _reservar_linea(nueva):
+                sin_stock.append(nueva)
+            nuevas.append(nueva)
+        pedido.asignado_a = None
+        pedido.transferencia_a = None
+        pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
+        pedido.transicionar(
+            Pedido.PENDIENTE, actor=actor,
+            motivo=f"Reposición de producto{f' ({folio_inc})' if folio_inc else ''}: regresa a picking con líneas nuevas.",
+        )
+        registrar_evento(
+            "pedido", pedido.pk, "reposicion", actor=actor, cliente=pedido.cliente,
+            delta={
+                "incidencia": folio_inc,
+                "lineas": [[n.sku.codigo, n.cantidad] for n in nuevas],
+                "sin_stock": [n.sku.codigo for n in sin_stock],
+            },
+            motivo=f"Se reponen {sum(n.cantidad for n in nuevas)} pieza(s); "
+                   + ("todas con stock." if not sin_stock else f"sin stock: {', '.join(n.sku.codigo for n in sin_stock)}."),
+        )
+        _planificar_best_effort(pedido, force=True)
+    return nuevas
+
+
 def _tras_reserva(pedido, actor):
     """Qué sigue cuando una línea faltante consigue reserva. PENDIENTE (la ola
     no empezó): se replanean las cajas con la línea nueva (force: aún no hay

@@ -91,17 +91,71 @@
     <div class="card">
       <div class="titulo"><h3>Compensaciones</h3></div>
       {% for comp in compensaciones %}
-        <div class="fila entre mb">
-          <div>
-            {{ comp.get_tipo_display }} · <span class="mono">${{ comp.monto }}</span>
-            {% if comp.referencia_pago %}<div class="small">Referencia de pago: <span class="mono">{{ comp.referencia_pago }}</span></div>{% endif %}
-            {% if comp.fecha_pago %}<div class="small">Pagada el {{ comp.fecha_pago|date:"d/M/Y" }}</div>{% endif %}
+        <div class="mb" style="padding-bottom:8px;border-bottom:1px solid var(--hair)">
+          <div class="fila entre">
+            <div>
+              <b>{{ comp.get_tipo_display }}</b> · <span class="mono">${{ comp.monto }}</span>
+              {% if comp.resumen_lineas %}<div class="small">{{ comp.resumen_lineas }}{% if comp.reembolsar_envio %} · + envío{% endif %}</div>{% endif %}
+              {% if comp.referencia_pago %}<div class="small">Referencia: <span class="mono">{{ comp.referencia_pago }}</span></div>{% endif %}
+              {% if comp.fecha_pago %}<div class="small">{% if comp.tipo == "reposicion" %}Entregada{% else %}Pagada{% endif %} el {{ comp.fecha_pago|date:"d/M/Y" }}</div>{% endif %}
+              {% if comp.nota %}<div class="small muted">{{ comp.nota }}</div>{% endif %}
+            </div>
+            <div class="fila">
+              <span class="pill {% if comp.estado == 'PAGADA' %}ok{% elif comp.estado == 'APROBADA' %}accent{% else %}warn{% endif %}">{{ comp.get_estado_display }}</span>
+              {% if comp.estado == "COTIZADA" and incidencia.abierta %}
+              <form method="post">{% csrf_token %}
+                <input type="hidden" name="accion" value="compensacion_aprobar">
+                <input type="hidden" name="compensacion_id" value="{{ comp.pk }}">
+                <button class="btn chico primario" type="submit">Aprobar</button>
+              </form>
+              {% endif %}
+            </div>
           </div>
-          <span class="pill {% if comp.estado == 'PAGADA' %}ok{% elif comp.estado == 'APROBADA' %}accent{% else %}warn{% endif %}">{{ comp.get_estado_display }}</span>
         </div>
       {% empty %}
         <p class="muted">Sin compensaciones en este caso. Si aplica una, aquí verás su estatus y su referencia de pago.</p>
       {% endfor %}
+      {% if opciones_compensacion %}
+      {# El cliente pide reposición o reembolso eligiendo sus line items; se ejecuta al enviar. #}
+      <form method="post" class="mt">{% csrf_token %}
+        <input type="hidden" name="accion" value="compensacion_crear">
+        <div class="eyebrow">Pedir una compensación</div>
+        <div class="fila mt">
+          <div style="flex:1">
+            <label for="comp-tipo">Tipo</label>
+            <select id="comp-tipo" name="tipo">
+              {% for clave, nombre in opciones_compensacion %}
+              <option value="{{ clave }}">{{ nombre }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="flex:1">
+            <label for="comp-monto">Monto MXN</label>
+            <input id="comp-monto" type="number" name="monto" step="0.01" min="0" placeholder="cupón o reembolso de monto libre">
+          </div>
+        </div>
+        {% if lineas_pedido %}
+        <div class="small muted mt">Marca qué se repone o reembolsa: todo, un producto o cualquier combinación.</div>
+        <table class="mt">
+          <thead><tr><th></th><th>Producto</th><th>Pedidas</th><th>Piezas</th></tr></thead>
+          <tbody>
+            {% for linea in lineas_pedido %}
+            <tr>
+              <td><input type="checkbox" name="linea_{{ linea.pk }}" value="1" aria-label="Incluir {{ linea.sku.codigo }}"></td>
+              <td><span class="mono">{{ linea.sku.codigo }}</span> <span class="small">{{ linea.sku.descripcion }}</span></td>
+              <td class="mono">{{ linea.cantidad }}</td>
+              <td><input type="number" name="cantidad_{{ linea.pk }}" min="1" max="{{ linea.cantidad }}" value="{{ linea.cantidad }}" style="width:90px" aria-label="Piezas de {{ linea.sku.codigo }}"></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <label class="mt" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="reembolsar_envio" value="1"> Reembolsar también el envío (solo reembolso)</label>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="avisar_comprador" value="1" checked> Que Shopify le avise al comprador del reembolso</label>
+        {% endif %}
+        <p class="small muted mt">Una reposición regresa el pedido a picking con lo marcado; un reembolso se hace en tu Shopify al instante.</p>
+        <button class="btn primario mt" type="submit">Crear y ejecutar</button>
+      </form>
+      {% endif %}
     </div>
   </div>
 </div>

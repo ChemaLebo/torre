@@ -361,6 +361,74 @@ def push_inventario():
     return resumen
 
 
+# ── Reembolsos y reposiciones (Chema 2026-09-28) ─────────────────────────────
+
+def reembolsar_en_shopify(pedido, lineas=(), reembolsar_envio=False, monto=None, nota="", avisar=True):
+    """Refund en Shopify por line items (`lineas` = [(sku, cantidad)]) y/o el
+    envío, o por un `monto` libre sin líneas. El monto y las transacciones
+    (contra el medio de pago original) los calcula Shopify; sin restock: el
+    inventario lo manda Torre y un producto que vuelve entra por reingreso.
+    Regresa (gid del refund, monto). ShopifyError si no hay tienda con token,
+    si la orden no tiene esas piezas reembolsables o si Shopify rechaza."""
+    from decimal import Decimal  # lazy: solo aquí
+
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        raise ShopifyError(f"{pedido.folio} no viene de una tienda de Shopify.")
+    if not tienda.token:
+        raise ShopifyError(f"La tienda {tienda.dominio} no tiene token: configúralo en Mesa → Clientes → tiendas.")
+    api = ShopifyClient(tienda)
+    try:
+        items, transacciones = api.lineas_orden(pedido.shopify_order_id)
+        refund_lines = []
+        for sku, cantidad in lineas:
+            restante = int(cantidad)
+            for item in items:
+                if item["sku"] != sku or restante <= 0:
+                    continue
+                toma = min(restante, item["reembolsable"])
+                if toma > 0:
+                    refund_lines.append({"lineItemId": item["id"], "quantity": toma})
+                    restante -= toma
+            if restante > 0:
+                raise ShopifyError(f"La orden no tiene {cantidad} pieza(s) reembolsable(s) de {sku}.")
+        if refund_lines or reembolsar_envio:
+            sugerido = api.reembolso_sugerido(pedido.shopify_order_id, refund_lines, reembolsar_envio)
+            transacciones_refund = [t for t in sugerido["transacciones"] if t.get("parent_id") and t.get("amount")]
+            total = Decimal(str(sugerido["monto"] or 0))
+        elif monto and Decimal(str(monto)) > 0:
+            padre = next(
+                (t for t in transacciones if t["kind"] in ("SALE", "CAPTURE") and t["status"] == "SUCCESS"), None,
+            )
+            if padre is None:
+                raise ShopifyError("La orden no tiene un pago exitoso al que devolverle dinero.")
+            total = Decimal(str(monto))
+            transacciones_refund = [{"gateway": padre["gateway"], "parent_id": padre["id"], "amount": f"{total:.2f}"}]
+        else:
+            raise ShopifyError("Nada que reembolsar: elige líneas, el envío o un monto.")
+        referencia, monto_final = api.crear_reembolso(
+            pedido.shopify_order_id, refund_lines, reembolsar_envio, transacciones_refund, note=nota, notify=avisar,
+        )
+    except ShopifyError as exc:
+        _log_push(tienda, False, f"refund {pedido.folio}: {exc}")
+        raise
+    monto_final = Decimal(str(monto_final)) if monto_final not in (None, "") else total
+    _log_push(tienda, True, f"refund {pedido.folio}: ${monto_final} ({referencia})")
+    registrar_evento(
+        "pedido", pedido.pk, "reembolso_shopify", cliente=pedido.cliente,
+        delta={"refund": referencia, "monto": str(monto_final), "lineas": [list(x) for x in lineas], "envio": bool(reembolsar_envio)},
+        motivo=(nota or "Reembolso desde Torre")[:300],
+    )
+    return referencia, monto_final
+
+
+def _caja_es_reposicion(caja):
+    """True si TODO el contenido de la caja son líneas de reposición: la
+    orden ya está fulfilled en Shopify y no hay line items que fulfillear."""
+    lineas = list(caja.lineas.select_related("linea_pedido"))
+    return bool(lineas) and all(pl.linea_pedido.reposicion_de_id for pl in lineas)
+
+
 # ── Fulfillment (write-back al firmar el manifiesto) ─────────────────────────
 
 # Estados de fulfillment order que SÍ se pueden fulfillear. SCHEDULED y ON_HOLD
@@ -492,6 +560,12 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", n
         return False  # pedido manual: no existe en Shopify
 
     cajas = [c for c in (cajas or []) if not c.shopify_fulfillment_id]
+    de_reposicion = [c for c in cajas if _caja_es_reposicion(c)]
+    if de_reposicion:
+        _log_push(tienda, True, f"reposición {pedido.folio}: caja(s) {[c.numero for c in de_reposicion]} sin fulfillment en Shopify")
+        cajas = [c for c in cajas if c not in de_reposicion]
+        if not cajas:
+            return False
     numeros, carrier = [], ""
     for guia in pedido.guias.all().order_by("pk"):  # orden estable: caja 1 primero
         if guia.es_activa and guia.numero:
@@ -674,6 +748,8 @@ def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=N
     status = EVENTO_FULFILLMENT_POR_ESTADO.get(estado_guia or "")
     if not status:
         return False
+    if guia is not None and guia.paquete_id and _caja_es_reposicion(guia.paquete):
+        return False  # la reposición no tiene fulfillment: nada que actualizar allá
     fid = guia.paquete.shopify_fulfillment_id if guia is not None and guia.paquete_id else ""
     donde = f"caja {guia.paquete.numero}" if fid else "pedido entero"
     if not fid:

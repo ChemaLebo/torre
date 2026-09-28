@@ -7,6 +7,7 @@ Consumidores conocidos (llaman lazy a este módulo):
   retorno o silencio del carrier.
 """
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
@@ -16,7 +17,7 @@ from django.utils import timezone
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 
-from .models import Incidencia, MensajeIncidencia
+from .models import Compensacion, Incidencia, MensajeIncidencia
 
 # Prioridad default por tipo cuando quien abre no la especifica.
 PRIORIDAD_DEFAULT_POR_TIPO = {
@@ -318,6 +319,209 @@ def cerrar(incidencia, actor):
             pedido.incidencia_activa = False
             pedido.save(update_fields=["incidencia_activa"])
     return incidencia
+
+
+# ── Compensaciones que ejecutan (Chema 2026-09-28) ──
+# Reposición física: desde daño, faltante y retorno/no entregado; reembolso:
+# esos más retraso y cancelación tardía; cupón: registro en cualquier caso.
+TIPOS_CON_REPOSICION = (Incidencia.TIPO_DAN, Incidencia.TIPO_FAL, Incidencia.TIPO_RF)
+TIPOS_CON_REEMBOLSO = (
+    Incidencia.TIPO_DAN, Incidencia.TIPO_FAL, Incidencia.TIPO_RF, Incidencia.TIPO_RET, Incidencia.TIPO_CAN,
+)
+
+
+def opciones_compensacion(incidencia):
+    """[(tipo, nombre)] de compensación que aplican a esta incidencia."""
+    nombres = dict(Compensacion.TIPOS)
+    opciones = []
+    if incidencia.pedido_id:
+        if incidencia.tipo in TIPOS_CON_REPOSICION:
+            opciones.append((Compensacion.TIPO_REPOSICION, nombres[Compensacion.TIPO_REPOSICION]))
+        if incidencia.tipo in TIPOS_CON_REEMBOLSO:
+            opciones.append((Compensacion.TIPO_REEMBOLSO, nombres[Compensacion.TIPO_REEMBOLSO]))
+    opciones.append((Compensacion.TIPO_CUPON, nombres[Compensacion.TIPO_CUPON]))
+    return opciones
+
+
+def lineas_para_compensar(incidencia):
+    """Los line items originales del pedido (sin reposiciones previas ni
+    componentes de kit): lo que se puede reponer o reembolsar."""
+    if incidencia.pedido_id is None:
+        return []
+    return list(
+        incidencia.pedido.lineas.filter(reposicion_de__isnull=True, parte_de_kit__isnull=True)
+        .select_related("sku").order_by("pk")
+    )
+
+
+def seleccion_desde_post(post, incidencia):
+    """[(línea, cantidad)] marcadas en el formulario (linea_<pk> + cantidad_<pk>)."""
+    seleccion = []
+    for linea in lineas_para_compensar(incidencia):
+        if not post.get(f"linea_{linea.pk}"):
+            continue
+        try:
+            cantidad = int(post.get(f"cantidad_{linea.pk}") or linea.cantidad)
+        except (TypeError, ValueError):
+            raise ValueError(f"Cantidad inválida para {linea.sku.codigo}.") from None
+        seleccion.append((linea, cantidad))
+    return seleccion
+
+
+def _precio_linea(linea):
+    """Lo que se vendió (precio real de la tienda) o, sin venta, el declarado del catálogo."""
+    if linea.precio_unitario is not None:
+        return Decimal(linea.precio_unitario)
+    return Decimal(linea.sku.precio_declarado or 0)
+
+
+def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, reembolsar_envio=False,
+                       avisar_comprador=True, aprobar=False):
+    """Propone una compensación (COTIZADA) y, con `aprobar`, la ejecuta ya.
+    `rol` = "mesa" | "cliente" (quién la propone). Reposición: líneas
+    obligatorias, monto = valor declarado del catálogo (informativo).
+    Reembolso: líneas y/o envío (Shopify calcula el monto real al ejecutar) o
+    un monto libre sin líneas. Cupón: monto obligatorio, solo registro."""
+    permitidos = dict(opciones_compensacion(incidencia))
+    if tipo not in permitidos:
+        raise ValueError("Esa compensación no aplica a este tipo de incidencia.")
+    try:
+        monto = Decimal(str(monto).strip()) if monto not in (None, "") else None
+    except InvalidOperation:
+        raise ValueError("Captura el monto en MXN (ej. 450.00).") from None
+    seleccion = [(linea, int(cantidad)) for linea, cantidad in (lineas or []) if int(cantidad or 0) > 0]
+    for linea, cantidad in seleccion:
+        if cantidad > linea.cantidad:
+            raise ValueError(f"{linea.sku.codigo}: el pedido lleva {linea.cantidad} pieza(s), no {cantidad}.")
+    if tipo == Compensacion.TIPO_REPOSICION:
+        if not seleccion:
+            raise ValueError("Elige qué productos se reponen.")
+        monto = sum((Decimal(linea.sku.precio_declarado or 0) * cantidad for linea, cantidad in seleccion), Decimal(0))
+        reembolsar_envio = False
+    elif tipo == Compensacion.TIPO_REEMBOLSO:
+        if not seleccion and not reembolsar_envio and not (monto and monto > 0):
+            raise ValueError("Elige qué se reembolsa: productos, el envío o un monto.")
+        if seleccion:
+            monto = sum((_precio_linea(linea) * cantidad for linea, cantidad in seleccion), Decimal(0))
+        elif monto is None:
+            monto = Decimal(0)  # solo envío: Shopify dice cuánto
+    else:
+        if not monto or monto <= 0:
+            raise ValueError("Captura el monto del cupón en MXN.")
+        reembolsar_envio = False
+    comp = Compensacion.objects.create(
+        incidencia=incidencia, tipo=tipo, monto=monto,
+        lineas=[{"linea_id": linea.pk, "sku": linea.sku.codigo, "cantidad": cantidad} for linea, cantidad in seleccion],
+        reembolsar_envio=bool(reembolsar_envio), avisar_comprador=bool(avisar_comprador),
+        creada_por=Compensacion.CREADA_CLIENTE if rol == "cliente" else Compensacion.CREADA_MESA,
+    )
+    registrar_evento(
+        "compensacion", comp.pk, "creada", actor=actor, cliente=incidencia.cliente,
+        delta={"incidencia": incidencia.folio, "tipo": tipo, "monto": str(monto), "lineas": comp.lineas,
+               "envio": comp.reembolsar_envio, "por": comp.creada_por},
+    )
+    rol_autor = MensajeIncidencia.ROL_CLIENTE if rol == "cliente" else MensajeIncidencia.ROL_MESA
+    detalle = comp.resumen_lineas + (" + envío" if comp.reembolsar_envio else "") if (comp.lineas or comp.reembolsar_envio) else f"${monto}"
+    responder(incidencia, _nombre_actor(actor), rol_autor, f"Propuso {permitidos[tipo].lower()}: {detalle}.")
+    if aprobar:
+        aprobar_compensacion(comp, actor, rol)
+    return comp
+
+
+def _seleccion_de(comp):
+    from apps.pedidos.models import LineaPedido  # lazy por contrato
+
+    por_id = {l.pk: l for l in LineaPedido.objects.filter(pk__in=[x.get("linea_id") for x in comp.lineas]).select_related("sku")}
+    return [(por_id[x["linea_id"]], int(x["cantidad"])) for x in comp.lineas if x.get("linea_id") in por_id]
+
+
+def aprobar_compensacion(comp, actor, rol="mesa"):
+    """COTIZADA → APROBADA y se ejecuta: la reposición regresa el pedido a
+    picking (si falla, nada cambia: ValueError al que aprueba); el reembolso
+    va a Shopify fuera de la transacción (ejecutar_reembolso); el cupón es
+    registro. Queda en el timeline de la incidencia."""
+    incidencia = comp.incidencia
+    with transaction.atomic():
+        comp.transicionar(Compensacion.APROBADA, actor=actor, motivo=f"Aprobada ({incidencia.folio})")
+        if comp.tipo == Compensacion.TIPO_REPOSICION:
+            from apps.pedidos.services import reponer_lineas  # lazy por contrato
+
+            nuevas = reponer_lineas(incidencia.pedido, _seleccion_de(comp), actor, incidencia=incidencia)
+            comp.nota = f"{incidencia.pedido.folio} regresó a picking con {sum(n.cantidad for n in nuevas)} pieza(s) por reponer."
+            comp.save(update_fields=["nota"])
+    if comp.tipo == Compensacion.TIPO_REEMBOLSO:
+        ejecutar_reembolso(comp, actor)
+    responder(
+        incidencia, _nombre_actor(actor),
+        MensajeIncidencia.ROL_CLIENTE if rol == "cliente" else MensajeIncidencia.ROL_MESA, resumen_ejecucion(comp),
+    )
+    return comp
+
+
+def ejecutar_reembolso(comp, actor):
+    """Refund en Shopify de una compensación APROBADA (o reintento): con el
+    id del refund pasa a PAGADA; un rechazo queda en `nota` y se reintenta
+    desde Mesa. Sin tienda de Shopify no hay a dónde: se paga por fuera y se
+    marca PAGADA con su referencia."""
+    incidencia = comp.incidencia
+    pedido = incidencia.pedido
+    if comp.estado != Compensacion.APROBADA or comp.referencia_pago:
+        return comp
+    if pedido is None or pedido.tienda_id is None or not pedido.shopify_order_id:
+        comp.nota = "Sin tienda de Shopify: haz el reembolso por tu medio y márcalo pagado con su referencia."
+        comp.save(update_fields=["nota"])
+        return comp
+    from apps.integraciones.services import reembolsar_en_shopify  # lazy por contrato
+    from apps.integraciones.shopify import ShopifyError  # lazy por contrato
+
+    try:
+        referencia, monto = reembolsar_en_shopify(
+            pedido, lineas=[(x["sku"], int(x["cantidad"])) for x in comp.lineas],
+            reembolsar_envio=comp.reembolsar_envio, monto=None if comp.lineas else comp.monto,
+            nota=f"{incidencia.folio} · Torre", avisar=comp.avisar_comprador,
+        )
+    except ShopifyError as exc:
+        comp.nota = f"Shopify rechazó el reembolso: {str(exc)[:240]}"
+        comp.save(update_fields=["nota"])
+        registrar_evento("compensacion", comp.pk, "reembolso_rechazado", actor=actor, cliente=incidencia.cliente,
+                         delta={"incidencia": incidencia.folio}, motivo=comp.nota)
+        return comp
+    comp.referencia_pago = referencia
+    comp.monto = monto
+    comp.nota = "Reembolso hecho en Shopify."
+    comp.save(update_fields=["referencia_pago", "monto", "nota"])
+    comp.transicionar(Compensacion.PAGADA, actor=actor, motivo=f"Reembolso en Shopify ({referencia})")
+    return comp
+
+
+def compensaciones_por_entrega(pedido):
+    """La reposición se entregó (el pedido volvió a ENTREGADO): sus
+    compensaciones aprobadas pasan a PAGADA con nota en el timeline."""
+    comps = Compensacion.objects.filter(
+        incidencia__pedido=pedido, tipo=Compensacion.TIPO_REPOSICION, estado=Compensacion.APROBADA,
+    ).select_related("incidencia")
+    for comp in comps:
+        comp.referencia_pago = f"{pedido.folio} entregado"
+        comp.nota = "Reposición entregada."
+        comp.save(update_fields=["referencia_pago", "nota"])
+        comp.transicionar(Compensacion.PAGADA, motivo="La reposición se entregó.")
+        responder(comp.incidencia, "Torre", MensajeIncidencia.ROL_SISTEMA, f"La reposición de {pedido.folio} se entregó.")
+    return len(comps)
+
+
+def resumen_ejecucion(comp):
+    """Frase para el flash de Mesa/portal tras crear, aprobar o ejecutar."""
+    nombre = comp.get_tipo_display()
+    detalle = comp.resumen_lineas or f"${comp.monto}"
+    if comp.estado == Compensacion.COTIZADA:
+        return f"{nombre} propuesta ({detalle}): falta aprobarla."
+    if comp.tipo == Compensacion.TIPO_REPOSICION:
+        return f"Reposición aprobada: {comp.nota or detalle}"
+    if comp.tipo == Compensacion.TIPO_REEMBOLSO:
+        if comp.estado == Compensacion.PAGADA:
+            return f"Reembolso de ${comp.monto} hecho en Shopify ({comp.referencia_pago})."
+        return f"Reembolso aprobado, pero no se ejecutó: {comp.nota or 'sin detalle'}"
+    return f"{nombre} aprobado por ${comp.monto}."
 
 
 def sin_paqueteria_abierta(pedido):

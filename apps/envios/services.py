@@ -1123,6 +1123,13 @@ def _transicionar_pedido(pedido, destino, motivo=""):
             avanzo = True
         except ValueError:
             break
+    if avanzo and destino == "ENTREGADO":
+        try:
+            from apps.incidencias.services import compensaciones_por_entrega  # lazy por contrato
+
+            compensaciones_por_entrega(pedido)
+        except Exception:  # noqa: BLE001, S110 — la compensación es registro; la entrega no se deshace
+            pass
     return avanzo
 
 

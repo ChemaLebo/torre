@@ -167,6 +167,49 @@ mutation definirMetafield($definition: MetafieldDefinitionInput!) {
 """
 
 
+# Reembolsos (Chema 2026-09-28): line items reembolsables y transacciones de
+# la orden; el monto y las transacciones las sugiere Shopify (suggestedRefund)
+# y refundCreate las ejecuta contra el medio de pago original.
+CONSULTA_LINEAS_ORDEN = """
+query lineasOrden($id: ID!) {
+  order(id: $id) {
+    id
+    lineItems(first: 100) { nodes { id sku quantity refundableQuantity } }
+    transactions(first: 50) {
+      id kind status gateway
+      parentTransaction { id }
+      amountSet { shopMoney { amount currencyCode } }
+    }
+  }
+}
+"""
+
+CONSULTA_REEMBOLSO_SUGERIDO = """
+query reembolsoSugerido($id: ID!, $lineas: [RefundLineItemInput!], $envio: Boolean) {
+  order(id: $id) {
+    suggestedRefund(refundLineItems: $lineas, refundShipping: $envio) {
+      amountSet { shopMoney { amount currencyCode } }
+      suggestedTransactions {
+        amountSet { shopMoney { amount currencyCode } }
+        gateway
+        kind
+        parentTransaction { id }
+      }
+    }
+  }
+}
+"""
+
+MUTACION_REEMBOLSO = """
+mutation crearReembolso($input: RefundInput!) {
+  refundCreate(input: $input) {
+    refund { id totalRefundedSet { shopMoney { amount currencyCode } } }
+    userErrors { field message }
+  }
+}
+"""
+
+
 class ShopifyError(Exception):
     """Error de la API de Shopify (HTTP, GraphQL o userErrors)."""
 
@@ -281,6 +324,79 @@ class ShopifyClient:
         if errores:
             raise ShopifyError(f"inventoryActivate {self.tienda.dominio}: {errores}")
         return resultado
+
+    # ── reembolsos ──
+    @staticmethod
+    def _order_gid(order_id):
+        gid = str(order_id)
+        return gid if gid.startswith("gid://") else f"gid://shopify/Order/{gid}"
+
+    def lineas_orden(self, order_id):
+        """(line items, transacciones) de la orden: [{id, sku, cantidad,
+        reembolsable}] y [{id, kind, status, gateway, parent_id, amount}]."""
+        datos = self.graphql(CONSULTA_LINEAS_ORDEN, {"id": self._order_gid(order_id)})
+        orden = datos.get("order") or {}
+        if not orden:
+            raise ShopifyError(f"Pedido {order_id} no existe en {self.tienda.dominio}.")
+        lineas = [
+            {"id": n.get("id"), "sku": (n.get("sku") or "").strip(), "cantidad": int(n.get("quantity") or 0),
+             "reembolsable": int(n.get("refundableQuantity") or 0)}
+            for n in (orden.get("lineItems") or {}).get("nodes") or [] if n.get("id")
+        ]
+        transacciones = [
+            {"id": t.get("id"), "kind": t.get("kind") or "", "status": t.get("status") or "", "gateway": t.get("gateway") or "",
+             "parent_id": (t.get("parentTransaction") or {}).get("id"),
+             "amount": ((t.get("amountSet") or {}).get("shopMoney") or {}).get("amount")}
+            for t in orden.get("transactions") or [] if t.get("id")
+        ]
+        return lineas, transacciones
+
+    def reembolso_sugerido(self, order_id, refund_line_items, refund_shipping):
+        """Lo que Shopify calcula para esas líneas (+ envío): monto y las
+        transacciones de devolución contra el pago original."""
+        datos = self.graphql(CONSULTA_REEMBOLSO_SUGERIDO, {
+            "id": self._order_gid(order_id),
+            "lineas": [{"lineItemId": x["lineItemId"], "quantity": x["quantity"]} for x in refund_line_items],
+            "envio": bool(refund_shipping),
+        })
+        sugerido = ((datos.get("order") or {}).get("suggestedRefund")) or {}
+        monto = ((sugerido.get("amountSet") or {}).get("shopMoney") or {}).get("amount")
+        transacciones = [
+            {"gateway": t.get("gateway") or "", "parent_id": (t.get("parentTransaction") or {}).get("id"),
+             "amount": ((t.get("amountSet") or {}).get("shopMoney") or {}).get("amount")}
+            for t in sugerido.get("suggestedTransactions") or []
+        ]
+        return {"monto": monto, "transacciones": transacciones}
+
+    def crear_reembolso(self, order_id, refund_line_items, refund_shipping, transactions, note="", notify=True):
+        """refundCreate: regresa (gid del refund, monto). Sin restock: el
+        inventario lo publica Torre."""
+        entrada = {
+            "orderId": self._order_gid(order_id),
+            "note": (note or "")[:250],
+            "notify": bool(notify),
+            "refundLineItems": [
+                {"lineItemId": x["lineItemId"], "quantity": int(x["quantity"]), "restockType": "NO_RESTOCK"}
+                for x in refund_line_items
+            ],
+            "transactions": [
+                {"orderId": self._order_gid(order_id), "gateway": t["gateway"], "kind": "REFUND",
+                 "amount": str(t["amount"]), "parentId": t["parent_id"]}
+                for t in transactions
+            ],
+        }
+        if refund_shipping:
+            entrada["shipping"] = {"fullRefund": True}
+        datos = self.graphql(MUTACION_REEMBOLSO, {"input": entrada})
+        resultado = datos.get("refundCreate") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"refundCreate {self.tienda.dominio}: {errores}")
+        refund = resultado.get("refund") or {}
+        if not refund.get("id"):
+            raise ShopifyError(f"refundCreate {self.tienda.dominio}: Shopify no regresó el refund.")
+        monto = ((refund.get("totalRefundedSet") or {}).get("shopMoney") or {}).get("amount")
+        return refund["id"], monto
 
     # ── fulfillment (write-back al marcar RECOLECTADO) ──
     def fulfillment_orders(self, order_id):

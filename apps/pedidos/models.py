@@ -60,9 +60,11 @@ class Pedido(models.Model):
         GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO, EMPACADO},
         # → CANCELADO desde la calle solo lo hace el cierre de una cancelación
         # tardía (Mesa decide el reingreso o resuelve la incidencia CAN).
-        RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO},
-        EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO, CANCELADO},
-        ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO, CANCELADO},
+        # → PENDIENTE desde la calle o ya entregado SOLO por una reposición de
+        # producto (services.reponer_lineas, 2026-09-28): líneas nuevas, mismo folio.
+        RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO, PENDIENTE},
+        EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO, CANCELADO, PENDIENTE},
+        ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO, CANCELADO, PENDIENTE},
         # PARCIALMENTE_DESPACHADO = salieron algunas cajas y otras siguen en
         # bodega (manifiesto por caja); al salir la última → RECOLECTADO. El
         # tracking no lo mueve mientras queden cajas adentro. También es el
@@ -71,9 +73,9 @@ class Pedido(models.Model):
         # pedido vuelve a PENDIENTE (segunda ola, mismo folio).
         PARCIALMENTE_DESPACHADO: {RECOLECTADO, EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO, PENDIENTE},
         CANCELACION_PENDIENTE: {CANCELADO},
-        ENTREGADO: set(),
+        ENTREGADO: {PENDIENTE},  # reposición
         CANCELADO: set(),
-        RETORNADO: set(),
+        RETORNADO: {PENDIENTE},  # reposición
     }
 
     # Estado destino → campo timestamp que se estampa al entrar (solo la primera vez).
@@ -417,6 +419,13 @@ class LineaPedido(models.Model):
     cantidad_despachada = models.PositiveIntegerField(
         default=0, help_text="Unidades que ya salieron de bodega en un manifiesto anterior",
     )
+    # Reposición de producto (Chema 2026-09-28): línea nueva del mismo pedido
+    # que repone piezas de la original (daño, faltante, extravío). No es venta
+    # (sin precio, fuera del reporte de ventas) y no se fulfillea en Shopify.
+    reposicion_de = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reposiciones",
+        help_text="Línea original que esta línea repone",
+    )
     parte_de_kit = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.CASCADE, related_name="componentes",
         help_text="Línea kit a la que pertenece este componente (té dentro de la TeaBox)",
@@ -438,6 +447,10 @@ class LineaPedido(models.Model):
 
     def __str__(self):
         return f"{self.pedido.folio} · {self.sku} × {self.cantidad}"
+
+    @property
+    def es_reposicion(self):
+        return self.reposicion_de_id is not None
 
     @property
     def faltante(self):

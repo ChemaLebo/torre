@@ -91,6 +91,7 @@
          data-codigo="{{ linea.sku.codigo }}">
   {% if linea.primera_ubicacion %}
   <div class="eyebrow">Ve a</div>
+  {% if linea.reposicion_de_id %}<span class="pill accent">Reposición</span>{% endif %}
   <div class="pick-ubicacion">{{ linea.primera_ubicacion.ubicacion.codigo }}</div>
   <div class="small mono">
     {% if linea.primera_ubicacion.lote %}
