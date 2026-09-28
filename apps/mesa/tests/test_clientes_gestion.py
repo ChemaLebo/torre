@@ -160,19 +160,24 @@ class EdicionClienteTests(BaseGestionClientes):
         self.assertEqual(evento.delta["contacto_nombre"], ["", "Karina Fuentes"])
 
     def test_edicion_pausa_incidencias_automaticas_hasta_una_fecha(self):
-        from datetime import date
+        from datetime import timedelta
 
+        from django.utils import timezone
+        from django.utils.dateformat import format as formato
+
+        # Fecha relativa (2026-09-28): la pausa se muestra solo mientras no venza.
+        hasta = timezone.localdate() + timedelta(days=30)
         url = reverse("mesa:cliente_editar", args=[self.colima.pk])
         respuesta = self.client.post(url, datos_form_cliente(
-            nombre="Cervecería Colima", incidencias_auto_pausadas_hasta="2026-09-27",
+            nombre="Cervecería Colima", incidencias_auto_pausadas_hasta=hasta.isoformat(),
         ))
         self.assertRedirects(respuesta, reverse("mesa:cliente_detalle", args=[self.colima.pk]))
         self.colima.refresh_from_db()
-        self.assertEqual(self.colima.incidencias_auto_pausadas_hasta, date(2026, 9, 27))
+        self.assertEqual(self.colima.incidencias_auto_pausadas_hasta, hasta)
         evento = EventoAuditoria.objects.get(entidad="cliente", entidad_id="colima", accion="edicion")
-        self.assertEqual(evento.delta["incidencias_auto_pausadas_hasta"], [None, "2026-09-27"])
+        self.assertEqual(evento.delta["incidencias_auto_pausadas_hasta"], [None, hasta.isoformat()])
         respuesta = self.client.get(reverse("mesa:incidencias"))
-        self.assertContains(respuesta, "Incidencias automáticas pausadas: Cervecería Colima hasta 27/Sep/2026")
+        self.assertContains(respuesta, f"Incidencias automáticas pausadas: Cervecería Colima hasta {formato(hasta, 'd/M/Y')}")
         # Vacío = se reactivan.
         self.client.post(url, datos_form_cliente(nombre="Cervecería Colima"))
         self.colima.refresh_from_db()

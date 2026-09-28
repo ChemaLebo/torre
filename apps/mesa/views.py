@@ -327,6 +327,14 @@ def incidencias(request):
     tipo = request.GET.get("tipo", "").strip()
     cliente_id = request.GET.get("cliente", "").strip()
     origen = request.GET.get("origen", "").strip()  # Chema 2026-09-24: distinguir automáticas de las del cliente/comprador
+    q = request.GET.get("q", "").strip()  # Chema 2026-09-28: folio, pedido, orden de Shopify, comprador o dueño
+    if q:
+        nombre = q if q.startswith("#") else f"#{q}"
+        qs = qs.filter(
+            Q(folio__icontains=q) | Q(pedido__folio__icontains=q) | Q(pedido__shopify_order_name__iexact=nombre)
+            | Q(pedido__shopify_order_name__icontains=q) | Q(pedido__comprador_nombre__icontains=q)
+            | Q(dueno__icontains=q)
+        )
     if estado == "abiertas":
         qs = qs.filter(estado__in=Incidencia.ESTADOS_ABIERTOS)
     elif estado:
@@ -353,7 +361,7 @@ def incidencias(request):
         "estados": Incidencia.ESTADOS,
         "origenes": Incidencia.ORIGENES,
         "clientes_filtro": Cliente.objects.all(),
-        "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id, "origen": origen},
+        "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id, "origen": origen, "q": q},
         "abiertas_n": sum(1 for i in filas if i.abierta),
         # Clientes con las automáticas pausadas hoy: se avisa arriba para que nadie busque lo que no nació.
         "pausas": Cliente.objects.filter(incidencias_auto_pausadas_hasta__gte=timezone.localdate()).order_by("nombre"),

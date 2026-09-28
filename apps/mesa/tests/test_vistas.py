@@ -121,7 +121,9 @@ class GestionIncidenciaTests(BaseMesaTest):
     def test_flujo_compensacion(self):
         from apps.incidencias.models import Compensacion
 
-        self.client.post(self.url, {"accion": "compensacion_crear", "tipo": "reposicion", "monto": "450.00"})
+        # 2026-09-28: reposición y reembolso exigen line items (test_compensaciones);
+        # el flujo de estados a mano se prueba con un cupón, que sigue siendo registro.
+        self.client.post(self.url, {"accion": "compensacion_crear", "tipo": "cupon", "monto": "450.00"})
         comp = Compensacion.objects.get(incidencia=self.incidencia)
         self.assertEqual(comp.estado, Compensacion.COTIZADA)
         self.assertEqual(comp.monto, Decimal("450.00"))

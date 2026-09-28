@@ -36,6 +36,8 @@
 {# Sin CSS de fuentes por CDN: un stylesheet remoto render-bloquea con lie-fi. Cuerpo = stack de sistema. #}
 <link rel="stylesheet" href="{% static 'css/wop.css' %}">
 <script defer src="{% static 'js/escaner.js' %}" data-zxing="{% static 'js/zxing.min.js' %}"></script>
+{# Toda tabla con encabezado se ordena por columna y, con 8 renglones o más, trae buscador (Chema 2026-09-28). #}
+<script defer src="{% static 'js/tablas.js' %}"></script>
 {% if user.is_authenticated %}
 {# PWA: el SW se registra SOLO en páginas autenticadas — rastreo público y etiquetas QR jamás. #}
 <script defer src="{% static 'js/push.js' %}"></script>

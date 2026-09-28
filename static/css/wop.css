@@ -285,6 +285,14 @@ td { padding: 10px 14px; border-bottom: 1px solid var(--hair); vertical-align: m
 tr:last-child td { border-bottom: none; }
 tr.fila-link { cursor: pointer; }
 tr.fila-link:hover td { background: var(--panel-2); }
+/* Orden por columna y buscador por tabla (static/js/tablas.js). */
+th.ordenable { cursor: pointer; user-select: none; }
+th.ordenable::after { content: " ↕"; opacity: .35; }
+th.ordenable[aria-sort="ascending"]::after { content: " ↑"; opacity: 1; color: var(--accent-hot); }
+th.ordenable[aria-sort="descending"]::after { content: " ↓"; opacity: 1; color: var(--accent-hot); }
+.tabla-buscador { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--hair); }
+.tabla-buscador input[type="search"] { max-width: 320px; margin: 0; }
+tr[hidden] { display: none; }
 
 /* ── Pills de estado ── */
 .pill {
