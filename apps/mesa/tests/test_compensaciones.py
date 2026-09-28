@@ -37,7 +37,7 @@ class CompensacionesMesaTests(TestCase):
         self.assertIn('value="reembolso"', html)
         retraso = abrir_incidencia(self.cliente, Incidencia.TIPO_RET, Incidencia.ORIGEN_AUTO, pedido=self.pedido, texto="x")
         html = self.client.get(reverse("mesa:incidencia_detalle", args=[retraso.pk])).content.decode()
-        self.assertNotIn('value="reposicion"', html)
+        self.assertIn('value="reposicion"', html)  # cualquier tipo con pedido (Chema 2026-09-28)
         self.assertIn('value="reembolso"', html)
 
     def test_proponer_y_luego_aprobar_ejecuta_la_reposicion(self):

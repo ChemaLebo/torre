@@ -322,12 +322,9 @@ def cerrar(incidencia, actor):
 
 
 # ── Compensaciones que ejecutan (Chema 2026-09-28) ──
-# Reposición física: desde daño, faltante y retorno/no entregado; reembolso:
-# esos más retraso y cancelación tardía; cupón: registro en cualquier caso.
-TIPOS_CON_REPOSICION = (Incidencia.TIPO_DAN, Incidencia.TIPO_FAL, Incidencia.TIPO_RF)
-TIPOS_CON_REEMBOLSO = (
-    Incidencia.TIPO_DAN, Incidencia.TIPO_FAL, Incidencia.TIPO_RF, Incidencia.TIPO_RET, Incidencia.TIPO_CAN,
-)
+# Reposición física y reembolso en CUALQUIER incidencia ligada a un pedido
+# (Chema: el caso de hoy no era daño/faltante); cupón siempre. Las de bodega
+# (sin pedido) solo cupón.
 
 
 def opciones_compensacion(incidencia):
@@ -335,10 +332,8 @@ def opciones_compensacion(incidencia):
     nombres = dict(Compensacion.TIPOS)
     opciones = []
     if incidencia.pedido_id:
-        if incidencia.tipo in TIPOS_CON_REPOSICION:
-            opciones.append((Compensacion.TIPO_REPOSICION, nombres[Compensacion.TIPO_REPOSICION]))
-        if incidencia.tipo in TIPOS_CON_REEMBOLSO:
-            opciones.append((Compensacion.TIPO_REEMBOLSO, nombres[Compensacion.TIPO_REEMBOLSO]))
+        opciones.append((Compensacion.TIPO_REPOSICION, nombres[Compensacion.TIPO_REPOSICION]))
+        opciones.append((Compensacion.TIPO_REEMBOLSO, nombres[Compensacion.TIPO_REEMBOLSO]))
     opciones.append((Compensacion.TIPO_CUPON, nombres[Compensacion.TIPO_CUPON]))
     return opciones
 

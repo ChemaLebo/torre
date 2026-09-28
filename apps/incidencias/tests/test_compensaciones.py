@@ -31,10 +31,9 @@ class CompensacionesTests(TestCase):
 
     def test_opciones_segun_el_tipo_de_incidencia(self):
         self.assertEqual([t for t, _ in opciones_compensacion(self.inc)], ["reposicion", "reembolso", "cupon"])
+        # Cualquier tipo con pedido repone o reembolsa (Chema 2026-09-28).
         retraso = abrir_incidencia(self.cliente, Incidencia.TIPO_RET, Incidencia.ORIGEN_AUTO, pedido=self.pedido, texto="x")
-        self.assertEqual([t for t, _ in opciones_compensacion(retraso)], ["reembolso", "cupon"])
-        direccion = abrir_incidencia(self.cliente, Incidencia.TIPO_DIR, Incidencia.ORIGEN_CLIENTE, pedido=self.pedido, texto="x")
-        self.assertEqual([t for t, _ in opciones_compensacion(direccion)], ["cupon"])
+        self.assertEqual([t for t, _ in opciones_compensacion(retraso)], ["reposicion", "reembolso", "cupon"])
         suelta = abrir_incidencia(self.cliente, Incidencia.TIPO_DAN, Incidencia.ORIGEN_CLIENTE, texto="sin pedido")
         self.assertEqual([t for t, _ in opciones_compensacion(suelta)], ["cupon"])
 
@@ -73,8 +72,9 @@ class CompensacionesTests(TestCase):
 
     def test_validaciones(self):
         retraso = abrir_incidencia(self.cliente, Incidencia.TIPO_RET, Incidencia.ORIGEN_AUTO, pedido=self.pedido, texto="x")
+        suelta = abrir_incidencia(self.cliente, Incidencia.TIPO_DES, Incidencia.ORIGEN_AUTO, texto="sin pedido")
         casos = [
-            (retraso, "reposicion", {"lineas": [(self.l1, 1)]}),          # no aplica al tipo
+            (suelta, "reposicion", {"lineas": [(self.l1, 1)]}),           # sin pedido no aplica
             (self.inc, "reposicion", {}),                                  # sin líneas
             (self.inc, "reposicion", {"lineas": [(self.l1, 3)]}),          # más piezas que las pedidas
             (self.inc, "cupon", {}),                                       # cupón sin monto
