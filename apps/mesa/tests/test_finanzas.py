@@ -1,8 +1,9 @@
-"""Finanzas de Mesa: factura por tarifario (por pedido/bloque) vs costos reales.
+"""Finanzas de Mesa: factura por tarifario vs costos reales.
 
-Regla bajo prueba: el envío se factura por PEDIDO por bloque de 20 kg según
-zona — nunca por guía — para que dividir/consolidar paquetes no mueva la
-factura del cliente. El costo sí es el real de cada guía.
+Regla bajo prueba (Chema 2026-09-28): el envío se factura POR GUÍA a la
+tarifa de la zona del CP destino; cada guía comprada es un cobro. El almacén
+(alistamiento + empaque) va una vez por pedido. El costo es el real de cada
+guía.
 """
 from datetime import time, timedelta
 from decimal import Decimal
@@ -73,15 +74,14 @@ class ResumenMesTests(TestCase):
         cls.inicio = cls.ahora - timedelta(days=1)
         cls.fin = cls.ahora + timedelta(days=1)
 
-    def test_factura_por_pedido_y_bloque_no_por_guia(self):
-        # Pedido local de 18.9 kg dividido en 2 paquetes → 2 guías de $100,
-        # pero UN solo bloque de envío local ($129).
+    def test_factura_por_guia_segun_la_zona(self):
+        # Pedido local de 18.9 kg dividido en 2 paquetes → 2 guías → 2 × $129.
         local = crear_pedido(self.cliente, "PED-F0001")
         p1 = paquete(local, 1, "12.60")
         p2 = paquete(local, 2, "6.30")
         guia(local, "local", "100", p1)
         guia(local, "local", "100", p2)
-        # Pedido nacional de 14.2 kg → 1 bloque nacional ($219).
+        # Pedido nacional de 14.2 kg → 1 guía nacional ($219).
         nacional = crear_pedido(self.cliente, "PED-F0002", es_local=False, cp="97203")
         p3 = paquete(nacional, 1, "14.20", carrier="estafeta")
         guia(nacional, "estafeta", "213.50", p3)
@@ -90,15 +90,15 @@ class ResumenMesTests(TestCase):
 
         self.assertEqual(r["pedidos"], 2)
         self.assertEqual(r["paquetes"], 3)
-        self.assertEqual(r["bloques"], {"local": 1, "metro": 0, "nacional": 1})
-        self.assertEqual(r["ingresos"]["envio"], Decimal("348"))          # 129 + 219
+        self.assertEqual(r["guias_zona"], {"local": 2, "metro": 0, "nacional": 1})
+        self.assertEqual(r["ingresos"]["envio"], Decimal("477"))          # 129 + 129 + 219
         self.assertEqual(r["ingresos"]["almacenaje"], Decimal("18000"))
-        self.assertEqual(r["ingresos"]["alistamiento"], Decimal("50"))    # 2 × 25
-        self.assertEqual(r["ingresos"]["empaque"], Decimal("130"))        # 2 × 65
-        self.assertEqual(r["ingresos"]["total"], Decimal("18528"))
+        self.assertEqual(r["ingresos"]["alistamiento"], Decimal("50"))    # 2 × 25: por pedido
+        self.assertEqual(r["ingresos"]["empaque"], Decimal("130"))        # 2 × 65: por pedido
+        self.assertEqual(r["ingresos"]["total"], Decimal("18657"))
         self.assertEqual(r["costos"]["carrier"], Decimal("413.50"))
-        self.assertEqual(r["costos"]["insumos"], Decimal("36"))           # 3 × 12
-        self.assertEqual(r["margen_bruto"], Decimal("18078.50"))
+        self.assertEqual(r["costos"]["insumos"], Decimal("36"))           # 3 guías × 12
+        self.assertEqual(r["margen_bruto"], Decimal("18207.50"))
         # Desglose por estado, con datos reales de guías:
         cdmx = r["estados"]["Ciudad de México"]
         self.assertEqual(cdmx["ordenes"], 1)
@@ -106,20 +106,22 @@ class ResumenMesTests(TestCase):
         self.assertEqual(cdmx["zona"], "local")
         self.assertAlmostEqual(cdmx["peso"], 18.0, places=1)              # 18.9 sin el +5%
         self.assertEqual(cdmx["costo"], Decimal("200"))
-        self.assertEqual(cdmx["facturado"], Decimal("129"))
+        self.assertEqual(cdmx["facturado"], Decimal("258"))
         yuc = r["estados"]["Yucatán"]
         self.assertEqual(yuc["ordenes"], 1)
         self.assertEqual(yuc["zona"], "nacional")
         self.assertEqual(yuc["facturado"], Decimal("219"))
 
-    def test_pedido_pesado_cobra_bloques_multiples(self):
+    def test_pedido_pesado_con_una_sola_guia_cobra_una(self):
+        # 39 kg en una guía sin caja (pedido sin plan): un cobro; los bloques ya no existen.
         pesado = crear_pedido(self.cliente, "PED-F0003")
         for i, peso in enumerate(("18.90", "18.90", "1.20"), start=1):
             paquete(pesado, i, peso)
         guia(pesado, "local", "300")
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["bloques"]["local"], 2)                        # 39 kg → 2 bloques de 20
-        self.assertEqual(r["ingresos"]["envio"], Decimal("258"))
+        self.assertEqual(r["guias_zona"]["local"], 1)
+        self.assertEqual(r["ingresos"]["envio"], Decimal("129"))
+        self.assertAlmostEqual(r["estados"]["Ciudad de México"]["peso"], 37.14, places=1)  # 39 kg sin el +5%
 
     def test_zona_metro_por_carrier_puntopost(self):
         gdl = crear_pedido(self.cliente, "PED-F0004", es_local=False, cp="44100")
@@ -128,8 +130,8 @@ class ResumenMesTests(TestCase):
         guia(gdl, "puntopost", "91", p1)
         guia(gdl, "puntopost", "91", p2)
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["bloques"], {"local": 0, "metro": 1, "nacional": 0})
-        self.assertEqual(r["ingresos"]["envio"], Decimal("169"))          # 1 bloque metro, no 2 guías
+        self.assertEqual(r["guias_zona"], {"local": 0, "metro": 2, "nacional": 0})
+        self.assertEqual(r["ingresos"]["envio"], Decimal("338"))          # 2 guías metro
         self.assertEqual(r["costos"]["carrier"], Decimal("182"))
 
     def test_override_de_tarifario_por_cliente(self):
@@ -177,18 +179,44 @@ class ResumenMesTests(TestCase):
         p1 = paquete(gdl, 1, "14.20", carrier="estafeta")
         guia(gdl, "estafeta", "213.50", p1)
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["bloques"], {"local": 0, "metro": 1, "nacional": 0})
+        self.assertEqual(r["guias_zona"], {"local": 0, "metro": 1, "nacional": 0})
         self.assertEqual(r["ingresos"]["envio"], Decimal("169"))
 
     def test_peso_facturable_descuenta_margen_de_empaque(self):
-        # 19.5 kg planeados (con +5% de relleno) = 18.57 kg reales -> 1 bloque,
-        # aunque el plan lo haya partido en 2 bultos.
+        # 19.5 kg planeados (con +5% de relleno) = 18.57 kg reales en la guía.
         pedido = crear_pedido(self.cliente, "PED-F0009")
         paquete(pedido, 1, "13.20")
         paquete(pedido, 2, "6.30")
         guia(pedido, "local", "200")
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["bloques"]["local"], 1)
+        self.assertEqual(r["guias_zona"]["local"], 1)
+        self.assertAlmostEqual(r["estados"]["Ciudad de México"]["peso"], 18.57, places=1)
+
+    def test_guia_cancelada_y_caja_de_reposicion_van_sin_cargo(self):
+        from apps.catalogo.models import SKU
+        from apps.envios.models import PaqueteLinea
+        from apps.pedidos.models import LineaPedido
+
+        pedido = crear_pedido(self.cliente, "PED-F0010")
+        sku = SKU.objects.create(cliente=self.cliente, codigo="SIX", descripcion="Six")
+        original = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1)
+        repuesta = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, reposicion_de=original)
+        p1 = paquete(pedido, 1, "5.00")
+        PaqueteLinea.objects.create(paquete=p1, linea_pedido=original, cantidad=1)
+        p2 = paquete(pedido, 2, "5.00")
+        PaqueteLinea.objects.create(paquete=p2, linea_pedido=repuesta, cantidad=1)
+        cancelada = guia(pedido, "estafeta", "150", p1)
+        Guia.objects.filter(pk=cancelada.pk).update(estado=Guia.CANCELADA)
+        Guia.objects.create(pedido=pedido, paquete=p1, carrier="local", numero="L-1", costo_preferencial=Decimal("100"))
+        Guia.objects.create(pedido=pedido, paquete=p2, carrier="local", numero="L-2", costo_preferencial=Decimal("100"))
+        r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
+        self.assertEqual(r["guias_zona"]["local"], 1)              # solo la caja original viva
+        self.assertEqual(r["ingresos"]["envio"], Decimal("129"))
+        self.assertEqual(r["ingresos"]["alistamiento"], Decimal("25"))  # el pedido, una vez
+        self.assertEqual(r["costos"]["insumos"], Decimal("24"))      # 2 bultos; la cancelada no
+        self.assertEqual(r["costos"]["carrier"], Decimal("350"))     # lo pagado, cancelada incluida
+        notas = [f["nota"] for f in finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"]]
+        self.assertEqual(notas, ["guía cancelada (sin cargo)", "", "reposición (sin cargo)"])
 
 
 class VistaFinanzasTests(TestCase):

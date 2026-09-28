@@ -43,7 +43,7 @@
           <th>Cliente</th>
           <th class="derecha">Pedidos</th>
           <th class="derecha">Paquetes</th>
-          <th class="derecha">Bloques L/M/N</th>
+          <th class="derecha">Guías L/M/N</th>
           <th class="derecha">Fulfillment</th>
           <th class="derecha">Envío facturado</th>
           <th class="derecha">Facturación</th>
@@ -59,7 +59,7 @@
           <td><b>{{ f.cliente.nombre }}</b>{% if f.cliente.tarifario %}<div class="small muted">tarifario propio</div>{% endif %}</td>
           <td class="derecha mono">{{ f.pedidos }}</td>
           <td class="derecha mono">{{ f.paquetes }}</td>
-          <td class="derecha mono">{{ f.bloques.local }}/{{ f.bloques.metro }}/{{ f.bloques.nacional }}</td>
+          <td class="derecha mono">{{ f.guias_zona.local }}/{{ f.guias_zona.metro }}/{{ f.guias_zona.nacional }}</td>
           <td class="derecha mono">${{ f.ingresos.fulfillment|floatformat:0|intcomma }}</td>
           <td class="derecha mono">${{ f.ingresos.envio|floatformat:0|intcomma }}</td>
           <td class="derecha mono"><b>${{ f.ingresos.total|floatformat:0|intcomma }}</b></td>
@@ -81,8 +81,8 @@
     </table>
   </div>
   <p class="small muted">
-    El envío se factura por pedido, por cada bloque de 20 kg según la zona del CP de destino
-    (Local / Metro / Nacional) — nunca por guía ni por carrier: el ruteo interno no mueve la factura del cliente.
+    El envío se factura por guía, a la tarifa de la zona del CP de destino (Local / Metro / Nacional):
+    cada guía comprada es un cobro. Guías canceladas, reexpediciones, cancelados y reposiciones van sin cargo.
     "vs Melonn" compara contra ${{ TORRE.BENCHMARK_PEDIDO_MXN }}/pedido (factura real jun-2026).
   </p>
 </div>
@@ -138,7 +138,7 @@
   </div>
   <p class="small muted">
     Estado inferido del CP de destino. Peso promedio = peso facturable por pedido (báscula si existe;
-    si no, plan de empaque sin el 5% de relleno). El margen de envío compara la tarifa por bloques
+    si no, plan de empaque sin el 5% de relleno). El margen de envío compara la tarifa por guía
     contra el costo real de las guías de cada estado.
   </p>
 </div>
@@ -166,7 +166,7 @@
           {% endif %}
           <tr>
             <td>Envío</td>
-            <td class="derecha mono small">L ${{ f.tarifario.envio_bloque.local }} · M ${{ f.tarifario.envio_bloque.metro }} · N ${{ f.tarifario.envio_bloque.nacional }} <span class="muted">/ {{ f.tarifario.bloque_kg }} kg</span></td>
+            <td class="derecha mono small">L ${{ f.tarifario.envio_bloque.local }} · M ${{ f.tarifario.envio_bloque.metro }} · N ${{ f.tarifario.envio_bloque.nacional }} <span class="muted">por guía</span></td>
             <td class="derecha mono">${{ f.ingresos.envio|floatformat:0|intcomma }}</td>
           </tr>
           {% if f.ingresos.ajuste_minimo > 0 %}

@@ -379,7 +379,7 @@ class FormTarifario(forms.Form):
     almacenaje_mes = forms.DecimalField(label="Almacenaje al mes (MXN)", required=False, min_value=0)
     alistamiento_pedido = forms.DecimalField(label="Alistamiento por pedido (MXN)", required=False, min_value=0)
     empaque_pedido = forms.DecimalField(label="Empaque por pedido (MXN)", required=False, min_value=0)
-    bloque_kg = forms.DecimalField(label="Tamaño del bloque de envío (kg)", required=False, min_value=0)
+    bloque_kg = forms.DecimalField(label="Tope de kg por caja (informativo; el envío se cobra por guía)", required=False, min_value=0)
     envio_local = forms.DecimalField(label="Envío local por bloque (MXN)", required=False, min_value=0)
     envio_metro = forms.DecimalField(label="Envío metro por bloque (MXN)", required=False, min_value=0)
     envio_nacional = forms.DecimalField(label="Envío nacional por bloque (MXN)", required=False, min_value=0)
