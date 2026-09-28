@@ -75,7 +75,10 @@ def auto_pausadas(cliente):
 
 def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None, orden=None,
                      interna=False):
-    """Abre una incidencia con folio y relojes SLA. N por pedido permitidas.
+    """Abre una incidencia con folio y relojes SLA. Un caso por tipo y pedido
+    (Chema 2026-09-28): si ya hay una del mismo tipo sobre el pedido sin
+    cerrar, el reporte nuevo se suma a ese caso (_agrupar_reporte) y se
+    regresa esa incidencia con `agrupada=True`; tipos distintos conviven.
     `orden`: la recepción (OrdenEntrada) de la que nace, para las DES de recepción.
     Con las automáticas pausadas (auto_pausadas) una de origen "auto" NO nace:
     regresa None, no toca el pedido y deja el evento "auto_omitida" con el texto.
@@ -106,6 +109,9 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
             motivo=texto[:300],
         )
         return None
+    abierta = _abierta_del_mismo_tipo(pedido, tipo, interna)
+    if abierta is not None:
+        return _agrupar_reporte(abierta, origen, texto, prioridad)
     ahora = timezone.now()
     torre = settings.TORRE
     if origen == Incidencia.ORIGEN_COMPRADOR:
@@ -164,13 +170,18 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
         else:
             notificar_cliente_incidencia(incidencia)
 
-    # Web Push a la Mesa, best-effort TOTAL: un push caído o sin VAPID
-    # JAMÁS bloquea la apertura de la incidencia.
-    #
-    # Sale en transaction.on_commit: abrir_incidencia corre DENTRO de la
-    # transacción del caller (p.ej. la ingesta Shopify con locks de Saldo
-    # tomados vía la incidencia FAL) — un push service colgado con el lock
-    # tomado apilaría workers. Mismo patrón que pedidos._avisar_piso.
+    _push_mesa(incidencia, f"⚠️ Incidencia {incidencia.folio}")
+    incidencia.agrupada = False
+    return incidencia
+
+
+def _push_mesa(incidencia, titulo):
+    """Web Push a la Mesa, best-effort TOTAL: un push caído o sin VAPID JAMÁS
+    bloquea la apertura. Sale en transaction.on_commit: abrir_incidencia corre
+    DENTRO de la transacción del caller (p.ej. la ingesta Shopify con locks de
+    Saldo tomados vía la incidencia FAL) — un push service colgado con el lock
+    tomado apilaría workers. Mismo patrón que pedidos._avisar_piso."""
+    pedido = incidencia.pedido
     sobre = f" · {pedido.folio}" if pedido is not None else ""
 
     def _avisar_mesa():
@@ -178,15 +189,57 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
             from apps.mensajeria import push  # lazy por contrato
 
             push.enviar_push_a_rol(
-                "mesa",
-                f"⚠️ Incidencia {incidencia.folio}",
-                f"{incidencia.get_tipo_display()} · {cliente.nombre}{sobre}",
+                "mesa", titulo,
+                f"{incidencia.get_tipo_display()} · {incidencia.cliente.nombre}{sobre}",
                 url=f"/mesa/incidencias/{incidencia.pk}/",
             )
         except Exception:
             pass
     transaction.on_commit(_avisar_mesa)
 
+
+def _abierta_del_mismo_tipo(pedido, tipo, interna):
+    """La incidencia sin cerrar del mismo tipo sobre el pedido (las internas
+    y las del cliente no se mezclan), o None. Sin pedido no hay con qué agrupar."""
+    if pedido is None:
+        return None
+    return (
+        Incidencia.objects.filter(pedido=pedido, tipo=tipo, interna=interna)
+        .exclude(estado=Incidencia.CERRADA).order_by("-pk").first()
+    )
+
+
+def _agrupar_reporte(incidencia, origen, texto, prioridad):
+    """Un reporte nuevo del mismo tipo sobre el mismo pedido vive en el caso
+    abierto (Chema 2026-09-28): el texto entra al timeline con quién lo
+    reportó (un texto idéntico al último no se repite: el poller insiste), la
+    prioridad sube si la nueva es mayor, y un caso RESUELTO se reabre
+    (EN_CURSO) porque el cliente aún no lo daba por cerrado. Mesa recibe push;
+    al cliente no se le vuelve a avisar de un caso que ya conoce."""
+    if texto:
+        ultimo = incidencia.mensajes.order_by("-pk").first()
+        if ultimo is None or ultimo.texto != texto:
+            autor, rol_autor = _autor_inicial(origen, incidencia.cliente)
+            MensajeIncidencia.objects.create(
+                incidencia=incidencia, autor=autor, rol_autor=rol_autor, texto=texto, ts=timezone.now(),
+            )
+    nueva = prioridad or PRIORIDAD_DEFAULT_POR_TIPO.get(incidencia.tipo, Incidencia.P2)
+    if nueva < incidencia.prioridad:  # "P1" < "P2" < "P3"
+        incidencia.prioridad = nueva
+        incidencia.save(update_fields=["prioridad"])
+    if incidencia.estado == Incidencia.RESUELTA:
+        incidencia.transicionar(Incidencia.EN_CURSO, motivo="Nuevo reporte del mismo tipo: el caso se reabre.")
+    pedido = incidencia.pedido
+    if not incidencia.interna and not pedido.incidencia_activa:
+        pedido.incidencia_activa = True
+        pedido.save(update_fields=["incidencia_activa"])
+    registrar_evento(
+        "incidencia", incidencia.folio, "reporte_agrupado", cliente=incidencia.cliente,
+        delta={"tipo": incidencia.tipo, "origen": origen, "pedido": pedido.folio, "prioridad": incidencia.prioridad},
+        motivo=(texto or "")[:300],
+    )
+    _push_mesa(incidencia, f"🔁 Nuevo reporte en {incidencia.folio}")
+    incidencia.agrupada = True
     return incidencia
 
 

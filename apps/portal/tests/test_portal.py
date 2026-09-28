@@ -264,6 +264,19 @@ class TestAccionesIncidencia(BasePortal):
         self.assertTrue(nueva.folio.startswith("INC-"))
         self.assertIsNotNone(nueva.sla_respuesta_limite)
 
+    def test_segundo_reporte_del_mismo_tipo_cae_en_el_mismo_folio(self):
+        """Chema 2026-09-28: dos reportes iguales sobre un pedido viven en un solo caso."""
+        self.entrar()
+        datos = {"pedido": str(self.pedido.pk), "tipo": Incidencia.TIPO_FAL, "descripcion": "Faltó una pieza."}
+        self.client.post(reverse("portal:incidencia_nueva"), datos)
+        primera = Incidencia.objects.filter(cliente=self.colima, tipo=Incidencia.TIPO_FAL).latest("ts_apertura")
+        respuesta = self.client.post(
+            reverse("portal:incidencia_nueva"), {**datos, "descripcion": "Y también faltó otra."}, follow=True,
+        )
+        self.assertEqual(Incidencia.objects.filter(pedido=self.pedido, tipo=Incidencia.TIPO_FAL).count(), 1)
+        self.assertContains(respuesta, f"tu reporte quedó en el folio {primera.folio}")
+        self.assertContains(respuesta, "Y también faltó otra.")
+
     def test_cambio_de_direccion_entra_por_el_portal_como_p1(self):
         """Chema 2026-09-23: el cliente avisa el cambio de dirección con una
         incidencia propia (CDR) que nace P1 para que Mesa cancele la guía a tiempo."""

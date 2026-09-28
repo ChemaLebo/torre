@@ -616,11 +616,18 @@ def incidencia_nueva(request):
             texto=form.cleaned_data["descripcion"],
         )
         horas = settings.TORRE["SLA_PRIMERA_RESPUESTA_CLIENTE_HORAS"]
-        messages.success(
-            request,
-            f"Quedó registrada con el folio {incidencia.folio}. Una persona de la "
-            f"Mesa de Control te responde en un máximo de {horas} horas hábiles.",
-        )
+        if getattr(incidencia, "agrupada", False):
+            messages.success(
+                request,
+                f"Ese pedido ya tenía un caso abierto de este tipo: tu reporte quedó en el "
+                f"folio {incidencia.folio}, para que todo viva en el mismo expediente.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Quedó registrada con el folio {incidencia.folio}. Una persona de la "
+                f"Mesa de Control te responde en un máximo de {horas} horas hábiles.",
+            )
         return redirect("portal:incidencia_detalle", pk=incidencia.pk)
     return render(request, "portal/incidencia_nueva.html", {
         "seccion": "incidencias",

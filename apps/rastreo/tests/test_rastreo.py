@@ -76,12 +76,19 @@ class TestReporte(BaseRastreo):
     def test_limite_de_tres_reportes(self):
         from apps.incidencias.models import Incidencia
 
+        from apps.incidencias.models import MensajeIncidencia
+
         for i in range(5):
             cache.clear()  # que el throttle no interfiera con el límite de negocio
             self.client.post(f"/r/{self.token}/reporte/", {"tipo": "RET", "texto": f"intento {i}"})
-        self.assertEqual(
-            Incidencia.objects.filter(pedido=self.pedido, origen="comprador").count(), 3
+        # Un solo caso por tipo y pedido (2026-09-28): los reportes se suman al
+        # mismo folio, y el tope de 3 cuenta reportes, no folios.
+        self.assertEqual(Incidencia.objects.filter(pedido=self.pedido, origen="comprador").count(), 1)
+        reportes = MensajeIncidencia.objects.filter(
+            incidencia__pedido=self.pedido, rol_autor="comprador", texto__startswith="[Reporte del comprador",
         )
+        self.assertEqual(reportes.count(), 3)
+        self.assertEqual(MensajeIncidencia.objects.filter(incidencia__pedido=self.pedido, texto="intento 3").count(), 0)
 
 
 class TestPodPublico(BaseRastreo):

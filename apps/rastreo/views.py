@@ -84,6 +84,7 @@ TIPOS_REPORTE = [
 ]
 
 MAX_REPORTES = 3
+PREFIJO_REPORTE = "[Reporte del comprador vía página de rastreo]"
 
 # Página del repartidor: dedupe de escaneo y tope de avisos de auxilio.
 ESCANEO_DEDUPE_SEG = 600        # máx 1 evento qr_escaneado por token por 10 min
@@ -226,10 +227,14 @@ def reporte(request, token):
     )
     pedido = acceso.pedido
 
-    from apps.incidencias.models import Incidencia  # lazy
+    from apps.incidencias.models import MensajeIncidencia  # lazy
     from apps.incidencias.services import abrir_incidencia, responder  # lazy
 
-    previas = Incidencia.objects.filter(pedido=pedido, origen="comprador").count()
+    # Los reportes del mismo tipo viven en una sola incidencia (2026-09-28):
+    # el tope se cuenta por reportes (mensajes de apertura del comprador).
+    previas = MensajeIncidencia.objects.filter(
+        incidencia__pedido=pedido, rol_autor=MensajeIncidencia.ROL_COMPRADOR, texto__startswith=PREFIJO_REPORTE,
+    ).count()
     if previas >= MAX_REPORTES:
         return redirect(f"/r/{token}/?reportado=1")
 
@@ -244,7 +249,7 @@ def reporte(request, token):
     # veía la misma frase duplicada en el timeline).
     incidencia = abrir_incidencia(
         pedido.cliente, tipo_incidencia, "comprador", pedido=pedido,
-        texto=f"[Reporte del comprador vía página de rastreo] {etiqueta}.",
+        texto=f"{PREFIJO_REPORTE} {etiqueta}.",
     )
     if texto:
         responder(incidencia, pedido.comprador_nombre or "Comprador", "comprador", texto)
