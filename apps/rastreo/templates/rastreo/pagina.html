@@ -167,8 +167,15 @@
   </div>
   {% endif %}
 
+  {# Chema 2026-09-28: solo el WhatsApp del cliente; el formulario vuelve con TORRE["RASTREO_REPORTE_FORMULARIO"]. #}
+  {% if url_whatsapp or formulario_reporte %}
   <div class="tarjeta">
     <h2>¿Algo no salió bien?</h2>
+    {% if url_whatsapp %}
+    <p style="font-size:14.5px">Escríbenos por WhatsApp y lo resolvemos. Nada de bots: te responde una persona en horario de atención.</p>
+    <a class="btn btn-primario" href="{{ url_whatsapp }}" target="_blank" rel="noopener">Escríbenos por WhatsApp</a>
+    {% endif %}
+    {% if formulario_reporte %}
     <p style="font-size:14.5px">Cuéntanos y lo resolvemos. Nada de bots: te responde una persona en menos de {{ sla_min }} minutos en horario de atención.</p>
     <details>
       <summary>Reportar un problema</summary>
@@ -185,10 +192,9 @@
         <button class="btn btn-primario" type="submit">Enviar reporte</button>
       </form>
     </details>
-    {% if b.whatsapp_soporte %}
-    <a class="btn btn-secundario" href="https://wa.me/{{ b.whatsapp_soporte }}">Escríbenos por WhatsApp</a>
     {% endif %}
   </div>
+  {% endif %}
 
   <footer>{{ b.nombre_publico }}{% if b.pie %} · {{ b.pie }}{% endif %}{% if b.url_tienda %} · <a href="{{ b.url_tienda }}">Volver a la tienda</a>{% endif %}</footer>
 </div>

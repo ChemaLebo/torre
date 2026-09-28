@@ -1,6 +1,9 @@
 """Tests de la página pública de rastreo brandeada."""
+from django.conf import settings
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
+
+CON_FORMULARIO = {**settings.TORRE, "RASTREO_REPORTE_FORMULARIO": True}
 
 from apps.catalogo.models import SKU
 from apps.envios.tests.base import crear_cliente, crear_pedido, crear_tienda
@@ -61,6 +64,41 @@ class TestPagina(BaseRastreo):
         self.assertNotIn("EN_TRANSITO", cuerpo)
 
 
+class TestWhatsApp(BaseRastreo):
+    """Chema 2026-09-28: en la página solo va el WhatsApp del cliente con el
+    mensaje prellenado; el formulario de reporte queda apagado por config."""
+
+    def test_solo_whatsapp_con_mensaje_prellenado_y_sin_formulario(self):
+        from apps.envios.models import Guia
+
+        Guia.objects.create(pedido=self.pedido, carrier="estafeta", numero="EST-77", proveedor="mock")
+        self.pedido.shopify_order_name = "#4074"
+        self.pedido.save(update_fields=["shopify_order_name"])
+        html = self.client.get(f"/r/{self.token}/").content.decode()
+        self.assertIn("https://wa.me/5231211122?text=Hola%2C%20escribo%20por%20mi%20pedido%20%234074%20%28gu%C3%ADa%20EST-77%29.", html)
+        self.assertIn("Escríbenos por WhatsApp", html)
+        self.assertNotIn("Reportar un problema", html)
+        self.assertNotIn(f"/r/{self.token}/reporte/", html)
+
+    def test_sin_whatsapp_no_hay_bloque_y_el_reporte_no_abre_nada(self):
+        from apps.incidencias.models import Incidencia
+
+        self.cliente.branding["whatsapp_soporte"] = ""
+        self.cliente.save(update_fields=["branding"])
+        html = self.client.get(f"/r/{self.token}/").content.decode()
+        self.assertNotIn("¿Algo no salió bien?", html)
+        respuesta = self.client.post(f"/r/{self.token}/reporte/", {"tipo": "DAN", "texto": "x"})
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertFalse(Incidencia.objects.exists())
+
+    @override_settings(TORRE=CON_FORMULARIO)
+    def test_con_el_flag_vuelven_el_formulario_y_el_whatsapp(self):
+        html = self.client.get(f"/r/{self.token}/").content.decode()
+        self.assertIn("Reportar un problema", html)
+        self.assertIn("https://wa.me/5231211122?text=", html)
+
+
+@override_settings(TORRE=CON_FORMULARIO)
 class TestReporte(BaseRastreo):
     def test_reporte_abre_incidencia_origen_comprador(self):
         from apps.incidencias.models import Incidencia

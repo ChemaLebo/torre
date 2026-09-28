@@ -173,6 +173,8 @@ def _contexto(pedido):
 
     return {
         "b": branding,
+        "url_whatsapp": _url_whatsapp(branding, pedido),
+        "formulario_reporte": bool(settings.TORRE.get("RASTREO_REPORTE_FORMULARIO", False)),
         "pedido": pedido,
         "nombre_pila": nombre_pila,
         "estado_titulo": titulo,
@@ -183,6 +185,20 @@ def _contexto(pedido):
         "tipos_reporte": TIPOS_REPORTE,
         "sla_min": settings.TORRE["SLA_PRIMERA_RESPUESTA_COMPRADOR_MIN"],
     }
+
+
+def _url_whatsapp(branding, pedido):
+    """Link wa.me al WhatsApp de soporte del cliente con el mensaje prellenado
+    (número de orden o folio y guías); "" si el cliente no capturó número."""
+    from urllib.parse import quote  # lazy: solo aquí
+
+    numero = "".join(ch for ch in str(branding.get("whatsapp_soporte") or "") if ch.isdigit())
+    if not numero:
+        return ""
+    guias = [g.numero for g in pedido.guias.all() if g.es_activa and g.numero and not g.numero.startswith("LOCAL-")]
+    orden = getattr(pedido, "shopify_order_name", "") or pedido.folio
+    texto = f"Hola, escribo por mi pedido {orden}" + (f" (guía {', '.join(guias)})" if guias else "") + "."
+    return f"https://wa.me/{numero}?text={quote(texto)}"
 
 
 def pagina(request, token):
@@ -226,6 +242,8 @@ def reporte(request, token):
         AccesoRastreo.objects.select_related("pedido__cliente"), token=token
     )
     pedido = acceso.pedido
+    if not settings.TORRE.get("RASTREO_REPORTE_FORMULARIO", False):
+        return redirect(f"/r/{token}/")  # el formulario está apagado: el comprador escribe por WhatsApp
 
     from apps.incidencias.models import MensajeIncidencia  # lazy
     from apps.incidencias.services import abrir_incidencia, responder  # lazy

@@ -277,6 +277,10 @@ TORRE = {
     # (la guía se escapa para URL). Carrier sin entrada (local, mock) = número
     # sin link. Verificar cada patrón con una guía real al primer uso: las
     # páginas de rastreo cambian sin aviso; esto es config, no código.
+    # Página pública de rastreo (Chema 2026-09-28): el comprador escribe por
+    # WhatsApp al número del cliente (branding.whatsapp_soporte); el formulario
+    # de reporte queda apagado por ahora (True lo devuelve).
+    "RASTREO_REPORTE_FORMULARIO": False,
     "RASTREO_CARRIER_URL": {
         "estafeta": "https://rastreo3.estafeta.com/RastreoWebInternet/consultaEnvio.do?dispatch=doRastreoInternet&tipoGuia=ESTAFETA&guias={numero}",
         "paquetexpress": "https://www.paquetexpress.com.mx/rastreo/{numero}",
