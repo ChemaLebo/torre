@@ -76,6 +76,22 @@ class ReposicionTests(TestCase):
         evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="reposicion")
         self.assertEqual(evento.delta["sin_stock"], ["B-SIX"])
 
+    def test_al_empacar_la_reposicion_no_se_reimprimen_las_cajas_que_ya_salieron(self):
+        """PED-00045 (2026-09-28): al cerrar la caja 3 salieron también las
+        etiquetas de las cajas 1 y 2, ya en la calle."""
+        from unittest.mock import patch
+
+        pedido, la, _ = self.pedido_entregado()
+        with self.captureOnCommitCallbacks(execute=True):
+            services.reponer_lineas(pedido, [(la, 1)], self.mesa)
+        Guia.objects.filter(pedido=pedido, paquete__numero=1).update(estado=Guia.RECOLECTADO)
+        nueva = Guia.objects.create(pedido=pedido, paquete=None, carrier="local", proveedor="local",
+                                    numero=f"LOCAL-{pedido.folio}-3", estado=Guia.GUIA_CREADA)
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok") as imprimir:
+            guias, _ = services.imprimir_guias_activas(pedido)
+        self.assertEqual([g.pk for g in guias], [nueva.pk])
+        self.assertEqual(imprimir.call_count, 2)  # carrier + interna, solo de la nueva
+
     def test_solo_desde_la_calle_o_entregado_y_nunca_mas_piezas_que_las_pedidas(self):
         pedido, la, _ = self.pedido_entregado()
         with self.assertRaises(ValueError):

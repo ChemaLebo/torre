@@ -2077,13 +2077,16 @@ def imprimir_guias_activas(pedido):
     """Manda a imprimir, BEST-EFFORT, la etiqueta del carrier y la interna
     (folio + QR) de cada guía activa del pedido: una falla de impresora se
     acumula en mensajes y jamás toca la guía (la reimpresión vive en Salida).
+    Solo las guías que AÚN NO SALEN: una segunda ola o una reposición no
+    reimprime las cajas ya despachadas (Chema 2026-09-28, PED-00045).
     Regresa (guias, mensajes)."""
-    from apps.envios.models import Guia  # lazy: modelo de otra app
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
     from apps.piso.etiquetas import imprimir_etiqueta  # lazy por contrato
 
-    guias = list(
-        pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
-    )
+    guias = [
+        g for g in pedido.guias.filter(estado=Guia.GUIA_CREADA).select_related("paquete").order_by("id")
+        if g.paquete is None or g.paquete.estado != Paquete.DESPACHADO
+    ]
     mensajes = []
     for guia in guias:
         try:
