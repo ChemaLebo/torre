@@ -6,7 +6,7 @@
     <div class="eyebrow">Piso · Salida</div>
     <h1>Staging por corral</h1>
   </div>
-  {% if flota_propia %}
+  {% if flota_propia or entregas_propias %}
   <div class="fila">
     <a class="btn chico" href="{% url 'piso:entrega_local' %}">Entregas locales (POD)</a>
   </div>

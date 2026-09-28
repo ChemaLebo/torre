@@ -568,6 +568,8 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", n
             return False
     numeros, carrier = [], ""
     for guia in pedido.guias.all().order_by("pk"):  # orden estable: caja 1 primero
+        if guia.carrier == "local":
+            continue  # guía interna (entrega propia, sin carrier): no es un tracking para Shopify
         if guia.es_activa and guia.numero:
             numeros.append(guia.numero)
             carrier = carrier or guia.carrier

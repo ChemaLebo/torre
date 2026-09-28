@@ -680,6 +680,29 @@ def _pedidos_cancelar_guias(request):
     )
 
 
+# Estados en los que Mesa puede cambiar la paquetería de un pedido (2026-09-28).
+ESTADOS_CAMBIO_PAQUETERIA = ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA")
+
+
+def _pedidos_cambiar_paqueteria(request):
+    """Selector por renglón (Chema 2026-09-28): fuerza la paquetería del pedido
+    antes de salir (pedidos.replanear_con_carrier), incluida la salida SIN
+    guía de carrier ("local": guía interna, corral SAL-LOCAL, POD en Entregas
+    locales) para reposiciones que entrega el cliente o alguien propio."""
+    from apps.envios.services import etiqueta_paqueteria
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import replanear_con_carrier
+
+    folio = (request.POST.get("folio") or "").strip()
+    carrier = (request.POST.get("carrier") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    resultado = replanear_con_carrier(pedido, carrier, request.user)
+    cajas = resultado["cajas"]
+    detalle = ", ".join(f"caja {c.numero} ${c.precio_cotizado or 0}" for c in cajas)
+    que = "recotizadas" if resultado["modo"] == "recotizadas" else "planeadas"
+    return f"{pedido.folio} con {etiqueta_paqueteria(carrier)}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} {que} ({detalle})."
+
+
 def _pedidos_reintentar_reservas(request):
     """Botón por renglón: reintenta las reservas de UN pedido (palanca de prioridad)."""
     from apps.pedidos.models import Pedido
@@ -708,6 +731,13 @@ def pedidos(request):
         elif accion == "cancelar":
             try:
                 exito = _pedidos_cancelar(request)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            else:
+                messages.success(request, exito)
+        elif accion == "cambiar_paqueteria":
+            try:
+                exito = _pedidos_cambiar_paqueteria(request)
             except ValueError as exc:
                 messages.error(request, str(exc))
             else:
@@ -756,6 +786,10 @@ def pedidos(request):
         pedido.pill = PILL_PEDIDO.get(pedido.estado, "")
         pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
         # Guías compradas y nada en la calle: se pueden cancelar y recomprar (2026-09-24).
+        # Cambiar paquetería (2026-09-28): antes de salir; incluye "Sin guía".
+        pedido.puede_cambiar_paqueteria = (
+            pedido.estado in ESTADOS_CAMBIO_PAQUETERIA and not pedido.tiene_despachadas
+        )
         pedido.puede_cancelar_guias = (
             pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
             and not any(c.estado == "DESPACHADO" for c in pedido.paquetes.all())
@@ -773,9 +807,12 @@ def pedidos(request):
         from apps.incidencias.services import sin_paqueteria_abierta  # lazy por contrato
         pedido.sin_paqueteria = sin_paqueteria_abierta(pedido)
 
+    from apps.envios.services import opciones_paqueteria  # lazy por contrato
+
     return render(request, "mesa/pedidos.html", {
         "seccion": "pedidos",
         "pedidos": filas,
+        "opciones_paqueteria": opciones_paqueteria(),
         "total": qs.count(),
         "estados": Pedido.ESTADOS,
         "canales": Pedido.CANALES,

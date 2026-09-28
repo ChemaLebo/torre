@@ -89,7 +89,7 @@
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% elif not pedido.sin_paqueteria %}<span class="small">—</span>{% endif %}{% if pedido.sin_paqueteria %} <a class="pill crit" href="{% url 'mesa:incidencia_detalle' pedido.sin_paqueteria.pk %}" title="Ningún carrier cotiza: elige paquetería en la incidencia">Sin paquetería · {{ pedido.sin_paqueteria.folio }}</a>{% endif %}{% if pedido.reingreso_estado %} <span class="pill">{{ pedido.get_reingreso_estado_display }}</span>{% endif %}{% if pedido.piezas_sin_inventario %} <span class="pill crit">Sin inventario · {{ pedido.piezas_sin_inventario }} pza{{ pedido.piezas_sin_inventario|pluralize }}</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
         <td>
-          {% if pedido.cancelable or pedido.estado == "PENDIENTE" or pedido.puede_cancelar_guias %}
+          {% if pedido.cancelable or pedido.estado == "PENDIENTE" or pedido.puede_cancelar_guias or pedido.puede_cambiar_paqueteria %}
           <div class="fila">
             {% if pedido.puede_cancelar_guias %}
             <form method="post" onsubmit="return confirm('¿Cancelar las guías de {{ pedido.folio }} con el carrier y regresarlo a empaquetado? El piso recompra la guía.');">
@@ -107,6 +107,18 @@
               <input type="hidden" name="accion" value="reintentar_reservas">
               <input type="hidden" name="folio" value="{{ pedido.folio }}">
               <button class="btn chico" type="submit" title="Reintenta apartar el stock de sus líneas sin reservar">Reintentar reservas</button>
+            </form>
+            {% endif %}
+            {% if pedido.puede_cambiar_paqueteria %}
+            {# Cambiar paquetería antes de salir (2026-09-28), incluida la salida sin guía de carrier. #}
+            <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de {{ pedido.folio }}? Se replanea o recotiza con la elegida; con guía comprada, se cancela y regresa a empaquetado.');">
+              {% csrf_token %}
+              <input type="hidden" name="accion" value="cambiar_paqueteria">
+              <input type="hidden" name="folio" value="{{ pedido.folio }}">
+              <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}">
+                {% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}
+              </select>
+              <button class="btn chico" type="submit" title="Fuerza esta paquetería para el pedido; 'Sin guía' lo manda al corral SAL-LOCAL con guía interna">Cambiar paquetería</button>
             </form>
             {% endif %}
             {% if pedido.cancelable %}

@@ -119,3 +119,17 @@ class IntegracionPorClienteTests(TestCase):
         )
         pedido = crear_pedido(cliente, tienda)
         self.assertEqual(services.elegir_carrier(pedido), ("fedex", "ground"))
+
+
+class SinGuiaForzadoTests(TestCase):
+    """Chema 2026-09-28: Mesa fuerza "local" (salida sin guía de carrier) para
+    un pedido aunque no haya flota propia ni sea local."""
+
+    def test_forzado_local_es_entrega_propia_y_acota_la_lista(self):
+        cliente = crear_cliente()
+        pedido = crear_pedido(cliente, crear_tienda(cliente), es_local=False, carrier_forzado="local")
+        self.assertEqual(services.elegir_carrier(pedido), ("local", "entrega_local"))
+        self.assertEqual(services.carriers_del_pedido(pedido), ["local"])
+        self.assertEqual(services.carrier_preferido(pedido), "local")
+        self.assertIn(("local", "Sin guía: entrega propia o la recoge el cliente"), services.opciones_paqueteria())
+

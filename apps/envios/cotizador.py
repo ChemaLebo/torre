@@ -433,7 +433,9 @@ def _planificar(pedido, force, carriers, preferido=None):
     # El atajo local pasa por el motor de reglas: una ReglaEnvio explícita
     # puede mandar un pedido local con carrier externo (y entonces se cotiza).
     from .services import CARRIER_LOCAL, elegir_carrier  # lazy: evita ciclo
-    if pedido.es_local and elegir_carrier(pedido)[0] == CARRIER_LOCAL:
+    # Flota local (es_local con flota propia) o "sin guía" forzado desde Mesa
+    # (2026-09-28, cualquier destino): elegir_carrier ya decidió "local".
+    if elegir_carrier(pedido)[0] == CARRIER_LOCAL:
         # Flota local: $100 flat por paquete ≤20 kg (CDMX + metro hasta Toluca).
         tarifa_local = Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100)))
         bins = _bins_por_capacidad(unidades, max_kg) or [unidades]

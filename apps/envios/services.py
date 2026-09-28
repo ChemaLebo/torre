@@ -61,6 +61,10 @@ def opciones_paqueteria():
         ("noventa9Minutos", "99minutos directo"),
         ("imile", "iMile directo" if _imile_habilitado("full") else "iMile (vía envia.com)"),
         (CARRIER_POOL_ENVIA, "envia.com: el más barato de su lista"),
+        # Chema 2026-09-28: salir sin guía de carrier (la entrega la hace el
+        # cliente o alguien propio): guía interna LOCAL-*, corral SAL-LOCAL,
+        # POD en Entregas locales. Tarifa TORRE["TARIFA_LOCAL_MXN"] por caja.
+        (CARRIER_LOCAL, "Sin guía: entrega propia o la recoge el cliente"),
     ]
     vistos = {c for c, _ in base}
     return base + [
@@ -201,7 +205,9 @@ def elegir_carrier(pedido):
     """
     forzado = _carrier_forzado(pedido)
     if forzado and forzado != CARRIER_POOL_ENVIA:
-        return (forzado, SERVICIO_DEFAULT)  # Mesa lo decidió para este pedido: gana a todo
+        # Mesa lo decidió para este pedido: gana a todo. "local" forzado =
+        # salida sin guía de carrier (2026-09-28), aunque no haya flota propia.
+        return (forzado, SERVICIO_LOCAL if forzado == CARRIER_LOCAL else SERVICIO_DEFAULT)
     flota = _flota_propia()
     regla = _regla_aplicable(pedido, flota)
     if regla is not None:
@@ -508,6 +514,19 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
     hora de comprar la guía."""
     from .cotizador import cotizar_lane, elegir_entre  # lazy: evita ciclo en carga
 
+    if carriers_del_pedido(pedido) == [CARRIER_LOCAL]:
+        # Sin guía de carrier (forzado desde Mesa, 2026-09-28): la caja física
+        # se queda y viaja con guía interna a la tarifa local.
+        tarifa = Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100)))
+        paquete.carrier, paquete.servicio, paquete.precio_cotizado = CARRIER_LOCAL, SERVICIO_LOCAL, tarifa
+        paquete.estimado_entrega = ""
+        paquete.save(update_fields=["carrier", "servicio", "precio_cotizado", "estimado_entrega"])
+        registrar_evento(
+            "pedido", pedido.pk, "replan_paquete", cliente=pedido.cliente,
+            delta={"paquete": paquete.numero, "antes": carrier_viejo, "ahora": CARRIER_LOCAL, "precio": float(tarifa)},
+            motivo="Sale sin guía de carrier (entrega propia): guía interna a tarifa local.",
+        )
+        return CARRIER_LOCAL, SERVICIO_LOCAL
     dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
     filas = [
         f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente,

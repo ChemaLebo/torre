@@ -13,7 +13,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -478,12 +478,10 @@ def home(request):
     for pedido in por_completar:
         pedido.falta = _que_falta_empaque(pedido)
     flota = _flota_propia()
-    entregas_locales = []
-    if flota:
-        entregas_locales = list(
-            Pedido.objects.filter(es_local=True, estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO])
-            .select_related("cliente")
-        )
+    entregas_locales = list(
+        _pedidos_entrega_propia().filter(estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO])
+        .select_related("cliente")
+    )
     restocks = list(
         Pedido.objects.filter(estado=Pedido.CANCELACION_PENDIENTE)
         .select_related("cliente").prefetch_related("lineas__sku")
@@ -2598,6 +2596,7 @@ def salida(request):
         "hoy_iso": hoy.isoformat(),
         "corrales": [grupos[codigo] for codigo, _ in orden_corrales],
         "corral_local": CORRAL_LOCAL,
+        "entregas_propias": _pedidos_entrega_propia().filter(estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO]).exists(),
         "flota_propia": _flota_propia(),
     }
     return render(request, "piso/salida.html", contexto)
@@ -3150,6 +3149,15 @@ def _cuarentena_ubicar(request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _pedidos_entrega_propia():
+    """Pedidos que entrega alguien propio: con flota, los locales; siempre, los
+    que llevan guía interna "local" (salida sin guía forzada desde Mesa, 2026-09-28)."""
+    con_guia_local = Q(pk__in=Guia.objects.filter(carrier="local").values("pedido_id"))
+    if _flota_propia():
+        return Pedido.objects.filter(con_guia_local | Q(es_local=True))
+    return Pedido.objects.filter(con_guia_local)
+
+
 def _sin_flota_404(request):
     """404 amable: la flota propia no existe (TORRE["FLOTA_PROPIA"]=False)."""
     return render(request, "piso/sin_flota.html", {"seccion": "salida"}, status=404)
@@ -3157,20 +3165,18 @@ def _sin_flota_404(request):
 
 @rol_requerido("piso", "mesa")
 def entrega_local(request):
-    if not _flota_propia():
+    propios = _pedidos_entrega_propia()
+    if not _flota_propia() and not propios.exists():
         return _sin_flota_404(request)
     hoy = timezone.localdate()
     en_reparto = list(
-        Pedido.objects.filter(es_local=True, estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO])
-        .select_related("cliente")
+        propios.filter(estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO]).select_related("cliente")
     )
     por_salir = list(
-        Pedido.objects.filter(es_local=True, estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA])
-        .select_related("cliente")
+        propios.filter(estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA]).select_related("cliente")
     )
     entregados_hoy = list(
-        Pedido.objects.filter(es_local=True, estado=Pedido.ENTREGADO, ts_entregado__date=hoy)
-        .select_related("cliente")
+        propios.filter(estado=Pedido.ENTREGADO, ts_entregado__date=hoy).select_related("cliente")
     )
     contexto = {
         "seccion": "salida",
@@ -3183,11 +3189,12 @@ def entrega_local(request):
 
 @rol_requerido("piso", "mesa")
 def entrega_local_pedido(request, pk):
-    if not _flota_propia():
-        return _sin_flota_404(request)
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
-    if not pedido.es_local:
-        messages.error(request, f"El pedido {pedido.folio} no es de entrega local.")
+    propio = _pedidos_entrega_propia().filter(pk=pedido.pk).exists()
+    if not _flota_propia() and not propio:
+        return _sin_flota_404(request)
+    if not propio:
+        messages.error(request, f"El pedido {pedido.folio} no es de entrega propia.")
         return redirect("piso:entrega_local")
     if pedido.estado not in (Pedido.RECOLECTADO, Pedido.EN_TRANSITO):
         messages.error(
