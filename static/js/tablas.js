@@ -77,18 +77,29 @@
     });
   }
 
+  var contador = 0;
+
+  // Misma pinta que el "Buscar" de los filtros de Mesa: etiqueta arriba e
+  // input de la casa. Si la página ya trae un buscador del servidor (input
+  // name="q"), no se duplica.
   function activarBuscador(tabla) {
+    if (document.querySelector('form input[name="q"]')) return;
     var total = 0;
     Array.prototype.forEach.call(tabla.tBodies, function (c) { total += c.rows.length; });
     if (total < MIN_BUSCADOR) return;
+    var id = "tabla-buscador-" + (++contador);
     var caja = document.createElement("div");
     caja.className = "tabla-buscador";
+    var etiqueta = document.createElement("label");
+    etiqueta.htmlFor = id;
+    etiqueta.textContent = "Buscar";
     var input = document.createElement("input");
     input.type = "search";
-    input.placeholder = "Buscar en esta tabla…";
-    input.setAttribute("aria-label", "Buscar en la tabla");
+    input.id = id;
+    input.placeholder = "Lo que sea de esta tabla: folio, comprador, guía…";
     var cuenta = document.createElement("span");
     cuenta.className = "small muted";
+    caja.appendChild(etiqueta);
     caja.appendChild(input);
     caja.appendChild(cuenta);
     tabla.parentNode.insertBefore(caja, tabla);
