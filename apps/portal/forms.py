@@ -63,6 +63,8 @@ class FormNuevaIncidencia(forms.Form):
         error_messages={"required": "Cuéntanos qué pasó; sin descripción no podemos ayudarte."},
     )
 
+    reponer = forms.BooleanField(required=False, label="Necesito que repongan producto de este pedido")
+
     def __init__(self, cliente, *args, **kwargs):
         super().__init__(*args, **kwargs)
         campo = self.fields["pedido"]

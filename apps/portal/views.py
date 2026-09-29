@@ -573,6 +573,7 @@ def incidencia_detalle(request, pk):
                         lineas=seleccion_desde_post(request.POST, incidencia), monto=request.POST.get("monto") or None,
                         reembolsar_envio=bool(request.POST.get("reembolsar_envio")),
                         avisar_comprador=bool(request.POST.get("avisar_comprador")), aprobar=True,
+                        motivo=request.POST.get("motivo", ""),
                     )
                 else:
                     comp = get_object_or_404(Compensacion, pk=request.POST.get("compensacion_id"), incidencia=incidencia)
@@ -637,6 +638,8 @@ def incidencia_detalle(request, pk):
         "compensaciones": incidencia.compensaciones.all(),
         "opciones_compensacion": opciones_compensacion(incidencia) if incidencia.abierta else [],
         "lineas_pedido": lineas_para_compensar(incidencia),
+        "motivos_sustitucion": __import__("apps.envios.models", fromlist=["Guia"]).Guia.MOTIVOS_SUSTITUCION,
+        "reponer": request.GET.get("reponer") == "1",
         "form": form,
         "puede_urgente": incidencia.abierta and incidencia.prioridad != Incidencia.P1,
     })
@@ -673,6 +676,8 @@ def incidencia_nueva(request):
                 f"Quedó registrada con el folio {incidencia.folio}. Una persona de la "
                 f"Mesa de Control te responde en un máximo de {horas} horas hábiles.",
             )
+        if form.cleaned_data.get("reponer") and incidencia.pedido_id:
+            return redirect(f"{reverse('portal:incidencia_detalle', args=[incidencia.pk])}?reponer=1#compensaciones")
         return redirect("portal:incidencia_detalle", pk=incidencia.pk)
     return render(request, "portal/incidencia_nueva.html", {
         "seccion": "incidencias",

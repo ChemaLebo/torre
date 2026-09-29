@@ -371,7 +371,7 @@ def _precio_linea(linea):
 
 
 def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, reembolsar_envio=False,
-                       avisar_comprador=True, aprobar=False):
+                       avisar_comprador=True, aprobar=False, motivo=""):
     """Propone una compensación (COTIZADA) y, con `aprobar`, la ejecuta ya.
     `rol` = "mesa" | "cliente" (quién la propone). Reposición: líneas
     obligatorias, monto = valor declarado del catálogo (informativo).
@@ -409,6 +409,7 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
         lineas=[{"linea_id": linea.pk, "sku": linea.sku.codigo, "cantidad": cantidad} for linea, cantidad in seleccion],
         reembolsar_envio=bool(reembolsar_envio), avisar_comprador=bool(avisar_comprador),
         creada_por=Compensacion.CREADA_CLIENTE if rol == "cliente" else Compensacion.CREADA_MESA,
+        motivo=(motivo or "")[:20] if tipo == Compensacion.TIPO_REPOSICION else "",
     )
     registrar_evento(
         "compensacion", comp.pk, "creada", actor=actor, cliente=incidencia.cliente,
@@ -444,6 +445,7 @@ def aprobar_compensacion(comp, actor, rol="mesa"):
             nuevas = reponer_lineas(incidencia.pedido, _seleccion_de(comp), actor, incidencia=incidencia)
             comp.nota = f"{incidencia.pedido.folio} regresó a picking con {sum(n.cantidad for n in nuevas)} pieza(s) por reponer."
             comp.save(update_fields=["nota"])
+            marcar_guias_sustituidas(comp, actor)
     if comp.tipo == Compensacion.TIPO_REEMBOLSO:
         ejecutar_reembolso(comp, actor)
     responder(
@@ -487,6 +489,49 @@ def ejecutar_reembolso(comp, actor):
     comp.save(update_fields=["referencia_pago", "monto", "nota"])
     comp.transicionar(Compensacion.PAGADA, actor=actor, motivo=f"Reembolso en Shopify ({referencia})")
     return comp
+
+
+def marcar_guias_sustituidas(comp, actor):
+    """Las guías de las cajas que contenían lo repuesto quedan "sustituidas"
+    con el motivo de la compensación (Chema 2026-09-29): el poller las sigue,
+    pero lo que reporten ya no mueve el pedido. Regresa las guías marcadas."""
+    from apps.envios.models import Guia, PaqueteLinea  # lazy: modelos de otra app
+
+    lineas_ids = [x.get("linea_id") for x in comp.lineas if x.get("linea_id")]
+    cajas_ids = set(PaqueteLinea.objects.filter(linea_pedido_id__in=lineas_ids).values_list("paquete_id", flat=True))
+    guias = list(
+        Guia.objects.filter(paquete_id__in=cajas_ids, sustituida_motivo="")
+        .exclude(estado=Guia.CANCELADA).exclude(carrier="local")
+    )
+    ahora = timezone.now()
+    for g in guias:
+        g.sustituida_motivo = comp.motivo or "otro"
+        g.ts_sustituida = ahora
+        g.save(update_fields=["sustituida_motivo", "ts_sustituida"])
+        registrar_evento(
+            "guia", g.pk, "guia_sustituida", actor=actor, cliente=comp.incidencia.cliente,
+            delta={"numero": g.numero, "motivo": g.sustituida_motivo, "incidencia": comp.incidencia.folio},
+            motivo="Su contenido se repone en otra caja; la guía se sigue rastreando aparte.",
+        )
+    return guias
+
+
+def entrega_duplicada(guia, descripcion=""):
+    """El carrier entregó una guía ya sustituida: nota en las incidencias
+    abiertas del pedido (o en la última) para que el cliente decida si
+    recupera el producto; el pedido no se mueve."""
+    pedido = guia.pedido
+    casos = list(Incidencia.objects.filter(pedido=pedido).exclude(estado=Incidencia.CERRADA).order_by("-pk")) \
+        or list(Incidencia.objects.filter(pedido=pedido).order_by("-pk")[:1])
+    texto = (
+        f"Entrega duplicada: el carrier entregó la guía {guia.numero} ({guia.carrier}) después de que su "
+        f"contenido se repuso ({guia.get_sustituida_motivo_display().lower()}). {descripcion}".strip()
+    )[:900]
+    for inc in casos:
+        responder(inc, "Torre", MensajeIncidencia.ROL_SISTEMA, texto)
+    registrar_evento("guia", guia.pk, "entrega_duplicada", cliente=pedido.cliente,
+                     delta={"numero": guia.numero, "incidencias": [i.folio for i in casos]}, motivo=texto[:300])
+    return casos
 
 
 def compensaciones_por_entrega(pedido):

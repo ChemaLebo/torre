@@ -42,6 +42,7 @@
       {{ form.texto }}
       {{ form.texto.errors }}
       <label class="mt" style="display:flex;gap:8px;align-items:center">{{ form.interna }} {{ form.interna.label }}</label>
+      <label style="display:flex;gap:8px;align-items:center">{{ form.reponer }} {{ form.reponer.label }}</label>
       <div class="fila mt">
         <button class="btn primario" type="submit">Abrir incidencia</button>
         <a class="btn" href="{% url 'mesa:incidencias' %}">Cancelar</a>

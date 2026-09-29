@@ -754,6 +754,10 @@ def guias_del_pedido(pedido):
             "estado": g.get_estado_display(),
             "activa": g.es_activa,
             "url": url_rastreo_carrier(g.carrier, g.numero),
+            "sustituida": (
+                f"sustituida · {g.get_sustituida_motivo_display().lower()}"
+                + (f" · por caja {', '.join(str(n) for n in g.cajas_reposicion)}" if g.cajas_reposicion else "")
+            ) if g.sustituida_motivo else "",
         }
         for g in pedido.guias.select_related("paquete").order_by("pk")
     ]
@@ -1055,6 +1059,14 @@ def _aplicar_efectos(guia, estado, descripcion):
     if estado in {Guia.EN_TRANSITO, Guia.EN_RUTA}:
         if not en_bodega:
             _transicionar_pedido(pedido, "EN_TRANSITO", motivo=descripcion)
+    elif estado == Guia.ENTREGADO and guia.sustituida_motivo:
+        # Sustituida por una reposición (2026-09-29): entrega duplicada, el
+        # pedido no se mueve; queda en la incidencia para que decidan.
+        try:
+            from apps.incidencias.services import entrega_duplicada  # lazy por contrato
+            entrega_duplicada(guia, descripcion)
+        except Exception:  # noqa: BLE001, S110 — la nota es aviso; el rastreo sigue
+            pass
     elif estado == Guia.ENTREGADO:
         if _estado_por_guias(pedido) == "ENTREGADO":
             _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion)

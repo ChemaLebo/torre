@@ -65,7 +65,7 @@
           <span class="mono">{{ guia.numero|default:"guía en generación" }}</span>
         </p>
         <div class="fila entre">
-          <span class="pill {% if guia.estado == 'ENTREGADO' %}ok{% elif guia.estado == 'RETORNO' or guia.estado == 'INTENTO_FALLIDO' %}crit{% else %}accent{% endif %}">{{ guia.get_estado_display }}</span>
+          <span class="pill {% if guia.estado == 'ENTREGADO' %}ok{% elif guia.estado == 'RETORNO' or guia.estado == 'INTENTO_FALLIDO' %}crit{% else %}accent{% endif %}">{{ guia.get_estado_display }}</span>{% if guia.sustituida_motivo %} <span class="pill warn">sustituida · {{ guia.get_sustituida_motivo_display|lower }}</span>{% endif %}
           <span class="small">Último movimiento {{ guia.movio_hace }}</span>
         </div>
         {% if guia.ultimo_evento %}<p class="small mt">“{{ guia.ultimo_evento }}”</p>{% endif %}

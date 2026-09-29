@@ -340,6 +340,9 @@ class Compensacion(MaquinaEstados):
         max_length=10, choices=[(CREADA_MESA, "Mesa de Control"), (CREADA_CLIENTE, "el cliente")], default=CREADA_MESA,
     )
     nota = models.CharField(max_length=300, blank=True)
+    # Por qué se repone (2026-09-29): marca las guías originales como
+    # sustituidas con este motivo (Guia.sustituida_motivo).
+    motivo = models.CharField(max_length=20, blank=True)
 
     class Meta:
         ordering = ["-id"]

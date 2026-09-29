@@ -93,6 +93,17 @@ class Guia(models.Model):
     # carrier reportó que recogió el paquete. Puede llegar ANTES del
     # manifiesto (escanean mientras hacemos Salida) y manda sobre él.
     ts_recolectado_carrier = models.DateTimeField(null=True, blank=True)
+    # Sustituida por una reposición (Chema 2026-09-29): la caja de esta guía
+    # se repuso (dañada, extraviada, no entregada, devuelta) y su contenido
+    # viaja en otra caja. El poller la sigue igual; lo que reporte ya no
+    # mueve el pedido: una entrega tardía queda como "entrega duplicada" en
+    # la incidencia y un retorno entra a reingreso.
+    MOTIVOS_SUSTITUCION = [
+        ("danada", "Paquete dañado"), ("extraviada", "Extraviado"), ("no_entregada", "No entregado"),
+        ("devolucion", "Devolución del carrier"), ("otro", "Otro"),
+    ]
+    sustituida_motivo = models.CharField(max_length=20, blank=True, choices=MOTIVOS_SUSTITUCION)
+    ts_sustituida = models.DateTimeField(null=True, blank=True)
     raw = models.JSONField(default=dict, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
@@ -103,6 +114,22 @@ class Guia(models.Model):
 
     def __str__(self):
         return f"{self.carrier} {self.numero} · {self.estado}"
+
+    @property
+    def sustituida(self):
+        return bool(self.sustituida_motivo)
+
+    @property
+    def cajas_reposicion(self):
+        """Números de las cajas que reponen el contenido de esta guía (las
+        líneas de reposición ligadas a las líneas de su caja); [] si no hay."""
+        if not self.paquete_id:
+            return []
+        originales = list(self.paquete.lineas.values_list("linea_pedido_id", flat=True))
+        return sorted({
+            n for n in PaqueteLinea.objects.filter(linea_pedido__reposicion_de_id__in=originales)
+            .values_list("paquete__numero", flat=True)
+        })
 
     @property
     def es_activa(self):

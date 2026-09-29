@@ -22,7 +22,7 @@
       Cliente: {{ incidencia.cliente.nombre }}<br>
       {% if incidencia.pedido %}Pedido: {{ incidencia.pedido.folio }} ({{ incidencia.pedido.get_estado_display }})<br>{% endif %}
       {# Todas las guías (una por caja si el envío va dividido), con el rastreo del carrier. #}
-      {% for g in guias %}Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}{{ g.numero }}{% endif %}{% if not g.activa %} <span class="muted">({{ g.estado|lower }})</span>{% endif %}<br>{% endfor %}
+      {% for g in guias %}Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}{{ g.numero }}{% endif %}{% if not g.activa %} <span class="muted">({{ g.estado|lower }})</span>{% endif %}{% if g.sustituida %} <span class="pill warn">{{ g.sustituida }}</span>{% endif %}<br>{% endfor %}
       {% if incidencia.sku %}SKU: {{ incidencia.sku.codigo }}<br>{% endif %}
       Origen: {{ incidencia.get_origen_display }}<br>
       Dueño: {{ incidencia.dueno|default:"sin dueño" }}
@@ -132,8 +132,9 @@
   </div>
 
   <div>
-    <div class="card mb">
+    <div class="card mb" id="compensaciones">
       <div class="titulo"><h3>Compensaciones</h3><span class="small">reposición y reembolso se ejecutan al aprobarse</span></div>
+      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan como sustituidas.</div>{% endif %}
       {% for comp in compensaciones %}
       <div style="padding:8px 0;border-bottom:1px solid var(--hair)">
         <div class="fila entre">
@@ -181,8 +182,14 @@
             <label for="comp-tipo">Tipo</label>
             <select id="comp-tipo" name="tipo">
               {% for clave, nombre in opciones_compensacion %}
-              <option value="{{ clave }}">{{ nombre }}</option>
+              <option value="{{ clave }}" {% if reponer and clave == "reposicion" %}selected{% endif %}>{{ nombre }}</option>
               {% endfor %}
+            </select>
+          </div>
+          <div style="flex:1">
+            <label for="comp-motivo">Motivo (reposición)</label>
+            <select id="comp-motivo" name="motivo">
+              {% for clave, nombre in motivos_sustitucion %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}
             </select>
           </div>
           <div style="flex:1">

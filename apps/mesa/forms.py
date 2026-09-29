@@ -314,6 +314,9 @@ class FormNuevaIncidenciaMesa(forms.Form):
     interna = forms.BooleanField(
         required=False, label="Interna (de la bodega: el cliente no la ve ni recibe aviso)",
     )
+    reponer = forms.BooleanField(
+        required=False, label="Reponer producto (abre el caso y te deja en la reposición)",
+    )
     texto = forms.CharField(
         label="Qué pasó", widget=forms.Textarea(attrs={"rows": 5, "placeholder": "Con detalle: es lo que lee el cliente."}),
         error_messages={"required": "Escribe qué pasó: sin texto no hay incidencia."},

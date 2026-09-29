@@ -54,6 +54,33 @@ class CompensacionesMesaTests(TestCase):
         self.assertEqual(comp.estado, Compensacion.APROBADA)
         self.assertContains(respuesta, "Reposición aprobada")
 
+    def test_reposicion_con_motivo_marca_la_guia_original_como_sustituida(self):
+        from apps.envios.models import Guia, PaqueteLinea, Paquete as Caja
+
+        caja = Caja.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="imile", estado=Caja.DESPACHADO)
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=self.linea, cantidad=2)
+        guia = Guia.objects.create(pedido=self.pedido, paquete=caja, carrier="imile", numero="IM-9", proveedor="envia", estado=Guia.RECOLECTADO)
+        with patch("apps.pedidos.services.reponer_lineas", return_value=[MagicMock(cantidad=2)]):
+            self.client.post(self.url, {
+                "accion": "compensacion_crear", "tipo": "reposicion", f"linea_{self.linea.pk}": "1",
+                "motivo": "extraviada", "aprobar": "1",
+            }, follow=True)
+        guia.refresh_from_db()
+        self.assertEqual((Compensacion.objects.get().motivo, guia.sustituida_motivo), ("extraviada", "extraviada"))
+        html = self.client.get(self.url).content.decode()
+        self.assertIn("sustituida · extraviado", html)
+
+    def test_nueva_incidencia_con_reponer_cae_en_la_compensacion(self):
+        respuesta = self.client.post(reverse("mesa:incidencia_nueva"), {
+            "pedido": self.pedido.pk, "tipo": "DAN", "texto": "Rota", "reponer": "on",
+        })
+        nueva = Incidencia.objects.latest("pk")
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertTrue(respuesta.url.endswith(f"/{nueva.pk}/?reponer=1#compensaciones"))
+        html = self.client.get(respuesta.url).content.decode()
+        self.assertIn('value="reposicion" selected', html)
+        self.assertIn("Marca qué productos se reponen", html)
+
     def test_aprobar_y_ejecutar_ya(self):
         with patch("apps.pedidos.services.reponer_lineas", return_value=[MagicMock(cantidad=2)]) as reponer:
             self.client.post(self.url, {

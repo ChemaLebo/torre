@@ -436,6 +436,9 @@ def incidencia_nueva(request):
             )
         else:
             messages.success(request, f"Incidencia {incidencia.folio} abierta ({incidencia.get_tipo_display()}, {incidencia.prioridad}).")
+        if datos.get("reponer") and incidencia.pedido_id:
+            # "Reponer producto" (2026-09-29): cae en la compensación ya elegida.
+            return redirect(f"{reverse('mesa:incidencia_detalle', args=[incidencia.pk])}?reponer=1#compensaciones")
         return redirect("mesa:incidencia_detalle", pk=incidencia.pk)
     return render(request, "mesa/incidencia_form.html", {"seccion": "incidencias", "form": form})
 
@@ -522,7 +525,7 @@ def _gestionar_incidencia(request, incidencia):
             lineas=seleccion_desde_post(request.POST, incidencia), monto=request.POST.get("monto") or None,
             reembolsar_envio=bool(request.POST.get("reembolsar_envio")),
             avisar_comprador=bool(request.POST.get("avisar_comprador")),
-            aprobar=bool(request.POST.get("aprobar")),
+            aprobar=bool(request.POST.get("aprobar")), motivo=request.POST.get("motivo", ""),
         )
         return resumen_ejecucion(comp)
     if accion in ("compensacion_aprobar", "compensacion_ejecutar"):
@@ -593,6 +596,7 @@ def _gestionar_incidencia(request, incidencia):
 
 @rol_requerido("mesa")
 def incidencia_detalle(request, pk):
+    from apps.envios.models import Guia  # lazy: modelo de otra app
     from apps.incidencias.models import Compensacion, Incidencia, ReclamacionCarrier
     from apps.incidencias.services import lineas_para_compensar, opciones_compensacion  # lazy por contrato
     from apps.envios.services import guias_del_pedido  # lazy por contrato
@@ -646,6 +650,8 @@ def incidencia_detalle(request, pk):
         "tipos_compensacion": Compensacion.TIPOS,
         "opciones_compensacion": opciones_compensacion(incidencia),
         "lineas_pedido": lineas_para_compensar(incidencia),
+        "motivos_sustitucion": Guia.MOTIVOS_SUSTITUCION,
+        "reponer": request.GET.get("reponer") == "1",
         "fotos": fotos,
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,
