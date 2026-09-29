@@ -29,11 +29,40 @@ class BusquedaYColumnasTests(TestCase):
         self.suelta.save(update_fields=["dueno"])
         self.url = reverse("mesa:incidencias")
 
-    def test_el_pedido_va_en_la_segunda_columna_con_su_orden_y_comprador(self):
+    def test_una_fila_por_pedido_con_sus_incidencias_y_las_sueltas_aparte(self):
+        """Chema 2026-09-29: la lista es de pedidos; sus incidencias abiertas van como píldoras."""
         html = self.client.get(self.url).content.decode()
-        self.assertLess(html.index("<th>Pedido</th>"), html.index("<th>Tipo</th>"))
         self.assertIn("#33713 · Dulce Espinoza", html)
+        self.assertIn(reverse("mesa:incidencias_pedido", args=[self.pedido.pk]), html)
+        self.assertIn(self.con_pedido.folio, html)
+        self.assertIn("<h3>Sin pedido</h3>", html)
+        self.assertIn(self.suelta.folio, html)
         self.assertIn("js/tablas.js", html)
+
+    def test_las_cerradas_no_aparecen_salvo_con_la_casilla(self):
+        from apps.incidencias.services import cerrar, resolver
+
+        resolver(self.con_pedido, "listo", actor=None)
+        cerrar(self.con_pedido, actor=None)
+        html = self.client.get(self.url).content.decode()
+        self.assertNotIn(self.pedido.folio, html)
+        html = self.client.get(self.url, {"cerradas": "on"}).content.decode()
+        self.assertIn(self.pedido.folio, html)
+        self.assertIn("1 cerrada", html)
+
+    def test_expediente_del_pedido_estado_segundo_y_cerradas_al_fondo(self):
+        from apps.incidencias.services import cerrar, resolver
+
+        vieja = self.con_pedido
+        resolver(vieja, "listo", actor=None)
+        cerrar(vieja, actor=None)
+        nueva = abrir_incidencia(self.colima, Incidencia.TIPO_DAN, Incidencia.ORIGEN_CLIENTE, pedido=self.pedido, texto="rota")
+        html = self.client.get(reverse("mesa:incidencias_pedido", args=[self.pedido.pk])).content.decode()
+        self.assertLess(html.index("<th>Folio</th>"), html.index("<th>Estado</th>"))
+        self.assertLess(html.index("<th>Estado</th>"), html.index("<th>Tipo</th>"))
+        self.assertLess(html.index(nueva.folio), html.index(vieja.folio))  # la cerrada al fondo
+        self.assertIn("Cerrada", html)
+        self.assertIn(f"{reverse('mesa:incidencia_nueva')}?pedido={self.pedido.pk}", html)
 
     def test_busqueda(self):
         casos = {

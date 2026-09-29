@@ -195,6 +195,35 @@ class TestAislamientoTenant(BasePortal):
         self.assertEqual(respuesta.status_code, 404)
 
 
+class TestListaPorPedidoPortal(BasePortal):
+    """Chema 2026-09-29: el portal lista pedidos con incidencias; las cerradas
+    solo con la casilla; el detalle del pedido pone las abiertas primero."""
+
+    def test_lista_por_pedido_y_cerradas_ocultas(self):
+        from apps.incidencias.services import cerrar, resolver
+
+        self.entrar()
+        url = reverse("portal:incidencias")
+        html = self.client.get(url).content.decode()
+        self.assertIn(reverse("portal:pedido_detalle", args=[self.pedido.pk]), html)
+        self.assertIn(self.incidencia.folio, html)
+        resolver(self.incidencia, "listo", actor=None)
+        cerrar(self.incidencia, actor=None)
+        self.assertNotIn(self.pedido.folio, self.client.get(url).content.decode())
+        self.assertIn(self.pedido.folio, self.client.get(url, {"cerradas": "on"}).content.decode())
+
+    def test_detalle_del_pedido_ordena_abiertas_primero_con_estado(self):
+        from apps.incidencias.services import abrir_incidencia, cerrar, resolver
+
+        self.entrar()
+        resolver(self.incidencia, "listo", actor=None)
+        cerrar(self.incidencia, actor=None)
+        nueva = abrir_incidencia(self.colima, Incidencia.TIPO_RET, Incidencia.ORIGEN_CLIENTE, pedido=self.pedido, texto="tarde")
+        html = self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk])).content.decode()
+        self.assertLess(html.index(nueva.folio), html.index(self.incidencia.folio))
+        self.assertIn("Cerrada", html)
+
+
 class TestCompensacionesPortal(BasePortal):
     """Chema 2026-09-28: el cliente pide reposición o reembolso eligiendo sus
     line items (se ejecuta al enviar) y aprueba lo que propuso Mesa."""

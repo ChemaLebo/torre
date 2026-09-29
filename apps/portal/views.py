@@ -440,7 +440,14 @@ def pedido_detalle(request, pk):
     fotos = EvidenciaFoto.objects.filter(
         entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio],
     )
-    incidencias_pedido = [_decorar_incidencia(i) for i in pedido.incidencias.filter(interna=False)]
+    from apps.incidencias.services import orden_incidencia, resolucion_de  # lazy: servicio de otra app
+
+    incidencias_pedido = [_decorar_incidencia(i) for i in pedido.incidencias.filter(interna=False).prefetch_related("compensaciones", "mensajes")]
+    for inc in incidencias_pedido:  # abiertas primero, cerradas al fondo (Chema 2026-09-29)
+        inc.resolucion = resolucion_de(inc)
+        ultimo = inc.mensajes.order_by("-ts").first()
+        inc.ultima_actividad = max(t for t in (inc.ts_apertura, ultimo.ts if ultimo else None, inc.ts_resolucion, inc.ts_cierre) if t)
+    incidencias_pedido.sort(key=orden_incidencia)
     if pedido.estado == Pedido.RETORNADO:
         # Chema 2026-09-23 (PED-00039): no prometer una incidencia que no existe.
         especial = ("crit", especial[1] + (
@@ -510,20 +517,30 @@ def _movimiento_legible(mov):
 
 @portal_requerido
 def incidencias(request):
-    todas = list(
+    """Portal → Incidencias (Chema 2026-09-29): una fila por pedido con sus
+    casos abiertos; las cerradas solo con "Mostrar cerradas"; las de bodega
+    (internas) jamás; las sin pedido en su propia tabla."""
+    from django.db.models import Max
+
+    from apps.incidencias.services import agrupar_por_pedido  # lazy: servicio de otra app
+
+    cerradas = request.GET.get("cerradas") == "on"
+    qs = (
         Incidencia.objects.filter(cliente=request.cliente, interna=False)  # las internas son de la bodega
-        .select_related("pedido")
-        .order_by("-ts_apertura")
+        .select_related("pedido").prefetch_related("compensaciones").annotate(ultimo_mensaje=Max("mensajes__ts"))
     )
-    for incidencia in todas:
-        _decorar_incidencia(incidencia)
-    abiertas = [i for i in todas if i.abierta]
-    abiertas.sort(key=lambda i: (i.prioridad, i.ts_apertura))
-    historial = [i for i in todas if not i.abierta]
+    if not cerradas:
+        qs = qs.exclude(estado=Incidencia.CERRADA)
+    todas = [_decorar_incidencia(i) for i in qs]
+    grupos, sueltas = agrupar_por_pedido(todas)
+    for g in grupos:
+        g["principal"] = g["abiertas"][0] if g["abiertas"] else g["incidencias"][0]
     return render(request, "portal/incidencias.html", {
         "seccion": "incidencias",
-        "abiertas": abiertas,
-        "historial": historial,
+        "grupos": grupos,
+        "sueltas": sueltas,
+        "cerradas": cerradas,
+        "abiertas_n": sum(1 for i in todas if i.abierta),
     })
 
 

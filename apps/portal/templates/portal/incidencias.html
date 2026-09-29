@@ -1,77 +1,71 @@
 {% extends "base.html" %}
-
 {% block title %}Incidencias{% endblock %}
-
 {% block content %}
 <div class="topbar">
   <div>
     <div class="eyebrow">Tu operación</div>
     <h1>Incidencias</h1>
+    <div class="small muted">{{ abiertas_n }} abierta{{ abiertas_n|pluralize }} · {{ grupos|length }} pedido{{ grupos|length|pluralize }}</div>
   </div>
-  <a class="btn primario" href="{% url 'portal:incidencia_nueva' %}">Levantar incidencia</a>
+  <div class="fila">
+    {# Las cerradas no aparecen salvo que las pidas (Chema 2026-09-29). #}
+    <form method="get" class="fila"><label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="cerradas" {% if cerradas %}checked{% endif %} onchange="this.form.submit()"> Mostrar cerradas</label></form>
+    <a class="btn primario" href="{% url 'portal:incidencia_nueva' %}">Levantar incidencia</a>
+  </div>
 </div>
-
 <div class="card mb">
-  <div class="titulo"><h3>En atención</h3></div>
+  <div class="titulo"><h3>Por pedido</h3><span class="small muted">entra al pedido para ver todas sus incidencias</span></div>
   <div class="tabla-wrap">
     <table>
       <thead>
         <tr>
-          <th>Folio</th>
-          <th>Qué pasó</th>
           <th>Pedido</th>
-          <th>Abierta</th>
+          <th>Qué pasó</th>
           <th>Quién tiene la pelota</th>
           <th>Reloj</th>
           <th>Prioridad</th>
+          <th>Última actividad</th>
         </tr>
       </thead>
       <tbody>
-        {% for inc in abiertas %}
+        {% for g in grupos %}
           <tr class="fila-link">
-            <td class="mono"><a href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
-            <td>{{ inc.get_tipo_display }}</td>
-            <td class="mono">{% if inc.pedido %}{{ inc.pedido.folio }}{% else %}—{% endif %}</td>
-            <td class="small">{{ inc.abierta_hace }}</td>
-            <td class="small">{{ inc.pelota }}</td>
-            <td><span class="pill {{ inc.reloj_clase }}">{{ inc.reloj_texto }}</span></td>
-            <td>{% if inc.prioridad == 'P1' %}<span class="pill accent">Urgente</span>{% else %}<span class="pill">{{ inc.get_prioridad_display }}</span>{% endif %}</td>
+            <td><a class="mono" href="{% url 'portal:pedido_detalle' g.pedido.pk %}">{{ g.pedido.folio }}</a><div class="small muted">{% if g.pedido.shopify_order_name %}{{ g.pedido.shopify_order_name }} · {% endif %}{{ g.pedido.comprador_nombre|default:"" }}</div></td>
+            <td>{% for inc in g.abiertas %}<div><span class="pill accent">{{ inc.get_tipo_display }}</span> <span class="small mono muted">{{ inc.folio }}</span>{% if inc.resolucion %} <span class="small muted">· {{ inc.resolucion }}</span>{% endif %}</div>{% endfor %}{% if g.cerradas %}<div class="small muted">{{ g.cerradas }} cerrada{{ g.cerradas|pluralize }}</div>{% endif %}</td>
+            <td class="small">{{ g.principal.pelota }}</td>
+            <td><span class="pill {{ g.principal.reloj_clase }}">{{ g.principal.reloj_texto }}</span></td>
+            <td>{% if g.prioridad == 'P1' %}<span class="pill accent">Urgente</span>{% elif g.prioridad %}<span class="pill">{{ g.prioridad }}</span>{% else %}—{% endif %}</td>
+            <td class="small" data-orden="{{ g.ultima_actividad|date:'Y-m-d H:i' }}">{{ g.ultima_actividad|date:"d/M/Y H:i" }}</td>
           </tr>
         {% empty %}
-          <tr><td colspan="7" class="muted">No hay incidencias abiertas. Cuando algo falle, aquí lo verás con folio, reloj y responsable.</td></tr>
+          <tr><td colspan="6" class="muted">No hay incidencias abiertas. Cuando algo falle, aquí lo verás por pedido, con folio, reloj y responsable.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
-
+{% if sueltas %}
 <div class="card">
-  <div class="titulo"><h3>Historial</h3></div>
+  <div class="titulo"><h3>Sin pedido</h3><span class="small muted">inventario y otros temas de bodega</span></div>
   <div class="tabla-wrap">
     <table>
       <thead>
-        <tr>
-          <th>Folio</th>
-          <th>Qué pasó</th>
-          <th>Pedido</th>
-          <th>Abierta el</th>
-          <th>Estado</th>
-        </tr>
+        <tr><th>Folio</th><th>Estado</th><th>Qué pasó</th><th>Abierta</th><th>Quién tiene la pelota</th><th>Reloj</th></tr>
       </thead>
       <tbody>
-        {% for inc in historial %}
+        {% for inc in sueltas %}
           <tr class="fila-link">
             <td class="mono"><a href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a></td>
+            <td><span class="pill {% if inc.abierta %}accent{% else %}ok{% endif %}">{{ inc.get_estado_display }}</span></td>
             <td>{{ inc.get_tipo_display }}</td>
-            <td class="mono">{% if inc.pedido %}{{ inc.pedido.folio }}{% else %}—{% endif %}</td>
-            <td class="small">{{ inc.ts_apertura|date:"d/M/Y H:i" }}</td>
-            <td><span class="pill ok">{{ inc.get_estado_display }}</span></td>
+            <td class="small">{{ inc.abierta_hace }}</td>
+            <td class="small">{{ inc.pelota }}</td>
+            <td><span class="pill {{ inc.reloj_clase }}">{{ inc.reloj_texto }}</span></td>
           </tr>
-        {% empty %}
-          <tr><td colspan="5" class="muted">Todavía no hay incidencias resueltas.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+{% endif %}
 {% endblock %}

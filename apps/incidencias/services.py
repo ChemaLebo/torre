@@ -519,6 +519,57 @@ def resumen_ejecucion(comp):
     return f"{nombre} aprobado por ${comp.monto}."
 
 
+# ── Lista por pedido (Chema 2026-09-29) ──
+
+def resolucion_de(incidencia):
+    """Cómo se resolvió: los tipos de compensación del caso ("Reposición
+    física, Reembolso"); "" sin compensaciones. La reposición es solución,
+    no tipo de incidencia."""
+    return ", ".join(sorted({c.get_tipo_display() for c in incidencia.compensaciones.all()}))
+
+
+def _ultima_actividad(incidencia):
+    marcas = [incidencia.ts_apertura, getattr(incidencia, "ultimo_mensaje", None),
+              incidencia.ts_resolucion, incidencia.ts_cierre]
+    return max(m for m in marcas if m is not None)
+
+
+def orden_incidencia(incidencia):
+    """Abiertas primero (P1 antes que P3), cerradas siempre al fondo; dentro
+    de cada bloque, la de actividad más reciente arriba."""
+    return (not incidencia.abierta, incidencia.prioridad if incidencia.abierta else "P9",
+            -incidencia.ultima_actividad.timestamp())
+
+
+def agrupar_por_pedido(incidencias):
+    """(grupos, sueltas): un grupo por pedido con sus incidencias ordenadas
+    (orden_incidencia), las abiertas, la prioridad más alta abierta, si hay
+    alguna interna abierta y la última actividad; `sueltas` = sin pedido
+    (descuadres de inventario). Los grupos con algo abierto van primero, por
+    prioridad y actividad. Cada incidencia queda con `resolucion` y
+    `ultima_actividad` colgadas (el caller manda el queryset con
+    prefetch de compensaciones y la anotación `ultimo_mensaje`)."""
+    grupos, sueltas = {}, []
+    for inc in incidencias:
+        inc.resolucion = resolucion_de(inc)
+        inc.ultima_actividad = _ultima_actividad(inc)
+        if inc.pedido_id is None:
+            sueltas.append(inc)
+            continue
+        grupos.setdefault(inc.pedido_id, {"pedido": inc.pedido, "incidencias": []})["incidencias"].append(inc)
+    for g in grupos.values():
+        g["incidencias"].sort(key=orden_incidencia)
+        abiertas = [i for i in g["incidencias"] if i.abierta]
+        g["abiertas"] = abiertas
+        g["cerradas"] = len(g["incidencias"]) - len(abiertas)
+        g["prioridad"] = min((i.prioridad for i in abiertas), default="")
+        g["interna"] = any(i.interna for i in abiertas)
+        g["ultima_actividad"] = max(i.ultima_actividad for i in g["incidencias"])
+    ordenados = sorted(grupos.values(), key=lambda g: (not g["abiertas"], g["prioridad"] or "P9", -g["ultima_actividad"].timestamp()))
+    sueltas.sort(key=orden_incidencia)
+    return ordenados, sueltas
+
+
 def sin_paqueteria_abierta(pedido):
     """La incidencia interna "Sin paquetería que cotice" abierta del pedido, o None."""
     return (

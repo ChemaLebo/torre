@@ -1,14 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Incidencias · Mesa{% endblock %}
 {% block content %}
-
 <div class="topbar">
   <div>
     <div class="eyebrow">Mesa de Control</div>
     <h1>Incidencias</h1>
   </div>
   <div class="fila">
-    <div class="quien"><b>{{ abiertas_n }}</b> abiertas de {{ incidencias|length }} en la vista</div>
+    <div class="quien"><b>{{ abiertas_n }}</b> abiertas de {{ total_n }} en la vista · {{ grupos|length }} pedido{{ grupos|length|pluralize }}</div>
     <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}">Nueva incidencia</a>
   </div>
 </div>
@@ -27,7 +26,7 @@
     <div style="flex:1;min-width:160px">
       <label for="f-estado">Estado</label>
       <select id="f-estado" name="estado">
-        <option value="">Todas</option>
+        <option value="">Sin cerrar</option>
         <option value="abiertas" {% if filtro.estado == "abiertas" %}selected{% endif %}>Solo abiertas</option>
         {% for clave, nombre in estados %}
         <option value="{{ clave }}" {% if filtro.estado == clave %}selected{% endif %}>{{ nombre }}</option>
@@ -61,34 +60,65 @@
         {% endfor %}
       </select>
     </div>
+    {# Las cerradas no aparecen salvo que se pidan (Chema 2026-09-29). #}
+    <label style="align-self:flex-end;display:flex;gap:8px;align-items:center;margin:0 0 10px"><input type="checkbox" name="cerradas" {% if filtro.cerradas %}checked{% endif %}> Mostrar cerradas</label>
     <div style="align-self:flex-end"><button class="btn" type="submit">Filtrar</button></div>
   </form>
 </div>
 
+{# Una fila por pedido (Chema 2026-09-29): sus incidencias abiertas como píldoras; el expediente completo al entrar. #}
 <div class="tabla-wrap">
   <table>
     <thead>
-      {# Pedido en la segunda columna (Chema 2026-09-28): es lo primero que se busca. #}
-      <tr><th>Folio</th><th>Pedido</th><th>Tipo</th><th>Origen</th><th>Prioridad</th><th>Cliente</th><th>Estado</th><th>Dueño</th><th>Reloj SLA</th></tr>
+      <tr><th>Pedido</th><th>Incidencias</th><th>Prioridad</th><th>Cliente</th><th>Reloj SLA</th><th>Última actividad</th></tr>
     </thead>
     <tbody>
-      {% for inc in incidencias %}
+      {% for g in grupos %}
       <tr class="fila-link">
-        <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>{% if inc.interna %} <span class="pill warn" title="De la bodega: el cliente no la ve">interna</span>{% endif %}</td>
-        <td>{% if inc.pedido %}<span class="mono">{{ inc.pedido.folio }}</span><div class="small muted">{% if inc.pedido.shopify_order_name %}{{ inc.pedido.shopify_order_name }} · {% endif %}{{ inc.pedido.comprador_nombre|default:"" }}</div>{% else %}—{% endif %}</td>
-        <td>{{ inc.get_tipo_display }}</td>
-        <td class="small">{{ inc.get_origen_display }}</td>
-        <td><span class="pill {% if inc.prioridad == 'P1' %}crit{% elif inc.prioridad == 'P2' %}warn{% endif %}">{{ inc.prioridad }}</span></td>
-        <td>{{ inc.cliente.nombre }}</td>
-        <td><span class="pill {% if inc.abierta %}accent{% else %}ok{% endif %}">{{ inc.get_estado_display }}</span></td>
-        <td>{{ inc.dueno|default:"sin dueño" }}</td>
-        <td>{% if inc.abierta %}<span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span>{% else %}<span class="small">cerró su reloj</span>{% endif %}</td>
+        <td>
+          <a class="mono" href="{% url 'mesa:incidencias_pedido' g.pedido.pk %}">{{ g.pedido.folio }}</a>
+          <div class="small muted">{% if g.pedido.shopify_order_name %}{{ g.pedido.shopify_order_name }} · {% endif %}{{ g.pedido.comprador_nombre|default:"" }} · {{ g.pedido.get_estado_display }}</div>
+        </td>
+        <td>
+          {% for inc in g.abiertas %}
+          <div><span class="pill {% if inc.estado == 'RESOLUCION_PROPUESTA' or inc.estado == 'RESUELTA' %}ok{% else %}accent{% endif %}" title="{{ inc.get_estado_display }}">{{ inc.get_tipo_display }}</span>{% if inc.interna %} <span class="pill warn" title="De la bodega: el cliente no la ve">interna</span>{% endif %} <span class="small mono muted">{{ inc.folio }}</span>{% if inc.resolucion %} <span class="small muted">· {{ inc.resolucion }}</span>{% endif %}</div>
+          {% endfor %}
+          {% if g.cerradas %}<div class="small muted">{{ g.cerradas }} cerrada{{ g.cerradas|pluralize }}</div>{% endif %}
+        </td>
+        <td>{% if g.prioridad %}<span class="pill {% if g.prioridad == 'P1' %}crit{% elif g.prioridad == 'P2' %}warn{% endif %}">{{ g.prioridad }}</span>{% else %}—{% endif %}</td>
+        <td>{{ g.pedido.cliente.nombre }}</td>
+        <td>{% if g.reloj %}<span class="pill {{ g.reloj.reloj_pill }}">{{ g.reloj.reloj_texto }}</span>{% else %}<span class="small">sin abiertas</span>{% endif %}</td>
+        <td class="mono small" data-orden="{{ g.ultima_actividad|date:'Y-m-d H:i' }}">{{ g.ultima_actividad|date:"d/M H:i" }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="9" class="muted centro">Nada con esos filtros. Ajusta la búsqueda.</td></tr>
+      <tr><td colspan="6" class="muted centro">Sin pedidos con incidencias para esos filtros.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 
+{% if sueltas %}
+<div class="titulo mt"><h3>Sin pedido</h3><span class="small muted">descuadres de inventario y otras de bodega</span></div>
+<div class="tabla-wrap">
+  <table>
+    <thead>
+      <tr><th>Folio</th><th>Estado</th><th>Tipo</th><th>Origen</th><th>Prioridad</th><th>Cliente</th><th>Dueño</th><th>Reloj SLA</th></tr>
+    </thead>
+    <tbody>
+      {% for inc in sueltas %}
+      <tr class="fila-link">
+        <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>{% if inc.interna %} <span class="pill warn" title="De la bodega: el cliente no la ve">interna</span>{% endif %}</td>
+        <td><span class="pill {% if inc.abierta %}accent{% else %}ok{% endif %}">{{ inc.get_estado_display }}</span></td>
+        <td>{{ inc.get_tipo_display }}</td>
+        <td class="small">{{ inc.get_origen_display }}</td>
+        <td><span class="pill {% if inc.prioridad == 'P1' %}crit{% elif inc.prioridad == 'P2' %}warn{% endif %}">{{ inc.prioridad }}</span></td>
+        <td>{{ inc.cliente.nombre }}</td>
+        <td>{{ inc.dueno|default:"sin dueño" }}</td>
+        <td>{% if inc.abierta %}<span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span>{% else %}<span class="small">cerró su reloj</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endblock %}

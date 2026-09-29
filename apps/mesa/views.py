@@ -318,16 +318,27 @@ def bodega(request):
 
 @rol_requerido("mesa")
 def incidencias(request):
+    """Mesa → Incidencias (Chema 2026-09-29): una fila por PEDIDO con
+    incidencias, con sus casos abiertos como píldoras; las cerradas no
+    aparecen salvo con "Mostrar cerradas"; las incidencias sin pedido
+    (descuadres) van en su propia tabla. El expediente por pedido vive en
+    incidencias_pedido."""
+    from django.db.models import Max
+
     from apps.incidencias.models import Incidencia
+    from apps.incidencias.services import agrupar_por_pedido
 
     ahora = timezone.now()
-    qs = Incidencia.objects.select_related("cliente", "pedido", "sku")
-
+    qs = (
+        Incidencia.objects.select_related("cliente", "pedido", "sku")
+        .prefetch_related("compensaciones").annotate(ultimo_mensaje=Max("mensajes__ts"))
+    )
     estado = request.GET.get("estado", "").strip()
     tipo = request.GET.get("tipo", "").strip()
     cliente_id = request.GET.get("cliente", "").strip()
     origen = request.GET.get("origen", "").strip()  # Chema 2026-09-24: distinguir automáticas de las del cliente/comprador
     q = request.GET.get("q", "").strip()  # Chema 2026-09-28: folio, pedido, orden de Shopify, comprador o dueño
+    cerradas = request.GET.get("cerradas") == "on"
     if q:
         nombre = q if q.startswith("#") else f"#{q}"
         qs = qs.filter(
@@ -339,32 +350,61 @@ def incidencias(request):
         qs = qs.filter(estado__in=Incidencia.ESTADOS_ABIERTOS)
     elif estado:
         qs = qs.filter(estado=estado)
+    elif not cerradas:
+        qs = qs.exclude(estado=Incidencia.CERRADA)
     if tipo:
         qs = qs.filter(tipo=tipo)
     if cliente_id:
         qs = qs.filter(cliente_id=cliente_id)
     if origen:
         qs = qs.filter(origen=origen)
-
     filas = [_anotar_reloj_sla(inc, ahora) for inc in qs]
-    # Abiertas primero, ordenadas por reloj; cerradas después, recientes arriba.
-    filas.sort(key=lambda i: (
-        not i.abierta,
-        (i.reloj_limite or ahora) if i.abierta else ahora,
-        -(i.ts_apertura.timestamp()),
-    ))
-
+    grupos, sueltas = agrupar_por_pedido(filas)
+    for g in grupos:
+        con_reloj = [i for i in g["abiertas"] if i.reloj_limite is not None]
+        g["reloj"] = min(con_reloj, key=lambda i: i.reloj_limite) if con_reloj else (g["abiertas"][0] if g["abiertas"] else None)
     return render(request, "mesa/incidencias.html", {
         "seccion": "incidencias",
-        "incidencias": filas,
+        "grupos": grupos,
+        "sueltas": sueltas,
         "tipos": Incidencia.TIPOS,
         "estados": Incidencia.ESTADOS,
         "origenes": Incidencia.ORIGENES,
         "clientes_filtro": Cliente.objects.all(),
-        "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id, "origen": origen, "q": q},
+        "filtro": {"estado": estado, "tipo": tipo, "cliente": cliente_id, "origen": origen, "q": q, "cerradas": cerradas},
         "abiertas_n": sum(1 for i in filas if i.abierta),
-        # Clientes con las automáticas pausadas hoy: se avisa arriba para que nadie busque lo que no nació.
+        "total_n": len(filas),
         "pausas": Cliente.objects.filter(incidencias_auto_pausadas_hasta__gte=timezone.localdate()).order_by("nombre"),
+    })
+
+
+@rol_requerido("mesa")
+def incidencias_pedido(request, pk):
+    """Expediente de incidencias de UN pedido (Chema 2026-09-29): todas sus
+    incidencias, cerradas al fondo, estado en la segunda columna; guías con
+    su estado real y "Nueva incidencia" con el pedido puesto."""
+    from django.db.models import Max
+
+    from apps.envios.services import guias_del_pedido  # lazy por contrato
+    from apps.incidencias.models import Incidencia
+    from apps.incidencias.services import agrupar_por_pedido
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.reportes import url_orden_shopify  # lazy por contrato
+
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
+    ahora = timezone.now()
+    qs = (
+        Incidencia.objects.filter(pedido=pedido).select_related("cliente", "sku")
+        .prefetch_related("compensaciones").annotate(ultimo_mensaje=Max("mensajes__ts"))
+    )
+    grupos, _ = agrupar_por_pedido([_anotar_reloj_sla(inc, ahora) for inc in qs])
+    grupo = grupos[0] if grupos else {"pedido": pedido, "incidencias": [], "abiertas": [], "cerradas": 0}
+    return render(request, "mesa/incidencias_pedido.html", {
+        "seccion": "incidencias",
+        "pedido": pedido,
+        "grupo": grupo,
+        "guias": guias_del_pedido(pedido),
+        "url_shopify": url_orden_shopify(pedido),
     })
 
 

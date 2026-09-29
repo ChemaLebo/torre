@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Incidencias de {{ pedido.folio }} · Mesa{% endblock %}
+{% block content %}
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{% url 'mesa:incidencias' %}">Incidencias</a> / {{ pedido.folio }}</div>
+    <h1>{{ pedido.folio }}{% if pedido.shopify_order_name %} · {{ pedido.shopify_order_name }}{% endif %}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · {{ pedido.comprador_nombre|default:"sin comprador" }} · <span class="pill">{{ pedido.get_estado_display }}</span></div>
+  </div>
+  <div class="fila">
+    <a class="btn chico" href="{% url 'mesa:pedidos' %}?q={{ pedido.folio }}">Ver en Pedidos</a>
+    {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener">Ver orden en Shopify ↗</a>{% endif %}
+    <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}">Nueva incidencia</a>
+  </div>
+</div>
+
+<div class="card mb">
+  <div class="eyebrow">Guías del pedido</div>
+  <p class="mono" style="margin:8px 0 0">
+    {% for g in guias %}Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}{{ g.numero }}{% endif %} · {{ g.estado|lower }}{% if not g.activa %} <span class="muted">(inactiva)</span>{% endif %}<br>{% empty %}Sin guías todavía.{% endfor %}
+  </p>
+</div>
+
+{# Todas las incidencias del pedido: abiertas primero, cerradas siempre al fondo, estado en la segunda columna (Chema 2026-09-29). #}
+<div class="tabla-wrap">
+  <table data-sin-tabla-js>
+    <thead>
+      <tr><th>Folio</th><th>Estado</th><th>Tipo</th><th>Prioridad</th><th>Resolución</th><th>Origen</th><th>Dueño</th><th>Reloj SLA</th><th>Última actividad</th><th>Abierta</th></tr>
+    </thead>
+    <tbody>
+      {% for inc in grupo.incidencias %}
+      <tr class="fila-link{% if not inc.abierta %} muted{% endif %}">
+        <td><a class="mono" href="{% url 'mesa:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>{% if inc.interna %} <span class="pill warn" title="De la bodega: el cliente no la ve">interna</span>{% endif %}</td>
+        <td><span class="pill {% if inc.abierta %}accent{% else %}ok{% endif %}">{{ inc.get_estado_display }}</span></td>
+        <td>{{ inc.get_tipo_display }}</td>
+        <td><span class="pill {% if inc.prioridad == 'P1' %}crit{% elif inc.prioridad == 'P2' %}warn{% endif %}">{{ inc.prioridad }}</span></td>
+        <td class="small">{{ inc.resolucion|default:"—" }}</td>
+        <td class="small">{{ inc.get_origen_display }}</td>
+        <td>{{ inc.dueno|default:"sin dueño" }}</td>
+        <td>{% if inc.abierta %}<span class="pill {{ inc.reloj_pill }}">{{ inc.reloj_texto }}</span>{% else %}<span class="small">cerró su reloj</span>{% endif %}</td>
+        <td class="mono small">{{ inc.ultima_actividad|date:"d/M H:i" }}</td>
+        <td class="mono small">{{ inc.ts_apertura|date:"d/M/Y H:i" }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="10" class="muted centro">Este pedido no tiene incidencias.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

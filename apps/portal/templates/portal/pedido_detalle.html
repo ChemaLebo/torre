@@ -78,11 +78,13 @@
 
     <div class="card">
       <div class="titulo"><h3>Incidencias de este pedido</h3></div>
+      {# Abiertas primero, cerradas al fondo; el estado junto al folio (Chema 2026-09-29). #}
       {% for inc in incidencias_pedido %}
         <div class="fila entre mb">
           <div>
             <a class="mono" href="{% url 'portal:incidencia_detalle' inc.pk %}">{{ inc.folio }}</a>
-            <span class="small">· {{ inc.get_tipo_display }}</span>
+            <span class="pill {% if inc.abierta %}accent{% else %}ok{% endif %}">{{ inc.get_estado_display }}</span>
+            <span class="small">· {{ inc.get_tipo_display }}</span>{% if inc.resolucion %} <span class="small muted">· {{ inc.resolucion }}</span>{% endif %}
             <div class="small">La pelota la tiene: {{ inc.pelota }}</div>
           </div>
           <span class="pill {{ inc.reloj_clase }}">{{ inc.reloj_texto }}</span>
