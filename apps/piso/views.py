@@ -2731,10 +2731,12 @@ def _salida_manifiesto(request):
     if not carrier:
         messages.error(request, "Falta el carrier del manifiesto. Usa los botones de la pantalla.")
         return redirect("piso:salida")
-    # La firma del chofer va ANTES de mover nada: sin firma no hay salida.
+    # Nombre y firma del chofer van ANTES de mover nada: sin ellos no hay salida.
+    chofer = (request.POST.get("chofer") or "").strip()
     firma = _decodificar_firma(request.POST.get("firma_png"))
-    if firma is None:
-        messages.error(request, "Falta la firma del chofer: fírmala en el recuadro antes de confirmar la salida.")
+    if not chofer or firma is None:
+        que = "el nombre y la firma" if not chofer and firma is None else ("el nombre" if not chofer else "la firma")
+        messages.error(request, f"Falta {que} del chofer: captúralo en el recuadro antes de confirmar la salida.")
         return redirect(f"{reverse('piso:salida_resumen')}?corral={quote(corral)}&carrier={quote(carrier)}")
     seleccion = {int(v) for v in request.POST.getlist("pedido_id") if v.isdigit()}
     cajas_sel = {int(v) for v in request.POST.getlist("paquete_id") if v.isdigit()}
@@ -2833,7 +2835,6 @@ def _salida_manifiesto(request):
     hoja = None
     if recolectados:
         from apps.envios.services import registrar_manifiesto  # lazy por contrato
-        chofer = (request.POST.get("chofer") or "").strip()
         hoja = registrar_manifiesto(
             carrier, corral, request.user, salidas, chofer=chofer,
             sin_escaneo={"pedidos": ya_pedidos, "cajas": ya_cajas},

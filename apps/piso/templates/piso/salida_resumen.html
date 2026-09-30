@@ -58,8 +58,8 @@
   {# Firma del chofer (Chema 2026-09-30): obligatoria; se guarda como evidencia del manifiesto. #}
   <div class="card mt">
     <div class="titulo"><h2>Firma del chofer</h2><span class="pill accent">obligatoria</span></div>
-    <label for="chofer">Nombre del chofer (va en la hoja del manifiesto)</label>
-    <input type="text" name="chofer" id="chofer" maxlength="120" placeholder="Quien recibe las cajas" autocomplete="off">
+    <label for="chofer">Nombre del chofer</label>
+    <input type="text" name="chofer" id="chofer" maxlength="120" placeholder="Quien recibe las cajas" autocomplete="off" required>
     <p class="small muted mt">Que el chofer firme con el dedo en el recuadro: con esto recibe las {{ escaneadas|length }} caja{{ escaneadas|length|pluralize }} de arriba.</p>
     <div class="firma-lienzo">
       <canvas id="firma" aria-label="Recuadro para la firma del chofer"></canvas>
@@ -112,6 +112,13 @@
     trazos = 0; puntos = 0; ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); oculto.value = ""; pintarEstado();
   });
   canvas.closest("form").addEventListener("submit", function (e) {
+    var nombre = document.getElementById("chofer");
+    if (!nombre.value.trim()) {
+      e.preventDefault(); nombre.focus();
+      estado.textContent = "Falta el nombre del chofer.";
+      if (window.Feedback) { Feedback.error("Falta el nombre del chofer."); }
+      return;
+    }
     if (trazos < 2 || puntos < 8) {
       e.preventDefault();
       estado.textContent = "Falta la firma del chofer: pídele que firme en el recuadro.";
