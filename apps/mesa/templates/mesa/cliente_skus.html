@@ -55,7 +55,7 @@
           {% for sku in skus %}
           <tr>
             <td class="mono"><b>{{ sku.codigo }}</b></td>
-            <td>{{ sku.descripcion }}</td>
+            <td>{{ sku.descripcion }}{% if sku.fragil %} <span class="pill warn" title="Imprime FRÁGIL en la etiqueta">frágil</span>{% endif %}{% if sku.este_lado_arriba %} <span class="pill warn" title="Imprime THIS SIDE UP en la etiqueta">parado</span>{% endif %}</td>
             <td>{{ sku.variante|default:"—" }}</td>
             <td>
               <select name="cat_{{ sku.pk }}" aria-label="Categoría de {{ sku.codigo }}">
@@ -192,6 +192,10 @@
           {{ form.productos_por_kit.errors }}
           <label for="{{ form.usa_caja_propia.id_for_label }}">{{ form.usa_caja_propia.label }}</label>
           {{ form.usa_caja_propia }}{{ form.usa_caja_propia.errors }}
+          <label for="{{ form.fragil.id_for_label }}">{{ form.fragil.label }}</label>
+          {{ form.fragil }}{{ form.fragil.errors }}
+          <label for="{{ form.este_lado_arriba.id_for_label }}">{{ form.este_lado_arriba.label }}</label>
+          {{ form.este_lado_arriba }}{{ form.este_lado_arriba.errors }}
         </div>
         <div>
           <label for="{{ form.activo.id_for_label }}">{{ form.activo.label }}</label>

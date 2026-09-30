@@ -486,6 +486,8 @@ class FormSKU(forms.Form):
         label="Usa caja propia", required=False, initial=False,
         help_text="Viaja en su propio empaque: sus medidas/peso de catálogo son las del bulto.",
     )
+    fragil = forms.BooleanField(label="Frágil (imprime FRÁGIL en la etiqueta de la caja)", required=False, initial=False)
+    este_lado_arriba = forms.BooleanField(label="Tiene que ir parado (imprime THIS SIDE UP)", required=False, initial=False)
     activo = forms.BooleanField(label="Activo", required=False, initial=True)
 
     def __init__(self, cliente, *args, **kwargs):
@@ -527,6 +529,8 @@ class FormSKU(forms.Form):
             "es_kit": d.get("es_kit", False),
             "productos_por_kit": d.get("productos_por_kit") or 0,
             "usa_caja_propia": d.get("usa_caja_propia", False),
+            "fragil": d.get("fragil", False),
+            "este_lado_arriba": d.get("este_lado_arriba", False),
             "activo": d.get("activo", False),
         }
 

@@ -2848,6 +2848,8 @@ def etiqueta(request, guia_pk):
         "qr_url": url_publica_etiqueta(guia),
         "peso_kg": peso_kg,
     }
+    from apps.piso.etiquetas import marcas_de_manejo  # lazy: misma regla que el PDF
+    contexto["fragil"], contexto["este_lado_arriba"] = marcas_de_manejo(guia)
     return render(request, "piso/etiqueta.html", contexto)
 
 

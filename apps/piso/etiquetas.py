@@ -167,6 +167,31 @@ def _dibujar_qr(lienzo, url, x, y):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def marcas_de_manejo(guia):
+    """(fragil, este_lado_arriba) de la caja de la guía: True si alguna pieza
+    de la caja (o del pedido, sin caja) lleva la bandera en su SKU."""
+    if guia.paquete_id:
+        skus = [pl.linea_pedido.sku for pl in guia.paquete.lineas.select_related("linea_pedido__sku")]
+    else:
+        skus = [l.sku for l in guia.pedido.lineas.select_related("sku")]
+    return any(s.fragil for s in skus), any(s.este_lado_arriba for s in skus)
+
+
+def _banda_manejo(lienzo, y, fragil, arriba):
+    """Banda negra con FRÁGIL y/o THIS SIDE UP en blanco (solo si aplica); regresa el y nuevo."""
+    textos = [t for t, aplica in (("FRÁGIL", fragil), ("↑ THIS SIDE UP", arriba)) if aplica]
+    if not textos:
+        return y
+    alto = 16
+    y -= alto + 3
+    lienzo.rect(MARGEN, y, ANCHO_UTIL, alto, stroke=0, fill=1)
+    lienzo.setFillColorRGB(1, 1, 1)
+    lienzo.setFont(NEGRITA, 12)
+    lienzo.drawCentredString(ANCHO / 2, y + 4, "  ·  ".join(textos))
+    lienzo.setFillColorRGB(0, 0, 0)
+    return y
+
+
 def generar_pdf_etiqueta(guia):
     """PDF de UNA página 100×150 mm listo para la térmica. Regresa los bytes.
 
@@ -272,6 +297,9 @@ def generar_pdf_etiqueta(guia):
     lienzo.drawString(MARGEN, y, _recortar(f"CP {cp or '—'}", MONO_NEGRITA, 30, ANCHO_UTIL))
     y = _separador(lienzo, y - 5)
 
+    # Manejo (2026-09-29): FRÁGIL / THIS SIDE UP en banda propia solo si alguna pieza lo pide.
+    fragil, arriba = marcas_de_manejo(guia)
+    y = _banda_manejo(lienzo, y, fragil, arriba)
     # 4) Referencias destacadas: banda negra con texto blanco (o manda al QR).
     if referencias:
         lineas_refs = []
@@ -317,7 +345,9 @@ def generar_pdf_etiqueta(guia):
     lienzo.setFont(NEGRITA, 9)
     if peso_kg is not None:
         lienzo.drawString(MARGEN, MARGEN + 3, f"{peso_kg} kg")
-    lienzo.drawCentredString(ANCHO / 2, MARGEN + 3, "FRÁGIL · ESTE LADO ARRIBA")
+    pie = " · ".join(t for t, aplica in (("FRÁGIL", fragil), ("THIS SIDE UP", arriba)) if aplica)
+    if pie:
+        lienzo.drawCentredString(ANCHO / 2, MARGEN + 3, pie)
     lienzo.setFont(MONO, 8)
     lienzo.drawRightString(ANCHO - MARGEN, MARGEN + 3, pedido.folio)
 

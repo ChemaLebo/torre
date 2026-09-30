@@ -382,6 +382,22 @@ class SkusTests(BaseGestionClientes):
             ).exists()
         )
 
+    def test_banderas_de_manejo_por_formulario_y_csv(self):
+        from io import BytesIO
+
+        from apps.catalogo.models import SKU
+
+        self.client.post(self.url, datos_form_sku(codigo="FRAGIL-SIX", fragil="on", este_lado_arriba="on"))
+        sku = SKU.objects.get(cliente=self.colima, codigo="FRAGIL-SIX")
+        self.assertEqual((sku.fragil, sku.este_lado_arriba), (True, True))
+        csv = BytesIO("codigo,descripcion,peso_gr,fragil,este_lado_arriba\nCSV-SIX,Six csv,3600,si,no\n".encode("utf-8"))
+        csv.name = "skus.csv"
+        self.client.post(self.url, {"accion": "importar_csv", "archivo": csv})
+        sku = SKU.objects.get(cliente=self.colima, codigo="CSV-SIX")
+        self.assertEqual((sku.fragil, sku.este_lado_arriba), (True, False))
+        html = self.client.get(self.url).content.decode()
+        self.assertIn(">frágil</span>", html)
+
     def test_edicion_prefillea_y_guarda(self):
         from apps.catalogo.models import SKU
 

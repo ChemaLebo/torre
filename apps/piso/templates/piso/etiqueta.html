@@ -137,7 +137,7 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
 
   <div class="pie">
     <span>{% if peso_kg %}{{ peso_kg }} kg{% endif %}</span>
-    <span>Frágil · Este lado arriba</span>
+    <span>{% if fragil %}FRÁGIL{% endif %}{% if fragil and este_lado_arriba %} · {% endif %}{% if este_lado_arriba %}↑ THIS SIDE UP{% endif %}</span>
     <span class="mono folio-chico">{{ pedido.folio }}</span>
   </div>
 </div>

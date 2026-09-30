@@ -23,6 +23,8 @@ Todo módulo se construye contra este documento. Las firmas de servicios y los n
 - `Ubicacion`: codigo único (`A-01-2`), tipo (recepcion|picking|reserva|merma|retorno|salida), activo. Corrales de salida: `SAL-PQX`, `SAL-LOCAL`, `SAL-OTRO`.
 - `Lote`: sku FK, codigo, fecha_caducidad (date null).
 
+- **Banderas de manejo (2026-09-29):** `SKU.fragil` y `SKU.este_lado_arriba` (formulario de SKU en Mesa, columnas opcionales `fragil`/`este_lado_arriba` si/no en el CSV de catálogo). `piso.etiquetas.marcas_de_manejo(guia)` → (frágil, parado) si alguna pieza de la caja lo pide (sin caja: del pedido); la etiqueta interna (PDF y HTML) imprime una banda negra "FRÁGIL · ↑ THIS SIDE UP" solo cuando aplica; ya no lleva el texto fijo.
+
 ### inventario
 - **Tarimas (2026-09-24):** una tarima es una `Ubicacion` de reserva `TAR-nn` sin medidas ni prioridad (el plan no la sugiere); `services.tarimas_activas()` y `services.crear_tarima(actor)` (siguiente número, evento `tarima_creada`). El piso la abre desde Ubicar y mete ahí lo que no va a anaquel; lo que vive en una tarima es vendible como cualquier reserva. **Sobrantes del plan:** `planear_acomodo` manda lo que no cabe (o no tiene medidas) como paso a la zona de desborde `TORRE["ZONA_DESBORDE"]` (env `ZONA_DESBORDE`, default RES-CUAR; reserva vendible) y lo dice en el motivo; solo sin zona configurada el paso queda sin anaquel (cuarentena). `ubicar_pieza` avanza primero el paso de la ubicación real, la zona incluida.
 - `Saldo`: sku FK, ubicacion FK, lote FK null, estado (`en_putaway|ubicado_vendible|reservado|en_empaque|cuarentena`), cantidad (int). unique_together (sku, ubicacion, lote, estado).

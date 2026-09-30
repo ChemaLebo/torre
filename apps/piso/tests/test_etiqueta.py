@@ -148,6 +148,25 @@ class ContenidoEtiquetaTests(EtiquetaTestCase):
         respuesta = self.get_etiqueta(guia)
         self.assertContains(respuesta, "Paquete 1 de 1")
 
+    def test_marcas_de_manejo_solo_cuando_el_sku_lo_pide(self):
+        """Chema 2026-09-29: FRÁGIL y THIS SIDE UP salen del SKU (banderas), no siempre."""
+        from apps.piso.etiquetas import generar_pdf_etiqueta, marcas_de_manejo
+
+        guia = self.crear_guia()
+        respuesta = self.get_etiqueta(guia)
+        self.assertNotContains(respuesta, "FRÁGIL")
+        self.assertNotContains(respuesta, "THIS SIDE UP")
+        self.assertEqual(marcas_de_manejo(guia), (False, False))
+        self.sku.fragil = True
+        self.sku.este_lado_arriba = True
+        self.sku.save(update_fields=["fragil", "este_lado_arriba"])
+        respuesta = self.get_etiqueta(guia)
+        self.assertContains(respuesta, "FRÁGIL")
+        self.assertContains(respuesta, "THIS SIDE UP")
+        self.assertEqual(marcas_de_manejo(guia), (True, True))
+        pdf = generar_pdf_etiqueta(guia)
+        self.assertIn(b"THIS SIDE UP", pdf)  # pageCompression=0: el texto va crudo en el PDF
+
     def test_no_imprime_el_valor_declarado(self):
         pedido = self.crear_pedido(
             estado=Pedido.GUIA_GENERADA, reservar_stock=False,

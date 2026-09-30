@@ -2791,6 +2791,15 @@ def _parsear_fila_csv(fila):
             datos["es_kit"] = False
         else:
             raise ValueError("es_kit acepta si/no/1/0")
+    for campo in ("fragil", "este_lado_arriba"):  # manejo (2026-09-29): si/no/1/0
+        crudo = celda(campo).lower()
+        if crudo:
+            if crudo in ("si", "sí", "1"):
+                datos[campo] = True
+            elif crudo in ("no", "0"):
+                datos[campo] = False
+            else:
+                raise ValueError(f"{campo} acepta si/no/1/0")
     rotacion = celda("rotacion").strip().upper()
     if rotacion:
         if rotacion in ("A", "B", "C"):
