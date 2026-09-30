@@ -139,6 +139,6 @@ class ReporteDiaTests(TestCase):
         renglones = reportes.armar_reporte([pedido])
         [fila] = reportes.filas_csv(renglones, lambda f: f"http://t/evidencia/{f.pk}/")
         self.assertEqual(fila[0], pedido.folio)
-        self.assertEqual(fila[1], "5502")
+        self.assertEqual(fila[1], "#5502")  # la orden legible: el nombre de Shopify o "#<id>" (bfe8550)
         self.assertEqual(fila[-3:], [1, 0, f"http://t/evidencia/{foto.pk}/"])
         self.assertEqual(len(fila), len(reportes.COLUMNAS_CSV))
