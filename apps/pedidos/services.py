@@ -157,11 +157,50 @@ def reintentar_reservas_pedido(pedido, actor):
 
 
 # Desde dónde se repone: producto en la calle o ya entregado. Antes de salir
-# el pedido simplemente se corrige.
+# el pedido simplemente se corrige. El candado real es por CAJA
+# (piezas_reponibles): con estos estados y sin cantidad_despachada (pedidos
+# anteriores al fulfillment parcial) todo el pedido cuenta como salido.
 ESTADOS_REPOSICION = (
     Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.ENTREGA_PRESUNTA, Pedido.ENTREGADO,
     Pedido.RETORNADO, Pedido.PARCIALMENTE_DESPACHADO,
 )
+# Otra ola en manos del piso: no se le meten líneas a medio picking/empaque.
+ESTADOS_OLA_OCUPADA = (
+    Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.CANCELACION_PENDIENTE,
+)
+
+
+def piezas_reponibles(pedido):
+    """Qué se puede reponer del pedido, por caja que YA SALIÓ (Chema
+    2026-09-30: el candado es por paquete, no por pedido). {linea_id:
+    {"linea", "piezas", "cajas"}} con las piezas despachadas de cada line item
+    original (sin reposiciones previas, kits ni componentes) y los números de
+    las cajas despachadas que las llevaron. Lo que sigue en bodega (una
+    segunda ola esperando stock) no aparece: eso se corrige, no se repone.
+    Pedidos anteriores al fulfillment parcial (en la calle o entregados, sin
+    cantidad_despachada): todas sus líneas cuentan como salidas."""
+    from apps.envios.models import Paquete, PaqueteLinea  # lazy: modelos de otra app
+
+    legado = pedido.estado in ESTADOS_REPOSICION and not pedido.tiene_despachadas
+    cajas_por_linea = {}
+    for pl in (
+        PaqueteLinea.objects.filter(paquete__pedido=pedido, paquete__estado=Paquete.DESPACHADO)
+        .select_related("paquete")
+    ):
+        cajas_por_linea.setdefault(pl.linea_pedido_id, set()).add(pl.paquete.numero)
+    resultado = {}
+    for linea in (
+        pedido.lineas.filter(reposicion_de__isnull=True, parte_de_kit__isnull=True)
+        .select_related("sku").order_by("pk")
+    ):
+        if getattr(linea.sku, "es_kit", False):
+            continue
+        piezas = linea.cantidad if legado else linea.cantidad_despachada
+        if piezas > 0:
+            resultado[linea.pk] = {
+                "linea": linea, "piezas": piezas, "cajas": sorted(cajas_por_linea.get(linea.pk, ())),
+            }
+    return resultado
 
 
 def reponer_lineas(pedido, seleccion, actor, incidencia=None):
@@ -175,12 +214,27 @@ def reponer_lineas(pedido, seleccion, actor, incidencia=None):
     salida; al entregarse la reposición el pedido vuelve a ENTREGADO. Lo que
     ya salió se estampa como despachado (pedidos anteriores al fulfillment
     parcial no lo tenían) para no planearlo dos veces. Shopify no se toca: la
-    orden ya está fulfilled. Regresa las líneas nuevas."""
-    if pedido.estado not in ESTADOS_REPOSICION:
+    orden ya está fulfilled. Regresa las líneas nuevas.
+
+    Candado por CAJA (Chema 2026-09-30): solo se reponen piezas que ya
+    salieron en una caja despachada (piezas_reponibles), aunque el pedido
+    esté PENDIENTE por una segunda ola que espera stock; en ese caso las
+    líneas nuevas se suman a esa ola (misma reserva y replaneo, sin
+    transición ni estampado). Con la ola en manos del piso (picking, empaque,
+    guía) se espera a que salga."""
+    reponibles = piezas_reponibles(pedido)
+    if not reponibles:
         raise ValueError(
-            f"{pedido.folio} está {pedido.get_estado_display()}: solo se repone lo que ya salió o se "
-            "entregó; antes de eso se corrige el pedido."
+            f"{pedido.folio} está {pedido.get_estado_display()} y ninguna caja ha salido: solo se repone "
+            "lo que ya salió o se entregó; antes de eso se corrige el pedido."
         )
+    if pedido.estado in ESTADOS_OLA_OCUPADA:
+        raise ValueError(
+            f"{pedido.folio} tiene otra ola en manos del piso ({pedido.get_estado_display()}): "
+            "espera a que salga y luego repón."
+        )
+    if pedido.estado not in ESTADOS_REPOSICION + (Pedido.PENDIENTE,):
+        raise ValueError(f"{pedido.folio} está {pedido.get_estado_display()}: no se puede reponer.")
     limpias = []
     for linea, cantidad in seleccion:
         cantidad = int(cantidad or 0)
@@ -188,16 +242,19 @@ def reponer_lineas(pedido, seleccion, actor, incidencia=None):
             continue
         if linea.pedido_id != pedido.pk:
             raise ValueError(f"La línea {linea.pk} no es de {pedido.folio}.")
-        if cantidad > linea.cantidad:
-            raise ValueError(f"{linea.sku.codigo}: no se reponen {cantidad} piezas de una línea de {linea.cantidad}.")
         if linea.parte_de_kit_id or getattr(linea.sku, "es_kit", False):
             raise ValueError(f"{linea.sku.codigo}: los kits se reponen por componente; elige el producto, no el kit.")
+        info = reponibles.get(linea.pk)
+        if info is None:
+            raise ValueError(f"{linea.sku.codigo}: no ha salido de bodega; eso se corrige en el pedido, no se repone.")
+        if cantidad > info["piezas"]:
+            raise ValueError(f"{linea.sku.codigo}: salieron {info['piezas']} pieza(s); no se reponen {cantidad}.")
         limpias.append((linea, cantidad))
     if not limpias:
         raise ValueError("Elige al menos un producto con piezas a reponer.")
     folio_inc = getattr(incidencia, "folio", "") or ""
     with transaction.atomic():
-        if pedido.estado != Pedido.PARCIALMENTE_DESPACHADO:
+        if pedido.estado not in (Pedido.PARCIALMENTE_DESPACHADO, Pedido.PENDIENTE):
             # Ya salió todo lo reservado: los pedidos anteriores al fulfillment
             # parcial no traen cantidad_despachada y el plan los repetiría.
             for linea in pedido.lineas.all():
@@ -213,10 +270,11 @@ def reponer_lineas(pedido, seleccion, actor, incidencia=None):
         pedido.asignado_a = None
         pedido.transferencia_a = None
         pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
-        pedido.transicionar(
-            Pedido.PENDIENTE, actor=actor,
-            motivo=f"Reposición de producto{f' ({folio_inc})' if folio_inc else ''}: regresa a picking con líneas nuevas.",
-        )
+        if pedido.estado != Pedido.PENDIENTE:
+            pedido.transicionar(
+                Pedido.PENDIENTE, actor=actor,
+                motivo=f"Reposición de producto{f' ({folio_inc})' if folio_inc else ''}: regresa a picking con líneas nuevas.",
+            )
         registrar_evento(
             "pedido", pedido.pk, "reposicion", actor=actor, cliente=pedido.cliente,
             delta={

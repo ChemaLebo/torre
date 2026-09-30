@@ -235,7 +235,8 @@ class TestCompensacionesPortal(BasePortal):
         from apps.pedidos.models import LineaPedido
 
         sku, _ = SKU.objects.get_or_create(cliente=self.colima, codigo="SIX-COMP", defaults={"descripcion": "Six", "precio_declarado": Decimal("300")})
-        return LineaPedido.objects.create(pedido=self.pedido, sku=sku, cantidad=2)
+        # Se repone lo que ya salió: la línea viajó completa en una caja despachada.
+        return LineaPedido.objects.create(pedido=self.pedido, sku=sku, cantidad=2, cantidad_despachada=2)
 
     def test_el_cliente_crea_una_reposicion_y_se_ejecuta_sola(self):
         from unittest.mock import MagicMock, patch

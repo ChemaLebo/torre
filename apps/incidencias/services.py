@@ -340,13 +340,24 @@ def opciones_compensacion(incidencia):
 
 def lineas_para_compensar(incidencia):
     """Los line items originales del pedido (sin reposiciones previas ni
-    componentes de kit): lo que se puede reponer o reembolsar."""
+    componentes de kit): lo que se puede reponer o reembolsar. Cada línea
+    trae `salieron` (piezas que ya salieron en una caja despachada: lo único
+    reponible, pedidos.piezas_reponibles) y `cajas_salida` ("1, 2") para el
+    formulario."""
+    from apps.pedidos.services import piezas_reponibles  # lazy por contrato
+
     if incidencia.pedido_id is None:
         return []
-    return list(
+    reponibles = piezas_reponibles(incidencia.pedido)
+    lineas = list(
         incidencia.pedido.lineas.filter(reposicion_de__isnull=True, parte_de_kit__isnull=True)
         .select_related("sku").order_by("pk")
     )
+    for linea in lineas:
+        info = reponibles.get(linea.pk)
+        linea.salieron = info["piezas"] if info else 0
+        linea.cajas_salida = ", ".join(str(n) for n in info["cajas"]) if info else ""
+    return lineas
 
 
 def seleccion_desde_post(post, incidencia):
@@ -391,6 +402,15 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
     if tipo == Compensacion.TIPO_REPOSICION:
         if not seleccion:
             raise ValueError("Elige qué productos se reponen.")
+        from apps.pedidos.services import piezas_reponibles  # lazy por contrato
+
+        reponibles = piezas_reponibles(incidencia.pedido)
+        for linea, cantidad in seleccion:
+            info = reponibles.get(linea.pk)
+            if info is None:
+                raise ValueError(f"{linea.sku.codigo}: no ha salido de bodega; eso se corrige en el pedido, no se repone.")
+            if cantidad > info["piezas"]:
+                raise ValueError(f"{linea.sku.codigo}: salieron {info['piezas']} pieza(s); no se reponen {cantidad}.")
         monto = sum((Decimal(linea.sku.precio_declarado or 0) * cantidad for linea, cantidad in seleccion), Decimal(0))
         reembolsar_envio = False
     elif tipo == Compensacion.TIPO_REEMBOLSO:

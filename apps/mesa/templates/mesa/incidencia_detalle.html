@@ -199,21 +199,54 @@
         </div>
         {% if lineas_pedido %}
         <div class="small muted mt">Qué se repone o reembolsa: todos, uno o cualquier combinación.</div>
-        <table class="mt">
-          <thead><tr><th></th><th>Producto</th><th>Pedidas</th><th>Piezas</th></tr></thead>
+        <table class="mt" data-sin-tabla-js>
+          <thead><tr><th></th><th>Producto</th><th>Pedidas</th><th>Salieron</th><th>Caja</th><th>Piezas</th></tr></thead>
           <tbody>
             {% for linea in lineas_pedido %}
-            <tr>
+            <tr class="comp-linea" data-pedidas="{{ linea.cantidad }}" data-salieron="{{ linea.salieron }}">
               <td><input type="checkbox" name="linea_{{ linea.pk }}" value="1" aria-label="Incluir {{ linea.sku.codigo }}"></td>
               <td><span class="mono">{{ linea.sku.codigo }}</span> <span class="small">{{ linea.sku.descripcion }}</span></td>
               <td class="mono">{{ linea.cantidad }}</td>
+              <td class="mono">{{ linea.salieron }}</td>
+              <td class="small">{% if linea.cajas_salida %}{{ linea.cajas_salida }}{% elif linea.salieron %}—{% else %}<span class="muted">en bodega</span>{% endif %}</td>
               <td><input type="number" name="cantidad_{{ linea.pk }}" min="1" max="{{ linea.cantidad }}" value="{{ linea.cantidad }}" style="width:90px" aria-label="Piezas de {{ linea.sku.codigo }}"></td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
-        <label class="mt" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="reembolsar_envio" value="1"> Reembolsar también el envío (solo reembolso)</label>
-        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="avisar_comprador" value="1" checked> Que Shopify le avise al comprador del reembolso</label>
+        <label class="mt solo-reembolso" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="reembolsar_envio" value="1"> Reembolsar también el envío</label>
+        <label class="solo-reembolso" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="avisar_comprador" value="1" checked> Que Shopify le avise al comprador del reembolso</label>
+        <script>
+        // Reposición: solo lo que ya salió en una caja (piezas = salieron; lo de
+        // bodega queda apagado) y sin las opciones de reembolso. Reembolso: todo.
+        (function () {
+          var tipo = document.getElementById("comp-tipo");
+          if (!tipo) return;
+          function ajustar() {
+            var reposicion = tipo.value === "reposicion";
+            document.querySelectorAll(".solo-reembolso").forEach(function (el) {
+              el.style.display = tipo.value === "reembolso" ? "" : "none";
+            });
+            document.querySelectorAll(".comp-linea").forEach(function (fila) {
+              var tope = reposicion ? parseInt(fila.dataset.salieron, 10) : parseInt(fila.dataset.pedidas, 10);
+              var marca = fila.querySelector("input[type=checkbox]");
+              var piezas = fila.querySelector("input[type=number]");
+              var apagada = reposicion && tope <= 0;
+              marca.disabled = apagada;
+              piezas.disabled = apagada;
+              if (apagada) marca.checked = false;
+              piezas.max = Math.max(tope, 1);
+              if (!piezas.dataset.tocado || parseInt(piezas.value, 10) > tope) piezas.value = Math.max(tope, 1);
+              fila.style.opacity = apagada ? "0.45" : "";
+            });
+          }
+          document.querySelectorAll(".comp-linea input[type=number]").forEach(function (el) {
+            el.addEventListener("input", function () { el.dataset.tocado = "1"; });
+          });
+          tipo.addEventListener("change", ajustar);
+          ajustar();
+        })();
+        </script>
         {% endif %}
         <div class="fila mt">
           <button class="btn chico" type="submit">Proponer (el cliente aprueba)</button>

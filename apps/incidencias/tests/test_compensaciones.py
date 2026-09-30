@@ -23,6 +23,8 @@ class CompensacionesTests(TestCase):
     def setUp(self):
         self.cliente = crear_cliente()
         self.pedido = crear_pedido(self.cliente)
+        self.pedido.estado = "ENTREGADO"  # se repone lo que ya salió (anterior al parcial: todo el pedido)
+        self.pedido.save(update_fields=["estado"])
         self.six = SKU.objects.create(cliente=self.cliente, codigo="SIX", descripcion="Six", precio_declarado=Decimal("300"))
         self.caja = SKU.objects.create(cliente=self.cliente, codigo="C12", descripcion="Caja 12", precio_declarado=Decimal("600"))
         self.l1 = LineaPedido.objects.create(pedido=self.pedido, sku=self.six, cantidad=2, precio_unitario=Decimal("250"))
@@ -84,6 +86,26 @@ class CompensacionesTests(TestCase):
             with self.assertRaises(ValueError, msg=(tipo, extra)):
                 crear_compensacion(incidencia, tipo, None, "mesa", **extra)
         self.assertFalse(Compensacion.objects.exists())
+
+    def test_reposicion_solo_de_lo_que_salio_en_una_caja(self):
+        """Candado por caja (Chema 2026-09-30): PED-00051 con la ola 1 en la
+        calle y la ola 2 PENDIENTE por falta de stock: se repone lo de la
+        caja que salió, con tope en sus piezas; lo de bodega se corrige."""
+        from apps.incidencias.services import lineas_para_compensar
+
+        self.pedido.estado = "PENDIENTE"
+        self.pedido.save(update_fields=["estado"])
+        LineaPedido.objects.filter(pk=self.l1.pk).update(cantidad_despachada=1)
+        lineas = lineas_para_compensar(self.inc)
+        self.assertEqual([(l.sku.codigo, l.salieron) for l in lineas], [("SIX", 1), ("C12", 0)])
+        with self.assertRaises(ValueError) as ctx:
+            crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l2, 1)])
+        self.assertIn("no ha salido de bodega", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l1, 2)])
+        self.assertIn("salieron 1 pieza(s)", str(ctx.exception))
+        comp = crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l1, 1)])
+        self.assertEqual(comp.lineas, [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1}])
 
     def test_reembolso_lo_ejecuta_shopify_y_queda_pagado(self):
         comp = crear_compensacion(self.inc, "reembolso", None, "mesa", lineas=[(self.l1, 2)], reembolsar_envio=True)

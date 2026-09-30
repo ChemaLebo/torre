@@ -104,6 +104,63 @@ class ReposicionTests(TestCase):
             services.reponer_lineas(pedido, [(la, 1)], self.mesa)
         self.assertEqual(pedido.lineas.count(), 2)  # nada cambió
 
+    def pedido_ola_dos_pendiente(self):
+        """PED-00051 (Chema 2026-09-30): A × 2 salió en la caja 1 (despachada);
+        B × 1 no tenía stock y espera como segunda ola con el pedido PENDIENTE."""
+        pedido = Pedido.objects.create(cliente=self.cliente, tienda=None, origen="manual", comprador_nombre="Ana",
+                                       cp="01780", estado=Pedido.PENDIENTE)
+        la = LineaPedido.objects.create(pedido=pedido, sku=self.a, cantidad=2, reservada=True, cantidad_pickeada=2,
+                                        cantidad_despachada=2)
+        lb = LineaPedido.objects.create(pedido=pedido, sku=self.b, cantidad=1)
+        caja = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta",
+                                      estado=Paquete.DESPACHADO)
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=la, cantidad=2)
+        Guia.objects.create(pedido=pedido, paquete=caja, carrier="estafeta", numero="EST-1", proveedor="mock",
+                            estado=Guia.ENTREGADO)
+        return pedido, la, lb
+
+    def test_piezas_reponibles_es_por_caja_despachada(self):
+        pedido, la, lb = self.pedido_ola_dos_pendiente()
+        reponibles = services.piezas_reponibles(pedido)
+        self.assertEqual({k: (v["piezas"], v["cajas"]) for k, v in reponibles.items()}, {la.pk: (2, [1])})
+        # Pedido anterior al fulfillment parcial (sin cantidad_despachada) entregado: todo salió.
+        viejo, va, vb = self.pedido_entregado()
+        self.assertEqual({k: v["piezas"] for k, v in services.piezas_reponibles(viejo).items()}, {va.pk: 2, vb.pk: 1})
+        # En bodega sin ninguna caja fuera: nada que reponer.
+        Pedido.objects.filter(pk=viejo.pk).update(estado=Pedido.EMPACADO)
+        viejo.refresh_from_db()
+        self.assertEqual(services.piezas_reponibles(viejo), {})
+
+    def test_con_la_ola_dos_pendiente_se_repone_lo_de_la_caja_que_salio_y_se_suma_a_la_ola(self):
+        pedido, la, lb = self.pedido_ola_dos_pendiente()
+        with self.assertRaises(ValueError) as ctx:
+            services.reponer_lineas(pedido, [(lb, 1)], self.mesa)  # B sigue en bodega: se corrige, no se repone
+        self.assertIn("no ha salido de bodega", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            services.reponer_lineas(pedido, [(la, 3)], self.mesa)  # más de lo que salió
+        with self.captureOnCommitCallbacks(execute=True):
+            nuevas = services.reponer_lineas(pedido, [(la, 1)], self.mesa)
+        pedido.refresh_from_db()
+        lb.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)  # sin transición: ya estaba
+        self.assertEqual([(n.sku.codigo, n.cantidad, n.reposicion_de_id, n.reservada) for n in nuevas], [("A-SIX", 1, la.pk, True)])
+        self.assertEqual(lb.cantidad_despachada, 0)  # la ola 2 no se estampa como salida
+        # Una sola ola: la reposición se surte ya; B sigue faltante (sin stock) en el mismo pedido.
+        self.assertEqual([l.pk for l in pedido.lineas_por_surtir], [nuevas[0].pk])
+        self.assertEqual([l.pk for l in pedido.lineas_faltantes], [lb.pk])
+        self.assertFalse(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="cambio_estado").exists())
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="reposicion").exists())
+
+    def test_con_la_ola_dos_en_manos_del_piso_se_espera(self):
+        pedido, la, _ = self.pedido_ola_dos_pendiente()
+        for estado in (Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+            Pedido.objects.filter(pk=pedido.pk).update(estado=estado)
+            pedido.refresh_from_db()
+            with self.assertRaises(ValueError) as ctx:
+                services.reponer_lineas(pedido, [(la, 1)], self.mesa)
+            self.assertIn("espera a que salga", str(ctx.exception))
+        self.assertEqual(pedido.lineas.count(), 2)
+
     def test_al_entregar_la_reposicion_la_compensacion_se_paga_sola(self):
         from apps.envios.services import _transicionar_pedido
 
