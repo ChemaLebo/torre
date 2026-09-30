@@ -34,6 +34,38 @@
   </div>
 </div>
 
+<div class="card mb">
+  <div class="titulo"><h3>Escrituras a Shopify pendientes</h3><span class="small">{{ escrituras|length }} · fulfillments, rastreos de reposición y eventos que Shopify rechazó; el cron las reintenta cada 15 min</span></div>
+  {% if escrituras %}
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Pedido</th><th>Escritura</th><th>Intentos</th><th>Último error</th><th>Desde</th><th>Estado</th><th></th></tr></thead>
+      <tbody>
+        {% for e in escrituras %}
+        <tr>
+          <td class="mono">{{ e.pedido.folio }}</td>
+          <td>{{ e.get_accion_display }}</td>
+          <td>{{ e.intentos }} <span class="small muted">· último {{ e.frescura_intento }}</span></td>
+          <td class="small">{{ e.ultimo_error|truncatechars:90 }}</td>
+          <td class="small">{{ e.frescura }}</td>
+          <td>{% if e.vencida %}<span class="pill crit">vencida</span>{% else %}<span class="pill warn">reintentando</span>{% endif %}</td>
+          <td>
+            <form method="post">{% csrf_token %}
+              <input type="hidden" name="escritura" value="{{ e.pk }}">
+              {% if e.vencida %}<button class="btn chico primario" type="submit" name="accion" value="reintentar">Reintentar</button>{% endif %}
+              <button class="btn chico" type="submit" name="accion" value="descartar" onclick="return confirm('¿Descartar? Shopify no se actualizará.')">Descartar</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Sin pendientes: todo lo que Torre escribió en Shopify entró a la primera.</p>
+  {% endif %}
+</div>
+
 <div class="grid g2">
   <div class="card">
     <div class="titulo"><h3>Cola de push de inventario</h3><span class="small">{{ cola|length }} SKU(s) pendientes</span></div>

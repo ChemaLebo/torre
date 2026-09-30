@@ -132,6 +132,18 @@ mutation eventoFulfillment($fulfillmentEvent: FulfillmentEventInput!) {
 }
 """
 
+# Reposición (2026-09-30): el fulfillment de la caja sustituida cambia de guía
+# a la de la caja de reposición; notifyCustomer manda el correo nativo de
+# "tu envío se actualizó".
+MUTACION_ACTUALIZAR_TRACKING = """
+mutation actualizarTracking($fulfillmentId: ID!, $trackingInfoInput: FulfillmentTrackingInput!, $notifyCustomer: Boolean) {
+  fulfillmentTrackingInfoUpdate(fulfillmentId: $fulfillmentId, trackingInfoInput: $trackingInfoInput, notifyCustomer: $notifyCustomer) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
 # Fulfillments ya escritos de una orden, con sus números de guía: para
 # recuperar ids de pedidos fulfilleados antes de guardarlos (backfill).
 CONSULTA_FULFILLMENTS_ORDEN = """
@@ -511,6 +523,24 @@ class ShopifyClient:
         if errores:
             raise ShopifyError(f"fulfillmentEventCreate {self.tienda.dominio}: {errores}")
         return resultado.get("fulfillmentEvent") or {}
+
+    def actualizar_tracking_fulfillment(self, fulfillment_gid, carrier, numero, url_rastreo, notificar=True):
+        """fulfillmentTrackingInfoUpdate: reemplaza la guía y el link de rastreo
+        de un fulfillment ya escrito (la caja sustituida por una reposición
+        viaja ahora con la guía nueva). No toca sus line items. Con
+        `notificar`, Shopify manda al comprador su correo de envío actualizado.
+        Regresa el fulfillment ({id, status})."""
+        tracking = {"company": carrier or "", "url": url_rastreo or ""}
+        if numero:
+            tracking["number"] = numero
+        datos = self.graphql(MUTACION_ACTUALIZAR_TRACKING, {
+            "fulfillmentId": fulfillment_gid, "trackingInfoInput": tracking, "notifyCustomer": bool(notificar),
+        })
+        resultado = datos.get("fulfillmentTrackingInfoUpdate") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"fulfillmentTrackingInfoUpdate {self.tienda.dominio}: {errores}")
+        return resultado.get("fulfillment") or {}
 
     def fulfillments_de_orden(self, order_id):
         """[(gid, status, [números de guía])] de los fulfillments de la orden.

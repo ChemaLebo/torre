@@ -220,9 +220,10 @@ Lo que quedó fuera, para cuando haga falta:
   marca PAGADA a mano.
 - Kits: se reponen por componente (el formulario ofrece los line items
   originales sin componentes; un kit como línea se rechaza con mensaje).
-- Shopify no se entera de la reposición más allá del expediente de Torre al
-  que la orden ya apunta; una nota en la orden (`orderUpdate`, `write_orders`)
-  es una llamada si Chema la quiere.
+- Shopify se entera de la reposición al firmar su manifiesto (2026-09-30): el
+  fulfillment de la caja sustituida cambia a la guía nueva y el comprador
+  recibe el correo de envío actualizado. Una nota en la orden (`orderUpdate`)
+  sigue siendo una llamada si Chema la quiere.
 - Reembolso de monto libre: usa el último SALE/CAPTURE exitoso como
   transacción padre; órdenes con varios pagos o pasarela manual: Shopify
   registra el refund y el dinero se mueve fuera.

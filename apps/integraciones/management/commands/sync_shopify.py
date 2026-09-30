@@ -1,4 +1,4 @@
-"""Job: sincronización completa con Shopify (reconciliar + replay + push).
+"""Job: sincronización completa con Shopify (reconciliar + replay + reintentos + push).
 
 Idempotente: correrlo dos veces seguidas no duplica pedidos ni pushes.
 Programación sugerida en dev: cada 10 min (BLUEPRINT §2.2.8 — polling de respaldo).
@@ -10,7 +10,7 @@ from apps.integraciones.models import Tienda
 
 
 class Command(BaseCommand):
-    help = "Reconcilia pedidos por tienda, reintenta webhooks pendientes y empuja inventario."
+    help = "Reconcilia pedidos por tienda, reintenta webhooks y escrituras de fulfillment pendientes y empuja inventario."
 
     def handle(self, *args, **options):
         tiendas = Tienda.objects.filter(activo=True)
@@ -23,6 +23,12 @@ class Command(BaseCommand):
         replays = services.reprocesar_pendientes()
         if replays:
             self.stdout.write(f"Replay: {replays} webhooks pendientes reprocesados")
+        escrituras = services.reintentar_escrituras_shopify()
+        if escrituras["pendientes"] or escrituras["vencidas"]:
+            self.stdout.write(
+                f"Escrituras a Shopify: {escrituras['ok']} ok, {escrituras['error']} con error, "
+                f"{escrituras['vencidas']} vencidas"
+            )
         resumen = services.push_inventario()
         self.stdout.write(self.style.SUCCESS(
             f"Push de inventario: {resumen['skus']} SKUs, "

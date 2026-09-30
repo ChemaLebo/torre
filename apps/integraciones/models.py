@@ -126,3 +126,50 @@ class PushInventarioPendiente(models.Model):
 
     def __str__(self):
         return f"push pendiente · {self.sku} · {self.creado:%Y-%m-%d %H:%M}"
+
+
+class EscrituraShopifyPendiente(models.Model):
+    """Cola en BD de escrituras de fulfillment a Shopify que fallaron
+    (2026-09-30): crear el fulfillment de una caja o del pedido, actualizar el
+    rastreo del fulfillment sustituido por una reposición, o un evento de
+    avance. El primer intento es en línea; si Shopify falla, la escritura se
+    encola aquí en vez de perderse y `reintentar_escrituras_shopify()` (cron
+    sync_shopify) la reintenta hasta que entra o hasta `vence`. `clave` hace
+    el encolado idempotente: la misma escritura fallando dos veces suma
+    intentos, no renglones. `datos` guarda lo necesario para reproducir la
+    llamada (ids de cajas, evento inicial, notificar, status, hora)."""
+
+    ACCION_FULFILLMENT = "fulfillment"
+    ACCION_TRACKING = "tracking"
+    ACCION_EVENTO = "evento"
+    ACCIONES = [
+        (ACCION_FULFILLMENT, "Crear fulfillment"),
+        (ACCION_TRACKING, "Actualizar rastreo (reposición)"),
+        (ACCION_EVENTO, "Evento de avance"),
+    ]
+
+    tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name="escrituras_pendientes")
+    pedido = models.ForeignKey("pedidos.Pedido", on_delete=models.CASCADE, related_name="escrituras_shopify_pendientes")
+    clave = models.CharField(max_length=160, unique=True)
+    accion = models.CharField(max_length=20, choices=ACCIONES)
+    datos = models.JSONField(default=dict, blank=True)
+    intentos = models.PositiveIntegerField(default=1)
+    ultimo_error = models.TextField(blank=True)
+    creado = models.DateTimeField(auto_now_add=True)
+    ultimo_intento = models.DateTimeField(auto_now=True)
+    vence = models.DateTimeField(db_index=True, help_text="Después de esta hora el cron ya no la reintenta; Mesa puede reactivarla.")
+
+    class Meta:
+        ordering = ["creado"]
+        verbose_name = "escritura a Shopify pendiente"
+        verbose_name_plural = "escrituras a Shopify pendientes"
+
+    def __str__(self):
+        return f"{self.get_accion_display()} · {self.pedido.folio} · {self.intentos} intento(s)"
+
+    @property
+    def vencida(self):
+        """True cuando el cron ya no la reintenta (pasó `vence`)."""
+        from django.utils import timezone
+
+        return self.vence <= timezone.now()

@@ -5,6 +5,9 @@
 - push_inventario()             → drena la cola: on_hand a TODAS las tiendas del cliente.
 - reconciliar_pedidos(tienda)   → polling de respaldo con checkpoint.
 - escribir_link_pedido(pedido)  → metafield torre.pedido_url en la orden: link al pedido en el portal.
+- marcar_fulfillment / registrar_evento_fulfillment → write-back de fulfillment y avance;
+  lo que Shopify rechaza se encola (EscrituraShopifyPendiente) y
+  reintentar_escrituras_shopify() lo reintenta desde el cron sync_shopify.
 
 Todo job puede correr dos veces sin duplicar efecto (BLUEPRINT §2.2.7).
 """
@@ -14,10 +17,11 @@ from django.conf import settings
 from django.db import IntegrityError
 from django.db.models import Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from apps.core.services import registrar_evento
 
-from .models import PushInventarioPendiente, SyncLog, Tienda, WebhookEvento
+from .models import EscrituraShopifyPendiente, PushInventarioPendiente, SyncLog, Tienda, WebhookEvento
 from .shopify import ErrorItemNoStockeado, ShopifyClient, ShopifyError
 
 TOPICS_PEDIDOS = {"orders/create", "orders/updated", "orders/cancelled"}
@@ -424,7 +428,8 @@ def reembolsar_en_shopify(pedido, lineas=(), reembolsar_envio=False, monto=None,
 
 def _caja_es_reposicion(caja):
     """True si TODO el contenido de la caja son líneas de reposición: la
-    orden ya está fulfilled en Shopify y no hay line items que fulfillear."""
+    orden ya está fulfilled en Shopify y no hay line items que fulfillear;
+    en su lugar, el fulfillment sustituido cambia de guía (_tracking_reposicion)."""
     lineas = list(caja.lineas.select_related("linea_pedido"))
     return bool(lineas) and all(pl.linea_pedido.reposicion_de_id for pl in lineas)
 
@@ -455,6 +460,32 @@ def _log_push(tienda, ok, detalle):
         tienda=tienda, direccion=SyncLog.DIRECCION_PUSH,
         resultado=SyncLog.RESULTADO_OK if ok else SyncLog.RESULTADO_ERROR, detalle=detalle,
     )
+
+
+def _encolar_escritura(tienda, pedido, accion, clave, datos, error):
+    """Una escritura de fulfillment que Shopify rechazó se encola para que el
+    cron la reintente (reintentar_escrituras_shopify). Idempotente por
+    `clave`: la misma escritura fallando otra vez suma un intento y refresca
+    el error, sin renglón nuevo. Best-effort: si la cola misma falla, queda
+    solo el SyncLog."""
+    ahora = timezone.now()
+    horas = settings.TORRE.get("SHOPIFY_REINTENTOS_HORAS", 24)
+    try:
+        escritura, creada = EscrituraShopifyPendiente.objects.get_or_create(
+            clave=clave[:160],
+            defaults={
+                "tienda": tienda, "pedido": pedido, "accion": accion, "datos": datos,
+                "ultimo_error": str(error)[:1000], "vence": ahora + timedelta(hours=horas),
+            },
+        )
+        if not creada:
+            escritura.intentos += 1
+            escritura.ultimo_error = str(error)[:1000]
+            escritura.datos = datos
+            escritura.save(update_fields=["intentos", "ultimo_error", "datos", "ultimo_intento"])
+        return escritura
+    except Exception:  # noqa: BLE001, S110 — la cola jamás rompe al caller
+        return None
 
 
 def _lineas_fulfillment_por_caja(cajas, fos):
@@ -512,16 +543,23 @@ def _id_de_fulfillment(respuesta):
     return fid if isinstance(fid, str) else ""
 
 
-def _evento_inicial(api, tienda, pedido, fid, status, donde):
-    """Primer evento de avance tras crear el fulfillment (best-effort, con SyncLog)."""
+def _evento_inicial(api, tienda, pedido, fid, status, donde, ts=None):
+    """Primer evento de avance tras crear el fulfillment (best-effort, con
+    SyncLog; si Shopify falla, a la cola de reintentos con el id ya conocido)."""
     if not fid or not status:
-        return
+        return True
+    ts = ts or timezone.now()
     try:
-        api.crear_evento_fulfillment(fid, status, happened_at=timezone.now())
+        api.crear_evento_fulfillment(fid, status, happened_at=ts)
     except Exception as exc:  # noqa: BLE001 — best-effort: el fulfillment ya quedó
         _log_push(tienda, False, f"evento {status} de {pedido.folio} ({donde}): {exc}")
-    else:
-        _log_push(tienda, True, f"evento {status} de {pedido.folio} ({donde})")
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_EVENTO, f"evento:fid:{fid}:{status}",
+            {"fid": fid, "status": status, "ts": ts.isoformat(), "donde": donde}, exc,
+        )
+        return False
+    _log_push(tienda, True, f"evento {status} de {pedido.folio} ({donde})")
+    return True
 
 
 def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", notificar=None):
@@ -559,13 +597,16 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", n
     if tienda is None or not pedido.shopify_order_id:
         return False  # pedido manual: no existe en Shopify
 
+    con_cajas = cajas is not None
     cajas = [c for c in (cajas or []) if not c.shopify_fulfillment_id]
     de_reposicion = [c for c in cajas if _caja_es_reposicion(c)]
-    if de_reposicion:
-        _log_push(tienda, True, f"reposición {pedido.folio}: caja(s) {[c.numero for c in de_reposicion]} sin fulfillment en Shopify")
-        cajas = [c for c in cajas if c not in de_reposicion]
-        if not cajas:
-            return False
+    cajas = [c for c in cajas if c not in de_reposicion]
+    if con_cajas and not cajas and not de_reposicion:
+        # Todas las cajas de este manifiesto ya tienen fulfillment (el carrier
+        # las recogió antes, o es un reintento): nada que escribir, y JAMÁS
+        # caer al fulfillment del pedido entero con cajas aún en bodega.
+        _log_push(tienda, True, f"fulfillment: {pedido.folio} caja(s) ya con fulfillment; nada que escribir")
+        return True
     numeros, carrier = [], ""
     for guia in pedido.guias.all().order_by("pk"):  # orden estable: caja 1 primero
         if guia.carrier == "local":
@@ -595,6 +636,10 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", n
     except ImportError:
         url_rastreo = ""
 
+    if de_reposicion:
+        ok_reposicion = _tracking_reposicion(pedido, tienda, de_reposicion, notificar, evento_inicial)
+        if not cajas:
+            return ok_reposicion
     if cajas:
         return _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, notificar)
     if pedido.shopify_fulfillment_id:
@@ -639,6 +684,10 @@ def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", n
             tienda=tienda, direccion=SyncLog.DIRECCION_PUSH, resultado=SyncLog.RESULTADO_ERROR,
             detalle=f"fulfillment {pedido.folio}: {exc}",
         )
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_FULFILLMENT, f"fulfillment:{pedido.pk}:pedido",
+            {"cajas": [], "evento_inicial": evento_inicial, "notificar": notificar}, exc,
+        )
         return False
 
     fid = _id_de_fulfillment(respuesta)
@@ -666,6 +715,7 @@ def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, no
     """Un fulfillment por caja que sale (ver marcar_fulfillment)."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
+    notificar_pendiente = notificar  # lo que hereda el reintento si Shopify falla a medias
     try:
         api = ShopifyClient(tienda)
         nuestra = api.location_gid if (tienda.location_id or "").strip() else ""
@@ -713,6 +763,7 @@ def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, no
                 guia.carrier if guia is not None else "", notificar=not ya_notificado, lineas=lineas,
             )
             ya_notificado = True
+            notificar_pendiente = False
             fid = _id_de_fulfillment(respuesta)
             if fid:
                 Paquete.objects.filter(pk=caja.pk).update(shopify_fulfillment_id=fid)
@@ -727,8 +778,92 @@ def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, no
             _evento_inicial(api, tienda, pedido, fid, evento_inicial, f"caja {caja.numero}")
     except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no bloquea nada
         _log_push(tienda, False, f"fulfillment por caja {pedido.folio}: {exc}")
+        faltan = sorted(c.pk for c in cajas if not c.shopify_fulfillment_id)
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_FULFILLMENT,
+            f"fulfillment:{pedido.pk}:{','.join(str(pk) for pk in faltan)}",
+            {"cajas": faltan, "evento_inicial": evento_inicial, "notificar": notificar_pendiente}, exc,
+        )
         return False
     return True
+
+
+def _fulfillments_sustituidos(pedido, caja):
+    """gids de los fulfillments de las cajas cuyo contenido repone `caja`
+    (PaqueteLinea → LineaPedido.reposicion_de → caja original →
+    Paquete.shopify_fulfillment_id), en orden de caja; sin caja original con
+    id, el fulfillment del pedido entero; [] si Torre no guardó ninguno."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    originales = [
+        pl.linea_pedido.reposicion_de_id
+        for pl in caja.lineas.select_related("linea_pedido") if pl.linea_pedido.reposicion_de_id
+    ]
+    fids = []
+    for fid in (
+        Paquete.objects.filter(pedido=pedido, lineas__linea_pedido_id__in=originales)
+        .exclude(shopify_fulfillment_id="").order_by("numero")
+        .values_list("shopify_fulfillment_id", flat=True)
+    ):
+        if fid not in fids:
+            fids.append(fid)
+    if not fids and pedido.shopify_fulfillment_id:
+        fids.append(pedido.shopify_fulfillment_id)
+    return fids
+
+
+def _tracking_reposicion(pedido, tienda, cajas, notificar, evento_inicial):
+    """Reposición (Chema 2026-09-30): la orden ya está fulfilled, así que la
+    caja de reposición no crea fulfillment; el fulfillment de la caja
+    sustituida cambia de guía a la nueva (fulfillmentTrackingInfoUpdate) y el
+    comprador recibe el correo de envío actualizado de Shopify (`notificar`;
+    None = sí). La caja de reposición guarda ese id para que sus eventos de
+    avance cuelguen de ahí; con varias cajas originales se actualizan todas y
+    los eventos van a la primera. Entrega propia: paquetería "WOP" y la página
+    pública de rastreo. Sin fulfillment original en Torre queda en SyncLog
+    (corre shopify_eventos_backfill). Shopify caído → cola de reintentos."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.rastreo.services import url_publica  # lazy por contrato
+
+    avisar = True if notificar is None else bool(notificar)
+    todo_ok = True
+    for caja in cajas:
+        guia = caja.guia_activa
+        if guia is None:
+            _log_push(tienda, False, f"reposición: caja {caja.numero} de {pedido.folio} sin guía activa; sin rastreo que actualizar")
+            todo_ok = False
+            continue
+        fids = _fulfillments_sustituidos(pedido, caja)
+        if not fids:
+            _log_push(tienda, False, f"reposición: caja {caja.numero} de {pedido.folio} sin fulfillment original en Torre (corre shopify_eventos_backfill)")
+            todo_ok = False
+            continue
+        carrier, numero = ("WOP", "") if guia.carrier == "local" else (guia.carrier, guia.numero)
+        try:
+            api = ShopifyClient(tienda)
+            url = url_publica(pedido)
+            for fid in fids:
+                api.actualizar_tracking_fulfillment(fid, carrier, numero, url, notificar=avisar)
+                avisar = False  # un solo correo por manifiesto
+        except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no bloquea el manifiesto
+            _log_push(tienda, False, f"reposición: caja {caja.numero} de {pedido.folio}: {exc}")
+            _encolar_escritura(
+                tienda, pedido, EscrituraShopifyPendiente.ACCION_TRACKING, f"tracking:{pedido.pk}:{caja.pk}",
+                {"caja": caja.pk, "notificar": avisar, "evento_inicial": evento_inicial}, exc,
+            )
+            todo_ok = False
+            continue
+        Paquete.objects.filter(pk=caja.pk).update(shopify_fulfillment_id=fids[0])
+        caja.shopify_fulfillment_id = fids[0]
+        _log_push(tienda, True, f"reposición: caja {caja.numero} de {pedido.folio} viaja en el fulfillment sustituido ({', '.join(fids)}) con la guía {numero or 'de entrega propia'}")
+        registrar_evento(
+            "paquete", caja.pk, "tracking_reposicion_shopify", cliente=pedido.cliente,
+            delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero,
+                   "guia": numero, "carrier": carrier, "fulfillments": fids},
+            motivo=f"Rastreo del fulfillment sustituido actualizado a la guía de la caja {caja.numero} (reposición).",
+        )
+        _evento_inicial(api, tienda, pedido, fids[0], evento_inicial, f"caja {caja.numero}, reposición")
+    return todo_ok
 
 
 def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=None):
@@ -750,8 +885,6 @@ def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=N
     status = EVENTO_FULFILLMENT_POR_ESTADO.get(estado_guia or "")
     if not status:
         return False
-    if guia is not None and guia.paquete_id and _caja_es_reposicion(guia.paquete):
-        return False  # la reposición no tiene fulfillment: nada que actualizar allá
     fid = guia.paquete.shopify_fulfillment_id if guia is not None and guia.paquete_id else ""
     donde = f"caja {guia.paquete.numero}" if fid else "pedido entero"
     if not fid:
@@ -761,7 +894,17 @@ def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=N
             if any(g.estado != "ENTREGADO" for g in activas):
                 _log_push(tienda, True, f"evento DELIVERED de {pedido.folio} espera a las demás guías")
                 return False
+    clave = f"evento:guia:{guia.pk}:{status}" if guia is not None else f"evento:pedido:{pedido.pk}:{status}"
+    datos = {"guia": guia.pk if guia is not None else None, "estado_guia": estado_guia,
+             "descripcion": descripcion, "ts": ts.isoformat() if ts else None}
     if not fid:
+        if EscrituraShopifyPendiente.objects.filter(
+            pedido=pedido, accion__in=(EscrituraShopifyPendiente.ACCION_FULFILLMENT, EscrituraShopifyPendiente.ACCION_TRACKING),
+        ).exists():
+            # El fulfillment mismo está en la cola: el evento espera detrás de él.
+            _log_push(tienda, True, f"evento {status} de {pedido.folio} espera al fulfillment pendiente (en cola)")
+            _encolar_escritura(tienda, pedido, EscrituraShopifyPendiente.ACCION_EVENTO, clave, datos, "espera al fulfillment pendiente")
+            return False
         _log_push(tienda, False, f"evento {status} de {pedido.folio}: sin fulfillment id en Torre (corre shopify_eventos_backfill)")
         return False
     try:
@@ -769,6 +912,7 @@ def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=N
         api.crear_evento_fulfillment(fid, status, happened_at=ts, message=descripcion)
     except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no detiene el rastreo
         _log_push(tienda, False, f"evento {status} de {pedido.folio} ({donde}): {exc}")
+        _encolar_escritura(tienda, pedido, EscrituraShopifyPendiente.ACCION_EVENTO, clave, datos, exc)
         return False
     _log_push(tienda, True, f"evento {status} de {pedido.folio} ({donde})")
     registrar_evento(
@@ -778,6 +922,68 @@ def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=N
         motivo=(descripcion or f"{status} en Shopify")[:300],
     )
     return True
+
+
+def reintentar_escrituras_shopify():
+    """Drena la cola de escrituras de fulfillment que Shopify rechazó
+    (EscrituraShopifyPendiente), en orden de llegada: cada una se reproduce
+    con la MISMA función que la intentó en línea (idempotentes: caja con id
+    guardado no se vuelve a fulfillear, el rastreo se puede volver a fijar, un
+    evento repetido es inofensivo) y se borra cuando entra. Las vencidas no se
+    tocan: Mesa → Sync las reactiva o descarta. Lo llama sync_shopify (cron
+    cada 15 min). Regresa el resumen."""
+    resumen = {"pendientes": 0, "ok": 0, "error": 0, "vencidas": 0}
+    ahora = timezone.now()
+    for escritura in list(EscrituraShopifyPendiente.objects.select_related("tienda", "pedido").order_by("creado")):
+        if escritura.vence <= ahora:
+            resumen["vencidas"] += 1
+            continue
+        resumen["pendientes"] += 1
+        intentos = escritura.intentos
+        try:
+            ok = _reintentar_escritura(escritura)
+        except Exception as exc:  # noqa: BLE001 — un renglón roto no detiene la cola
+            _log_push(escritura.tienda, False, f"reintento {escritura.accion} de {escritura.pedido.folio}: {exc}")
+            ok = False
+        if ok:
+            escritura.delete()
+            resumen["ok"] += 1
+            continue
+        resumen["error"] += 1
+        escritura.refresh_from_db()
+        if escritura.intentos == intentos:  # la función no volvió a encolar: contar el intento aquí
+            escritura.intentos += 1
+            escritura.ultimo_error = escritura.ultimo_error or "sin efecto (ver el log de sync)"
+            escritura.save(update_fields=["intentos", "ultimo_error", "ultimo_intento"])
+    return resumen
+
+
+def _reintentar_escritura(escritura):
+    """Reproduce UNA escritura pendiente; True si entró (o ya no aplica)."""
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+
+    datos = escritura.datos or {}
+    pedido = escritura.pedido
+    if escritura.accion == EscrituraShopifyPendiente.ACCION_FULFILLMENT:
+        cajas = list(Paquete.objects.filter(pedido=pedido, pk__in=datos.get("cajas") or []).order_by("numero"))
+        return marcar_fulfillment(
+            pedido, cajas=cajas or None, evento_inicial=datos.get("evento_inicial"), notificar=datos.get("notificar"),
+        )
+    if escritura.accion == EscrituraShopifyPendiente.ACCION_TRACKING:
+        caja = Paquete.objects.filter(pedido=pedido, pk=datos.get("caja")).first()
+        if caja is None or caja.shopify_fulfillment_id:
+            return True  # ya no existe o ya quedó
+        return _tracking_reposicion(pedido, escritura.tienda, [caja], datos.get("notificar"), datos.get("evento_inicial"))
+    ts = parse_datetime(datos["ts"]) if datos.get("ts") else None
+    if datos.get("fid"):
+        return _evento_inicial(
+            ShopifyClient(escritura.tienda), escritura.tienda, pedido, datos["fid"], datos["status"],
+            datos.get("donde", ""), ts=ts,
+        )
+    guia = Guia.objects.filter(pedido=pedido, pk=datos.get("guia")).first() if datos.get("guia") else None
+    if datos.get("guia") and guia is None:
+        return True  # la guía ya no existe: nada que reportar
+    return registrar_evento_fulfillment(pedido, guia, datos.get("estado_guia"), descripcion=datos.get("descripcion", ""), ts=ts)
 
 
 # ── Reconciliación (polling de respaldo) ─────────────────────────────────────

@@ -285,6 +285,10 @@ TORRE = {
     # WhatsApp al número del cliente (branding.whatsapp_soporte); el formulario
     # de reporte queda apagado por ahora (True lo devuelve).
     "RASTREO_REPORTE_FORMULARIO": False,
+    # Escrituras de fulfillment a Shopify que fallaron (2026-09-30): el cron
+    # sync_shopify las reintenta durante estas horas; después quedan vencidas
+    # y visibles en Mesa → Sync, donde se reactivan o se descartan.
+    "SHOPIFY_REINTENTOS_HORAS": 24,
     "RASTREO_CARRIER_URL": {
         "estafeta": "https://rastreo3.estafeta.com/RastreoWebInternet/consultaEnvio.do?dispatch=doRastreoInternet&tipoGuia=ESTAFETA&guias={numero}",
         "paquetexpress": "https://www.paquetexpress.com.mx/rastreo/{numero}",

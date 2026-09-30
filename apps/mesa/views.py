@@ -1853,9 +1853,30 @@ def _recepciones_decidir_reingreso(request):
 
 @rol_requerido("mesa")
 def sync(request):
+    """Salud de sync: frescura por tienda, cola de push de inventario, cola de
+    escrituras de fulfillment a Shopify (reintentar / descartar las vencidas)
+    y webhooks recientes."""
     from apps.integraciones.models import (
-        PushInventarioPendiente, SyncLog, Tienda, WebhookEvento,
+        EscrituraShopifyPendiente, PushInventarioPendiente, SyncLog, Tienda, WebhookEvento,
     )
+
+    if request.method == "POST" and request.POST.get("accion") in ("reintentar", "descartar"):
+        escritura = get_object_or_404(EscrituraShopifyPendiente, pk=request.POST.get("escritura"))
+        horas = settings.TORRE.get("SHOPIFY_REINTENTOS_HORAS", 24)
+        if request.POST["accion"] == "reintentar":
+            escritura.vence = timezone.now() + timedelta(hours=horas)
+            escritura.save(update_fields=["vence"])
+            messages.success(request, f"{escritura.get_accion_display()} de {escritura.pedido.folio}: el cron la vuelve a intentar (máximo {horas} h).")
+        else:
+            registrar_evento(
+                "pedido", escritura.pedido_id, "escritura_shopify_descartada", actor=request.user,
+                cliente=escritura.pedido.cliente,
+                delta={"accion": escritura.accion, "datos": escritura.datos, "intentos": escritura.intentos},
+                motivo=(escritura.ultimo_error or "Descartada desde Mesa")[:300],
+            )
+            escritura.delete()
+            messages.warning(request, "Escritura descartada: Shopify no se actualizará; hazlo a mano en el admin si hace falta.")
+        return redirect("mesa:sync")
 
     # El botón "correr push" se quitó (2026-08-11): la cola la drena el cron
     # cada 5 min y el drenado corre síncrono en el request — un click ansioso
@@ -1887,12 +1908,19 @@ def sync(request):
     )
     for pendiente in cola:
         pendiente.frescura = _frescura(pendiente.creado, ahora)
+    escrituras = list(
+        EscrituraShopifyPendiente.objects.select_related("pedido", "tienda").order_by("creado")
+    )
+    for escritura in escrituras:
+        escritura.frescura = _frescura(escritura.creado, ahora)
+        escritura.frescura_intento = _frescura(escritura.ultimo_intento, ahora)
 
     return render(request, "mesa/sync.html", {
         "seccion": "sync",
         "tiendas": tiendas,
         "webhooks": webhooks,
         "cola": cola,
+        "escrituras": escrituras,
     })
 
 
