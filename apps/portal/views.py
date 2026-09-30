@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.catalogo.models import SKU
-from apps.core.decorators import portal_requerido
+from apps.core.decorators import portal_requerido, redirigir_rol
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 from apps.incidencias.models import Incidencia, MensajeIncidencia
@@ -427,6 +427,7 @@ def linea_tiempo(request):
     })
 
 
+@redirigir_rol(mesa="mesa:pedido_detalle")
 @portal_requerido
 def pedido_detalle(request, pk):
     pedido = get_object_or_404(
@@ -544,6 +545,7 @@ def incidencias(request):
     })
 
 
+@redirigir_rol(mesa="mesa:incidencia_detalle")
 @portal_requerido
 def incidencia_detalle(request, pk):
     incidencia = get_object_or_404(

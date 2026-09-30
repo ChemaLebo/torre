@@ -22,7 +22,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.core.decorators import rol_requerido
+from apps.core.decorators import redirigir_rol, rol_requerido
 from apps.core.models import Cliente, EventoAuditoria, EvidenciaFoto, PerfilUsuario
 from apps.core.services import email_real, enviar_acceso, registrar_evento
 from apps.mesa.forms import (
@@ -594,6 +594,7 @@ def _gestionar_incidencia(request, incidencia):
     raise ValueError("Acción desconocida. Recarga la página e intenta de nuevo.")
 
 
+@redirigir_rol(portal="portal:incidencia_detalle")
 @rol_requerido("mesa")
 def incidencia_detalle(request, pk):
     from apps.envios.models import Guia  # lazy: modelo de otra app
@@ -922,6 +923,7 @@ def pedidos(request):
     })
 
 
+@redirigir_rol(portal="portal:pedido_detalle")
 @rol_requerido("mesa")
 def pedido_detalle(request, pk):
     """Detalle de UN pedido en Mesa (Chema 2026-09-30): encabezado, cajas con
