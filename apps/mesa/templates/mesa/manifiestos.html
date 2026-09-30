@@ -24,7 +24,7 @@
 
 <div class="tabla-wrap mt">
   <table>
-    <thead><tr><th>Folio</th><th>Fecha y hora</th><th>Carrier</th><th>Corral</th><th>Cajas</th><th>Pedidos</th><th>Registró</th><th>Chofer</th><th></th></tr></thead>
+    <thead><tr><th>Folio</th><th>Fecha y hora</th><th>Carrier</th><th>Corral</th><th>Cajas</th><th>Pedidos</th><th>Registró</th><th>Chofer</th><th>Firma</th><th></th></tr></thead>
     <tbody>
       {% for m in manifiestos %}
       <tr>
@@ -36,10 +36,11 @@
         <td class="mono small">{% for f in m.folios %}{{ f }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
         <td>{{ m.operador.username|default:"—" }}</td>
         <td>{{ m.chofer|default:"—" }}</td>
+        <td>{% if m.firma %}<a class="pill ok" href="{% url 'core:evidencia' m.firma.pk %}" target="_blank" rel="noopener" title="Firmado en pantalla {{ m.firma.ts|date:'d/M/Y H:i' }}">firmada</a>{% else %}<span class="small muted">en papel</span>{% endif %}</td>
         <td><a class="btn chico" href="{% url 'piso:manifiesto' m.pk %}" target="_blank" rel="noopener">Ver e imprimir</a></td>
       </tr>
       {% empty %}
-      <tr><td colspan="9" class="muted">Sin manifiestos{% if filtro.fecha or filtro.carrier %} con ese filtro{% endif %}. Nacen al confirmar una salida en Piso → Salida → Registrar salida.</td></tr>
+      <tr><td colspan="10" class="muted">Sin manifiestos{% if filtro.fecha or filtro.carrier %} con ese filtro{% endif %}. Nacen al confirmar una salida en Piso → Salida → Registrar salida.</td></tr>
       {% endfor %}
     </tbody>
   </table>

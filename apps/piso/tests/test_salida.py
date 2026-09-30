@@ -20,7 +20,7 @@ from apps.catalogo.models import SKU
 from apps.inventario.models import Movimiento, Saldo
 from apps.pedidos.models import LineaPedido, Pedido
 
-from .base import PisoTestCase
+from .base import FIRMA_PNG, PisoTestCase
 
 TORRE_CON_FLOTA = {**settings.TORRE, "FLOTA_PROPIA": True}
 
@@ -101,7 +101,7 @@ class SalidaPisoTests(PisoTestCase):
 
         corral = "SAL-OTRO"  # puntopost (el más barato del lane) vive aquí
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": corral, "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": corral, "carrier": "puntopost",
             "pedido_id": [p.pk for p in pedidos],
         }, follow=True)
         self.assertEqual(respuesta.status_code, 200)
@@ -141,7 +141,7 @@ class SalidaPisoTests(PisoTestCase):
         self.assertContains(pantalla, con_cierre.folio)
         self.assertNotContains(pantalla, sin_cierre.folio)
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
             "pedido_id": [con_cierre.pk, sin_cierre.pk],
         }, follow=True)
         self.assertContains(
@@ -157,20 +157,20 @@ class SalidaPisoTests(PisoTestCase):
     def test_manifiesto_de_corral_vacio_avisa(self):
         corral = "SAL-OTRO"  # puntopost (el más barato del lane) vive aquí
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": corral, "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": corral, "carrier": "puntopost",
             "pedido_id": ["99999"],
         }, follow=True)
         self.assertContains(respuesta, "Nada de puntopost listo")
 
     def test_manifiesto_corral_desconocido_avisa(self):
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-FALSO",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-FALSO",
         }, follow=True)
         self.assertContains(respuesta, "Corral desconocido")
 
     def test_manifiesto_sin_seleccion_avisa(self):
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
         }, follow=True)
         self.assertContains(respuesta, "No palomeaste")
 
@@ -183,7 +183,7 @@ class SalidaPisoTests(PisoTestCase):
             self.evidencia_cierre(pedido)
 
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
             "pedido_id": [se_va.pk],  # solo uno palomeado
         }, follow=True)
         self.assertEqual(respuesta.status_code, 200)
@@ -214,7 +214,7 @@ class SalidaPisoTests(PisoTestCase):
         self.assertContains(pantalla, "Registrar salida")
 
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
             "pedido_id": [de_puntopost.pk, de_estafeta.pk],  # el ajeno viene colado
         }, follow=True)
         self.assertEqual(respuesta.status_code, 200)
@@ -410,7 +410,7 @@ class ManifiestoPorCajaTests(PisoTestCase):
         pedido, c1, c2 = self._pedido_dos_cajas()
         # Camión lleno: el chofer se lleva solo la caja 1.
         respuesta = self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
             "paquete_id": [c1.pk],
         }, follow=True)
         self.assertContains(respuesta, "se queda en el corral")
@@ -426,7 +426,7 @@ class ManifiestoPorCajaTests(PisoTestCase):
         self.assertNotContains(respuesta, f'name="paquete_id" value="{c1.pk}"')
 
         self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
             "paquete_id": [c2.pk],
         }, follow=True)
         pedido.refresh_from_db()
@@ -443,7 +443,7 @@ class ManifiestoPorCajaTests(PisoTestCase):
     def test_pedido_id_de_un_pedido_por_caja_sube_todas_sus_cajas(self):
         pedido, c1, c2 = self._pedido_dos_cajas()
         self.client.post(self.url, {
-            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
             "pedido_id": [pedido.pk],
         }, follow=True)
         pedido.refresh_from_db()

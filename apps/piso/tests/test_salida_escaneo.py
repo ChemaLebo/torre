@@ -15,7 +15,7 @@ from apps.envios.models import Guia, Manifiesto, Paquete, PaqueteLinea
 from apps.pedidos.models import Pedido
 from apps.rastreo.services import obtener_o_crear_token_etiqueta
 
-from .base import PisoTestCase
+from .base import FIRMA_PNG, PisoTestCase
 
 # Pool pinneado: estas pruebas asumen que puntopost gana el lane (CP 44100).
 TORRE_POOL_LEGADO = {
@@ -119,7 +119,7 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertContains(resumen, "caja 2")
         with self.captureOnCommitCallbacks(execute=True):
             r = self.client.post(reverse("piso:salida"), {
-                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+                "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
                 "paquete_id": [c1.pk], "desde_escaner": "1", "chofer": "Juan Pérez",
             })
         hoja = Manifiesto.objects.get()
@@ -176,7 +176,7 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertNotContains(resumen, f'name="ya_salio_paquete_id" value="{c2.pk}" checked')
         with self.captureOnCommitCallbacks(execute=True):
             r = self.client.post(reverse("piso:salida"), {
-                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+                "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
                 "paquete_id": [c1.pk], "ya_salio_paquete_id": [c2.pk], "desde_escaner": "1",
             })
         hoja = Manifiesto.objects.get()
@@ -209,7 +209,7 @@ class RegistrarSalidaTests(PisoTestCase):
         self._no_esta(("caja", c2.pk))
         with self.captureOnCommitCallbacks(execute=True):
             self.client.post(reverse("piso:salida"), {
-                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+                "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
                 "paquete_id": [c1.pk], "desde_escaner": "1",
             })
         pedido.refresh_from_db()
@@ -244,7 +244,7 @@ class RegistrarSalidaTests(PisoTestCase):
         # Confirmar el pedido entero en la salida de puntopost solo saca la caja 2.
         with self.captureOnCommitCallbacks(execute=True):
             self.client.post(reverse("piso:salida"), {
-                "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost", "pedido_id": [pedido.pk],
+                "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost", "pedido_id": [pedido.pk],
             })
         c1.refresh_from_db()
         c2.refresh_from_db()
@@ -274,3 +274,52 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertRedirects(r, reverse("piso:salida"), fetch_redirect_response=False)
         self.assertContains(self.client.get(self.url), 'escaneadas <b class="mono">0</b>')
         self.assertEqual(Manifiesto.objects.count(), 0)
+
+
+@override_settings(TORRE=TORRE_POOL_LEGADO)
+class FirmaDelChoferTests(RegistrarSalidaTests):
+    """Firma del chofer (Chema 2026-09-30): obligatoria al confirmar la salida,
+    guardada como evidencia del manifiesto y visible en la hoja y en Mesa."""
+
+    def test_sin_firma_no_hay_salida(self):
+        pedido, c1, _ = self._pedido_dos_cajas()
+        self._escanear(obtener_o_crear_token_etiqueta(c1.guia_activa))
+        r = self.client.post(reverse("piso:salida"), {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "paquete_id": [c1.pk], "desde_escaner": "1",
+        }, follow=True)
+        self.assertContains(r, "Falta la firma del chofer")
+        self.assertFalse(Manifiesto.objects.exists())
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)
+        # Un data URL que no es PNG tampoco pasa.
+        r = self.client.post(reverse("piso:salida"), {
+            "accion": "manifiesto", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "paquete_id": [c1.pk], "desde_escaner": "1", "firma_png": "data:image/png;base64,aG9sYQ==",
+        }, follow=True)
+        self.assertContains(r, "Falta la firma del chofer")
+        self.assertFalse(Manifiesto.objects.exists())
+
+    def test_la_firma_queda_como_evidencia_del_manifiesto(self):
+        from apps.core.models import EvidenciaFoto
+
+        pedido, c1, _ = self._pedido_dos_cajas()
+        self._escanear(obtener_o_crear_token_etiqueta(c1.guia_activa))
+        resumen = self.client.get(reverse("piso:salida_resumen") + PARAMS)
+        self.assertContains(resumen, 'id="firma"')
+        self.assertContains(resumen, "Firma del chofer")
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse("piso:salida"), {
+                "accion": "manifiesto", "firma_png": FIRMA_PNG, "corral": "SAL-OTRO", "carrier": "puntopost",
+                "paquete_id": [c1.pk], "desde_escaner": "1", "chofer": "Juan Pérez",
+            })
+        hoja = Manifiesto.objects.get()
+        firma = EvidenciaFoto.objects.get(entidad="manifiesto", entidad_id=hoja.folio, tipo="firma")
+        self.assertEqual(firma.tomada_por, "Juan Pérez")
+        self.assertEqual(len(firma.hash_sha256), 64)
+        self.assertTrue(firma.archivo.name.endswith(".png"))
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="manifiesto", entidad_id=hoja.folio, accion="firma_chofer").exists())
+        hoja_html = self.client.get(reverse("piso:manifiesto", args=[hoja.pk])).content.decode()
+        self.assertIn(reverse("core:evidencia", args=[firma.pk]), hoja_html)
+        self.assertIn("Firmado en pantalla", hoja_html)
+        self.assertEqual(self.client.get(reverse("core:evidencia", args=[firma.pk])).status_code, 200)

@@ -1133,10 +1133,16 @@ def manifiestos(request):
         except ValueError:
             fecha = ""
     filas = list(qs[:200])
+    firmas = {
+        e.entidad_id: e for e in EvidenciaFoto.objects.filter(
+            entidad="manifiesto", tipo="firma", entidad_id__in=[h.folio for h in filas],
+        ).order_by("ts")
+    }
     for hoja in filas:
         lineas = list(hoja.lineas.all())
         hoja.cajas = len(lineas)
         hoja.folios = sorted({l.pedido.folio for l in lineas})
+        hoja.firma = firmas.get(hoja.folio)
     return render(request, "mesa/manifiestos.html", {
         "seccion": "manifiestos",
         "manifiestos": filas,

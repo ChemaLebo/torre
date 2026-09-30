@@ -21,7 +21,7 @@
 {% for corral in corrales %}
 {% if corral.codigo != corral_local or flota_propia or corral.listos %}
 <div class="card mt">
-  <div class="titulo">
+  <div class="titulo salida-corral">
     <h2 class="mono">{{ corral.codigo }}</h2>
     <span class="pill {% if corral.listos %}accent{% endif %}">{{ corral.nombre }}</span>
     <span class="small muted">{{ corral.listos|length }} listo{{ corral.listos|length|pluralize }} para el chofer</span>
@@ -31,7 +31,7 @@
   {% if corral.listos %}
   {% for grupo in corral.carriers %}
   <hr class="sep">
-  <div class="titulo">
+  <div class="titulo salida-carrier">
     <h3 class="mono">{{ grupo.carrier|upper }}</h3>
     <span class="pill accent">{{ grupo.listos|length }} pedido{{ grupo.listos|length|pluralize }}</span>
     {# La salida se registra escaneando la etiqueta interna de cada caja (Chema 2026-09-22): ya no hay palomitas aquí. #}
@@ -44,67 +44,58 @@
       <button class="btn" type="submit">Salen todos</button>
     </form>
   </div>
-  <div class="tabla-wrap">
-    <table>
-      <thead>
-        <tr><th>Pedido</th><th>Comprador · destino</th><th>Cajas</th></tr>
-      </thead>
-      <tbody>
-        {% for p in grupo.listos %}
-        <tr>
-          <td>
-            <span class="mono">{{ p.folio }}</span>
-            <div class="small">{{ p.cliente.nombre }}</div>
-            {% if p.estado == "PARCIALMENTE_DESPACHADO" %}<span class="pill warn">salida parcial</span>{% endif %}
-            {% if p.otros_carriers %}<span class="pill warn" title="Sus otras cajas viajan con otro carrier: están en su propia tabla">también con {{ p.otros_carriers|join:", " }}</span>{% endif %}
-          </td>
-          <td>
-            {{ p.comprador_nombre|default:"—" }}
-            <div class="small muted">{{ p.destino }}{% if p.es_local %} · <span class="pill warn">local</span>{% endif %}</div>
-          </td>
-          <td class="small">
-            {% if p.por_caja %}
-            {{ p.cajas_salida|length }} por salir de {{ p.cajas_total }}
-            {% for c in p.cajas_salida %}<div>caja {{ c.numero }} · <span class="mono">{{ c.guia.numero|default:"—" }}</span></div>{% endfor %}
-            {% if p.cajas_fuera %}<div class="muted">ya salió: {% for c in p.cajas_fuera %}caja {{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}
-            {% else %}
-            1 caja · <span class="mono">{{ p.guia.numero|default:"—" }}</span>
+  {# Lista en cuadrícula (2026-09-30): tres columnas en pantalla grande, una sola en el celular del piso; sin tabla que desborde. #}
+  <div class="salida-lista">
+    <div class="salida-item salida-cabecera"><span>Pedido</span><span>Comprador · destino</span><span>Cajas</span></div>
+    {% for p in grupo.listos %}
+    <div class="salida-item">
+      <div>
+        <span class="mono">{{ p.folio }}</span>
+        <div class="small">{{ p.cliente.nombre }}</div>
+        {% if p.estado == "PARCIALMENTE_DESPACHADO" %}<span class="pill warn">salida parcial</span>{% endif %}
+        {% if p.otros_carriers %}<span class="pill warn" title="Sus otras cajas viajan con otro carrier: están en su propia tabla">también con {{ p.otros_carriers|join:", " }}</span>{% endif %}
+      </div>
+      <div>
+        {{ p.comprador_nombre|default:"—" }}
+        <div class="small muted">{{ p.destino }}{% if p.es_local %} · <span class="pill warn">local</span>{% endif %}</div>
+      </div>
+      <div class="small">
+        {% if p.por_caja %}
+        {{ p.cajas_salida|length }} por salir de {{ p.cajas_total }}
+        {% for c in p.cajas_salida %}<div>caja {{ c.numero }} · <span class="mono">{{ c.guia.numero|default:"—" }}</span></div>{% endfor %}
+        {% if p.cajas_fuera %}<div class="muted">ya salió: {% for c in p.cajas_fuera %}caja {{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}
+        {% else %}
+        1 caja · <span class="mono">{{ p.guia.numero|default:"—" }}</span>
+        {% endif %}
+      </div>
+      {# Guías y contenido en un acordeón del renglón (Chema 2026-09-23). #}
+      <details class="colapsable salida-detalle">
+        <summary class="small">Guías y contenido · {{ p.guias_activas|length }} guía{{ p.guias_activas|length|pluralize }} · {{ p.contenido.piezas }} pieza{{ p.contenido.piezas|pluralize }}</summary>
+        <div class="colapsable-cuerpo">
+          {% for g in p.guias_activas %}
+          <div class="fila" style="flex-wrap:wrap;gap:4px;margin-bottom:4px">
+            <span class="mono small">{{ g.numero }}</span>
+            {% if g.etiqueta_url %}
+            <a class="btn chico" href="{{ g.etiqueta_url }}" target="_blank" rel="noopener">PDF carrier{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
             {% endif %}
-          </td>
-        </tr>
-        {# Guías y contenido en un acordeón del renglón (Chema 2026-09-23), no de la celda. #}
-        <tr>
-          <td colspan="3" style="padding-top:0">
-            <details class="colapsable">
-              <summary class="small">Guías y contenido · {{ p.guias_activas|length }} guía{{ p.guias_activas|length|pluralize }} · {{ p.contenido.piezas }} pieza{{ p.contenido.piezas|pluralize }}</summary>
-              <div class="colapsable-cuerpo">
-            {% for g in p.guias_activas %}
-            <div class="fila" style="flex-wrap:wrap;gap:4px;margin-bottom:4px">
-              <span class="mono small">{{ g.numero }}</span>
-              {% if g.etiqueta_url %}
-              <a class="btn chico" href="{{ g.etiqueta_url }}" target="_blank" rel="noopener">PDF carrier{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
-              {% endif %}
-              <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta interna{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
-              <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
-                <input type="hidden" name="accion" value="imprimir">
-                <input type="hidden" name="volver" value="salida">
-                <button class="btn chico" type="submit" title="Imprimir etiqueta del CARRIER en bodega (la que rutea el paquete)" aria-label="Imprimir etiqueta del carrier en la impresora de bodega">🖨 carrier</button>
-              </form>
-              <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
-                <input type="hidden" name="accion" value="imprimir_interna">
-                <input type="hidden" name="volver" value="salida">
-                <button class="btn chico" type="submit" title="Imprimir etiqueta INTERNA de Torre en bodega (QR del repartidor)" aria-label="Imprimir etiqueta interna en la impresora de bodega">🖨 interna</button>
-              </form>
-            </div>
-            {% endfor %}
-                {% include "piso/_contenido_salida.html" with contenido=p.contenido %}
-              </div>
-            </details>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+            <a class="btn chico" href="{% url 'piso:etiqueta' g.pk %}" target="_blank" rel="noopener">Etiqueta interna{% if g.paquete %} {{ g.paquete.numero }}{% endif %}</a>
+            <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
+              <input type="hidden" name="accion" value="imprimir">
+              <input type="hidden" name="volver" value="salida">
+              <button class="btn chico" type="submit" title="Imprimir etiqueta del CARRIER en bodega (la que rutea el paquete)" aria-label="Imprimir etiqueta del carrier en la impresora de bodega">🖨 carrier</button>
+            </form>
+            <form method="post" action="{% url 'piso:etiqueta' g.pk %}">{% csrf_token %}
+              <input type="hidden" name="accion" value="imprimir_interna">
+              <input type="hidden" name="volver" value="salida">
+              <button class="btn chico" type="submit" title="Imprimir etiqueta INTERNA de Torre en bodega (QR del repartidor)" aria-label="Imprimir etiqueta interna en la impresora de bodega">🖨 interna</button>
+            </form>
+          </div>
+          {% endfor %}
+          {% include "piso/_contenido_salida.html" with contenido=p.contenido %}
+        </div>
+      </details>
+    </div>
+    {% endfor %}
   </div>
 
   {% if grupo.puede_recolectar %}

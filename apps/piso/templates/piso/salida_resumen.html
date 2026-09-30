@@ -55,13 +55,78 @@
   </div>
   {% endif %}
 
+  {# Firma del chofer (Chema 2026-09-30): obligatoria; se guarda como evidencia del manifiesto. #}
   <div class="card mt">
-    <label for="chofer">Nombre del chofer (opcional, va en la hoja del manifiesto)</label>
-    <input type="text" name="chofer" id="chofer" maxlength="120" placeholder="Quien firma">
+    <div class="titulo"><h2>Firma del chofer</h2><span class="pill accent">obligatoria</span></div>
+    <label for="chofer">Nombre del chofer (va en la hoja del manifiesto)</label>
+    <input type="text" name="chofer" id="chofer" maxlength="120" placeholder="Quien recibe las cajas" autocomplete="off">
+    <p class="small muted mt">Que el chofer firme con el dedo en el recuadro: con esto recibe las {{ escaneadas|length }} caja{{ escaneadas|length|pluralize }} de arriba.</p>
+    <div class="firma-lienzo">
+      <canvas id="firma" aria-label="Recuadro para la firma del chofer"></canvas>
+      <div class="firma-guia"><span>firma aquí</span></div>
+    </div>
+    <div class="fila mt">
+      <button class="btn chico" type="button" id="firma-borrar">Borrar firma</button>
+      <span class="small muted" id="firma-estado">Sin firma todavía.</span>
+    </div>
+    <input type="hidden" name="firma_png" id="firma_png">
   </div>
 
   <div class="accion-fija mt">
     <button class="btn primario gigante" type="submit">Confirmar salida · {{ escaneadas|length }} caja{{ escaneadas|length|pluralize }}</button>
   </div>
 </form>
+
+<script>
+/* Firma con trazo simple: líneas rectas entre puntos, PNG al confirmar. La
+   decisión "trazo simple basta" es de Chema (2026-09-30, probado en celular). */
+(function () {
+  var canvas = document.getElementById("firma"), ctx = canvas.getContext("2d");
+  var estado = document.getElementById("firma-estado"), oculto = document.getElementById("firma_png");
+  var trazando = false, trazos = 0, puntos = 0;
+  function ajustar() {
+    var dpr = window.devicePixelRatio || 1;
+    var img = trazos ? canvas.toDataURL("image/png") : null;
+    canvas.width = Math.round(canvas.clientWidth * dpr); canvas.height = Math.round(canvas.clientHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineWidth = 2.2; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#111";
+    if (img) { var i = new Image(); i.onload = function () { ctx.drawImage(i, 0, 0, canvas.clientWidth, canvas.clientHeight); }; i.src = img; }
+  }
+  function punto(e) { var r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+  function pintarEstado() {
+    estado.textContent = trazos ? (trazos + " trazo" + (trazos === 1 ? "" : "s") + " · lista para confirmar") : "Sin firma todavía.";
+  }
+  canvas.addEventListener("pointerdown", function (e) {
+    canvas.setPointerCapture(e.pointerId); trazando = true; trazos++;
+    var p = punto(e); ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p[0] + 0.1, p[1]); ctx.stroke(); pintarEstado();
+  });
+  canvas.addEventListener("pointermove", function (e) {
+    if (!trazando) return;
+    var lista = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    if (!lista.length) lista = [e];
+    for (var i = 0; i < lista.length; i++) { var p = punto(lista[i]); ctx.lineTo(p[0], p[1]); puntos++; }
+    ctx.stroke();
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(function (ev) { canvas.addEventListener(ev, function () { trazando = false; }); });
+  document.getElementById("firma-borrar").addEventListener("click", function () {
+    trazos = 0; puntos = 0; ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); oculto.value = ""; pintarEstado();
+  });
+  canvas.closest("form").addEventListener("submit", function (e) {
+    if (trazos < 2 || puntos < 8) {
+      e.preventDefault();
+      estado.textContent = "Falta la firma del chofer: pídele que firme en el recuadro.";
+      canvas.scrollIntoView({ block: "center" });
+      if (window.Feedback) { Feedback.error("Falta la firma del chofer."); }
+      return;
+    }
+    // Fondo blanco: la evidencia se guarda igual aunque el piso esté en tema claro u oscuro.
+    var salida = document.createElement("canvas");
+    salida.width = canvas.width; salida.height = canvas.height;
+    var s = salida.getContext("2d"); s.fillStyle = "#fff"; s.fillRect(0, 0, salida.width, salida.height); s.drawImage(canvas, 0, 0);
+    oculto.value = salida.toDataURL("image/png");
+  });
+  window.addEventListener("resize", ajustar);
+  ajustar(); pintarEstado();
+})();
+</script>
 {% endblock %}

@@ -20,6 +20,12 @@ from apps.pedidos.models import LineaPedido, Pedido
 
 _MEDIA_TEMPORAL = tempfile.mkdtemp(prefix="torre-piso-tests-")
 
+# Firma del chofer (2026-09-30): PNG de 1×1 como data URL, lo que manda el canvas.
+FIRMA_PNG = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    "AAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
 
 @override_settings(MEDIA_ROOT=_MEDIA_TEMPORAL)
 class PisoTestCase(TestCase):

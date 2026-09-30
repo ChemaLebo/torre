@@ -2533,7 +2533,7 @@ def manifiesto(request, pk):
         linea.destino = f"{ciudad} · CP {linea.pedido.cp}" if ciudad else f"CP {linea.pedido.cp}"
     lineas = [l for l in todas if not l.sin_escaneo]  # lo que sube el chofer HOY
     return render(request, "piso/manifiesto.html", {
-        "manifiesto": hoja, "lineas": lineas,
+        "manifiesto": hoja, "lineas": lineas, "firma": firma_de_manifiesto(hoja),
         "sin_escaneo": [l for l in todas if l.sin_escaneo],
         "pedidos": len({l.pedido_id for l in lineas}), "es_mesa": _es_mesa(request),
     })
@@ -2659,6 +2659,53 @@ def _por_caja(pedido):
     ) > 1
 
 
+# Firma del chofer (Chema 2026-09-30): PNG dibujado en el resumen de salida,
+# obligatoria, guardada como evidencia del manifiesto (hash + hora).
+_FIRMA_MAX_BYTES = 1_500_000
+_PNG_MAGIA = b"\x89PNG\r\n\x1a\n"
+
+
+def _decodificar_firma(valor):
+    """bytes del PNG de la firma a partir del data URL del canvas; None si
+    falta, no es PNG o pesa más de la cuenta."""
+    import base64
+
+    valor = (valor or "").strip()
+    prefijo = "data:image/png;base64,"
+    if not valor.startswith(prefijo):
+        return None
+    try:
+        datos = base64.b64decode(valor[len(prefijo):], validate=True)
+    except (ValueError, TypeError):
+        return None
+    if not datos.startswith(_PNG_MAGIA) or len(datos) > _FIRMA_MAX_BYTES:
+        return None
+    return datos
+
+
+def _guardar_firma_manifiesto(hoja, firma, chofer, actor):
+    """La firma del chofer como EvidenciaFoto del manifiesto (entidad
+    "manifiesto", tipo "firma"): inmutable, con hash y hora."""
+    from django.core.files.base import ContentFile
+
+    evidencia = EvidenciaFoto.objects.create(
+        entidad="manifiesto", entidad_id=hoja.folio, tipo="firma",
+        archivo=ContentFile(firma, name=f"firma-{hoja.folio}.png"),
+        tomada_por=(chofer or getattr(actor, "username", "") or "")[:120],
+    )
+    registrar_evento(
+        "manifiesto", hoja.folio, "firma_chofer", actor=actor,
+        delta={"evidencia_id": evidencia.pk, "chofer": chofer, "hash": evidencia.hash_sha256},
+        motivo=f"Firma del chofer{f' {chofer}' if chofer else ''} guardada con el manifiesto {hoja.folio}.",
+    )
+    return evidencia
+
+
+def firma_de_manifiesto(hoja):
+    """La evidencia de firma de un manifiesto, o None (manifiestos anteriores a 2026-09-30)."""
+    return EvidenciaFoto.objects.filter(entidad="manifiesto", entidad_id=hoja.folio, tipo="firma").order_by("-ts").first()
+
+
 def _salida_manifiesto(request):
     """Manifiesto firmado: marca RECOLECTADO lo palomeado de UN carrier.
 
@@ -2684,6 +2731,11 @@ def _salida_manifiesto(request):
     if not carrier:
         messages.error(request, "Falta el carrier del manifiesto. Usa los botones de la pantalla.")
         return redirect("piso:salida")
+    # La firma del chofer va ANTES de mover nada: sin firma no hay salida.
+    firma = _decodificar_firma(request.POST.get("firma_png"))
+    if firma is None:
+        messages.error(request, "Falta la firma del chofer: fírmala en el recuadro antes de confirmar la salida.")
+        return redirect(f"{reverse('piso:salida_resumen')}?corral={quote(corral)}&carrier={quote(carrier)}")
     seleccion = {int(v) for v in request.POST.getlist("pedido_id") if v.isdigit()}
     cajas_sel = {int(v) for v in request.POST.getlist("paquete_id") if v.isdigit()}
     # "No estaba en salida · ya salió": se registra igual, pero aparte en la hoja.
@@ -2781,10 +2833,13 @@ def _salida_manifiesto(request):
     hoja = None
     if recolectados:
         from apps.envios.services import registrar_manifiesto  # lazy por contrato
+        chofer = (request.POST.get("chofer") or "").strip()
         hoja = registrar_manifiesto(
-            carrier, corral, request.user, salidas, chofer=(request.POST.get("chofer") or "").strip(),
+            carrier, corral, request.user, salidas, chofer=chofer,
             sin_escaneo={"pedidos": ya_pedidos, "cajas": ya_cajas},
         )
+        if hoja is not None:
+            _guardar_firma_manifiesto(hoja, firma, chofer, request.user)
         registrar_evento(
             "manifiesto", corral, "manifiesto_firmado", actor=request.user,
             delta={"corral": corral, "carrier": carrier, "pedidos": recolectados,

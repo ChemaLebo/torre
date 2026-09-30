@@ -492,13 +492,19 @@ input[type="date"], input[type="datetime-local"] { color-scheme: dark; }
 }
 
 @media (max-width: 860px) {
-  body.rol-piso .shell { grid-template-columns: 1fr; }
+  /* minmax(0, 1fr) y min-width 0 (2026-09-30): con 1fr a secas la columna
+     crecía al ancho del contenido más largo y toda la pantalla del piso se
+     desbordaba a la derecha en el celular. */
+  body.rol-piso .shell { grid-template-columns: minmax(0, 1fr); }
+  body.rol-piso .main { min-width: 0; }
   body.rol-piso .sidebar {
+    min-width: 0;
     position: sticky; top: 0; z-index: 40; height: auto;
     flex-direction: row; align-items: center; gap: 10px;
     padding: 8px 12px; overflow: visible;
     border-right: none; border-bottom: 1px solid var(--hair);
   }
+  body.rol-piso .sidebar .fila-abajo { flex-wrap: wrap; justify-content: flex-end; }
   body.rol-piso .sidebar .nav-links,
   body.rol-piso .brand-sub, body.rol-piso .nav-sec,
   body.rol-piso .usuario-info { display: none; }
@@ -603,7 +609,41 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
   padding: 10px 0; border-bottom: 1px solid var(--hair);
 }
 .corral-fila:last-child { border-bottom: none; }
-.corral-fila .crece { flex: 1 1 auto; min-width: 0; }
+/* Base 0 (2026-09-30): con "auto" un texto largo mandaba la palomita a su
+   propia línea en el celular; así comparten renglón y el texto envuelve. */
+.corral-fila .crece { flex: 1 1 0; min-width: 0; }
+.corral-fila > input[type="checkbox"] { flex: none; }
+
+/* Lista de salida (2026-09-30): cuadrícula de 3 columnas que en el celular
+   del piso se apila en una; el acordeón de guías ocupa todo el ancho. */
+.salida-lista { border: 1px solid var(--hair); border-radius: var(--r); background: var(--panel); padding: 0 14px; }
+.salida-item {
+  display: grid; grid-template-columns: 1.1fr 1.5fr 1.2fr; gap: 6px 14px; align-items: start;
+  padding: 12px 0; border-bottom: 1px solid var(--hair);
+}
+.salida-item:last-child { border-bottom: none; }
+.salida-item > * { min-width: 0; }
+.salida-cabecera { padding: 8px 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-50); }
+.salida-detalle { grid-column: 1 / -1; margin-top: 4px; }
+.salida-corral { flex-wrap: wrap; gap: 6px 10px; }
+.salida-corral h2 { white-space: nowrap; }
+.salida-carrier { flex-wrap: wrap; gap: 8px 12px; }
+.salida-carrier h3 { margin-right: auto; }
+@media (max-width: 860px) {
+  .salida-item { grid-template-columns: 1fr; gap: 4px; }
+  .salida-cabecera { display: none; }
+  .salida-carrier .btn, .salida-carrier form { flex: 1 1 100%; }
+  .salida-carrier form .btn { width: 100%; }
+}
+
+/* Firma del chofer en el resumen de salida (2026-09-30). */
+.firma-lienzo { position: relative; margin-top: 10px; }
+.firma-lienzo canvas {
+  display: block; width: 100%; height: 200px; border: 1px dashed var(--hair-2); border-radius: var(--r);
+  background: #fff; touch-action: none; cursor: crosshair;
+}
+.firma-guia { position: absolute; left: 20px; right: 20px; bottom: 40px; border-top: 1px solid var(--hair-2); pointer-events: none; }
+.firma-guia span { position: absolute; left: 0; top: 4px; font-family: var(--mono); font-size: 11px; color: #888; }
 
 /* ── Pantalla de éxito del wizard ── */
 .exito-pantalla { text-align: center; padding: 42px 16px 26px; }
