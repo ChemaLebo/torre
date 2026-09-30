@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='sku',
             name='este_lado_arriba',
-            field=models.BooleanField(default=False, help_text='Imprime THIS SIDE UP en la etiqueta de la caja'),
+            field=models.BooleanField(default=False, help_text='Imprime ESTE LADO ARRIBA en la etiqueta de la caja'),
         ),
         migrations.AddField(
             model_name='sku',

@@ -297,7 +297,7 @@ def generar_pdf_etiqueta(guia):
     lienzo.drawString(MARGEN, y, _recortar(f"CP {cp or '—'}", MONO_NEGRITA, 30, ANCHO_UTIL))
     y = _separador(lienzo, y - 5)
 
-    # Manejo (2026-09-29): FRÁGIL / THIS SIDE UP en banda propia solo si alguna pieza lo pide.
+    # Manejo (2026-09-29): FRÁGIL / ESTE LADO ARRIBA en banda propia solo si alguna pieza lo pide.
     fragil, arriba = marcas_de_manejo(guia)
     y = _banda_manejo(lienzo, y, fragil, arriba)
     # 4) Referencias destacadas: banda negra con texto blanco (o manda al QR).

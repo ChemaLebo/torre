@@ -201,6 +201,15 @@ leído del código de su página, no probado con una guía real). Doble intento
 planificador elige por regla/precio y solo si ninguno cotiza abre la
 incidencia PAQ.
 
+## Segunda impresora para las etiquetas de manejo (Chema 2026-09-29)
+
+Hoy FRÁGIL / ESTE LADO ARRIBA van como banda dentro de la etiqueta interna
+(100×150) de cada caja. Chema quiere después una segunda impresora dedicada a
+esas etiquetas (rollo aparte, más grandes, una por cara). Cuando toque:
+`TORRE_IMPRESORA_MANEJO` en .env, `imprimir_etiqueta(guia, manejo=True)` con
+un PDF propio de marcas, y encolarla en `imprimir_guias_activas` junto a la
+interna solo cuando `marcas_de_manejo(guia)` traiga algo.
+
 ## Reposición y reembolso — hecho 2026-09-28
 
 Compensaciones que ejecutan (CONVENTIONS → incidencias/pedidos/integraciones).
