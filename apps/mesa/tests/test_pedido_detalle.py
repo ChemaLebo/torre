@@ -53,7 +53,7 @@ class PedidoDetalleTests(PisoTestCase):
             'value="cancelar_guias"', "Sin guía: entrega propia o la recoge el cliente",
         ):
             self.assertIn(esperado, html)
-        self.assertNotIn('value="cambiar_paqueteria"', html)  # con cajas, la paquetería se cambia por caja
+        self.assertIn('value="cambiar_paqueteria"', html)  # la del pedido entero replanea la ola en bodega
         # Anterior = el más reciente (otro), con el filtro conservado; Siguiente no hay.
         self.assertIn(f"{reverse('mesa:pedido_detalle', args=[otro.pk])}?q=PED-", html)
         self.assertIn(f"{reverse('mesa:pedidos')}?q=PED-", html)
@@ -117,3 +117,56 @@ class PedidoDetalleTests(PisoTestCase):
         }, follow=True)
         self.assertContains(respuesta, "ya salió")
         self.assertEqual(c1.guia_activa.estado, Guia.GUIA_CREADA)
+
+
+@override_settings(ENVIA_API_KEY="")
+class ReplanearYGuiaPerdidaTests(PisoTestCase):
+    """PED-00031 (Chema 2026-09-30): iMile nunca registró dos cajas; se cancela
+    su guía sin tocar la caja despachada, y la ola de reposición se replanea
+    o cambia de paquetería completa desde el detalle."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
+        self.client.force_login(mesa)
+
+    def test_guia_de_caja_despachada_que_el_carrier_nunca_registro_se_cancela(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))
+        caja = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        services.generar_guia(pedido)
+        Paquete.objects.filter(pk=caja.pk).update(estado=Paquete.DESPACHADO)
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.RECOLECTADO)
+        caja.refresh_from_db()
+        guia = caja.guia_activa
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn('value="cancelar_guia_caja"', html)
+        self.assertIn("nunca registró", html)
+        respuesta = self.client.post(url, {"accion": "cancelar_guia_caja", "folio": pedido.folio, "caja": caja.pk}, follow=True)
+        self.assertContains(respuesta, "la caja sigue como despachada")
+        guia.refresh_from_db()
+        caja.refresh_from_db()
+        pedido.refresh_from_db()
+        self.assertEqual((guia.estado, caja.estado, pedido.estado), (Guia.CANCELADA, Paquete.DESPACHADO, Pedido.RECOLECTADO))
+
+    def test_replanear_cajas_y_cambiar_paqueteria_del_pedido_con_cajas(self):
+        from apps.envios.cotizador import planificar_envio
+
+        pedido = self.crear_pedido(cantidad=2)
+        planificar_envio(pedido)
+        viejas = {c.pk for c in pedido.paquetes.all()}
+        self.assertTrue(viejas)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn('value="replanear_cajas"', html)
+        self.assertIn('value="cambiar_paqueteria"', html)  # también con cajas: replanea la ola en bodega
+        respuesta = self.client.post(url, {"accion": "replanear_cajas", "folio": pedido.folio}, follow=True)
+        self.assertContains(respuesta, "replaneado")
+        self.assertFalse(viejas & {c.pk for c in pedido.paquetes.all()})  # plan nuevo
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="replaneo_cajas").exists())
+        # Una caja ya empacada frena el replaneo con mensaje.
+        Paquete.objects.filter(pedido=pedido).update(estado=Paquete.EMPACADO)
+        respuesta = self.client.post(url, {"accion": "replanear_cajas", "folio": pedido.folio}, follow=True)
+        self.assertContains(respuesta, "ya está empacada")

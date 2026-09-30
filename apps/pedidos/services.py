@@ -471,6 +471,47 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
     return {"modo": modo, "cajas": cajas}
 
 
+def replanear_cajas(pedido, actor):
+    """Mesa rehace el plan de cajas de la ola en bodega (Chema 2026-09-30:
+    botón "Replanear cajas" en el detalle). Solo tira cajas PLANEADAS sin
+    guía; las despachadas o con guía viva son fijas y una caja ya en empaque
+    o empacada (física) frena el replaneo con ValueError: eso se resuelve
+    con "Cambiar paquetería" (recotiza sin repartir) o reiniciando. Usa las
+    reglas vigentes (paquetería forzada del pedido incluida). Regresa las
+    cajas nuevas."""
+    from apps.envios.cotizador import planificar_envio  # lazy por contrato
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display().lower()}: el plan solo se rehace antes de salir."
+        )
+    cajas = list(pedido.paquetes.prefetch_related("guias"))
+    vivas = [c for c in cajas if c.estado != Paquete.DESPACHADO and not any(g.es_activa for g in c.guias.all())]
+    fisicas = [c.numero for c in vivas if c.estado != Paquete.PLANEADO]
+    if fisicas:
+        raise ValueError(
+            f"La caja {', '.join(str(n) for n in fisicas)} de {pedido.folio} ya está empacada: no se reparte de nuevo. "
+            "Cambia la paquetería (recotiza esa caja) o reinicia el pedido."
+        )
+    if not pedido.lineas_por_surtir:
+        raise ValueError(f"{pedido.folio} no tiene nada en bodega que planear.")
+    antes = [(c.numero, c.carrier, float(c.precio_cotizado or 0)) for c in vivas]
+    with transaction.atomic():
+        try:
+            resultado = planificar_envio(pedido, force=True)
+        except ValueError as exc:
+            raise ValueError(f"Ningún carrier cotiza el plan de {pedido.folio} (CP {pedido.cp}): {exc}") from exc
+    fijas = {c.pk for c in cajas if c not in vivas}
+    nuevas = [c for c in resultado if c.pk not in fijas]
+    registrar_evento(
+        "pedido", pedido.pk, "replaneo_cajas", actor=actor, cliente=pedido.cliente,
+        delta={"antes": antes, "ahora": [(c.numero, c.carrier, float(c.precio_cotizado or 0)) for c in nuevas]},
+        motivo=f"Mesa rehizo el plan: {len(antes)} caja(s) → {len(nuevas)}.",
+    )
+    return nuevas
+
+
 def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
     """Mesa cambia la paquetería de UNA caja que aún no sale (Chema
     2026-09-30: "cambiar paquetería debería de ser por paquete"). `carrier`

@@ -60,11 +60,17 @@
         <button class="btn chico" type="submit">Cancelar todas las guías</button>
       </form>
       {% endif %}
-      {% if puede_cambiar_paqueteria and not cajas %}
-      <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de {{ pedido.folio }}?');">{% csrf_token %}
+      {% if puede_replanear %}
+      <form method="post" onsubmit="return confirm('¿Rehacer el plan de cajas de {{ pedido.folio }}? Solo se reparten las cajas planeadas sin guía; las empacadas y las que ya salieron no se tocan.');">{% csrf_token %}
+        <input type="hidden" name="accion" value="replanear_cajas"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+        <button class="btn chico" type="submit" title="Tira las cajas planeadas sin guía y arma el plan otra vez con las reglas vigentes">Replanear cajas</button>
+      </form>
+      {% endif %}
+      {% if puede_cambiar_paqueteria %}
+      <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de {{ pedido.folio }}? Se replanea o recotiza la ola en bodega; con guía comprada se cancela y regresa a empaquetado. Las cajas que ya salieron no se tocan.');">{% csrf_token %}
         <input type="hidden" name="accion" value="cambiar_paqueteria"><input type="hidden" name="folio" value="{{ pedido.folio }}">
-        <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}">{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}</select>
-        <button class="btn chico" type="submit">Cambiar paquetería</button>
+        <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}">{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}" {% if clave == pedido.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+        <button class="btn chico" type="submit" title="Fuerza esta paquetería para todo el pedido y replanea las cajas que no han salido">Cambiar paquetería del pedido</button>
       </form>
       {% endif %}
     </div>
@@ -113,7 +119,7 @@
               </form>
               {% endif %}
               {% if caja.puede_cancelar_guia %}
-              <form method="post" onsubmit="return confirm('¿Cancelar la guía {{ caja.guia.numero }} de la caja {{ caja.numero }} con el carrier? El piso la recompra.');">{% csrf_token %}
+              <form method="post" onsubmit="return confirm('{% if caja.guia_perdida %}La caja {{ caja.numero }} ya salió y el carrier nunca registró la guía {{ caja.guia.numero }}. ¿Cancelarla con el carrier para que no la cobre? La caja sigue como despachada.{% else %}¿Cancelar la guía {{ caja.guia.numero }} de la caja {{ caja.numero }} con el carrier? El piso la recompra.{% endif %}');">{% csrf_token %}
                 <input type="hidden" name="accion" value="cancelar_guia_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
                 <button class="btn chico" type="submit">Cancelar guía</button>
               </form>
@@ -124,7 +130,7 @@
                 <button class="btn chico" type="submit" title="Etiqueta del carrier y etiqueta interna">Reimprimir etiqueta</button>
               </form>
               {% endif %}
-              {% if not caja.puede_cambiar and not caja.puede_reimprimir %}<span class="muted small">—</span>{% endif %}
+              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia %}<span class="muted small">—</span>{% endif %}
             </div>
           </td>
         </tr>

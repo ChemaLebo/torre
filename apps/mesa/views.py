@@ -785,16 +785,35 @@ def _pedidos_cambiar_paqueteria_caja(request):
 
 
 def _pedidos_cancelar_guia_caja(request):
-    """Cancela la guía de UNA caja (aún sin salir) y la recotiza con las reglas
-    del pedido; el pedido regresa a empaque sin dueño para recomprarla."""
+    """Cancela la guía de UNA caja. Caja aún sin salir: se recotiza con las
+    reglas del pedido y el pedido regresa a empaque sin dueño para
+    recomprarla. Caja ya despachada cuya guía el carrier nunca registró
+    (PED-00031, iMile la perdió; Chema 2026-09-30): solo se cancela con el
+    carrier para que no la cobre; la caja sigue como despachada."""
+    from apps.envios.services import cancelar_guia
     from apps.pedidos.services import cambiar_paqueteria_caja
 
     pedido, caja = _caja_del_post(request)
     vieja = caja.guia_activa
     if vieja is None:
         raise ValueError(f"La caja {caja.numero} de {pedido.folio} no tiene guía que cancelar.")
+    if caja.estado == "DESPACHADO":
+        cancelar_guia(vieja, request.user, motivo=f"Caja {caja.numero} despachada: el carrier nunca registró la guía; se cancela para que no la cobre.")
+        return f"Guía {vieja.numero} de la caja {caja.numero} cancelada con el carrier; la caja sigue como despachada."
     caja = cambiar_paqueteria_caja(pedido, caja, None, request.user)
     return f"Guía {vieja.numero} de la caja {caja.numero} cancelada; {pedido.folio} regresó a empaquetado sin dueño y el piso la recompra."
+
+
+def _pedidos_replanear_cajas(request):
+    """Botón "Replanear cajas" del detalle: rehace el plan de la ola en bodega."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import replanear_cajas
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    nuevas = replanear_cajas(pedido, request.user)
+    detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in nuevas)
+    return f"{pedido.folio} replaneado: {len(nuevas)} caja{'s' if len(nuevas) != 1 else ''} ({detalle})."
 
 
 def _pedidos_reimprimir_caja(request):
@@ -821,6 +840,7 @@ def _ejecutar_accion_pedido(request):
         "cambiar_paqueteria_caja": _pedidos_cambiar_paqueteria_caja,
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
         "reimprimir_caja": _pedidos_reimprimir_caja,
+        "replanear_cajas": _pedidos_replanear_cajas,
     }
     if accion in simples:
         try:
@@ -967,7 +987,9 @@ def pedido_detalle(request, pk):
         caja.puede_cambiar = puede_cambiar and caja.estado != "DESPACHADO" and (
             caja.guia is None or caja.guia.estado == "GUIA_CREADA"
         )
-        caja.puede_cancelar_guia = caja.puede_cambiar and caja.guia is not None
+        # Guía de una caja ya despachada que el carrier nunca registró (perdida): se cancela para que no la cobre.
+        caja.guia_perdida = caja.estado == "DESPACHADO" and caja.guia is not None and caja.guia.estado == "GUIA_CREADA"
+        caja.puede_cancelar_guia = (caja.puede_cambiar and caja.guia is not None) or caja.guia_perdida
         caja.puede_reimprimir = caja.guia is not None and caja.estado != "DESPACHADO"
     guias_sueltas = [
         (g, url_rastreo_carrier(g.carrier, g.numero))
@@ -1006,6 +1028,7 @@ def pedido_detalle(request, pk):
         "opciones_paqueteria": opciones_paqueteria(),
         "cancelable": pedido.estado in ESTADOS_CANCELABLES_MESA,
         "puede_cambiar_paqueteria": puede_cambiar,
+        "puede_replanear": puede_cambiar and any(c.estado == "PLANEADO" and c.guia is None for c in cajas),
         "puede_cancelar_guias": (
             pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
             and not any(c.estado == "DESPACHADO" for c in cajas)
