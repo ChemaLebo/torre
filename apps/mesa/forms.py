@@ -487,7 +487,7 @@ class FormSKU(forms.Form):
         help_text="Viaja en su propio empaque: sus medidas/peso de catálogo son las del bulto.",
     )
     fragil = forms.BooleanField(label="Frágil (imprime FRÁGIL en la etiqueta de la caja)", required=False, initial=False)
-    este_lado_arriba = forms.BooleanField(label="Tiene que ir parado (imprime THIS SIDE UP)", required=False, initial=False)
+    este_lado_arriba = forms.BooleanField(label="Tiene que ir parado (imprime ESTE LADO ARRIBA)", required=False, initial=False)
     activo = forms.BooleanField(label="Activo", required=False, initial=True)
 
     def __init__(self, cliente, *args, **kwargs):

@@ -178,8 +178,8 @@ def marcas_de_manejo(guia):
 
 
 def _banda_manejo(lienzo, y, fragil, arriba):
-    """Banda negra con FRÁGIL y/o THIS SIDE UP en blanco (solo si aplica); regresa el y nuevo."""
-    textos = [t for t, aplica in (("FRÁGIL", fragil), ("↑ THIS SIDE UP", arriba)) if aplica]
+    """Banda negra con FRÁGIL y/o ESTE LADO ARRIBA en blanco (solo si aplica); regresa el y nuevo."""
+    textos = [t for t, aplica in (("FRÁGIL", fragil), ("↑ ESTE LADO ARRIBA", arriba)) if aplica]
     if not textos:
         return y
     alto = 16
@@ -345,7 +345,7 @@ def generar_pdf_etiqueta(guia):
     lienzo.setFont(NEGRITA, 9)
     if peso_kg is not None:
         lienzo.drawString(MARGEN, MARGEN + 3, f"{peso_kg} kg")
-    pie = " · ".join(t for t, aplica in (("FRÁGIL", fragil), ("THIS SIDE UP", arriba)) if aplica)
+    pie = " · ".join(t for t, aplica in (("FRÁGIL", fragil), ("ESTE LADO ARRIBA", arriba)) if aplica)
     if pie:
         lienzo.drawCentredString(ANCHO / 2, MARGEN + 3, pie)
     lienzo.setFont(MONO, 8)

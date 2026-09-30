@@ -87,7 +87,7 @@ class SKU(models.Model):
     # Manejo (Chema 2026-09-29): la etiqueta interna de la caja imprime FRÁGIL
     # y/o THIS SIDE UP en grande cuando alguna pieza de la caja lo pide.
     fragil = models.BooleanField(default=False, help_text="Imprime FRÁGIL en la etiqueta de la caja")
-    este_lado_arriba = models.BooleanField(default=False, help_text="Imprime THIS SIDE UP en la etiqueta de la caja")
+    este_lado_arriba = models.BooleanField(default=False, help_text="Imprime ESTE LADO ARRIBA en la etiqueta de la caja")
     fecha_resurtido = models.DateField(null=True, blank=True)
     activo = models.BooleanField(default=True)
     creado = models.DateTimeField(auto_now_add=True)

@@ -155,17 +155,17 @@ class ContenidoEtiquetaTests(EtiquetaTestCase):
         guia = self.crear_guia()
         respuesta = self.get_etiqueta(guia)
         self.assertNotContains(respuesta, "FRÁGIL")
-        self.assertNotContains(respuesta, "THIS SIDE UP")
+        self.assertNotContains(respuesta, "ESTE LADO ARRIBA")
         self.assertEqual(marcas_de_manejo(guia), (False, False))
         self.sku.fragil = True
         self.sku.este_lado_arriba = True
         self.sku.save(update_fields=["fragil", "este_lado_arriba"])
         respuesta = self.get_etiqueta(guia)
         self.assertContains(respuesta, "FRÁGIL")
-        self.assertContains(respuesta, "THIS SIDE UP")
+        self.assertContains(respuesta, "ESTE LADO ARRIBA")
         self.assertEqual(marcas_de_manejo(guia), (True, True))
         pdf = generar_pdf_etiqueta(guia)
-        self.assertIn(b"THIS SIDE UP", pdf)  # pageCompression=0: el texto va crudo en el PDF
+        self.assertIn(b"ESTE LADO ARRIBA", pdf)  # pageCompression=0: el texto va crudo en el PDF
 
     def test_no_imprime_el_valor_declarado(self):
         pedido = self.crear_pedido(
