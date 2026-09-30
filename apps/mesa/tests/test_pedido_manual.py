@@ -285,8 +285,11 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         espera = self._pedido_con_linea(reservada=False)
         sin_faltantes = self._pedido_con_linea(reservada=True)
         Pedido.objects.filter(pk__in=[espera.pk, sin_faltantes.pk]).update(estado=Pedido.PARCIALMENTE_DESPACHADO)
-        html = self.client.get(self.url).content.decode()
-        con_boton = re.findall(r'value="reintentar_reservas">\s*<input type="hidden" name="folio" value="([^"]+)"', html)
+        # 2026-09-30: el botón vive en el detalle de cada pedido.
+        con_boton = [
+            p.folio for p in (espera, sin_faltantes)
+            if re.search(r'value="reintentar_reservas">', self.client.get(reverse("mesa:pedido_detalle", args=[p.pk])).content.decode())
+        ]
         self.assertIn(espera.folio, con_boton)
         self.assertNotIn(sin_faltantes.folio, con_boton)
 
@@ -383,12 +386,14 @@ class CancelarDesdeMesaTests(BasePedidoManualVista):
     def test_boton_cancelar_solo_en_estados_cancelables(self):
         from apps.pedidos.models import Pedido
 
-        crear_pedido(self.colima, estado=Pedido.ENTREGADO)
-        respuesta = self.client.get(self.url)
+        # 2026-09-30: la lista es solo lectura; el botón vive en el detalle.
+        entregado = crear_pedido(self.colima, estado=Pedido.ENTREGADO)
+        respuesta = self.client.get(reverse("mesa:pedido_detalle", args=[entregado.pk]))
         self.assertNotContains(respuesta, 'value="cancelar"')
-        crear_pedido(self.colima)
-        respuesta = self.client.get(self.url)
+        pendiente = crear_pedido(self.colima)
+        respuesta = self.client.get(reverse("mesa:pedido_detalle", args=[pendiente.pk]))
         self.assertContains(respuesta, 'value="cancelar"')
+        self.assertNotContains(self.client.get(self.url), 'value="cancelar"')
 
     def test_cancelar_conserva_los_filtros_activos(self):
         # El form inline postea a la URL filtrada: el PRG debe regresar ahí,

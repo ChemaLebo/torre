@@ -54,7 +54,7 @@
 <div class="tabla-wrap">
   <table>
     <thead>
-      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Cajas</th><th>Incidencia</th><th>Ingresó</th><th>Acciones</th></tr>
+      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Cajas</th><th>Incidencia</th><th>Ingresó</th></tr>
     </thead>
     <tbody>
       {% for pedido in pedidos %}
@@ -79,32 +79,9 @@
         <td class="small">{% if pedido.resumen_cajas %}<a href="{{ pedido.url_detalle }}#cajas">{{ pedido.resumen_cajas }}</a>{% else %}<span class="muted">sin plan</span>{% endif %}</td>
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% elif not pedido.sin_paqueteria %}<span class="small">—</span>{% endif %}{% if pedido.sin_paqueteria %} <a class="pill crit" href="{% url 'mesa:incidencia_detalle' pedido.sin_paqueteria.pk %}" title="Ningún carrier cotiza: elige paquetería en la incidencia">Sin paquetería · {{ pedido.sin_paqueteria.folio }}</a>{% endif %}{% if pedido.reingreso_estado %} <span class="pill">{{ pedido.get_reingreso_estado_display }}</span>{% endif %}{% if pedido.piezas_sin_inventario %} <span class="pill crit">Sin inventario · {{ pedido.piezas_sin_inventario }} pza{{ pedido.piezas_sin_inventario|pluralize }}</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
-        <td>
-          {# Acciones de orden completa (Chema 2026-09-30); las de cada caja viven en el detalle. #}
-          <div class="fila">
-            <a class="btn chico" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}" title="Abre una incidencia con este pedido ya puesto">Levantar incidencia</a>
-            {% if pedido.estado == "PENDIENTE" or pedido.estado == "PARCIALMENTE_DESPACHADO" and pedido.tiene_faltantes %}
-            <form method="post">
-              {% csrf_token %}
-              <input type="hidden" name="accion" value="reintentar_reservas">
-              <input type="hidden" name="folio" value="{{ pedido.folio }}">
-              <button class="btn chico" type="submit" title="Reintenta apartar el stock de sus líneas sin reservar">Reintentar reservas</button>
-            </form>
-            {% endif %}
-            {% if pedido.cancelable %}
-            <form method="post" class="fila">
-              {% csrf_token %}
-              <input type="hidden" name="accion" value="cancelar">
-              <input type="hidden" name="folio" value="{{ pedido.folio }}">
-              <input type="text" name="motivo" placeholder="Motivo" required>
-              <button class="btn chico peligro" type="submit">Cancelar</button>
-            </form>
-            {% endif %}
-          </div>
-        </td>
       </tr>
       {% empty %}
-      <tr><td colspan="11" class="muted centro">Sin pedidos con esos filtros.</td></tr>
+      <tr><td colspan="10" class="muted centro">Sin pedidos con esos filtros.</td></tr>
       {% endfor %}
     </tbody>
   </table>

@@ -884,8 +884,9 @@ def _resumen_cajas(pedido):
 
 @rol_requerido("mesa")
 def pedidos(request):
-    """Lista de pedidos de Mesa (2026-09-30: una fila limpia por pedido; el
-    detalle, las guías y las acciones por caja viven en pedido_detalle)."""
+    """Lista de pedidos de Mesa (2026-09-30: una fila limpia por pedido, solo
+    lectura; el detalle, las guías y TODAS las acciones viven en
+    pedido_detalle). El POST se conserva para llamadas viejas."""
     from apps.pedidos.models import Pedido
 
     if request.method == "POST":
@@ -904,7 +905,6 @@ def pedidos(request):
     sufijo = f"?{request.GET.urlencode()}" if request.GET.urlencode() else ""
     for pedido in filas:
         pedido.pill = PILL_PEDIDO.get(pedido.estado, "")
-        pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
         pedido.url_detalle = reverse("mesa:pedido_detalle", args=[pedido.pk]) + sufijo
         pedido.resumen_cajas = _resumen_cajas(pedido)
         # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").

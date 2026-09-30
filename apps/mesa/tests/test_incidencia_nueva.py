@@ -29,7 +29,7 @@ class IncidenciaNuevaMesaTests(TestCase):
 
     def test_la_lista_y_el_pedido_llevan_al_formulario_con_el_pedido_puesto(self):
         self.assertContains(self.client.get(reverse("mesa:incidencias")), self.url)
-        self.assertContains(self.client.get(reverse("mesa:pedidos")), f"{self.url}?pedido={self.pedido.pk}")
+        self.assertContains(self.client.get(reverse("mesa:pedido_detalle", args=[self.pedido.pk])), f"{self.url}?pedido={self.pedido.pk}")
         html = self.client.get(f"{self.url}?pedido={self.pedido.pk}").content.decode()
         etiqueta = f"{self.pedido.folio} · #33713 · Ana Compradora · {self.cliente.nombre} · Empacado"
         self.assertIn(f'name="pedido" value="{self.pedido.pk}"', html)  # el oculto prellenado
