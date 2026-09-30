@@ -2,7 +2,7 @@
 paquete con las horas del pedido y de su caja (guía, manifiesto, recolección
 del carrier, tránsito, entrega), el compromiso y el último evento de la
 paquetería; el portal solo ve lo suyo."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -52,6 +52,29 @@ class LineaTiempoTests(TestCase):
         por_paquete = self.client.get(reverse("mesa:linea_tiempo"), {"guia_estado": "RECOLECTADO"})
         self.assertEqual([f["caja"] for f in por_paquete.context["filas"]], [1])
         self.assertEqual(self.client.get(reverse("mesa:linea_tiempo"), {"guia_estado": "ENTREGADO"}).context["filas"], [])
+
+    def test_la_segunda_ola_muestra_sus_propias_horas(self):
+        """PED-00034 (2026-09-30): la caja de la reposición mostraba el picking y
+        el empaque del 21 (los ts del pedido, que se estampan una sola vez)."""
+        from apps.core.models import EventoAuditoria
+        from apps.pedidos.linea_tiempo import construir
+        from apps.pedidos.models import Pedido
+
+        primera = timezone.make_aware(datetime(2026, 9, 21, 12, 17))
+        Pedido.objects.filter(pk=self.pedido.pk).update(ts_picking=primera, ts_empacado=primera + timedelta(hours=1))
+        Paquete.objects.filter(pedido=self.pedido).update(creado=primera - timedelta(hours=2))  # la primera ola se planeó el 21
+        caja3 = Paquete.objects.create(pedido=self.pedido, numero=3, peso_kg=4, carrier="estafeta", estado=Paquete.EMPACADO)
+        hoy = timezone.now()
+        pick = EventoAuditoria.objects.create(entidad="pedido", entidad_id=str(self.pedido.pk), accion="cambio_estado",
+                                              delta={"de": "PENDIENTE", "a": "EN_PICKING"})
+        emp = EventoAuditoria.objects.create(entidad="pedido", entidad_id=str(self.pedido.pk), accion="caja_empacada",
+                                             delta={"caja": 3, "peso_real_gr": 4000})
+        EventoAuditoria.objects.filter(pk=pick.pk).update(ts=hoy + timedelta(minutes=5))
+        EventoAuditoria.objects.filter(pk=emp.pk).update(ts=hoy + timedelta(minutes=40))
+        filas = {f["caja"]: f for f in construir(Pedido.objects.filter(pk=self.pedido.pk))}
+        self.assertEqual((filas[1]["ts"]["picking"], filas[1]["ts"]["empacado"]), (primera, primera + timedelta(hours=1)))
+        self.assertEqual(filas[3]["ts"]["picking"], hoy + timedelta(minutes=5))
+        self.assertEqual(filas[3]["ts"]["empacado"], hoy + timedelta(minutes=40))
 
     def test_portal_solo_ve_lo_suyo(self):
         karina = get_user_model().objects.create_user("karina", password="x12345678")

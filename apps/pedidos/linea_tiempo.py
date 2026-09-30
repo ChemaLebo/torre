@@ -11,7 +11,10 @@ from datetime import timedelta
 from django.db.models import Q
 from django.utils import timezone
 
+from apps.core.models import EventoAuditoria
 from apps.envios.models import Guia, LineaManifiesto, Paquete
+
+from .models import Pedido
 
 DIAS_DEFAULT = 14
 
@@ -45,9 +48,35 @@ def _primer_evento(guia, estados):
     return None
 
 
-def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy):
+def _horas_de_la_ola(pedido, caja, guia, eventos):
+    """(picking, empacado) de LA OLA de esta caja (PED-00034, 2026-09-30: la
+    segunda ola de una reposición mostraba las horas de la primera, porque
+    ts_picking/ts_empacado del pedido se estampan solo una vez). La ventana de
+    la ola va de que se planeó la caja a que se compró su guía: picking = la
+    última entrada a EN_PICKING en esa ventana; empacado = el cierre de ESA
+    caja (caja_empacada) o la última entrada a EMPACADO en la ventana. Sin
+    eventos en la ventana (pedidos anteriores a la auditoría), las del pedido."""
+    picking, empacado = pedido.ts_picking, pedido.ts_empacado
+    if caja is None or not eventos:
+        return picking, empacado
+    desde = caja.creado - timedelta(minutes=1)
+    hasta = guia.creado + timedelta(minutes=1) if guia is not None else None
+    ventana = [e for e in eventos if e.ts >= desde and (hasta is None or e.ts <= hasta)]
+
+    def _ultimo(condicion):
+        return next((e.ts for e in reversed(ventana) if condicion(e)), None)
+
+    pick = _ultimo(lambda e: e.accion == "cambio_estado" and e.delta.get("a") == Pedido.EN_PICKING)
+    emp = _ultimo(lambda e: e.accion == "caja_empacada" and e.delta.get("caja") == caja.numero)
+    if emp is None:
+        emp = _ultimo(lambda e: e.accion == "cambio_estado" and e.delta.get("a") == Pedido.EMPACADO)
+    return pick or picking, emp or empacado
+
+
+def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
     """Una fila de la tabla: la caja (o el envío entero, legacy) con su guía."""
     linea = manifiestos.get(guia.pk) if guia else None
+    picking, empacado = _horas_de_la_ola(pedido, caja, guia, eventos)
     eventos = list(guia.eventos.all()) if guia else []
     ultimo = eventos[-1] if eventos else None
     entregada = bool(guia and guia.estado == Guia.ENTREGADO)
@@ -68,7 +97,7 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy):
         "guia": guia,
         "manifiesto": linea.manifiesto if linea else None,
         "ts": {
-            "recibido": pedido.creado, "picking": pedido.ts_picking, "empacado": pedido.ts_empacado,
+            "recibido": pedido.creado, "picking": picking, "empacado": empacado,
             "guia": guia.creado if guia else None,
             "salida": salida,
             "recolectado_carrier": guia.ts_recolectado_carrier if guia else None,
@@ -96,16 +125,24 @@ def construir(pedidos, guia_estado=""):
     )
     lineas = LineaManifiesto.objects.filter(pedido__in=pedidos).select_related("manifiesto")
     por_guia = {l.guia_id: l for l in lineas if l.guia_id}
+    # Entradas a picking/empaque y cierres por caja: las horas de cada ola.
+    eventos_por_pedido = {}
+    claves = {str(p.pk): p.pk for p in pedidos} | {p.folio: p.pk for p in pedidos}
+    for e in EventoAuditoria.objects.filter(
+        entidad="pedido", entidad_id__in=list(claves), accion__in=("cambio_estado", "caja_empacada"),
+    ).order_by("ts"):
+        eventos_por_pedido.setdefault(claves[e.entidad_id], []).append(e)
     hoy = timezone.localdate()
     filas = []
     for p in pedidos:
+        eventos = eventos_por_pedido.get(p.pk, [])
         cajas = sorted(p.paquetes.all(), key=lambda c: c.numero)
         sueltas = sorted((g for g in p.guias.all() if g.paquete_id is None), key=lambda g: g.pk)
         total = len(cajas) or max(len(sueltas), 1)
         for caja in cajas:
             guias = sorted(caja.guias.all(), key=lambda g: g.pk)
             guia = next((g for g in guias if g.es_activa), guias[-1] if guias else None)
-            filas.append(_fila(p, caja, guia, total, por_guia, hoy))
+            filas.append(_fila(p, caja, guia, total, por_guia, hoy, eventos))
         if not cajas:
             for guia in sueltas or [None]:
                 filas.append(_fila(p, None, guia, total, por_guia, hoy))
