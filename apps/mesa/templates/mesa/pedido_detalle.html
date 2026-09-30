@@ -69,7 +69,7 @@
       {% if puede_cambiar_paqueteria %}
       <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de {{ pedido.folio }}? Se replanea o recotiza la ola en bodega; con guía comprada se cancela y regresa a empaquetado. Las cajas que ya salieron no se tocan.');">{% csrf_token %}
         <input type="hidden" name="accion" value="cambiar_paqueteria"><input type="hidden" name="folio" value="{{ pedido.folio }}">
-        <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}">{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}" {% if clave == pedido.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+        <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}"><option value="" {% if not pedido.carrier_forzado %}selected{% endif %}>Sin forzar: reglas normales del pedido</option>{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}" {% if clave == pedido.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
         <button class="btn chico" type="submit" title="Fuerza esta paquetería para todo el pedido y replanea las cajas que no han salido">Cambiar paquetería del pedido</button>
       </form>
       {% endif %}
@@ -114,7 +114,7 @@
               {% if caja.puede_cambiar %}
               <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de la caja {{ caja.numero }}? Se recotiza solo esta caja; con guía comprada se cancela y el piso la recompra.');">{% csrf_token %}
                 <input type="hidden" name="accion" value="cambiar_paqueteria_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
-                <select name="carrier" aria-label="Paquetería para la caja {{ caja.numero }}">{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}" {% if clave == caja.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+                <select name="carrier" aria-label="Paquetería para la caja {{ caja.numero }}"><option value="" {% if not caja.carrier_forzado %}selected{% endif %}>Seguir al pedido</option>{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}" {% if clave == caja.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
                 <button class="btn chico" type="submit">Cambiar paquetería</button>
               </form>
               {% endif %}

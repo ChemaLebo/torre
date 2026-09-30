@@ -170,3 +170,40 @@ class ReplanearYGuiaPerdidaTests(PisoTestCase):
         Paquete.objects.filter(pedido=pedido).update(estado=Paquete.EMPACADO)
         respuesta = self.client.post(url, {"accion": "replanear_cajas", "folio": pedido.folio}, follow=True)
         self.assertContains(respuesta, "ya está empacada")
+
+
+@override_settings(ENVIA_API_KEY="")
+class SinForzarTests(PisoTestCase):
+    """Chema 2026-09-30: la opción "Sin forzar" quita la paquetería forzada del
+    pedido (o de la caja) y replanea con las reglas normales."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
+        self.client.force_login(mesa)
+
+    def test_sin_forzar_quita_el_forzado_del_pedido_y_replanea(self):
+        pedido = self.crear_pedido(cantidad=2, carrier_forzado="local")
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn("Sin forzar: reglas normales del pedido", html)
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.client.post(url, {"accion": "cambiar_paqueteria", "folio": pedido.folio, "carrier": ""}, follow=True)
+        self.assertContains(respuesta, "reglas normales del pedido")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.carrier_forzado, "")
+        self.assertTrue(pedido.paquetes.exists())
+        self.assertNotIn("local", {c.carrier for c in pedido.paquetes.all()})
+
+    def test_seguir_al_pedido_quita_el_forzado_de_la_caja(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))
+        caja = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="local", carrier_forzado="local", estado=Paquete.EMPACADO)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        self.assertIn("Seguir al pedido", self.client.get(url).content.decode())
+        respuesta = self.client.post(url, {"accion": "cambiar_paqueteria_caja", "folio": pedido.folio, "caja": caja.pk, "carrier": ""}, follow=True)
+        self.assertContains(respuesta, "las reglas del pedido")
+        caja.refresh_from_db()
+        self.assertEqual(caja.carrier_forzado, "")
+        self.assertNotEqual(caja.carrier, "local")

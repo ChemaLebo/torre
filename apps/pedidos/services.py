@@ -391,9 +391,12 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
     )
 
     carrier = (carrier or "").strip()
-    if carrier not in dict(opciones_paqueteria()):
+    if carrier and carrier not in dict(opciones_paqueteria()):
         raise ValueError("Elige una paquetería de la lista.")
-    etiqueta = etiqueta_paqueteria(carrier)
+    # "" = sin forzar (Chema 2026-09-30): se quita el forzado y se replanea con
+    # las reglas y preferencias normales del cliente (reparto, reglas de
+    # envío, integración).
+    etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas normales del pedido"
     if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
         raise ValueError(
             f"{pedido.folio} está {pedido.get_estado_display().lower()}: la paquetería solo se cambia antes de salir."
@@ -516,7 +519,8 @@ def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
     """Mesa cambia la paquetería de UNA caja que aún no sale (Chema
     2026-09-30: "cambiar paquetería debería de ser por paquete"). `carrier`
     = una opción de opciones_paqueteria (incluida "local": sale sin guía de
-    carrier) o None = cancelar su guía y recotizar con las reglas del pedido.
+    carrier), "" = quitar el forzado de la caja (vuelve a seguir al pedido) o
+    None = conservar lo que tenga y solo cancelar su guía y recotizar.
     Orden: 1) se fija Paquete.carrier_forzado y se recotiza SOLO esa caja
     (envios._replan_paquete honra el forzado de la caja); si no cotiza, nada
     cambia (ValueError); 2) con guía comprada (GUIA_CREADA) se cancela con el
@@ -529,8 +533,8 @@ def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
         _replan_paquete, cancelar_guia, etiqueta_paqueteria, opciones_paqueteria,
     )
 
-    carrier = (carrier or "").strip() or None
-    if carrier is not None and carrier not in dict(opciones_paqueteria()):
+    carrier = carrier.strip() if isinstance(carrier, str) else None
+    if carrier and carrier not in dict(opciones_paqueteria()):
         raise ValueError("Elige una paquetería de la lista.")
     if caja.pedido_id != pedido.pk:
         raise ValueError(f"La caja {caja.numero} no es de {pedido.folio}.")
@@ -544,12 +548,13 @@ def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
     if guia is not None and guia.estado != Guia.GUIA_CREADA:
         raise ValueError(f"La guía {guia.numero} de la caja {caja.numero} ya salió ({guia.get_estado_display().lower()}).")
     etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas del pedido"
+    quitar_forzado = carrier == ""
     with transaction.atomic():
         fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
         caja = Paquete.objects.select_for_update().get(pk=caja.pk)
         anterior_forzado, anterior_carrier = caja.carrier_forzado, caja.carrier
-        if carrier is not None:
-            caja.carrier_forzado = carrier
+        if carrier or quitar_forzado:
+            caja.carrier_forzado = carrier or ""
             caja.save(update_fields=["carrier_forzado"])
         try:
             with transaction.atomic():  # savepoint: si no cotiza, el plan de la caja queda intacto

@@ -741,9 +741,10 @@ def _pedidos_cambiar_paqueteria(request):
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
     resultado = replanear_con_carrier(pedido, carrier, request.user)
     cajas = resultado["cajas"]
-    detalle = ", ".join(f"caja {c.numero} ${c.precio_cotizado or 0}" for c in cajas)
+    detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in cajas)
     que = "recotizadas" if resultado["modo"] == "recotizadas" else "planeadas"
-    return f"{pedido.folio} con {etiqueta_paqueteria(carrier)}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} {que} ({detalle})."
+    etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas normales del pedido"
+    return f"{pedido.folio} con {etiqueta}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} {que} ({detalle})."
 
 
 def _pedidos_reintentar_reservas(request):
@@ -776,10 +777,11 @@ def _pedidos_cambiar_paqueteria_caja(request):
     from apps.pedidos.services import cambiar_paqueteria_caja
 
     pedido, caja = _caja_del_post(request)
-    carrier = (request.POST.get("carrier") or "").strip()
+    carrier = (request.POST.get("carrier") or "").strip()  # "" = la caja vuelve a seguir al pedido
     caja = cambiar_paqueteria_caja(pedido, caja, carrier, request.user)
+    etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas del pedido"
     return (
-        f"Caja {caja.numero} de {pedido.folio} con {etiqueta_paqueteria(carrier)}: ${caja.precio_cotizado or 0}"
+        f"Caja {caja.numero} de {pedido.folio} con {etiqueta}: ${caja.precio_cotizado or 0}"
         + (" · guía cancelada, el piso la recompra." if pedido.estado == "EMPACADO" else ".")
     )
 
