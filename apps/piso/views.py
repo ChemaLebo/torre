@@ -683,6 +683,13 @@ def recepcion_contar(request, pk):
         messages.error(request, "Escanea un producto de la orden para contarlo.")
         return volver
     sku = lineas[0].sku
+    if orden.tipo == OrdenEntrada.TIPO_REINGRESO and orden.estado == OrdenEntrada.RECIBIDA:
+        # Reingreso de una cancelación en bodega (ASN-0006, Chema 2026-09-30):
+        # la cancelación ya contó y metió las piezas a recepción; contarlas
+        # otra vez las duplicaba en put-away. Aquí solo se ubican.
+        piezas = sum(l.cantidad_recibida for l in lineas)
+        messages.info(request, f"{orden.folio} es un reingreso ya contado ({piezas} pieza{'s' if piezas != 1 else ''} de {sku.codigo}): solo ubícalas.")
+        return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
     if request.method == "POST":
         return _recepcion_contar_registrar(request, orden, sku, lineas)
     from apps.inventario.services import _suma  # lazy por contrato

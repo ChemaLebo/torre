@@ -675,3 +675,38 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         respuesta = self.client.post(reverse("mesa:recepciones"), {"accion": "reiniciar_recepcion", "orden_id": self.orden.pk}, follow=True)
         self.assertContains(respuesta, "recepción reiniciada")
         self.assertContains(respuesta, "los conteos bajaron 1 recibida(s)")
+
+
+class ReingresoYaContadoTests(PisoTestCase):
+    """ASN-0006 (Chema 2026-09-30): el reingreso que nace de una cancelación en
+    bodega ya viene contado y en put-away; contarlo otra vez lo duplicaba.
+    Contar manda directo a Ubicar y el servicio rechaza recibir de nuevo."""
+
+    def setUp(self):
+        from apps.inventario.services import recibir
+
+        self.login_piso()
+        self.orden = OrdenEntrada.objects.create(cliente=self.cliente)  # una ASN normal, para dejar 1 pieza en put-away
+        linea = LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=1)
+        recibir(linea, 1, 0, self.operador)
+        self.reingreso = OrdenEntrada.objects.create(
+            cliente=self.cliente, tipo=OrdenEntrada.TIPO_REINGRESO, estado=OrdenEntrada.RECIBIDA,
+        )
+        self.linea = LineaASN.objects.create(orden=self.reingreso, sku=self.sku, cantidad_anunciada=1, cantidad_recibida=1)
+
+    def test_contar_manda_a_ubicar_sin_recibir_otra_vez(self):
+        url = reverse("piso:recepcion_contar", args=[self.reingreso.pk])
+        respuesta = self.client.get(url, {"sku": self.sku.pk})
+        self.assertRedirects(respuesta, f"{reverse('piso:recepcion_ubicar', args=[self.reingreso.pk])}?sku={self.sku.pk}")
+        respuesta = self.client.post(url, {"sku_id": self.sku.pk, "linea_id": self.linea.pk, "cantidad": "1"}, follow=True)
+        self.assertContains(respuesta, "reingreso ya contado")
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 1)
+        self.assertEqual(_suma(self.sku, Saldo.EN_PUTAWAY), 1)  # nada se duplicó
+
+    def test_el_servicio_tambien_lo_rechaza(self):
+        from apps.inventario.services import recibir
+
+        with self.assertRaises(ValueError):
+            recibir(self.linea, 1, 0, self.operador)
+        self.assertEqual(_suma(self.sku, Saldo.EN_PUTAWAY), 1)

@@ -337,6 +337,10 @@ def recibir(linea_asn, cantidad_ok, cantidad_danada, actor):
     orden = linea_asn.orden
     if orden.estado == OrdenEntrada.CERRADA:
         raise ValueError(f"La orden {orden.folio} ya está cerrada; no acepta más recepciones.")
+    if orden.tipo == OrdenEntrada.TIPO_REINGRESO and orden.estado == OrdenEntrada.RECIBIDA:
+        # La cancelación en bodega ya contó y metió las piezas a recepción
+        # (2026-09-30): recibir otra vez las duplica; solo se ubican.
+        raise ValueError(f"{orden.folio} es un reingreso ya contado: solo se ubica, no se vuelve a recibir.")
 
     with transaction.atomic():
         if orden.estado == OrdenEntrada.ANUNCIADA:
