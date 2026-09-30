@@ -222,7 +222,10 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         pedido = crear_pedido(self.colima)
         Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.GUIA_GENERADA)
         Guia.objects.create(pedido=pedido, carrier="estafeta", numero="EST-123", proveedor="mock")
-        respuesta = self.client.get(self.url)
+        # 2026-09-30: la lista resume las cajas y linkea al detalle; la guía se ve en el detalle.
+        lista = self.client.get(self.url)
+        self.assertContains(lista, reverse("mesa:pedido_detalle", args=[pedido.pk]))
+        respuesta = self.client.get(reverse("mesa:pedido_detalle", args=[pedido.pk]))
         self.assertContains(respuesta, "EST-123")
         self.assertContains(respuesta, "estafeta")
         self.assertContains(respuesta, "Guía creada")

@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}{{ pedido.folio }} · Mesa{% endblock %}
+{% block content %}
+{# Detalle de un pedido en Mesa (Chema 2026-09-30): todo lo del pedido en una página, acciones por caja y de orden completa. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow"><a href="{{ url_lista }}">Pedidos</a> / {{ pedido.folio }}</div>
+    <h1>{{ pedido.folio }}{% if pedido.orden_shopify_legible %} · {{ pedido.orden_shopify_legible }}{% endif %}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · {% if pedido.tienda %}{{ pedido.tienda.dominio }}{% else %}pedido manual{% endif %} · <span class="pill" title="{{ pedido.canal_fuente }}">{{ pedido.get_canal_display }}</span> · ingresó <span class="mono">{{ pedido.creado|date:"d/M/Y H:i" }}</span></div>
+  </div>
+  <div class="fila">
+    {% if url_anterior %}<a class="btn chico" href="{{ url_anterior }}" title="Pedido más reciente con estos filtros">← Anterior</a>{% endif %}
+    {% if url_siguiente %}<a class="btn chico" href="{{ url_siguiente }}" title="Pedido más antiguo con estos filtros">Siguiente →</a>{% endif %}
+    {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener">Orden en Shopify ↗</a>{% endif %}
+    <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}">Levantar incidencia</a>
+  </div>
+</div>
+
+<div class="grid g3">
+  <div class="card">
+    <div class="titulo"><h3>Estado</h3></div>
+    <p>
+      <span class="pill {{ pill }}">{{ pedido.get_estado_display }}</span>
+      {% if pedido.incidencia_activa %}<span class="pill crit">incidencia activa</span>{% endif %}
+      {% if pedido.parcial_de_orden %}<span class="pill accent" title="La orden se dividió entre locations: este pedido ampara solo nuestro ticket">parcial</span>{% endif %}
+      {% if pedido.reingreso_estado %}<span class="pill">{{ pedido.get_reingreso_estado_display }}</span>{% endif %}
+      {% if piezas_sin_inventario %}<span class="pill crit">Sin inventario · {{ piezas_sin_inventario }} pza{{ piezas_sin_inventario|pluralize }}</span>{% endif %}
+      {% if pedido.ts_recolectado_carrier and pedido.estado == 'GUIA_GENERADA' %}<span class="pill warn">recolectado por carrier · sin manifiesto</span>{% endif %}
+    </p>
+    {% if sin_paqueteria %}<p class="small"><a class="pill crit" href="{% url 'mesa:incidencia_detalle' sin_paqueteria.pk %}">Sin paquetería · {{ sin_paqueteria.folio }}</a> ningún carrier cotiza: elige paquetería en la incidencia.</p>{% endif %}
+    <p class="small">
+      {% if pedido.asignado_a %}En manos de <b>{{ pedido.asignado_a.username }}</b>{% else %}Sin dueño en piso{% endif %}
+      {% if pedido.carrier_forzado %} · paquetería forzada: <span class="mono">{{ pedido.carrier_forzado }}</span>{% endif %}
+      {% if pedido.peso_real_gr %} · báscula <span class="mono">{{ pedido.peso_real_gr }} g</span> (esperado {{ pedido.peso_esperado_gr }} g){% endif %}
+    </p>
+  </div>
+  <div class="card">
+    <div class="titulo"><h3>Comprador y destino</h3></div>
+    <p>{{ pedido.comprador_nombre|default:"Sin nombre" }}{% if pedido.comprador_tel %} · <span class="mono">{{ pedido.comprador_tel }}</span>{% endif %}{% if pedido.comprador_email %} · <span class="small">{{ pedido.comprador_email }}</span>{% endif %}</p>
+    <p class="small">
+      {% if direccion.address1 %}{{ direccion.address1 }}{% if direccion.address2 %}, {{ direccion.address2 }}{% endif %}<br>{% endif %}
+      {% if direccion.city %}{{ direccion.city }}{% if direccion.province %}, {{ direccion.province }}{% endif %} · {% endif %}CP {{ pedido.cp|default:"—" }}
+      {% if pedido.es_local %} <span class="pill accent">local</span>{% endif %}
+    </p>
+    {% if direccion_pendiente %}<p class="small"><span class="pill warn">Dirección nueva pendiente</span> Shopify ahora tiene: {{ direccion_pendiente }}. Se aplica al recomprar la guía.</p>{% endif %}
+    {% if pedido.nota_regalo %}<p class="small">Nota de regalo: “{{ pedido.nota_regalo }}”</p>{% endif %}
+  </div>
+  <div class="card">
+    <div class="titulo"><h3>Acciones del pedido</h3></div>
+    <div class="fila">
+      {% if puede_reintentar_reservas %}
+      <form method="post">{% csrf_token %}
+        <input type="hidden" name="accion" value="reintentar_reservas"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+        <button class="btn chico" type="submit" title="Reintenta apartar el stock de sus líneas sin reservar">Reintentar reservas</button>
+      </form>
+      {% endif %}
+      {% if puede_cancelar_guias %}
+      <form method="post" onsubmit="return confirm('¿Cancelar TODAS las guías de {{ pedido.folio }} con el carrier y regresarlo a empaquetado? El piso recompra.');">{% csrf_token %}
+        <input type="hidden" name="accion" value="cancelar_guias"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+        <button class="btn chico" type="submit">Cancelar todas las guías</button>
+      </form>
+      {% endif %}
+      {% if puede_cambiar_paqueteria and not cajas %}
+      <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de {{ pedido.folio }}?');">{% csrf_token %}
+        <input type="hidden" name="accion" value="cambiar_paqueteria"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+        <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}">{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}</select>
+        <button class="btn chico" type="submit">Cambiar paquetería</button>
+      </form>
+      {% endif %}
+    </div>
+    {% if cancelable %}
+    <form method="post" class="fila mt">{% csrf_token %}
+      <input type="hidden" name="accion" value="cancelar"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+      <input type="text" name="motivo" placeholder="Motivo de la cancelación" required style="flex:1">
+      <button class="btn chico peligro" type="submit">Cancelar pedido</button>
+    </form>
+    {% endif %}
+    {% if not cancelable and not puede_reintentar_reservas and not puede_cancelar_guias %}<p class="muted small">Sin acciones de orden completa en este estado.</p>{% endif %}
+  </div>
+</div>
+
+<div class="card mt" id="cajas">
+  <div class="titulo"><h3>Cajas</h3><span class="small">{{ cajas|length }} caja{{ cajas|length|pluralize }} · las acciones son por caja y solo antes de salir</span></div>
+  {% if cajas %}
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Caja</th><th>Contenido</th><th>Peso</th><th>Paquetería</th><th>Guía</th><th>Estatus</th><th>Compromiso</th><th>Acciones</th></tr></thead>
+      <tbody>
+        {% for caja in cajas %}
+        <tr>
+          <td class="mono">{{ caja.numero }}<div class="small muted">{{ caja.get_estado_display }}</div></td>
+          <td class="small">{% for pl in caja.lineas.all %}{{ pl.texto_para_piso }}<br>{% empty %}<span class="muted">sin contenido registrado</span>{% endfor %}</td>
+          <td class="mono small">{{ caja.peso_kg }} kg{% if caja.peso_real_gr %}<div class="muted">báscula {{ caja.peso_real_gr }} g</div>{% endif %}</td>
+          <td class="small">{{ caja.carrier }}{% if caja.carrier_forzado %} <span class="pill warn" title="Paquetería forzada desde Mesa para esta caja">forzada</span>{% endif %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}{% if caja.estimado_entrega %} · {{ caja.estimado_entrega }}{% endif %}</div></td>
+          <td class="small">
+            {% if caja.guia %}{% if caja.url_rastreo %}<a class="mono" href="{{ caja.url_rastreo }}" target="_blank" rel="noopener">{{ caja.guia.numero }} ↗</a>{% else %}<span class="mono">{{ caja.guia.numero }}</span>{% endif %}<div class="muted">{{ caja.guia.carrier }}{% if caja.guia.proveedor %} · {{ caja.guia.proveedor }}{% endif %}</div>{% else %}<span class="muted">sin guía</span>{% endif %}
+            {% for g in caja.historial %}<div class="muted mono" title="Guía anterior de esta caja">{{ g.numero }} · {{ g.get_estado_display|lower }}</div>{% endfor %}
+          </td>
+          <td>
+            {% if caja.guia %}<span class="pill {% if caja.guia.estado == 'ENTREGADO' %}ok{% elif caja.guia.estado == 'RETORNO' or caja.guia.estado == 'INTENTO_FALLIDO' or caja.guia.estado == 'EXCEPCION' %}crit{% elif caja.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ caja.guia.ultimo_evento }}">{{ caja.guia.get_estado_display }}</span>
+            {% if caja.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repuso en otra caja; se sigue rastreando aparte">sustituida · {{ caja.guia.get_sustituida_motivo_display|lower }}{% for n in caja.guia.cajas_reposicion %} · por caja {{ n }}{% endfor %}</span></div>{% endif %}
+            {% if caja.guia.ultimo_evento %}<div class="small muted">{{ caja.guia.ultimo_evento|truncatechars:70 }}</div>{% endif %}
+            {% else %}<span class="muted small">—</span>{% endif %}
+          </td>
+          <td class="small">{% if caja.guia and caja.guia.fecha_compromiso and caja.guia.estado != 'ENTREGADO' %}llega {{ caja.guia.fecha_compromiso|date:"d/M" }}{% elif caja.guia and caja.guia.dias_promesa and caja.guia.estado == 'GUIA_CREADA' %}{{ caja.guia.dias_promesa }} día{{ caja.guia.dias_promesa|pluralize }} desde la salida{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>
+            <div class="fila">
+              {% if caja.puede_cambiar %}
+              <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de la caja {{ caja.numero }}? Se recotiza solo esta caja; con guía comprada se cancela y el piso la recompra.');">{% csrf_token %}
+                <input type="hidden" name="accion" value="cambiar_paqueteria_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
+                <select name="carrier" aria-label="Paquetería para la caja {{ caja.numero }}">{% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}" {% if clave == caja.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+                <button class="btn chico" type="submit">Cambiar paquetería</button>
+              </form>
+              {% endif %}
+              {% if caja.puede_cancelar_guia %}
+              <form method="post" onsubmit="return confirm('¿Cancelar la guía {{ caja.guia.numero }} de la caja {{ caja.numero }} con el carrier? El piso la recompra.');">{% csrf_token %}
+                <input type="hidden" name="accion" value="cancelar_guia_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
+                <button class="btn chico" type="submit">Cancelar guía</button>
+              </form>
+              {% endif %}
+              {% if caja.puede_reimprimir %}
+              <form method="post">{% csrf_token %}
+                <input type="hidden" name="accion" value="reimprimir_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
+                <button class="btn chico" type="submit" title="Etiqueta del carrier y etiqueta interna">Reimprimir etiqueta</button>
+              </form>
+              {% endif %}
+              {% if not caja.puede_cambiar and not caja.puede_reimprimir %}<span class="muted small">—</span>{% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Sin plan de cajas todavía: se arma al reservar el stock o al generar la guía.</p>
+  {% endif %}
+  {% if guias_sueltas %}
+  <p class="small mt">Guías sin caja (pedido sin plan):
+    {% for g, url in guias_sueltas %}{% if url %}<a class="mono" href="{{ url }}" target="_blank" rel="noopener">{{ g.numero }} ↗</a>{% else %}<span class="mono">{{ g.numero }}</span>{% endif %} · {{ g.carrier }} · {{ g.get_estado_display|lower }}{% if not g.es_activa %} <span class="muted">(inactiva)</span>{% endif %}{% if not forloop.last %}; {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h3>Líneas</h3></div>
+    <div class="tabla-wrap">
+      <table data-sin-tabla-js>
+        <thead><tr><th>Producto</th><th>Pedidas</th><th>Pickeadas</th><th>Despachadas</th><th></th></tr></thead>
+        <tbody>
+          {% for linea in lineas %}
+          <tr>
+            <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div></td>
+            <td class="mono">{{ linea.cantidad }}</td>
+            <td class="mono">{{ linea.cantidad_pickeada }}</td>
+            <td class="mono">{{ linea.cantidad_despachada }}</td>
+            <td>{% if linea.reposicion_de_id %}<span class="pill accent">Reposición</span>{% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span>{% elif not linea.reservada and not linea.cantidad_despachada %}<span class="pill warn">sin reservar</span>{% endif %}{% if linea.parte_de_kit_id %}<span class="pill">componente de kit</span>{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" class="muted">Sin renglones.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="titulo"><h3>Fotos de evidencia</h3></div>
+    <div class="fotos">
+      {% for foto in fotos %}
+        <a href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="{{ foto.tipo|default:'evidencia' }} · {{ foto.ts|date:'d/M H:i' }}{% if foto.tomada_por %} · {{ foto.tomada_por }}{% endif %}"><img src="{% url 'core:evidencia' foto.pk %}" alt="Evidencia {{ foto.tipo|default:'del pedido' }}"></a>
+      {% empty %}
+        <div class="foto-ph">Sin fotos todavía</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="card mt">
+  <div class="titulo"><h3>Línea de tiempo por caja</h3><span class="small">"Salió de bodega" es el manifiesto; "Recolectado por carrier" es lo que reportó la paquetería</span></div>
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead>
+        <tr><th>Pedido</th><th>Caja</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
+      </thead>
+      <tbody>
+        {% for f in filas %}{% include 'pedidos/_fila_linea_tiempo.html' %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mt">
+  <div class="titulo"><h3>Incidencias</h3><a class="btn chico" href="{% url 'mesa:incidencias_pedido' pedido.pk %}">Expediente completo</a></div>
+  {% include 'mesa/_tabla_incidencias_pedido.html' %}
+  {% if compensaciones %}
+  <div class="eyebrow mt">Compensaciones</div>
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Incidencia</th><th>Tipo</th><th>Estado</th><th>Monto</th><th>Detalle</th></tr></thead>
+      <tbody>
+        {% for comp in compensaciones %}
+        <tr>
+          <td><a class="mono" href="{% url 'mesa:incidencia_detalle' comp.incidencia_id %}#compensaciones">{{ comp.incidencia.folio }}</a></td>
+          <td>{{ comp.get_tipo_display }}{% if comp.motivo %} <span class="small muted">· {{ comp.motivo }}</span>{% endif %}</td>
+          <td><span class="pill {% if comp.estado == 'PAGADA' %}ok{% elif comp.estado == 'APROBADA' %}accent{% endif %}">{{ comp.get_estado_display }}</span></td>
+          <td class="mono">${{ comp.monto|floatformat:2 }}</td>
+          <td class="small">{{ comp.resumen_lineas|default:"—" }}{% if comp.nota %} · {{ comp.nota|truncatechars:80 }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card mt">
+  <div class="titulo"><h3>Auditoría</h3><span class="small">últimos {{ eventos|length }} movimientos del pedido</span></div>
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Cuándo</th><th>Acción</th><th>Quién</th><th>Motivo</th></tr></thead>
+      <tbody>
+        {% for e in eventos %}
+        <tr>
+          <td class="mono small">{{ e.ts|date:"d/M H:i" }}</td>
+          <td class="mono small">{{ e.accion }}</td>
+          <td class="small">{{ e.actor_id|default:e.actor_tipo }}</td>
+          <td class="small">{{ e.motivo|default:"—" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="muted">Sin movimientos registrados.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

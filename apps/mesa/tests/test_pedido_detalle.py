@@ -1,0 +1,119 @@
+"""Mesa → Pedidos → detalle de un pedido (Chema 2026-09-30): toda la orden en
+una página (cajas con guía, líneas, línea de tiempo, incidencias, fotos,
+auditoría), Anterior / Siguiente con los filtros de la lista y las acciones
+POR CAJA: cambiar paquetería (incluida la salida sin guía), cancelar guía y
+reimprimir etiqueta."""
+from decimal import Decimal
+from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+from django.test import override_settings
+from django.urls import reverse
+
+from apps.core.models import EventoAuditoria, PerfilUsuario
+from apps.envios.adapters import MockAdapter
+from apps.envios.models import Guia, Paquete, PaqueteLinea
+from apps.pedidos import services
+from apps.pedidos.models import Pedido
+from apps.piso.tests.base import PisoTestCase
+
+
+@override_settings(ENVIA_API_KEY="")
+class PedidoDetalleTests(PisoTestCase):
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+        self.client.force_login(self.mesa)
+
+    def pedido_con_dos_cajas_y_guias(self):
+        """Empacado en dos cajas físicas con guía comprada (GUIA_GENERADA)."""
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
+        linea = pedido.lineas.get()
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        c2 = Paquete.objects.create(pedido=pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=2)
+        services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)
+        return pedido, c1, c2
+
+    def test_muestra_todo_el_pedido_y_navega_con_los_filtros(self):
+        pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()
+        otro = self.crear_pedido(cantidad=1)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        respuesta = self.client.get(url, {"q": "PED-"})
+        html = respuesta.content.decode()
+        for esperado in (
+            pedido.folio, "Ana Prueba", "Cajas", c1.guia_activa.numero, c2.guia_activa.numero,
+            "Línea de tiempo por caja", "Incidencias", "Auditoría", "Fotos de evidencia",
+            'value="cambiar_paqueteria_caja"', 'value="cancelar_guia_caja"', 'value="reimprimir_caja"',
+            'value="cancelar_guias"', "Sin guía: entrega propia o la recoge el cliente",
+        ):
+            self.assertIn(esperado, html)
+        self.assertNotIn('value="cambiar_paqueteria"', html)  # con cajas, la paquetería se cambia por caja
+        # Anterior = el más reciente (otro), con el filtro conservado; Siguiente no hay.
+        self.assertIn(f"{reverse('mesa:pedido_detalle', args=[otro.pk])}?q=PED-", html)
+        self.assertIn(f"{reverse('mesa:pedidos')}?q=PED-", html)
+        self.assertNotIn("Siguiente →", html)
+        # Desde la lista se llega con el link del folio y el resumen de cajas.
+        lista = self.client.get(reverse("mesa:pedidos")).content.decode()
+        self.assertIn(f'href="{url}"', lista)
+        self.assertIn("2 cajas · 2 guía creada", lista)
+
+    def test_cambiar_paqueteria_de_una_caja_a_sin_guia_no_toca_la_otra(self):
+        pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()
+        vieja = c1.guia_activa
+        intacta = c2.guia_activa
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        respuesta = self.client.post(url, {
+            "accion": "cambiar_paqueteria_caja", "folio": pedido.folio, "caja": c1.pk, "carrier": "local",
+        }, follow=True)
+        self.assertContains(respuesta, "Caja 1")
+        self.assertContains(respuesta, "guía cancelada, el piso la recompra")
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        vieja.refresh_from_db()
+        intacta.refresh_from_db()
+        self.assertEqual((pedido.estado, pedido.asignado_a), (Pedido.EMPACADO, None))
+        self.assertEqual((c1.carrier, c1.carrier_forzado, c1.servicio), ("local", "local", "entrega_local"))
+        self.assertEqual((vieja.estado, intacta.estado), (Guia.CANCELADA, Guia.GUIA_CREADA))
+        self.assertEqual((c2.carrier, c2.carrier_forzado), ("estafeta", ""))
+        self.assertEqual(pedido.carrier_forzado, "")  # el pedido no cambia, solo la caja
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="paquete", entidad_id=str(c1.pk), accion="cambio_paqueteria_caja").exists())
+        # Al recomprar, la caja 1 sale con guía interna y la 2 conserva la suya.
+        services.generar_guia(pedido)
+        c1.refresh_from_db()
+        self.assertTrue(c1.guia_activa.numero.startswith("LOCAL-"))
+        self.assertEqual(c2.guia_activa.pk, intacta.pk)
+
+    def test_cancelar_guia_de_una_caja_y_reimprimir(self):
+        pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="impresa") as imprimir:
+            respuesta = self.client.post(url, {"accion": "reimprimir_caja", "folio": pedido.folio, "caja": c2.pk}, follow=True)
+        self.assertEqual(imprimir.call_count, 2)  # carrier + interna
+        self.assertContains(respuesta, "Caja 2")
+        vieja = c1.guia_activa
+        respuesta = self.client.post(url, {"accion": "cancelar_guia_caja", "folio": pedido.folio, "caja": c1.pk}, follow=True)
+        self.assertContains(respuesta, f"Guía {vieja.numero} de la caja 1 cancelada")
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        vieja.refresh_from_db()
+        self.assertEqual((pedido.estado, vieja.estado, c1.carrier_forzado), (Pedido.EMPACADO, Guia.CANCELADA, ""))
+        self.assertEqual(c2.guia_activa.estado, Guia.GUIA_CREADA)
+
+    def test_caja_que_ya_salio_no_tiene_acciones_y_la_accion_avisa(self):
+        pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()
+        Paquete.objects.filter(pk=c1.pk).update(estado=Paquete.DESPACHADO)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertEqual(html.count('value="cambiar_paqueteria_caja"'), 1)  # solo la caja 2
+        respuesta = self.client.post(url, {
+            "accion": "cambiar_paqueteria_caja", "folio": pedido.folio, "caja": c1.pk, "carrier": "local",
+        }, follow=True)
+        self.assertContains(respuesta, "ya salió")
+        self.assertEqual(c1.guia_activa.estado, Guia.GUIA_CREADA)

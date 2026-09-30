@@ -1,0 +1,22 @@
+{# Una fila de la línea de tiempo por caja (pedidos.linea_tiempo.construir); la usan la pantalla Línea de tiempo y el detalle del pedido en Mesa. #}
+      <tr>
+        <td>
+          <a class="mono" href="{% if es_mesa %}{% url 'mesa:pedido_detalle' f.pedido.pk %}{% else %}{% url 'portal:pedido_detalle' f.pedido.pk %}{% endif %}">{{ f.pedido.folio }}</a>
+          {% if f.pedido.orden_shopify_legible %}<div class="small mono">{{ f.pedido.orden_shopify_legible }}</div>{% endif %}
+          {% if es_mesa %}<div class="small muted">{{ f.pedido.cliente.nombre }}</div>{% endif %}
+          <span class="pill {% if f.pedido.estado == 'ENTREGADO' %}ok{% elif f.pedido.estado == 'CANCELADO' or f.pedido.estado == 'RETORNADO' %}crit{% else %}accent{% endif %}">{{ f.pedido.get_estado_display }}</span>
+        </td>
+        <td class="mono small">{% if f.caja %}{{ f.caja }} de {{ f.total_cajas }}{% else %}envío{% endif %}{% if f.caja_estado %}<div class="muted">{{ f.caja_estado }}</div>{% endif %}</td>
+        <td class="small">{% if f.guia %}{{ f.guia.carrier }}<div class="mono">{{ f.guia.numero }}</div><span class="pill {% if f.guia.estado == 'ENTREGADO' %}ok{% elif f.guia.estado == 'RETORNO' or f.guia.estado == 'INTENTO_FALLIDO' or f.guia.estado == 'EXCEPCION' or f.guia.estado == 'CANCELADA' %}crit{% elif f.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}">{{ f.guia.get_estado_display }}</span>{% if f.guia.sustituida_motivo %} <span class="pill warn">sustituida · {{ f.guia.get_sustituida_motivo_display|lower }}</span>{% endif %}{% else %}<span class="muted">sin guía</span>{% endif %}</td>
+        <td class="mono small">{{ f.ts.recibido|date:"d/M H:i" }}</td>
+        <td class="mono small">{% if f.ts.picking %}{{ f.ts.picking|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.empacado %}{{ f.ts.empacado|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.guia %}{{ f.ts.guia|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.salida %}{{ f.ts.salida|date:"d/M H:i" }}{% if f.manifiesto %}<div class="muted" title="Manifiesto{% if f.manifiesto.chofer %} · chofer {{ f.manifiesto.chofer }}{% endif %}">{{ f.manifiesto.folio }}{% if f.manifiesto.chofer %} · {{ f.manifiesto.chofer }}{% endif %}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.recolectado_carrier %}{{ f.ts.recolectado_carrier|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.en_transito %}{{ f.ts.en_transito|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.en_ruta %}{{ f.ts.en_ruta|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.entregado %}{{ f.ts.entregado|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.compromiso %}<span class="pill {% if f.vencido %}crit{% endif %}">{{ f.compromiso|date:"d/M" }}{% if f.vencido %} · vencido{% endif %}</span>{% elif f.ts.entregado %}<span class="muted">entregado</span>{% elif f.dias_promesa %}<span class="muted" title="Se cuenta desde la salida">{{ f.dias_promesa }} día{{ f.dias_promesa|pluralize }} desde la salida</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="small">{% if f.ultimo_evento %}{{ f.ultimo_evento }}{% if f.ultimo_evento_ts %}<div class="mono muted">{{ f.ultimo_evento_ts|date:"d/M H:i" }}{% if f.eventos > 1 %} · {{ f.eventos }} eventos{% endif %}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>

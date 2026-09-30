@@ -259,6 +259,10 @@ class Paquete(models.Model):
     # (integraciones.services.marcar_fulfillment): de él cuelgan los eventos de
     # avance de su guía (FulfillmentEvent → "Delivery status" del admin).
     shopify_fulfillment_id = models.CharField(max_length=80, blank=True, default="")
+    # Paquetería forzada desde Mesa para ESTA caja (2026-09-30): manda sobre
+    # la del pedido y sobre reglas y config al cotizar y comprar su guía;
+    # "local" = sale sin guía de carrier. Vacío = la caja sigue al pedido.
+    carrier_forzado = models.CharField(max_length=40, blank=True, default="")
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:

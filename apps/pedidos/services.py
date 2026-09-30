@@ -471,6 +471,85 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
     return {"modo": modo, "cajas": cajas}
 
 
+def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
+    """Mesa cambia la paquetería de UNA caja que aún no sale (Chema
+    2026-09-30: "cambiar paquetería debería de ser por paquete"). `carrier`
+    = una opción de opciones_paqueteria (incluida "local": sale sin guía de
+    carrier) o None = cancelar su guía y recotizar con las reglas del pedido.
+    Orden: 1) se fija Paquete.carrier_forzado y se recotiza SOLO esa caja
+    (envios._replan_paquete honra el forzado de la caja); si no cotiza, nada
+    cambia (ValueError); 2) con guía comprada (GUIA_CREADA) se cancela con el
+    carrier y se borra el cierre de la caja (etiqueta nueva); 3) si el pedido
+    estaba GUIA_GENERADA regresa a EMPACADO sin dueño para que el piso
+    recompre esa guía. Las demás cajas no se tocan. Regresa la caja."""
+    from apps.envios.adapters import ErrorCarrier  # lazy por contrato
+    from apps.envios.models import Guia, Paquete  # lazy: modelo de otra app
+    from apps.envios.services import (  # lazy por contrato
+        _replan_paquete, cancelar_guia, etiqueta_paqueteria, opciones_paqueteria,
+    )
+
+    carrier = (carrier or "").strip() or None
+    if carrier is not None and carrier not in dict(opciones_paqueteria()):
+        raise ValueError("Elige una paquetería de la lista.")
+    if caja.pedido_id != pedido.pk:
+        raise ValueError(f"La caja {caja.numero} no es de {pedido.folio}.")
+    if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display().lower()}: la paquetería solo se cambia antes de salir."
+        )
+    if caja.estado == Paquete.DESPACHADO:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} ya salió: no se cambia su paquetería.")
+    guia = caja.guia_activa
+    if guia is not None and guia.estado != Guia.GUIA_CREADA:
+        raise ValueError(f"La guía {guia.numero} de la caja {caja.numero} ya salió ({guia.get_estado_display().lower()}).")
+    etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas del pedido"
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        caja = Paquete.objects.select_for_update().get(pk=caja.pk)
+        anterior_forzado, anterior_carrier = caja.carrier_forzado, caja.carrier
+        if carrier is not None:
+            caja.carrier_forzado = carrier
+            caja.save(update_fields=["carrier_forzado"])
+        try:
+            with transaction.atomic():  # savepoint: si no cotiza, el plan de la caja queda intacto
+                _replan_paquete(fresco, caja, anterior_carrier)
+        except (ErrorCarrier, ValueError) as exc:
+            caja.carrier_forzado = anterior_forzado
+            caja.save(update_fields=["carrier_forzado"])
+            registrar_evento(
+                "paquete", caja.pk, "cambio_paqueteria_caja_fallido", actor=actor, cliente=fresco.cliente,
+                delta={"pedido": fresco.folio, "caja": caja.numero, "carrier": carrier}, motivo=str(exc)[:300],
+            )
+            raise ValueError(f"{etiqueta} no cotiza la caja {caja.numero} de {fresco.folio} (CP {fresco.cp}): {exc}") from exc
+        cancelada = ""
+        if guia is not None:
+            cancelar_guia(guia, actor, motivo=f"Cambio de paquetería de la caja {caja.numero} a {etiqueta}")
+            cancelada = guia.numero
+            campos = []
+            if caja.ts_cierre is not None or caja.foto_cierre_id:
+                caja.ts_cierre, caja.foto_cierre = None, None
+                campos += ["ts_cierre", "foto_cierre"]
+            if campos:
+                caja.save(update_fields=campos)
+        if fresco.estado == Pedido.GUIA_GENERADA:
+            fresco.asignado_a = None
+            fresco.save(update_fields=["asignado_a", "actualizado"])
+            fresco.transicionar(
+                Pedido.EMPACADO, actor=actor,
+                motivo=f"Caja {caja.numero} cambia a {etiqueta}: guía cancelada, el piso la recompra."[:300],
+            )
+        caja.refresh_from_db()
+        registrar_evento(
+            "paquete", caja.pk, "cambio_paqueteria_caja", actor=actor, cliente=fresco.cliente,
+            delta={"pedido": fresco.folio, "caja": caja.numero, "antes": anterior_carrier, "ahora": caja.carrier,
+                   "forzado": caja.carrier_forzado, "precio": float(caja.precio_cotizado or 0), "guia_cancelada": cancelada},
+            motivo=f"Mesa: caja {caja.numero} de {fresco.folio} con {etiqueta} (${caja.precio_cotizado or 0})."[:300],
+        )
+    pedido.estado = fresco.estado
+    pedido.asignado_a = fresco.asignado_a
+    return caja
+
+
 def _enviar_confirmacion_best_effort(pedido):
     """Plantilla A (confirmación). mensajeria omite el envío si no hay teléfono.
 

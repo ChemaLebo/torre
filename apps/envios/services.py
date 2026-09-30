@@ -278,6 +278,18 @@ def carriers_del_pedido(pedido):
     return list(settings.TORRE["CARRIERS_COTIZAR"])
 
 
+def carriers_de_paquete(pedido, paquete):
+    """Carriers permitidos para UNA caja: la paquetería forzada de la caja
+    (Paquete.carrier_forzado, Mesa 2026-09-30) manda; sin ella, los del
+    pedido (carriers_del_pedido)."""
+    forzado = (getattr(paquete, "carrier_forzado", "") or "").strip()
+    if forzado == CARRIER_POOL_ENVIA:
+        return list(settings.TORRE["CARRIERS_COTIZAR"])
+    if forzado:
+        return [forzado]
+    return carriers_del_pedido(pedido)
+
+
 def carrier_preferido(pedido):
     """Carrier que el cotizador PREFIERE para el pedido (Chema 2026-09-22: las
     reglas primero, el precio después): el de la ReglaEnvio que le aplique
@@ -514,9 +526,11 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
     hora de comprar la guía."""
     from .cotizador import cotizar_lane, elegir_entre  # lazy: evita ciclo en carga
 
-    if carriers_del_pedido(pedido) == [CARRIER_LOCAL]:
-        # Sin guía de carrier (forzado desde Mesa, 2026-09-28): la caja física
-        # se queda y viaja con guía interna a la tarifa local.
+    permitidos = carriers_de_paquete(pedido, paquete)
+    if permitidos == [CARRIER_LOCAL]:
+        # Sin guía de carrier (forzado desde Mesa, 2026-09-28; por caja desde
+        # 2026-09-30): la caja física se queda y viaja con guía interna a la
+        # tarifa local.
         tarifa = Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100)))
         paquete.carrier, paquete.servicio, paquete.precio_cotizado = CARRIER_LOCAL, SERVICIO_LOCAL, tarifa
         paquete.estimado_entrega = ""
@@ -530,7 +544,7 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
     dims = (paquete.largo_cm, paquete.ancho_cm, paquete.alto_cm)
     filas = [
         f for f in cotizar_lane(pedido.cp, paquete.peso_kg, dims, cliente=pedido.cliente,
-                                carriers=carriers_del_pedido(pedido))
+                                carriers=permitidos)
         if f["ok"] and f["precio"] is not None
     ]
     if not filas:
@@ -565,6 +579,12 @@ def _carrier_de_paquete(pedido, paquete):
     """
     carrier = paquete.carrier or ""
     servicio = paquete.servicio or ""
+    forzado = (getattr(paquete, "carrier_forzado", "") or "").strip()
+    if forzado == CARRIER_LOCAL:
+        # Mesa sacó ESTA caja sin guía de carrier (2026-09-30): guía interna.
+        return CARRIER_LOCAL, SERVICIO_LOCAL
+    if forzado and carrier not in carriers_de_paquete(pedido, paquete):
+        return _replan_paquete(pedido, paquete, carrier)
     if not carrier or (carrier == CARRIER_LOCAL and not _flota_propia()):
         carrier, servicio = elegir_carrier(pedido)
     elif carrier != CARRIER_LOCAL and carrier not in carriers_del_pedido(pedido):

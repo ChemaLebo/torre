@@ -1,6 +1,7 @@
 """Mesa → Pedidos → "Cancelar guías" (Chema 2026-09-24): un pedido con guía
 comprada que aún no sale se regresa a empaquetado cancelando las guías con el
-carrier; con algo en la calle no hay botón ni acción."""
+carrier; con algo en la calle no hay botón ni acción. Desde 2026-09-30 el
+botón vive en el detalle del pedido."""
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -29,7 +30,7 @@ class CancelarGuiasMesaTests(PisoTestCase):
         )
         services.generar_guia(self.pedido)
         self.pedido.refresh_from_db()
-        self.url = reverse("mesa:pedidos")
+        self.url = reverse("mesa:pedido_detalle", args=[self.pedido.pk])
 
     def test_boton_y_accion_regresan_a_empaque(self):
         self.assertIn('value="cancelar_guias"', self.client.get(self.url).content.decode())

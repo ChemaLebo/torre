@@ -757,107 +757,263 @@ def _pedidos_reintentar_reservas(request):
     return resultado, completo
 
 
-@rol_requerido("mesa")
-def pedidos(request):
+def _caja_del_post(request):
+    """(pedido, caja) de una acción por caja del detalle (folio + caja pk)."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
     from apps.pedidos.models import Pedido
 
-    if request.method == "POST":
-        accion = request.POST.get("accion")
-        if accion == "cancelar_guias":
-            try:
-                exito = _pedidos_cancelar_guias(request)
-            except ValueError as exc:
-                messages.error(request, str(exc))
-            else:
-                messages.success(request, exito)
-        elif accion == "cancelar":
-            try:
-                exito = _pedidos_cancelar(request)
-            except ValueError as exc:
-                messages.error(request, str(exc))
-            else:
-                messages.success(request, exito)
-        elif accion == "cambiar_paqueteria":
-            try:
-                exito = _pedidos_cambiar_paqueteria(request)
-            except ValueError as exc:
-                messages.error(request, str(exc))
-            else:
-                messages.success(request, exito)
-        elif accion == "reintentar_reservas":
-            try:
-                exito, completo = _pedidos_reintentar_reservas(request)
-            except ValueError as exc:
-                messages.error(request, str(exc))
-            else:
-                # Verde solo si el pedido quedó completo; parcial = warning
-                # (amarillo): sigue faltando stock y Mesa debe verlo como tal.
-                (messages.success if completo else messages.warning)(request, exito)
-        else:
-            messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
-        # PRG conservando los filtros activos (patrón _redirect_inventario):
-        # cancelar en tanda no debe rearmar el filtro cada vez.
-        qs_filtros = request.GET.urlencode()
-        destino = reverse("mesa:pedidos")
-        return redirect(f"{destino}?{qs_filtros}" if qs_filtros else destino)
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    caja = get_object_or_404(Paquete, pk=request.POST.get("caja"), pedido=pedido)
+    return pedido, caja
 
-    qs = (
-        Pedido.objects.select_related("cliente", "tienda")
-        .prefetch_related("lineas__sku", "guias").order_by("-creado")
+
+def _pedidos_cambiar_paqueteria_caja(request):
+    """Selector por CAJA en el detalle (Chema 2026-09-30): fuerza la paquetería
+    de una caja que aún no sale (pedidos.cambiar_paqueteria_caja)."""
+    from apps.envios.services import etiqueta_paqueteria
+    from apps.pedidos.services import cambiar_paqueteria_caja
+
+    pedido, caja = _caja_del_post(request)
+    carrier = (request.POST.get("carrier") or "").strip()
+    caja = cambiar_paqueteria_caja(pedido, caja, carrier, request.user)
+    return (
+        f"Caja {caja.numero} de {pedido.folio} con {etiqueta_paqueteria(carrier)}: ${caja.precio_cotizado or 0}"
+        + (" · guía cancelada, el piso la recompra." if pedido.estado == "EMPACADO" else ".")
     )
-    cliente_id = request.GET.get("cliente", "").strip()
-    estado = request.GET.get("estado", "").strip()
-    canal = request.GET.get("canal", "").strip()
-    q = request.GET.get("q", "").strip()
-    if cliente_id:
-        qs = qs.filter(cliente_id=cliente_id)
-    if estado:
-        qs = qs.filter(estado=estado)
-    if canal:
-        qs = qs.filter(canal=canal)
-    if q:
+
+
+def _pedidos_cancelar_guia_caja(request):
+    """Cancela la guía de UNA caja (aún sin salir) y la recotiza con las reglas
+    del pedido; el pedido regresa a empaque sin dueño para recomprarla."""
+    from apps.pedidos.services import cambiar_paqueteria_caja
+
+    pedido, caja = _caja_del_post(request)
+    vieja = caja.guia_activa
+    if vieja is None:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} no tiene guía que cancelar.")
+    caja = cambiar_paqueteria_caja(pedido, caja, None, request.user)
+    return f"Guía {vieja.numero} de la caja {caja.numero} cancelada; {pedido.folio} regresó a empaquetado sin dueño y el piso la recompra."
+
+
+def _pedidos_reimprimir_caja(request):
+    """Reimprime la etiqueta del carrier y la interna de la guía de una caja."""
+    from apps.piso.etiquetas import imprimir_etiqueta  # lazy por contrato
+
+    pedido, caja = _caja_del_post(request)
+    guia = caja.guia_activa
+    if guia is None:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} no tiene guía que imprimir.")
+    mensajes = [imprimir_etiqueta(guia), imprimir_etiqueta(guia, interna=True)]
+    return f"Caja {caja.numero} de {pedido.folio}: " + " · ".join(m for m in mensajes if m)
+
+
+def _ejecutar_accion_pedido(request):
+    """Acciones POST de Mesa sobre un pedido (lista y detalle comparten):
+    cancelar, cancelar guías, cambiar paquetería (pedido o caja), reintentar
+    reservas, cancelar guía de una caja, reimprimir etiqueta de una caja."""
+    accion = request.POST.get("accion")
+    simples = {
+        "cancelar_guias": _pedidos_cancelar_guias,
+        "cancelar": _pedidos_cancelar,
+        "cambiar_paqueteria": _pedidos_cambiar_paqueteria,
+        "cambiar_paqueteria_caja": _pedidos_cambiar_paqueteria_caja,
+        "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
+        "reimprimir_caja": _pedidos_reimprimir_caja,
+    }
+    if accion in simples:
+        try:
+            exito = simples[accion](request)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, exito)
+    elif accion == "reintentar_reservas":
+        try:
+            exito, completo = _pedidos_reintentar_reservas(request)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            # Verde solo si el pedido quedó completo; parcial = warning
+            # (amarillo): sigue faltando stock y Mesa debe verlo como tal.
+            (messages.success if completo else messages.warning)(request, exito)
+    else:
+        messages.error(request, "Acción desconocida. Recarga la página e intenta de nuevo.")
+
+
+def _filtrar_pedidos(GET):
+    """Queryset de Mesa → Pedidos con los filtros de la URL (cliente, estado,
+    canal, q), del más nuevo al más viejo; lo comparten la lista y el
+    Anterior / Siguiente del detalle."""
+    from apps.pedidos.models import Pedido
+
+    qs = Pedido.objects.select_related("cliente", "tienda").order_by("-creado", "-pk")
+    filtro = {k: (GET.get(k) or "").strip() for k in ("cliente", "estado", "canal", "q")}
+    if filtro["cliente"]:
+        qs = qs.filter(cliente_id=filtro["cliente"])
+    if filtro["estado"]:
+        qs = qs.filter(estado=filtro["estado"])
+    if filtro["canal"]:
+        qs = qs.filter(canal=filtro["canal"])
+    if filtro["q"]:
+        q = filtro["q"]
         qs = qs.filter(
             Q(folio__icontains=q)
             | Q(comprador_nombre__icontains=q)
             | Q(shopify_order_id__icontains=q)
             | Q(shopify_order_name__icontains=q)  # "#4074", como lo busca servicio al cliente
         )
+    return qs, filtro
 
+
+def _resumen_cajas(pedido):
+    """"2 cajas · 1 en tránsito · 1 empacada" para la lista: el estatus de
+    cada caja es el de su guía viva o, sin guía, el de la caja."""
+    cajas = list(pedido.paquetes.all())
+    if not cajas:
+        return ""
+    conteo = {}
+    for caja in cajas:
+        guia = next((g for g in caja.guias.all() if g.es_activa), None)
+        etiqueta = guia.get_estado_display() if guia is not None else caja.get_estado_display()
+        conteo[etiqueta] = conteo.get(etiqueta, 0) + 1
+    partes = " · ".join(f"{n} {e.lower()}" for e, n in conteo.items())
+    return f"{len(cajas)} caja{'s' if len(cajas) != 1 else ''} · {partes}"
+
+
+@rol_requerido("mesa")
+def pedidos(request):
+    """Lista de pedidos de Mesa (2026-09-30: una fila limpia por pedido; el
+    detalle, las guías y las acciones por caja viven en pedido_detalle)."""
+    from apps.pedidos.models import Pedido
+
+    if request.method == "POST":
+        _ejecutar_accion_pedido(request)
+        # PRG conservando los filtros activos (patrón _redirect_inventario):
+        # cancelar en tanda no debe rearmar el filtro cada vez.
+        qs_filtros = request.GET.urlencode()
+        destino = reverse("mesa:pedidos")
+        return redirect(f"{destino}?{qs_filtros}" if qs_filtros else destino)
+
+    qs, filtro = _filtrar_pedidos(request.GET)
+    qs = qs.prefetch_related("lineas__sku", "paquetes__guias")
     filas = list(qs[:200])
+    from apps.incidencias.services import sin_paqueteria_abierta  # lazy por contrato
+
+    sufijo = f"?{request.GET.urlencode()}" if request.GET.urlencode() else ""
     for pedido in filas:
         pedido.pill = PILL_PEDIDO.get(pedido.estado, "")
         pedido.cancelable = pedido.estado in ESTADOS_CANCELABLES_MESA
-        # Guías compradas y nada en la calle: se pueden cancelar y recomprar (2026-09-24).
-        # Cambiar paquetería (2026-09-28): antes de salir; incluye "Sin guía".
-        pedido.puede_cambiar_paqueteria = pedido.estado in ESTADOS_CAMBIO_PAQUETERIA
-        pedido.puede_cancelar_guias = (
-            pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
-            and not any(c.estado == "DESPACHADO" for c in pedido.paquetes.all())
-        )
+        pedido.url_detalle = reverse("mesa:pedido_detalle", args=[pedido.pk]) + sufijo
+        pedido.resumen_cajas = _resumen_cajas(pedido)
         # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
         pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
-        # Guías vivas con su rastreo público (Chema 2026-09-23: ver el número
-        # desde Mesa sin ir al admin).
-        from apps.envios.services import url_rastreo_carrier  # lazy por contrato
-        pedido.guias_vivas = [
-            (g, url_rastreo_carrier(g.carrier, g.numero))
-            for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.es_activa
-        ]
         # Incidencia interna "Sin paquetería que cotice" abierta: tag con link (2026-09-24).
-        from apps.incidencias.services import sin_paqueteria_abierta  # lazy por contrato
         pedido.sin_paqueteria = sin_paqueteria_abierta(pedido)
-
-    from apps.envios.services import opciones_paqueteria  # lazy por contrato
 
     return render(request, "mesa/pedidos.html", {
         "seccion": "pedidos",
         "pedidos": filas,
-        "opciones_paqueteria": opciones_paqueteria(),
         "total": qs.count(),
         "estados": Pedido.ESTADOS,
         "canales": Pedido.CANALES,
         "clientes_filtro": Cliente.objects.all(),
-        "filtro": {"cliente": cliente_id, "estado": estado, "canal": canal, "q": q},
+        "filtro": filtro,
+    })
+
+
+@rol_requerido("mesa")
+def pedido_detalle(request, pk):
+    """Detalle de UN pedido en Mesa (Chema 2026-09-30): encabezado, cajas con
+    su guía y acciones por caja (cambiar paquetería, cancelar guía,
+    reimprimir), líneas, línea de tiempo por caja, incidencias y
+    compensaciones, fotos, auditoría y las acciones de orden completa.
+    Anterior / Siguiente recorren la lista con los mismos filtros."""
+    from django.db.models import Max
+
+    from apps.core.models import EvidenciaFoto
+    from apps.envios.services import opciones_paqueteria, url_rastreo_carrier
+    from apps.incidencias.models import Incidencia
+    from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
+    from apps.pedidos.linea_tiempo import construir
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.reportes import url_orden_shopify
+    from apps.pedidos.services import direccion_en_una_linea
+
+    pedido = get_object_or_404(
+        Pedido.objects.select_related("cliente", "tienda", "asignado_a")
+        .prefetch_related("lineas__sku", "paquetes__guias", "paquetes__lineas__linea_pedido__sku"),
+        pk=pk,
+    )
+    if request.method == "POST":
+        _ejecutar_accion_pedido(request)
+        qs_filtros = request.GET.urlencode()
+        destino = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        return redirect(f"{destino}?{qs_filtros}" if qs_filtros else destino)
+
+    qs, filtro = _filtrar_pedidos(request.GET)
+    sufijo = f"?{request.GET.urlencode()}" if request.GET.urlencode() else ""
+    anterior = qs.filter(creado__gt=pedido.creado).order_by("creado", "pk").first()
+    siguiente = qs.filter(creado__lt=pedido.creado).first()
+
+    puede_cambiar = pedido.estado in ESTADOS_CAMBIO_PAQUETERIA
+    cajas = sorted(pedido.paquetes.all(), key=lambda c: c.numero)
+    for caja in cajas:
+        caja.guia = next((g for g in caja.guias.all() if g.es_activa), None)
+        caja.historial = sorted((g for g in caja.guias.all() if not g.es_activa), key=lambda g: g.pk)
+        caja.url_rastreo = url_rastreo_carrier(caja.guia.carrier, caja.guia.numero) if caja.guia else ""
+        caja.puede_cambiar = puede_cambiar and caja.estado != "DESPACHADO" and (
+            caja.guia is None or caja.guia.estado == "GUIA_CREADA"
+        )
+        caja.puede_cancelar_guia = caja.puede_cambiar and caja.guia is not None
+        caja.puede_reimprimir = caja.guia is not None and caja.estado != "DESPACHADO"
+    guias_sueltas = [
+        (g, url_rastreo_carrier(g.carrier, g.numero))
+        for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.paquete_id is None
+    ]
+    ahora = timezone.now()
+    incidencias = (
+        Incidencia.objects.filter(pedido=pedido).select_related("cliente", "sku")
+        .prefetch_related("compensaciones").annotate(ultimo_mensaje=Max("mensajes__ts"))
+    )
+    grupos, _ = agrupar_por_pedido([_anotar_reloj_sla(inc, ahora) for inc in incidencias])
+    grupo = grupos[0] if grupos else {"pedido": pedido, "incidencias": [], "abiertas": [], "cerradas": 0}
+    compensaciones = [c for inc in grupo["incidencias"] for c in inc.compensaciones.all()]
+    fotos = list(EvidenciaFoto.objects.filter(entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio]).order_by("ts"))
+    eventos = list(
+        EventoAuditoria.objects.filter(entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio]).order_by("-ts")[:40]
+    )
+    return render(request, "mesa/pedido_detalle.html", {
+        "seccion": "pedidos",
+        "pedido": pedido,
+        "pill": PILL_PEDIDO.get(pedido.estado, ""),
+        "url_shopify": url_orden_shopify(pedido),
+        "direccion": pedido.direccion or {},
+        "direccion_pendiente": direccion_en_una_linea(pedido.direccion_pendiente) if pedido.direccion_pendiente else "",
+        "cajas": cajas,
+        "guias_sueltas": guias_sueltas,
+        "lineas": list(pedido.lineas.all()),
+        "piezas_sin_inventario": sum(l.cantidad for l in pedido.lineas_faltantes),
+        "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
+        "es_mesa": True,
+        "grupo": grupo,
+        "compensaciones": compensaciones,
+        "fotos": fotos,
+        "eventos": eventos,
+        "sin_paqueteria": sin_paqueteria_abierta(pedido),
+        "opciones_paqueteria": opciones_paqueteria(),
+        "cancelable": pedido.estado in ESTADOS_CANCELABLES_MESA,
+        "puede_cambiar_paqueteria": puede_cambiar,
+        "puede_cancelar_guias": (
+            pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
+            and not any(c.estado == "DESPACHADO" for c in cajas)
+        ),
+        "puede_reintentar_reservas": pedido.estado == Pedido.PENDIENTE or (
+            pedido.estado == Pedido.PARCIALMENTE_DESPACHADO and pedido.tiene_faltantes
+        ),
+        "url_lista": reverse("mesa:pedidos") + sufijo,
+        "url_anterior": reverse("mesa:pedido_detalle", args=[anterior.pk]) + sufijo if anterior else "",
+        "url_siguiente": reverse("mesa:pedido_detalle", args=[siguiente.pk]) + sufijo if siguiente else "",
     })
 
 

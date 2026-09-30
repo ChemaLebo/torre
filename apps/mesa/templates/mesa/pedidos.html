@@ -54,12 +54,12 @@
 <div class="tabla-wrap">
   <table>
     <thead>
-      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Guía</th><th>Incidencia</th><th>Ingresó</th><th>Cancelar</th></tr>
+      <tr><th>Folio</th><th>Cliente</th><th>Tienda</th><th>Canal</th><th>Comprador</th><th>Ruta</th><th>Estado</th><th>Cajas</th><th>Incidencia</th><th>Ingresó</th><th>Acciones</th></tr>
     </thead>
     <tbody>
       {% for pedido in pedidos %}
       <tr>
-        <td class="mono">{{ pedido.folio }}</td>
+        <td><a class="mono" href="{{ pedido.url_detalle }}" title="Ver el detalle del pedido">{{ pedido.folio }}</a></td>
         <td>{{ pedido.cliente.nombre }}</td>
         <td class="small">
           {% if pedido.tienda %}{{ pedido.tienda.dominio }}
@@ -68,8 +68,7 @@
             {% endif %}
           {% else %}manual{% endif %}
         </td>
-        <td><span class="pill" title="{{ pedido.canal_fuente }}">{{ pedido.get_canal_display }}</span>
-        </td>
+        <td><span class="pill" title="{{ pedido.canal_fuente }}">{{ pedido.get_canal_display }}</span></td>
         <td>{{ pedido.comprador_nombre|default:"—" }}</td>
         <td>{% if pedido.es_local %}<span class="pill accent">local</span>{% else %}<span class="small">CP {{ pedido.cp|default:"—" }}</span>{% endif %}</td>
         <td>
@@ -77,48 +76,19 @@
           {% if pedido.parcial_de_orden %}<span class="pill accent" title="La orden se dividió entre locations: este pedido ampara solo nuestro ticket">parcial</span>{% endif %}
           {% if pedido.ts_recolectado_carrier and pedido.estado == 'GUIA_GENERADA' %}<span class="pill warn" title="El carrier ya reportó la recolección y Torre no tiene manifiesto: regístralo en Salida (sale pre-marcado)">recolectado por carrier · sin manifiesto</span>{% endif %}
         </td>
-        <td class="small">
-          {% for g, url in pedido.guias_vivas %}
-          <div>{% if url %}<a class="mono" href="{{ url }}" target="_blank" rel="noopener" title="Rastreo público de {{ g.carrier }}">{{ g.numero }} ↗</a>{% else %}<span class="mono">{{ g.numero }}</span>{% endif %}
-            · {{ g.carrier }}{% if g.paquete %} · caja {{ g.paquete.numero }}{% endif %}
-            <span class="pill {% if g.estado == 'ENTREGADO' %}ok{% elif g.estado == 'RETORNO' or g.estado == 'INTENTO_FALLIDO' or g.estado == 'EXCEPCION' %}crit{% elif g.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ g.ultimo_evento }}">{{ g.get_estado_display }}</span>{% if g.sustituida_motivo %} <span class="pill warn" title="Su contenido se repuso en otra caja; se sigue rastreando aparte">sustituida · {{ g.get_sustituida_motivo_display|lower }}{% for n in g.cajas_reposicion %} · por caja {{ n }}{% endfor %}</span>{% endif %}
-            {% if g.fecha_compromiso and g.estado != 'ENTREGADO' %}<span class="muted" title="Compromiso de entrega">· llega {{ g.fecha_compromiso|date:"d/M" }}</span>{% elif g.dias_promesa and g.estado == 'GUIA_CREADA' %}<span class="muted" title="Se cuenta desde la salida">· {{ g.dias_promesa }} día{{ g.dias_promesa|pluralize }} desde la salida</span>{% endif %}
-          </div>
-          {% empty %}—{% endfor %}
-        </td>
+        <td class="small">{% if pedido.resumen_cajas %}<a href="{{ pedido.url_detalle }}#cajas">{{ pedido.resumen_cajas }}</a>{% else %}<span class="muted">sin plan</span>{% endif %}</td>
         <td>{% if pedido.incidencia_activa %}<span class="pill crit">activa</span>{% elif not pedido.sin_paqueteria %}<span class="small">—</span>{% endif %}{% if pedido.sin_paqueteria %} <a class="pill crit" href="{% url 'mesa:incidencia_detalle' pedido.sin_paqueteria.pk %}" title="Ningún carrier cotiza: elige paquetería en la incidencia">Sin paquetería · {{ pedido.sin_paqueteria.folio }}</a>{% endif %}{% if pedido.reingreso_estado %} <span class="pill">{{ pedido.get_reingreso_estado_display }}</span>{% endif %}{% if pedido.piezas_sin_inventario %} <span class="pill crit">Sin inventario · {{ pedido.piezas_sin_inventario }} pza{{ pedido.piezas_sin_inventario|pluralize }}</span>{% endif %}</td>
         <td class="mono">{{ pedido.creado|date:"d/M H:i" }}</td>
         <td>
-          {% if pedido.cancelable or pedido.estado == "PENDIENTE" or pedido.puede_cancelar_guias or pedido.puede_cambiar_paqueteria %}
+          {# Acciones de orden completa (Chema 2026-09-30); las de cada caja viven en el detalle. #}
           <div class="fila">
-            {% if pedido.puede_cancelar_guias %}
-            <form method="post" onsubmit="return confirm('¿Cancelar las guías de {{ pedido.folio }} con el carrier y regresarlo a empaquetado? El piso recompra la guía.');">
-              {% csrf_token %}
-              <input type="hidden" name="accion" value="cancelar_guias">
-              <input type="hidden" name="folio" value="{{ pedido.folio }}">
-              <button class="btn chico" type="submit" title="Cancela las guías con el carrier, recotiza y regresa el pedido a empaquetado sin dueño">Cancelar guías</button>
-            </form>
-            {% endif %}
             <a class="btn chico" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}" title="Abre una incidencia con este pedido ya puesto">Levantar incidencia</a>
-            {# También en un parcial que espera inventario (Chema 2026-09-28): el servicio ya lo aceptaba, el botón no salía. #}
             {% if pedido.estado == "PENDIENTE" or pedido.estado == "PARCIALMENTE_DESPACHADO" and pedido.tiene_faltantes %}
             <form method="post">
               {% csrf_token %}
               <input type="hidden" name="accion" value="reintentar_reservas">
               <input type="hidden" name="folio" value="{{ pedido.folio }}">
               <button class="btn chico" type="submit" title="Reintenta apartar el stock de sus líneas sin reservar">Reintentar reservas</button>
-            </form>
-            {% endif %}
-            {% if pedido.puede_cambiar_paqueteria %}
-            {# Cambiar paquetería antes de salir (2026-09-28), incluida la salida sin guía de carrier. #}
-            <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de {{ pedido.folio }}? Se replanea o recotiza con la elegida; con guía comprada, se cancela y regresa a empaquetado.');">
-              {% csrf_token %}
-              <input type="hidden" name="accion" value="cambiar_paqueteria">
-              <input type="hidden" name="folio" value="{{ pedido.folio }}">
-              <select name="carrier" aria-label="Paquetería para {{ pedido.folio }}">
-                {% for clave, nombre in opciones_paqueteria %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}
-              </select>
-              <button class="btn chico" type="submit" title="Fuerza esta paquetería para el pedido; 'Sin guía' lo manda al corral SAL-LOCAL con guía interna">Cambiar paquetería</button>
             </form>
             {% endif %}
             {% if pedido.cancelable %}
@@ -131,11 +101,10 @@
             </form>
             {% endif %}
           </div>
-          {% else %}<span class="small">—</span>{% endif %}
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="9" class="muted centro">Sin pedidos con esos filtros.</td></tr>
+      <tr><td colspan="11" class="muted centro">Sin pedidos con esos filtros.</td></tr>
       {% endfor %}
     </tbody>
   </table>
