@@ -244,6 +244,20 @@ class TarifarioTests(BaseGestionClientes):
         self.assertEqual(evento.delta["despues"], {"almacenaje_mes": 20000})
         self.assertEqual(evento.actor_id, "mesa1")
 
+    def test_cobrar_almacenaje_desde_se_guarda_aparte_del_tarifario(self):
+        # No es override: va en Cliente.facturacion_desde (prorrateo del primer corte).
+        self.client.post(self.url, {"facturacion_desde": "2026-09-21"})
+        self.colima.refresh_from_db()
+        self.assertEqual((self.colima.tarifario, str(self.colima.facturacion_desde)), ({}, "2026-09-21"))
+        evento = EventoAuditoria.objects.filter(entidad="cliente", entidad_id="colima", accion="tarifario_actualizado").latest("ts")
+        self.assertEqual(evento.delta["facturacion_desde"], ["", "2026-09-21"])
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, 'value="2026-09-21"')
+        self.assertContains(respuesta, "Cobrar almacenaje desde")
+        self.client.post(self.url, {})  # vacío = vuelve al día del primer pedido
+        self.colima.refresh_from_db()
+        self.assertIsNone(self.colima.facturacion_desde)
+
     def test_get_prefillea_el_valor_efectivo_con_pill_propio(self):
         self.colima.tarifario = {"almacenaje_mes": 20000}
         self.colima.save(update_fields=["tarifario"])

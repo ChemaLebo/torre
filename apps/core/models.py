@@ -74,6 +74,12 @@ class Cliente(models.Model):
                   "almacenaje_mes, alistamiento_pedido, empaque_pedido, bloque_kg, "
                   "envio_bloque {local, metro, nacional}. Vacío = tarifario default.",
     )
+    # Desde qué día se cobra el almacenaje (prorrateado por días en su primer
+    # corte, Chema 2026-10-01). Vacío = el día de su primer pedido.
+    facturacion_desde = models.DateField(
+        null=True, blank=True,
+        help_text="Día desde el que se cobra almacenaje (prorrateado en su primer corte). Vacío = el día de su primer pedido.",
+    )
     activo = models.BooleanField(default=True)
     creado = models.DateTimeField(auto_now_add=True)
 

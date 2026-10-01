@@ -46,7 +46,8 @@
     <ul class="timeline">
       <li class="hito"><span class="cuando">Overrides</span>Solo se guardan las tarifas que difieren del default general; el resto sigue el tarifario de la casa.</li>
       <li><span class="cuando">Volver al default</span>Deja un campo vacío (o pon el mismo valor del default) y esa tarifa regresa al general.</li>
-      <li><span class="cuando">Dónde pega</span>La factura simulada de <a href="{% url 'mesa:finanzas' %}">Finanzas</a> usa este tarifario desde el siguiente cálculo.</li>
+      <li><span class="cuando">Dónde pega</span>Los estados de cuenta por corte de <a href="{% url 'mesa:finanzas' %}">Finanzas</a> usan este tarifario desde el siguiente cálculo.</li>
+      <li><span class="cuando">Almacenaje</span>Se cobra la mitad de la tarifa mensual en cada corte (1–15 y 16–fin de mes). "Cobrar almacenaje desde" prorratea su primer corte por días; vacío = el día de su primer pedido.</li>
     </ul>
   </div>
 </div>

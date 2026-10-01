@@ -390,6 +390,13 @@ class FormTarifario(forms.Form):
     envio_nacional = forms.DecimalField(label="Envío nacional por bloque (MXN)", required=False, min_value=0)
     recepcion_tarima = forms.DecimalField(label="Recepción por tarima (MXN)", required=False, min_value=0)
     minimo_mes = forms.DecimalField(label="Mínimo al mes (MXN)", required=False, min_value=0)
+    # No es override del tarifario: va en Cliente.facturacion_desde (el
+    # almacenaje se prorratea por días desde ahí en su primer corte).
+    facturacion_desde = forms.DateField(
+        label="Cobrar almacenaje desde", required=False,
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+        help_text="Vacío = el día de su primer pedido.",
+    )
 
     def overrides(self):
         """Dict listo para Cliente.tarifario: solo lo que difiere del default."""

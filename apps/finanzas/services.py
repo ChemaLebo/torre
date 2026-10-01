@@ -47,6 +47,8 @@ from decimal import Decimal
 from django.conf import settings
 from django.utils import timezone
 
+from .cortes import corte_de
+
 CARRIERS_METRO = {"puntopost"}
 CARRIER_LOCAL = "local"
 
@@ -332,8 +334,70 @@ def facturar_guias(cliente, inicio, fin):
     return {"filas": filas, "tarifas": tarifas, "reembolsos_previos": previos}
 
 
-def resumen_mes(cliente, inicio, fin):
-    """Estado de resultados del cliente en [inicio, fin): ingreso, costo, margen."""
+def _dia_primer_pedido(cliente):
+    """Fecha local del primer pedido del cliente; None si no tiene."""
+    from apps.pedidos.models import Pedido
+
+    primero = Pedido.objects.filter(cliente=cliente).order_by("creado").values_list("creado", flat=True).first()
+    return timezone.localtime(primero).date() if primero else None
+
+
+def dias_activos_en(cliente, corte):
+    """Días del corte en que el cliente ya es cliente: desde
+    `Cliente.facturacion_desde` o, si está vacío, el día de su primer pedido
+    (Chema 2026-10-01: Colima empezó el 21 de septiembre → su 2º corte de
+    septiembre cobra 10 de 15 días). 0 si todavía no empieza."""
+    desde = cliente.facturacion_desde or _dia_primer_pedido(cliente)
+    if desde is None:
+        return 0
+    primero = max(corte.inicio, desde)
+    if primero > corte.fin:
+        return 0
+    return (corte.fin - primero).days + 1
+
+
+def almacenaje_del_corte(cliente, corte, tarifas, hoy=None):
+    """Almacenaje del corte: la MITAD de la tarifa mensual (dos cobros al mes,
+    Chema 2026-10-01), prorrateada por los días activos del corte. 0 para un
+    cliente inactivo o un corte que aún no empieza. Regresa (importe, días)."""
+    dias = dias_activos_en(cliente, corte)
+    if not cliente.activo or corte.inicio > (hoy or timezone.localdate()) or not dias:
+        return Decimal("0.00"), dias
+    mensual = Decimal(str(tarifas["almacenaje_mes"]))
+    return (mensual / 2 * dias / corte.dias).quantize(Decimal("0.01")), dias
+
+
+def _recepcion_del_corte(cliente, inicio, fin, tarifas):
+    """(tarimas, importe) de la recepción por tarima (Modelo B): entradas
+    descargadas dentro del periodo; lo que contó el piso manda
+    (tarimas_recibidas), si no se contó vale lo anunciado (tarimas)."""
+    from apps.inventario.models import OrdenEntrada  # lazy por contrato
+
+    tarifa = Decimal(str(tarifas.get("recepcion_tarima", 0)))
+    tarimas = sum(
+        (recibidas or anunciadas)
+        for recibidas, anunciadas in OrdenEntrada.objects.filter(
+            cliente=cliente, ts_descarga_fin__gte=inicio, ts_descarga_fin__lt=fin,
+            estado__in=(OrdenEntrada.RECIBIDA, OrdenEntrada.CERRADA),
+        ).values_list("tarimas_recibidas", "tarimas")
+    )
+    return tarimas, tarimas * tarifa
+
+
+def _estado_de_cuenta(lineas, subtotal):
+    """Totales de un estado de cuenta: subtotal sin IVA, IVA y total."""
+    monto_iva, total = con_iva(subtotal)
+    return {"lineas": lineas, "subtotal": subtotal, "iva": monto_iva, "total": total}
+
+
+def resumen_corte(cliente, corte, _con_minimo=True):
+    """Estado de resultados del cliente en un corte: lo que se le factura
+    (dos estados de cuenta, Chema 2026-10-01: "fulfillment" = picking,
+    empaque, almacenaje del corte y recepción; "guias" = envío por guía menos
+    reembolsos, incluidos los de cortes anteriores), con subtotal, IVA y
+    total, y lo que nos costó (carrier real e insumos). El mínimo mensual
+    (Modelo B) se evalúa en el 2º corte con el mes completo."""
+    inicio, fin = corte.limites()
     facturacion = facturar_guias(cliente, inicio, fin)
     tarifas = facturacion["tarifas"]
     filas_guias = facturacion["filas"]
@@ -345,10 +409,11 @@ def resumen_mes(cliente, inicio, fin):
     guias_reexpedicion = 0
     cancelados = set()
     ingreso_envio = Decimal("0")
+    reembolsos_del_corte = Decimal("0")
+    pedidos_picking = pedidos_empaque = 0
     ingreso_alistamiento = sum((f["picking"] for f in filas_guias), Decimal("0"))
     ingreso_empaque = sum((f["empaque"] for f in filas_guias), Decimal("0"))
-    reembolsos_previos = sum((r.monto for r in facturacion["reembolsos_previos"]), Decimal("0"))
-    ingreso_envio -= reembolsos_previos
+    lineas_guias = []
     for f in filas_guias:
         if f["reexpedicion"] and f["guia"] is not None:
             guias_reexpedicion += 1
@@ -356,13 +421,24 @@ def resumen_mes(cliente, inicio, fin):
             cancelados.add(f["pedido"].pk)
         if f["bulto"]:
             paquetes += 1  # cada bulto empacado gasta insumos
+        if f["picking"]:
+            pedidos_picking += 1
+        if f["empaque"]:
+            pedidos_empaque += 1
         if f["picking"] or f["empaque"]:
             pedidos_facturables.add(f["pedido"].pk)
         if not f["cobra_envio"]:
             continue
+        g = f["guia"]
         pedidos_facturables.add(f["pedido"].pk)
         guias_zona[f["zona"]] += 1
         ingreso_envio += f["transporte"] - f["reembolso"]
+        reembolsos_del_corte += f["reembolso"]
+        lineas_guias.append({
+            "pedido": f["pedido"], "caja": f["caja"], "guia": g, "carrier": f["carrier"], "zona": f["zona"],
+            "fecha": f["ts"], "tarifa": f["transporte"], "reembolso": f["reembolso"],
+            "neto": f["transporte"] - f["reembolso"], "nota": f["nota"],
+        })
         fila = estados.setdefault(f["estado"], {
             "pedidos": set(), "ordenes": 0, "peso": 0.0, "guias": 0, "zona": f["zona"],
             "costo": Decimal("0"), "facturado": Decimal("0"),
@@ -375,39 +451,51 @@ def resumen_mes(cliente, inicio, fin):
         fila["facturado"] += f["transporte"] - f["reembolso"]
     for fila in estados.values():
         fila.pop("pedidos", None)
+    previos = [
+        {
+            "pedido": r.guia.pedido, "guia": r.guia, "caja": r.guia.paquete, "fecha": r.fecha, "monto": r.monto,
+            "corte_origen": corte_de(r.guia.creado).etiqueta_corta, "origen": r.get_origen_display(), "nota": r.nota,
+        }
+        for r in facturacion["reembolsos_previos"]
+    ]
+    reembolsos_previos = sum((p["monto"] for p in previos), Decimal("0"))
+    ingreso_envio -= reembolsos_previos
+    for p in previos:
+        pedidos_facturables.add(p["pedido"].pk)
     pedidos_facturables = len(pedidos_facturables)
     cancelados = len(cancelados)
 
-    # Recepción por tarima (Modelo B): entradas descargadas dentro del mes.
-    # Lo que contó el piso al cerrar la entrada manda (tarimas_recibidas);
-    # si no se contó, vale lo anunciado por el cliente (tarimas).
-    from apps.inventario.models import OrdenEntrada  # lazy por contrato
-
-    tarifa_recepcion = Decimal(str(tarifas.get("recepcion_tarima", 0)))
-    tarimas_facturadas = sum(
-        (recibidas or anunciadas)
-        for recibidas, anunciadas in OrdenEntrada.objects.filter(
-            cliente=cliente,
-            ts_descarga_fin__gte=inicio,
-            ts_descarga_fin__lt=fin,
-            estado__in=(OrdenEntrada.RECIBIDA, OrdenEntrada.CERRADA),
-        ).values_list("tarimas_recibidas", "tarimas")
-    )
-    ingreso_recepcion = tarimas_facturadas * tarifa_recepcion
-
-    cobra_almacenaje = cliente.activo and inicio <= timezone.now()
-    ingreso_almacenaje = Decimal(str(tarifas["almacenaje_mes"])) if cobra_almacenaje else Decimal("0")
+    tarimas_facturadas, ingreso_recepcion = _recepcion_del_corte(cliente, inicio, fin, tarifas)
+    ingreso_almacenaje, dias_activos = almacenaje_del_corte(cliente, corte, tarifas)
     ingreso_fulfillment = ingreso_almacenaje + ingreso_alistamiento + ingreso_empaque + ingreso_recepcion
     ingreso_total = ingreso_fulfillment + ingreso_envio
 
-    # Mínimo mensual (Modelo B): si la factura no llega al piso pactado, se
-    # agrega una línea de ajuste al total (línea aparte del CFDI) — nunca
-    # infla fulfillment ni envío.
+    # Mínimo mensual (Modelo B): se evalúa en el 2º corte con el mes completo;
+    # si la suma de los dos cortes no llega al piso pactado, el 2º corte
+    # lleva una línea de ajuste (línea aparte del CFDI), nunca infla
+    # fulfillment ni envío.
     minimo_mes = Decimal(str(tarifas.get("minimo_mes", 0)))
     ajuste_minimo = Decimal("0")
-    if minimo_mes > 0 and ingreso_total < minimo_mes:
-        ajuste_minimo = minimo_mes - ingreso_total
-        ingreso_total = minimo_mes
+    if _con_minimo and minimo_mes > 0 and corte.numero == 2:
+        ingreso_mes = resumen_corte(cliente, corte.anterior(), _con_minimo=False)["ingresos"]["total"] + ingreso_total
+        if ingreso_mes < minimo_mes:
+            ajuste_minimo = minimo_mes - ingreso_mes
+            ingreso_total += ajuste_minimo
+
+    lineas_fulfillment = [
+        {"concepto": "Almacenaje", "detalle": f"½ de ${tarifas['almacenaje_mes']:,} al mes · {dias_activos} de {corte.dias} días", "importe": ingreso_almacenaje},
+        {"concepto": "Picking (alistamiento)", "detalle": f"{pedidos_picking} pedido{'s' if pedidos_picking != 1 else ''} × ${tarifas['alistamiento_pedido']}", "importe": ingreso_alistamiento},
+        {"concepto": "Empaque", "detalle": f"{pedidos_empaque} pedido{'s' if pedidos_empaque != 1 else ''} × ${tarifas['empaque_pedido']}", "importe": ingreso_empaque},
+    ]
+    if tarimas_facturadas or tarifas.get("recepcion_tarima"):
+        lineas_fulfillment.append({"concepto": "Recepción", "detalle": f"{tarimas_facturadas} tarima{'s' if tarimas_facturadas != 1 else ''} × ${tarifas.get('recepcion_tarima', 0)}", "importe": ingreso_recepcion})
+    if ajuste_minimo:
+        lineas_fulfillment.append({"concepto": "Ajuste a mínimo mensual", "detalle": f"mínimo ${tarifas['minimo_mes']:,} al mes", "importe": ajuste_minimo})
+    facturas = {
+        "fulfillment": _estado_de_cuenta(lineas_fulfillment, ingreso_fulfillment + ajuste_minimo),
+        "guias": {**_estado_de_cuenta(lineas_guias, ingreso_envio), "previos": previos},
+    }
+    monto_iva, total_con_iva = con_iva(ingreso_total)
 
     costo_insumos = paquetes * Decimal(str(settings.TORRE["INSUMO_PAQUETE_MXN"]))
     costo_total = costo_carrier + costo_insumos
@@ -423,7 +511,9 @@ def resumen_mes(cliente, inicio, fin):
 
     return {
         "cliente": cliente,
+        "corte": corte,
         "tarifario": tarifas,
+        "dias_activos": dias_activos,
         "pedidos": pedidos_facturables,
         "paquetes": paquetes,
         "guias": sum(1 for f in filas_guias if f["guia"] is not None),
@@ -439,9 +529,13 @@ def resumen_mes(cliente, inicio, fin):
             "recepcion": ingreso_recepcion,
             "fulfillment": ingreso_fulfillment,
             "envio": ingreso_envio,
+            "reembolsos": reembolsos_del_corte + reembolsos_previos,
             "ajuste_minimo": ajuste_minimo,
             "total": ingreso_total,
+            "iva": monto_iva,
+            "total_con_iva": total_con_iva,
         },
+        "facturas": facturas,
         "costos": {
             "carrier": costo_carrier,
             "insumos": costo_insumos,

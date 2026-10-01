@@ -2386,11 +2386,16 @@ def cliente_tarifario(request, pk):
         if form.is_valid():
             viejo = cliente.tarifario or {}
             nuevo = form.overrides()
+            desde_antes = cliente.facturacion_desde
             cliente.tarifario = nuevo
-            cliente.save(update_fields=["tarifario"])
+            cliente.facturacion_desde = form.cleaned_data.get("facturacion_desde")
+            cliente.save(update_fields=["tarifario", "facturacion_desde"])
             registrar_evento(
                 "cliente", cliente.slug, "tarifario_actualizado", actor=request.user,
-                cliente=cliente, delta={"antes": viejo, "despues": nuevo},
+                cliente=cliente, delta={
+                    "antes": viejo, "despues": nuevo,
+                    "facturacion_desde": [str(desde_antes or ""), str(cliente.facturacion_desde or "")],
+                },
                 motivo="Editor de tarifario de Mesa de Control",
             )
             messages.success(
@@ -2409,6 +2414,7 @@ def cliente_tarifario(request, pk):
             inicial[f"envio_{zona}"] = efectivo.get("envio_bloque", {}).get(
                 zona, default.get("envio_bloque", {}).get(zona, 0)
             )
+        inicial["facturacion_desde"] = cliente.facturacion_desde
         form = FormTarifario(initial=inicial)
 
     # Filas para el template: campo + default (help) + pill propio/default.
@@ -2422,6 +2428,7 @@ def cliente_tarifario(request, pk):
         defecto = default.get("envio_bloque", {}).get(zona, 0)
         form.fields[f"envio_{zona}"].help_text = f"(default: ${defecto})"
         filas.append({"campo": form[f"envio_{zona}"], "propio": zona in envio_override})
+    filas.append({"campo": form["facturacion_desde"], "propio": cliente.facturacion_desde is not None})
 
     return render(request, "mesa/cliente_tarifario.html", {
         "seccion": "clientes",
@@ -3171,38 +3178,31 @@ def _importar_csv_skus(request, cliente):
 
 @rol_requerido("mesa")
 def finanzas(request):
-    """Estado de resultados del mes: cuánto facturamos, cuánto nos costó.
+    """Estado de resultados del CORTE (quincena, Chema 2026-10-01): cuánto se
+    factura a cada cliente en sus dos estados de cuenta (fulfillment y
+    guías, con IVA) y cuánto nos costó.
 
-    El ingreso se simula con el tarifario vigente (settings + override por
-    cliente); el costo de envío es el REAL de las guías del mes. Los fijos
-    (renta, sueldos, servicios) se restan una sola vez, a nivel global.
+    El ingreso sale del tarifario vigente (settings + override por cliente);
+    el costo de envío es el REAL de las guías del corte. Los fijos (renta,
+    sueldos, servicios) se restan una sola vez, a nivel global, la mitad del
+    mes por corte.
     """
-    from datetime import date, datetime
-
     from apps.finanzas import services as motor
+    from apps.finanzas.cortes import corte_actual, corte_desde_clave
 
-    hoy = timezone.localdate()
-    try:
-        anio, mes = (int(p) for p in (request.GET.get("mes") or "").split("-"))
-        date(anio, mes, 1)
-    except (ValueError, TypeError):
-        anio, mes = hoy.year, hoy.month
+    corte = corte_desde_clave(request.GET.get("corte")) or corte_actual()
+    inicio, fin = corte.limites()
 
-    tz = timezone.get_current_timezone()
-    inicio = datetime(anio, mes, 1, tzinfo=tz)
-    fin = datetime(anio + 1, 1, 1, tzinfo=tz) if mes == 12 else datetime(anio, mes + 1, 1, tzinfo=tz)
-    mes_prev = f"{anio - 1}-12" if mes == 1 else f"{anio}-{mes - 1:02d}"
-    mes_sig = f"{anio + 1}-01" if mes == 12 else f"{anio}-{mes + 1:02d}"
-
-    # Activos siempre; inactivos solo si tuvieron guías o recepciones ese mes
-    # (el histórico no se reescribe cuando un cliente churnea; un mes de SOLO
-    # recepción también es facturable).
+    # Activos siempre; inactivos solo si tuvieron guías, recepciones o
+    # reembolsos ese corte (el histórico no se reescribe cuando un cliente
+    # churnea; un corte de SOLO recepción o solo reembolso también cuenta).
     from apps.inventario.models import OrdenEntrada  # lazy por contrato
 
     clientes = (
         Cliente.objects.filter(
             Q(activo=True)
             | Q(pedidos__guias__creado__gte=inicio, pedidos__guias__creado__lt=fin)
+            | Q(reembolsos_guia__fecha__gte=inicio, reembolsos_guia__fecha__lt=fin)
             | Q(
                 ordenes_entrada__ts_descarga_fin__gte=inicio,
                 ordenes_entrada__ts_descarga_fin__lt=fin,
@@ -3212,10 +3212,11 @@ def finanzas(request):
         .distinct()
         .order_by("nombre")
     )
-    filas = [motor.resumen_mes(cliente, inicio, fin) for cliente in clientes]
+    filas = [motor.resumen_corte(cliente, corte) for cliente in clientes]
 
     torre = settings.TORRE
     ingreso_total = sum((f["ingresos"]["total"] for f in filas), Decimal("0"))
+    ingreso_con_iva = sum((f["ingresos"]["total_con_iva"] for f in filas), Decimal("0"))
     costo_envio = sum((f["costos"]["carrier"] for f in filas), Decimal("0"))
     costo_insumos = sum((f["costos"]["insumos"] for f in filas), Decimal("0"))
     margen_bruto = sum((f["margen_bruto"] for f in filas), Decimal("0"))
@@ -3257,9 +3258,9 @@ def finanzas(request):
         "facturado": sum((e["facturado"] for e in acumulado.values()), Decimal("0")),
     }
     totales_estados["margen_envio"] = totales_estados["facturado"] - totales_estados["costo"]
-    fijos = Decimal(str(torre["COSTOS_FIJOS_MES_MXN"]))
+    fijos = Decimal(str(torre["COSTOS_FIJOS_MES_MXN"])) / 2  # la mitad del mes por corte
     profit = margen_bruto - fijos
-    meta = Decimal(str(torre["META_PROFIT_MES_MXN"]))
+    meta = Decimal(str(torre["META_PROFIT_MES_MXN"])) / 2
     if profit >= meta:
         profit_pill = "ok"
     elif profit >= meta / 2:
@@ -3269,10 +3270,12 @@ def finanzas(request):
 
     return render(request, "mesa/finanzas.html", {
         "seccion": "finanzas",
-        "mes_texto": f"{anio}-{mes:02d}",
-        "mes_prev": mes_prev,
-        "mes_sig": mes_sig,
+        "corte": corte,
+        "corte_prev": corte.anterior().clave,
+        "corte_sig": corte.siguiente().clave,
+        "iva_pct": int(motor.iva() * 100),
         "filas": filas,
+        "ingreso_con_iva": ingreso_con_iva,
         "tabla_estados": tabla_estados,
         "totales_estados": totales_estados,
         "ingreso_total": ingreso_total,

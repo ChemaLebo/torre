@@ -9,16 +9,16 @@
     <h1>Finanzas</h1>
   </div>
   <div class="quien mono">
-    <a href="?mes={{ mes_prev }}">←</a>
-    &nbsp;<b>{{ mes_texto }}</b>&nbsp;
-    <a href="?mes={{ mes_sig }}">→</a>
+    <a href="?corte={{ corte_prev }}" title="Corte anterior">←</a>
+    &nbsp;<b>{{ corte.etiqueta }}</b> <span class="muted">· {{ corte.etiqueta_corta }}</span>&nbsp;
+    <a href="?corte={{ corte_sig }}" title="Corte siguiente">→</a>
   </div>
 </div>
 
 <div class="grid g4 mb">
   <div class="card stat">
     <b>${{ ingreso_total|floatformat:0|intcomma }}</b>
-    <span>facturación del mes (tarifario vigente)</span>
+    <span>facturación del corte sin IVA · ${{ ingreso_con_iva|floatformat:0|intcomma }} con IVA</span>
   </div>
   <div class="card stat">
     <b>${{ costo_envio|floatformat:0|intcomma }}</b>
@@ -30,12 +30,12 @@
   </div>
   <div class="card stat {{ profit_pill }}">
     <b>${{ profit|floatformat:0|intcomma }}</b>
-    <span>profit neto · meta ${{ meta_profit|floatformat:0|intcomma }} · fijos ${{ fijos|floatformat:0|intcomma }}</span>
+    <span>profit neto · meta ${{ meta_profit|floatformat:0|intcomma }} · fijos ${{ fijos|floatformat:0|intcomma }} (la mitad del mes)</span>
   </div>
 </div>
 
 <div class="card mb">
-  <div class="titulo"><h3>Resultado por cliente</h3></div>
+  <div class="titulo"><h3>Resultado por cliente</h3><span class="small">tarifas sin IVA; la última columna ya lo suma</span></div>
   <div class="tabla-wrap">
     <table>
       <thead>
@@ -45,8 +45,9 @@
           <th class="derecha">Paquetes</th>
           <th class="derecha">Guías L/M/N</th>
           <th class="derecha">Fulfillment</th>
-          <th class="derecha">Envío facturado</th>
+          <th class="derecha">Envío neto</th>
           <th class="derecha">Facturación</th>
+          <th class="derecha">Con IVA</th>
           <th class="derecha">Costo envío</th>
           <th class="derecha">Insumos</th>
           <th class="derecha">Margen bruto</th>
@@ -61,8 +62,9 @@
           <td class="derecha mono">{{ f.paquetes }}</td>
           <td class="derecha mono">{{ f.guias_zona.local }}/{{ f.guias_zona.metro }}/{{ f.guias_zona.nacional }}</td>
           <td class="derecha mono">${{ f.ingresos.fulfillment|floatformat:0|intcomma }}</td>
-          <td class="derecha mono">${{ f.ingresos.envio|floatformat:0|intcomma }}</td>
+          <td class="derecha mono">${{ f.ingresos.envio|floatformat:0|intcomma }}{% if f.ingresos.reembolsos %}<div class="small muted">−${{ f.ingresos.reembolsos|floatformat:0|intcomma }} reemb.</div>{% endif %}</td>
           <td class="derecha mono"><b>${{ f.ingresos.total|floatformat:0|intcomma }}</b></td>
+          <td class="derecha mono">${{ f.ingresos.total_con_iva|floatformat:0|intcomma }}</td>
           <td class="derecha mono">${{ f.costos.carrier|floatformat:0|intcomma }}</td>
           <td class="derecha mono">${{ f.costos.insumos|floatformat:0|intcomma }}</td>
           <td class="derecha mono"><b>${{ f.margen_bruto|floatformat:0|intcomma }}</b></td>
@@ -75,15 +77,15 @@
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="11" class="muted centro">Sin clientes con actividad en este mes.</td></tr>
+        <tr><td colspan="12" class="muted centro">Sin clientes con actividad en este corte.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   <p class="small muted">
-    El envío se factura por guía, a la tarifa de la zona del CP de destino (Local / Metro / Nacional):
-    cada guía comprada es un cobro. Alistamiento (picking) y empaque van una vez por pedido, cada uno solo si se hizo.
-    Guías canceladas (se reembolsan), reexpediciones, cancelados y reposiciones no pagan envío.
+    Cortes del 1 al 15 y del 16 al fin de mes. Toda guía comprada se cobra en el corte de su compra, a la tarifa de la zona
+    del CP de destino (Local / Metro / Nacional); lo que la paquetería reembolsa se descuenta en el corte en que llega.
+    Picking y empaque van una vez por pedido, cada uno solo si se hizo; el almacenaje es la mitad de la tarifa mensual por corte.
     "vs Melonn" compara contra ${{ TORRE.BENCHMARK_PEDIDO_MXN }}/pedido (factura real jun-2026).
   </p>
 </div>
@@ -119,7 +121,7 @@
           <td class="derecha mono {% if e.margen_envio < 0 %}crit{% endif %}"><b>${{ e.margen_envio|floatformat:0|intcomma }}</b></td>
         </tr>
         {% empty %}
-        <tr><td colspan="9" class="muted centro">Sin pedidos facturables en este mes.</td></tr>
+        <tr><td colspan="9" class="muted centro">Sin guías cobradas en este corte.</td></tr>
         {% endfor %}
         {% if tabla_estados %}
         <tr>
@@ -139,52 +141,84 @@
   </div>
   <p class="small muted">
     Estado inferido del CP de destino. Peso promedio = peso facturable por pedido (báscula si existe;
-    si no, plan de empaque sin el 5% de relleno). El margen de envío compara la tarifa por guía
+    si no, plan de empaque sin el 5% de relleno). El margen de envío compara la tarifa por guía, ya neta de reembolsos,
     contra el costo real de las guías de cada estado.
   </p>
 </div>
 
-<div class="grid g2">
-  {% for f in filas %}
-  <div class="card">
-    <div class="titulo">
-      <h3>{{ f.cliente.nombre }} · desglose</h3>
-      <a class="small" href="{% url 'mesa:cliente_tarifario' f.cliente.pk %}">Editar tarifario →</a>
-    </div>
-    <div class="tabla-wrap">
-      <table>
-        <thead><tr><th>Concepto</th><th class="derecha">Tarifa</th><th class="derecha">Facturado</th></tr></thead>
-        <tbody>
-          <tr><td>Almacenaje</td><td class="derecha mono">${{ f.tarifario.almacenaje_mes|intcomma }}/mes</td><td class="derecha mono">${{ f.ingresos.almacenaje|floatformat:0|intcomma }}</td></tr>
-          <tr><td>Alistamiento</td><td class="derecha mono">${{ f.tarifario.alistamiento_pedido }}/pedido</td><td class="derecha mono">${{ f.ingresos.alistamiento|floatformat:0|intcomma }}</td></tr>
-          <tr><td>Empaque</td><td class="derecha mono">${{ f.tarifario.empaque_pedido }}/pedido</td><td class="derecha mono">${{ f.ingresos.empaque|floatformat:0|intcomma }}</td></tr>
-          {% if f.tarifario.recepcion_tarima or f.ingresos.recepcion %}
-          <tr>
-            <td>Recepción</td>
-            <td class="derecha mono">${{ f.tarifario.recepcion_tarima|intcomma }}/tarima{% if f.tarimas %} <span class="muted">· {{ f.tarimas }} tarimas</span>{% endif %}</td>
-            <td class="derecha mono">${{ f.ingresos.recepcion|floatformat:0|intcomma }}</td>
-          </tr>
-          {% endif %}
-          <tr>
-            <td>Envío</td>
-            <td class="derecha mono small">L ${{ f.tarifario.envio_bloque.local }} · M ${{ f.tarifario.envio_bloque.metro }} · N ${{ f.tarifario.envio_bloque.nacional }} <span class="muted">por guía</span></td>
-            <td class="derecha mono">${{ f.ingresos.envio|floatformat:0|intcomma }}</td>
-          </tr>
-          {% if f.ingresos.ajuste_minimo > 0 %}
-          <tr>
-            <td>Ajuste a mínimo mensual <span class="pill accent">mínimo</span></td>
-            <td class="derecha mono">${{ f.tarifario.minimo_mes|intcomma }}/mes</td>
-            <td class="derecha mono">${{ f.ingresos.ajuste_minimo|floatformat:0|intcomma }}</td>
-          </tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
-    {% if f.tarifario.recepcion_tarima or f.ingresos.recepcion %}
-    <p class="small muted">La recepción se factura por tarima recibida (lo que contó el piso al cerrar la entrada).</p>
-    {% endif %}
+{% for f in filas %}
+<div class="card mb">
+  <div class="titulo">
+    <h3>{{ f.cliente.nombre }} · {{ corte.etiqueta }}</h3>
+    <a class="small" href="{% url 'mesa:cliente_tarifario' f.cliente.pk %}">Editar tarifario →</a>
   </div>
-  {% endfor %}
+  <div class="grid g2">
+    <div>
+      <h4>Estado de cuenta 1 · Fulfillment</h4>
+      <div class="tabla-wrap">
+        <table data-sin-tabla-js>
+          <thead><tr><th>Concepto</th><th>Detalle</th><th class="derecha">Importe</th></tr></thead>
+          <tbody>
+            {% for l in f.facturas.fulfillment.lineas %}
+            <tr><td>{{ l.concepto }}</td><td class="small muted">{{ l.detalle }}</td><td class="derecha mono">${{ l.importe|floatformat:2|intcomma }}</td></tr>
+            {% endfor %}
+            <tr><td colspan="2" class="derecha">Subtotal sin IVA</td><td class="derecha mono">${{ f.facturas.fulfillment.subtotal|floatformat:2|intcomma }}</td></tr>
+            <tr><td colspan="2" class="derecha">IVA {{ iva_pct }}%</td><td class="derecha mono">${{ f.facturas.fulfillment.iva|floatformat:2|intcomma }}</td></tr>
+            <tr><td colspan="2" class="derecha"><b>Total</b></td><td class="derecha mono"><b>${{ f.facturas.fulfillment.total|floatformat:2|intcomma }}</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      {% if f.tarifario.recepcion_tarima or f.ingresos.recepcion %}
+      <p class="small muted">La recepción se factura por tarima recibida (lo que contó el piso al cerrar la entrada).</p>
+      {% endif %}
+    </div>
+    <div>
+      <h4>Estado de cuenta 2 · Guías</h4>
+      <div class="tabla-wrap">
+        <table data-sin-tabla-js>
+          <thead><tr><th>Pedido</th><th>Caja</th><th>Guía</th><th>Zona</th><th>Fecha</th><th class="derecha">Tarifa</th><th class="derecha">Reembolso</th><th class="derecha">Neto</th><th>Nota</th></tr></thead>
+          <tbody>
+            {% for l in f.facturas.guias.lineas %}
+            <tr>
+              <td><a href="{% url 'mesa:pedido_detalle' l.pedido.pk %}">{{ l.pedido.folio }}</a></td>
+              <td class="mono">{% if l.caja %}{{ l.caja.numero }}{% else %}—{% endif %}</td>
+              <td class="mono small">{{ l.guia.numero }}<div class="muted">{{ l.carrier }}</div></td>
+              <td><span class="pill {% if l.zona == 'local' %}ok{% elif l.zona == 'metro' %}accent{% endif %}">{{ l.zona }}</span></td>
+              <td class="small">{{ l.fecha|date:"d/M" }}</td>
+              <td class="derecha mono">${{ l.tarifa|floatformat:2 }}</td>
+              <td class="derecha mono">{% if l.reembolso %}−${{ l.reembolso|floatformat:2 }}{% else %}—{% endif %}</td>
+              <td class="derecha mono">${{ l.neto|floatformat:2 }}</td>
+              <td class="small muted">{{ l.nota }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="9" class="muted centro">Sin guías compradas en este corte.</td></tr>
+            {% endfor %}
+            {% if f.facturas.guias.previos %}
+            <tr><td colspan="9"><b>Reembolsos de cortes anteriores</b> <span class="small muted">guías ya cobradas que la paquetería reembolsó en este corte</span></td></tr>
+            {% for p in f.facturas.guias.previos %}
+            <tr>
+              <td><a href="{% url 'mesa:pedido_detalle' p.pedido.pk %}">{{ p.pedido.folio }}</a></td>
+              <td class="mono">{% if p.caja %}{{ p.caja.numero }}{% else %}—{% endif %}</td>
+              <td class="mono small">{{ p.guia.numero }}<div class="muted">{{ p.guia.carrier }}</div></td>
+              <td class="small muted">cobrada el {{ p.corte_origen }}</td>
+              <td class="small">{{ p.fecha|date:"d/M" }}</td>
+              <td class="derecha mono">—</td>
+              <td class="derecha mono">−${{ p.monto|floatformat:2 }}</td>
+              <td class="derecha mono">−${{ p.monto|floatformat:2 }}</td>
+              <td class="small muted">{{ p.origen|lower }}{% if p.nota %} · {{ p.nota }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+            <tr><td colspan="7" class="derecha">Subtotal sin IVA</td><td class="derecha mono">${{ f.facturas.guias.subtotal|floatformat:2|intcomma }}</td><td></td></tr>
+            <tr><td colspan="7" class="derecha">IVA {{ iva_pct }}%</td><td class="derecha mono">${{ f.facturas.guias.iva|floatformat:2|intcomma }}</td><td></td></tr>
+            <tr><td colspan="7" class="derecha"><b>Total</b></td><td class="derecha mono"><b>${{ f.facturas.guias.total|floatformat:2|intcomma }}</b></td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted">Tarifas: L ${{ f.tarifario.envio_bloque.local }} · M ${{ f.tarifario.envio_bloque.metro }} · N ${{ f.tarifario.envio_bloque.nacional }} por guía. El reembolso es la tarifa que el cliente pagó por esa guía.</p>
+    </div>
+  </div>
 </div>
+{% endfor %}
 
 {% endblock %}
