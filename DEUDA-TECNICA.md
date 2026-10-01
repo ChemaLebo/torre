@@ -41,8 +41,11 @@ link del portal cuando exista al menos un manual con audiencia portal.
    reorden, kit, categoría) es de Torre y no se pisa. Los nuevos nacen inactivos
    en una cola "por completar" en Mesa; las bajas se marcan, no se borran.
    Definir qué tienda manda si Colima tiene el mismo código en dos.
-4. Webhook de rastreo de envia.com: sustituye el polling; entrega al minuto en
-   portal y rastreo del comprador. Confirmar eventos y firma de envia.
+4. HECHO 2026-09-30: webhooks de rastreo de envia.com (tipo 3, firmado) y
+   99minutos entran por `envios/webhooks.py` y el poller queda de respaldo.
+   Falta registrarlos: envia en su panel con la URL y el token; 99minutos con
+   `registrar_webhook_99minutos --url …`. Cuando lleven una semana limpios,
+   bajar `poll_tracking` a cada hora.
 
 ## Guías externas y cadencia de rastreo
 

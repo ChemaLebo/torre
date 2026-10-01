@@ -365,6 +365,12 @@ import sys  # noqa: E402
 if "test" in sys.argv:
     ENVIA_MODO = "off"  # los tests jamás tocan la API real
 ENVIA_API_BASE = os.environ.get("ENVIA_API_BASE", "https://api.envia.com")
+# Webhook de rastreo de envia.com (2026-09-30; tipo 3 "tracking.simple"):
+# POST hooks/carriers/envia/<ENVIA_WEBHOOK_TOKEN>/. El token en la URL es
+# obligatorio (sin token = endpoint cerrado); con ENVIA_WEBHOOK_SECRET además
+# se valida X-Webhook-Signature (v1 = HMAC-SHA256 de "ts.evento.cuerpo").
+ENVIA_WEBHOOK_TOKEN = os.environ.get("ENVIA_WEBHOOK_TOKEN", "")
+ENVIA_WEBHOOK_SECRET = os.environ.get("ENVIA_WEBHOOK_SECRET", "")
 ENVIA_QUERIES_BASE = os.environ.get("ENVIA_QUERIES_BASE", "https://queries.envia.com")
 # Catálogo de CP de envia (localidad, municipio, estado, colonias): envios.localidades.
 ENVIA_GEOCODES_BASE = os.environ.get("ENVIA_GEOCODES_BASE", "https://geocodes.envia.com")
@@ -379,6 +385,10 @@ if "test" in sys.argv:
 # la cuenta de WOP no tiene Nacional (NAL) y Sprint (SPT) cotiza local y
 # foráneo donde hay cobertura; NextDay no está en el enum de /orders.
 NOVENTA9_DELIVERY_TYPE = os.environ.get("NOVENTA9_DELIVERY_TYPE", "SPT")
+# Webhook de rastreo de 99minutos (2026-09-30): POST hooks/carriers/99minutos/
+# <NOVENTA9_WEBHOOK_TOKEN>/; 99minutos manda el shipment con su historial de
+# events[]. Sin token = endpoint cerrado.
+NOVENTA9_WEBHOOK_TOKEN = os.environ.get("NOVENTA9_WEBHOOK_TOKEN", "")
 # Con el directo de 99minutos en "full", el carrier noventa9Minutos viaja por
 # él para TODOS los clientes (nadie compra 99minutos vía envia teniendo cuenta
 # propia); el flip por cliente (integracion_envios) sigue mandando "solo 99".

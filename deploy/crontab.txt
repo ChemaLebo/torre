@@ -3,7 +3,8 @@
 PY=/srv/torre/venv/bin/python
 DIR=/srv/torre/torre
 
-# Tracking de guías con el carrier (cada 30 min en horario amplio)
+# Tracking de guías con el carrier (cada 30 min en horario amplio). Desde 2026-09-30 es el
+# RESPALDO de los webhooks de envia y 99minutos (hooks/carriers/…): se puede espaciar.
 */30 6-22 * * *  cd $DIR && $PY manage.py poll_tracking >> /var/log/torre/poll_tracking.log 2>&1
 # Push de inventario a Shopify: drena la cola (cada 5 min — la ventana de sobreventa ES esta cadencia)
 */5 6-22 * * *   cd $DIR && $PY manage.py push_inventario >> /var/log/torre/push_inventario.log 2>&1

@@ -873,8 +873,43 @@ def registrar_manifiesto(carrier, corral, operador, salidas, chofer="", sin_esca
     return manifiesto
 
 
+def procesar_evento_carrier(proveedor, numero, info, origen="webhook"):
+    """Un evento de rastreo que llega por webhook (2026-09-30) entra por el
+    MISMO camino que el poller (_procesar_rastreo): misma normalización,
+    mismos efectos sobre pedido e incidencias, misma deduplicación de
+    EventoGuia. `numero` = número de guía del carrier; `info` = el dict que
+    regresaría `adapter.rastrear` (estado, descripcion, ts_evento, raw,
+    eventos). Guía desconocida, de otro proveedor, local o ya terminal →
+    {"ok": False, "motivo"} sin tocar nada. El poller sigue corriendo como
+    respaldo: lo que el webhook ya aplicó, el poller lo encuentra igual."""
+    numero = (numero or "").strip()
+    if not numero:
+        return {"ok": False, "motivo": "sin número de guía"}
+    guia = (
+        Guia.objects.filter(numero=numero).exclude(carrier=CARRIER_LOCAL)
+        .select_related("pedido", "pedido__cliente").order_by("-pk").first()
+    )
+    if guia is None:
+        return {"ok": False, "motivo": f"guía {numero} desconocida"}
+    if (guia.proveedor or PROVEEDOR_ENVIA) != proveedor:
+        return {"ok": False, "motivo": f"guía {numero} es de {guia.proveedor or PROVEEDOR_ENVIA}, no de {proveedor}"}
+    if guia.estado in Guia.ESTADOS_TERMINALES:
+        return {"ok": False, "motivo": f"guía {numero} ya está {guia.get_estado_display().lower()}"}
+    ahora = timezone.now()
+    parcial = _procesar_rastreo(guia, info, ahora)
+    registrar_evento(
+        "guia", guia.pk, "evento_carrier_webhook", cliente=guia.pedido.cliente,
+        delta={"numero": numero, "proveedor": proveedor, "origen": origen, "estado": info.get("estado"),
+               "actualizada": parcial["actualizada"], "incidencias": parcial["incidencias"]},
+        motivo=(info.get("descripcion") or "")[:300],
+    )
+    return {"ok": True, "guia": guia, "estado": guia.estado, **parcial}
+
+
 def poll_tracking():
     """Job idempotente: rastrea toda guía no terminal y sincroniza pedido e incidencias.
+    Desde 2026-09-30 es el RESPALDO de los webhooks de envia y 99minutos
+    (procesar_evento_carrier): lo que ya entró por webhook se deduplica aquí.
 
     - Normaliza el estado del carrier y transiciona la guía.
     - ENTREGADO / EN_TRANSITO / EN_RUTA → avanza el pedido.
