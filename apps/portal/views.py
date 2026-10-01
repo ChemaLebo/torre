@@ -459,8 +459,18 @@ def pedido_detalle(request, pk):
     paquetes = list(
         pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "guias").order_by("numero")
     )
+    # Visibilidad por paquete (Chema 2026-10-01): guía viva, rastreo público,
+    # sustituida y la línea de tiempo por caja (la misma de Mesa).
+    from apps.envios.services import url_rastreo_carrier  # lazy por contrato
+    from apps.pedidos.linea_tiempo import construir  # lazy por contrato
+
+    for paq in paquetes:
+        paq.guia = next((g for g in paq.guias.all() if g.es_activa), None)
+        paq.url_rastreo = url_rastreo_carrier(paq.guia.carrier, paq.guia.numero) if paq.guia else ""
     ahorro_division = paquetes[0].ahorro_plan_mxn if paquetes else 0
     return render(request, "portal/pedido_detalle.html", {
+        "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
+        "es_mesa": False,
         "seccion": "pedidos",
         "pedido": pedido,
         "paquetes": paquetes,

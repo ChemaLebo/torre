@@ -132,6 +132,24 @@ class TestLinkShopify(BasePortal):
         self.assertContains(respuesta, self.pedido.folio)  # el manual sigue listado, sin link
         self.assertEqual(respuesta.content.decode().count("/admin/orders/"), 1)
 
+    def test_detalle_muestra_cada_paquete_y_su_linea_de_tiempo(self):
+        """Chema 2026-10-01: visibilidad por paquete en el portal, no solo con más de uno."""
+        from decimal import Decimal
+
+        from apps.envios.models import Guia, Paquete
+
+        caja = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        Guia.objects.create(pedido=self.pedido, paquete=caja, carrier="estafeta", numero="EST-900", proveedor="mock", estado=Guia.EN_TRANSITO)
+        self.entrar()
+        html = self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk])).content.decode()
+        self.assertIn("Tus paquetes", html)
+        self.assertIn("1 de 1", html)
+        self.assertIn("EST-900", html)
+        self.assertIn("rastreo3.estafeta.com", html)
+        self.assertIn("Línea de tiempo por paquete", html)
+        self.assertIn("Salió de bodega", html)
+        self.assertNotIn('<details class="colapsable"', html.split("Línea de tiempo por paquete")[1])  # sin acordeones en la tabla
+
     def test_detalle_enlaza_la_orden_y_el_manual_no(self):
         pedido = self._pedido_shopify()
         self.entrar()

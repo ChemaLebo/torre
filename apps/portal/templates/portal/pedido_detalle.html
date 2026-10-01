@@ -134,31 +134,51 @@
   </div>
 </div>
 
-{% if paquetes|length > 1 %}
+{% if paquetes %}
 <div class="card mt">
   <div class="titulo">
-    <h3>Paquetes de tu pedido</h3>
+    <h3>Tus paquetes</h3>
     {% if ahorro_division > 0 %}<span class="pill ok">División inteligente: ahorraste ${{ ahorro_division|floatformat:0 }}</span>{% endif %}
   </div>
-  <p class="small muted">Tu pedido viaja en {{ paquetes|length }} paquetes porque así el envío cuesta menos y cada botella viaja mejor protegida.</p>
-  <div class="grid g2 mt">
-    {% for paq in paquetes %}
-    <div class="card" style="background:var(--panel-2)">
-      <div class="titulo"><b>Paquete {{ paq.numero }}</b>
-        <span class="pill {% if paq.estado == 'DESPACHADO' %}accent{% elif paq.estado == 'EMPACADO' %}ok{% else %}warn{% endif %}">{{ paq.get_estado_display }}</span>
-      </div>
-      <div class="small">
-        <span class="mono">{{ paq.peso_kg }} kg</span> · {{ paq.carrier }} · <span class="mono">${{ paq.precio_cotizado|floatformat:2 }}</span>
-        {% if paq.fuera_de_meta %}<span class="pill warn">arriba de la meta de $115</span>{% endif %}
-      </div>
-      <ul class="small" style="margin:8px 0 0 18px;padding:0">
-        {% for pl in paq.lineas.all %}<li>{{ pl.texto_para_piso }}</li>{% endfor %}
-      </ul>
-      {% for g in paq.guias.all %}{% if g.es_activa %}
-      <div class="small mono mt">Guía {{ g.numero }}</div>
-      {% endif %}{% endfor %}
-    </div>
-    {% endfor %}
+  {% if paquetes|length > 1 %}<p class="small muted">Tu pedido viaja en {{ paquetes|length }} paquetes porque así el envío cuesta menos y cada botella viaja mejor protegida. Cada uno tiene su propia guía y su propio rastreo.</p>{% endif %}
+  <div class="tabla-wrap mt">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Paquete</th><th>Contenido</th><th>Peso</th><th>Paquetería</th><th>Guía</th><th>Estatus</th><th>Compromiso</th></tr></thead>
+      <tbody>
+        {% for paq in paquetes %}
+        <tr>
+          <td class="mono">{{ paq.numero }} de {{ paquetes|length }}<div class="small muted">{{ paq.get_estado_display }}</div></td>
+          <td class="small">{% for pl in paq.lineas.all %}{{ pl.texto_para_piso }}<br>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+          <td class="mono small">{{ paq.peso_kg }} kg</td>
+          <td class="small">{{ paq.carrier|title }}</td>
+          <td class="small">{% if paq.guia %}{% if paq.url_rastreo %}<a class="mono" href="{{ paq.url_rastreo }}" target="_blank" rel="noopener" title="Rastreo público de la paquetería">{{ paq.guia.numero }} ↗</a>{% else %}<span class="mono">{{ paq.guia.numero }}</span>{% endif %}{% else %}<span class="muted">en preparación</span>{% endif %}</td>
+          <td>
+            {% if paq.guia %}<span class="pill {% if paq.guia.estado == 'ENTREGADO' %}ok{% elif paq.guia.estado == 'RETORNO' or paq.guia.estado == 'INTENTO_FALLIDO' or paq.guia.estado == 'EXCEPCION' %}crit{% elif paq.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}">{{ paq.guia.get_estado_display }}</span>
+            {% if paq.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repuso en otro paquete">sustituido · {{ paq.guia.get_sustituida_motivo_display|lower }}{% for n in paq.guia.cajas_reposicion %} · por el paquete {{ n }}{% endfor %}</span></div>{% endif %}
+            {% if paq.guia.ultimo_evento %}<div class="small muted">{{ paq.guia.ultimo_evento|truncatechars:60 }}</div>{% endif %}
+            {% else %}<span class="pill">{{ paq.get_estado_display }}</span>{% endif %}
+          </td>
+          <td class="small">{% if paq.guia and paq.guia.fecha_compromiso and paq.guia.estado != 'ENTREGADO' %}llega {{ paq.guia.fecha_compromiso|date:"d/M" }}{% elif paq.guia and paq.guia.dias_promesa and paq.guia.estado == 'GUIA_CREADA' %}{{ paq.guia.dias_promesa }} día{{ paq.guia.dias_promesa|pluralize }} desde la salida{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if filas %}
+<div class="card mt">
+  <div class="titulo"><h3>Línea de tiempo por paquete</h3><span class="small">"Salió de bodega" es nuestra salida; "Recolectado por carrier" es lo que reportó la paquetería</span></div>
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead>
+        <tr><th>Pedido</th><th>Paquete</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
+      </thead>
+      <tbody>
+        {% for f in filas %}{% include 'pedidos/_fila_linea_tiempo.html' %}{% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endif %}
