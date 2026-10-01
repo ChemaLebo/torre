@@ -48,8 +48,11 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
   .bloque { border-bottom: 2px solid #000; padding: 1.5mm 0; }
 
   .cabecera { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; }
-  .marca { font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
-  .paquete-de { font-size: 13px; font-weight: 800; white-space: nowrap; }
+  /* Chema 2026-09-30: folio, número de caja y avisos de manejo MUCHO más visibles. */
+  .folio-grande { font-size: 26px; font-weight: 800; line-height: 1; }
+  .marca { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; margin-top: 1mm; }
+  .paquete-de { font-size: 22px; font-weight: 900; white-space: nowrap; line-height: 1; }
+  .banda-manejo { background: #000; color: #fff; text-align: center; font-size: 20px; font-weight: 900; letter-spacing: 1px; padding: 1.5mm 2mm; margin: 1.5mm 0; line-height: 1.25; }
 
   .carrier { font-size: 13px; font-weight: 800; text-transform: uppercase; }
   .numero-guia { font-size: 24px; font-weight: 800; line-height: 1.05; word-break: break-all; }
@@ -93,10 +96,10 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
 <div class="etiqueta">
   <div class="bloque cabecera">
     <div>
+      <div class="folio-grande mono">{{ pedido.folio }}</div>
       <div class="marca">{{ marca }}</div>
-      <div class="mono" style="font-size:12px">{{ pedido.folio }}</div>
     </div>
-    <div class="paquete-de">Paquete {{ paquete_n }} de {{ paquete_m }}</div>
+    <div class="paquete-de">CAJA {{ paquete_n }} DE {{ paquete_m }}</div>
   </div>
 
   <div class="bloque">
@@ -115,6 +118,10 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
     </div>
     <div class="cp-grande mono">CP {{ cp|default:"—" }}</div>
   </div>
+
+  {% if fragil or este_lado_arriba %}
+  <div class="banda-manejo">{% if fragil %}<div>FRÁGIL</div>{% endif %}{% if este_lado_arriba %}<div>&uarr; ESTE LADO ARRIBA</div>{% endif %}</div>
+  {% endif %}
 
   <div class="referencias">
     <div class="label">Referencias</div>

@@ -177,18 +177,45 @@ def marcas_de_manejo(guia):
     return any(s.fragil for s in skus), any(s.este_lado_arriba for s in skus)
 
 
+BANDA_LINEA = 22  # alto de cada renglón de la banda de manejo (pt)
+BANDA_FUENTE = 17
+
+
+def _flecha_arriba(lienzo, x, y_base, alto):
+    """Flecha hacia arriba dibujada (Helvetica no trae "↑"): asta + punta, en blanco."""
+    lienzo.setLineWidth(2.2)
+    lienzo.line(x, y_base, x, y_base + alto)
+    punta = lienzo.beginPath()
+    punta.moveTo(x - 4.5, y_base + alto - 5)
+    punta.lineTo(x, y_base + alto + 1)
+    punta.lineTo(x + 4.5, y_base + alto - 5)
+    punta.close()
+    lienzo.drawPath(punta, stroke=0, fill=1)
+
+
 def _banda_manejo(lienzo, y, fragil, arriba):
-    """Banda negra con FRÁGIL y/o ESTE LADO ARRIBA en blanco (solo si aplica); regresa el y nuevo."""
-    textos = [t for t, aplica in (("FRÁGIL", fragil), ("↑ ESTE LADO ARRIBA", arriba)) if aplica]
-    if not textos:
+    """Banda negra con FRÁGIL y/o ESTE LADO ARRIBA en blanco, grande (Chema
+    2026-09-30: MUCHO más visible), un renglón por aviso; regresa el y nuevo."""
+    renglones = [t for t, aplica in (("FRÁGIL", fragil), ("ESTE LADO ARRIBA", arriba)) if aplica]
+    if not renglones:
         return y
-    alto = 16
+    alto = BANDA_LINEA * len(renglones) + 4
     y -= alto + 3
     lienzo.rect(MARGEN, y, ANCHO_UTIL, alto, stroke=0, fill=1)
     lienzo.setFillColorRGB(1, 1, 1)
-    lienzo.setFont(NEGRITA, 12)
-    lienzo.drawCentredString(ANCHO / 2, y + 4, "  ·  ".join(textos))
+    lienzo.setStrokeColorRGB(1, 1, 1)
+    lienzo.setFont(NEGRITA, BANDA_FUENTE)
+    for indice, texto in enumerate(renglones):
+        y_linea = y + alto - 2 - BANDA_LINEA * (indice + 1) + 5
+        if texto == "ESTE LADO ARRIBA":
+            ancho_texto = stringWidth(texto, NEGRITA, BANDA_FUENTE)
+            x_texto = ANCHO / 2 - ancho_texto / 2 + 7
+            lienzo.drawString(x_texto, y_linea, texto)
+            _flecha_arriba(lienzo, x_texto - 11, y_linea - 2, BANDA_FUENTE - 2)
+        else:
+            lienzo.drawCentredString(ANCHO / 2, y_linea, texto)
     lienzo.setFillColorRGB(0, 0, 0)
+    lienzo.setStrokeColorRGB(0, 0, 0)
     return y
 
 
@@ -225,19 +252,24 @@ def generar_pdf_etiqueta(guia):
 
     y = ALTO - MARGEN  # cursor: se dibuja de arriba hacia abajo
 
-    # 1) Cabecera: marca del cliente + folio | Paquete N de M.
-    y -= 13
-    etiqueta_paquete = f"Paquete {paquete_n} de {paquete_m}"
-    ancho_paquete = stringWidth(etiqueta_paquete, NEGRITA, 10)
-    lienzo.setFont(NEGRITA, 13)
-    lienzo.drawString(
-        MARGEN, y, _recortar(str(marca).upper(), NEGRITA, 13, ANCHO_UTIL - ancho_paquete - 3 * mm)
-    )
-    lienzo.setFont(NEGRITA, 10)
+    # 1) Cabecera (Chema 2026-09-30: folio y número de caja MUCHO más visibles):
+    #    FOLIO grande a la izquierda, "CAJA N DE M" grande a la derecha, la
+    #    marca chica debajo. Si no caben juntos, baja el tamaño de la caja.
+    y -= 22
+    etiqueta_paquete = f"CAJA {paquete_n} DE {paquete_m}"
+    tamano_folio, tamano_caja = 22, 20
+    while tamano_caja > 12 and (
+        stringWidth(pedido.folio, MONO_NEGRITA, tamano_folio) + stringWidth(etiqueta_paquete, NEGRITA, tamano_caja)
+        > ANCHO_UTIL - 3 * mm
+    ):
+        tamano_caja -= 1
+    lienzo.setFont(MONO_NEGRITA, tamano_folio)
+    lienzo.drawString(MARGEN, y, pedido.folio)
+    lienzo.setFont(NEGRITA, tamano_caja)
     lienzo.drawRightString(ANCHO - MARGEN, y, etiqueta_paquete)
     y -= 11
-    lienzo.setFont(MONO, 9)
-    lienzo.drawString(MARGEN, y, pedido.folio)
+    lienzo.setFont(NEGRITA, 9)
+    lienzo.drawString(MARGEN, y, _recortar(str(marca).upper(), NEGRITA, 9, ANCHO_UTIL))
     y = _separador(lienzo, y - 4)
 
     # 2) Carrier + número de guía en Code128 (o texto grande si es muy largo).
@@ -301,14 +333,18 @@ def generar_pdf_etiqueta(guia):
     fragil, arriba = marcas_de_manejo(guia)
     y = _banda_manejo(lienzo, y, fragil, arriba)
     # 4) Referencias destacadas: banda negra con texto blanco (o manda al QR).
+    # Cuántos renglones de referencias caben sin que el QR pise la banda:
+    # lo que queda arriba del pie menos el QR y el marco de la banda.
+    y_pie = MARGEN + 14
+    caben = max(1, min(3, int((y - y_pie - QR_LADO - 8 - 16) / 12)))
     if referencias:
         lineas_refs = []
         for referencia in referencias:
             lineas_refs += _envolver(referencia, NEGRITA, 10, ANCHO_UTIL - 4 * mm, max_lineas=2)
-        lineas_refs = lineas_refs[:3]
+        lineas_refs = lineas_refs[:caben]
     else:
         lineas_refs = ["Sin referencias — usa el QR"]
-    alto_banda = 12 + 12 * len(lineas_refs)
+    alto_banda = 16 + 12 * len(lineas_refs)  # 6 pt de aire bajo el último renglón
     y -= alto_banda
     lienzo.rect(MARGEN, y, ANCHO_UTIL, alto_banda, stroke=0, fill=1)
     lienzo.setFillColorRGB(1, 1, 1)
@@ -321,7 +357,6 @@ def generar_pdf_etiqueta(guia):
     y -= 8
 
     # 5) QR a la página del repartidor + leyenda (nunca invade el pie).
-    y_pie = MARGEN + 14
     y_qr = max(y - QR_LADO, y_pie)
     _dibujar_qr(lienzo, qr_url, MARGEN, y_qr)
     x_leyenda = MARGEN + QR_LADO + 4 * mm
