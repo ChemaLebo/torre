@@ -92,12 +92,16 @@ class IncidenciasTests(ReportesTestCase):
         self.assertEqual(r["grupos"][0]["filas"], [])
 
     def test_vistas_mesa_y_portal(self):
+        # Rango explícito: el default de la vista es "del 1° del mes a hoy" y el
+        # fixture entrega hace 2 días (fallaba los primeros días de cada mes).
+        hoy = timezone.localdate()
+        rango = {"desde": (hoy - timedelta(days=7)).isoformat(), "hasta": hoy.isoformat()}
         self.client.force_login(self.mesa)
-        respuesta = self.client.get(reverse("mesa:reporte", args=["danos"]))
+        respuesta = self.client.get(reverse("mesa:reporte", args=["danos"]), rango)
         self.assertContains(respuesta, "Pedidos con daño")
         self.assertContains(respuesta, "50.0%")
         self.client.force_login(self.portal)
-        respuesta = self.client.get(reverse("portal:reporte", args=["incidencias"]), {"tipo": "DAN"})
+        respuesta = self.client.get(reverse("portal:reporte", args=["incidencias"]), {"tipo": "DAN", **rango})
         self.assertContains(respuesta, self.dan.folio)
         self.assertNotContains(respuesta, self.ret.folio)
         self.assertNotContains(respuesta, "<th>Dueño</th>")
