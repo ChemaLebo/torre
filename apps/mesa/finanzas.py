@@ -16,8 +16,13 @@ El peso facturable descuenta el margen de empaque (+5% de cotizador): el
 cliente paga por lo que vendió, no por nuestro relleno. Si todos los bultos
 tienen peso real de báscula, se usa ese.
 
+Picking (alistamiento) y empaque van UNA vez por pedido, cada uno solo si
+se hizo (Chema 2026-10-01): un pedido pickeado y cancelado antes de empacar
+paga picking y no empaque; el reporte lo muestra por caja.
+
 Reglas de honestidad:
-  - Pedidos CANCELADOS no se facturan; el costo de sus guías sí cuenta.
+  - Pedidos CANCELADOS no pagan envío; el costo de sus guías vivas sí cuenta.
+  - Guías CANCELADAS no cuestan: el carrier las reembolsa.
   - Reexpediciones (pedido con guía anterior al mes) suman costo de carrier e
     insumos del re-empaque, nunca ingreso.
   - El almacenaje se factura a clientes activos en meses ya iniciados.
@@ -95,38 +100,52 @@ def zona_de_carrier(carrier):
     return "nacional"
 
 
-def peso_de_guia(guia, planes):
-    """Kg que paga el cliente por esa guía: báscula de su caja si existe, si
+def peso_facturable(caja, planes):
+    """Kg que paga el cliente por esa fila: báscula de su caja si existe, si
     no su plan sin el +5% de relleno; una guía sin caja (pedido sin plan)
     carga el peso de todo el pedido."""
     from apps.envios.cotizador import MARGEN_EMPAQUE
 
-    cajas = [guia.paquete] if guia.paquete_id else planes
+    cajas = [caja] if caja is not None else planes
     if cajas and all(p.peso_real_gr for p in cajas):
         return round(sum(p.peso_real_gr for p in cajas) / 1000.0, 2)
     return round(float(sum((p.peso_kg for p in cajas), Decimal("0"))) / float(MARGEN_EMPAQUE), 2)
 
 
 def facturar_guias(cliente, inicio, fin):
-    """Una fila por guía creada en [inicio, fin) con lo que se le cobra al
-    cliente y lo que costó (Chema 2026-09-28: el cobro es por guía, a la
-    tarifa de la zona del CP del pedido). Regresa {"filas": [...],
-    "tarifas"}; cada fila: guia, pedido, zona, estado, peso, transporte,
-    almacen (alistamiento + empaque UNA vez por pedido facturable, en su
-    primera guía del periodo), insumo, costo, nota ("" = facturable)."""
+    """Una fila por caja con actividad en [inicio, fin): cada guía creada en
+    el periodo (una fila por guía) y cada caja planeada en el periodo que
+    nunca tuvo guía (se pickeó y se canceló antes de empacar, o va en curso).
+    Chema 2026-10-01: el ENVÍO se cobra por guía, a la tarifa de la zona del
+    CP del pedido; PICKING y EMPAQUE se cobran UNA vez por pedido, cada uno
+    solo si se hizo (picking: el pedido entró a picking; empaque: alguna
+    caja se cerró; una guía es evidencia de ambos, una guía cancelada solo
+    del picking), en la primera fila con envío del pedido o, si ninguna
+    cobra envío, en la primera. Regresa {"filas": [...], "tarifas"}; cada
+    fila: guia (None en caja sin guía), caja, pedido, ts, carrier, zona,
+    estado, peso, transporte, picking, empaque, insumo, costo, nota,
+    cobra_envio, bulto. Sin cargo de envío: guía CANCELADA (y su costo real
+    es 0: se reembolsa), reexpedición (pedido con guía anterior al periodo:
+    tampoco paga picking ni empaque, ya se facturaron), pedido CANCELADO y
+    caja de reposición."""
     from django.db.models import Min
 
     from apps.envios.models import Guia, Paquete, PaqueteLinea
 
     tarifas = tarifario_de(cliente)
     envio_zona = tarifas["envio_bloque"]
-    almacen_pedido = Decimal(str(tarifas["alistamiento_pedido"])) + Decimal(str(tarifas["empaque_pedido"]))
+    tarifa_picking = Decimal(str(tarifas["alistamiento_pedido"]))
+    tarifa_empaque = Decimal(str(tarifas["empaque_pedido"]))
     insumo = Decimal(str(settings.TORRE.get("INSUMO_PAQUETE_MXN", 0)))
     guias = list(
         Guia.objects.filter(pedido__cliente=cliente, creado__gte=inicio, creado__lt=fin)
         .select_related("pedido", "paquete").order_by("creado", "pk")
     )
-    pedidos_ids = {g.pedido_id for g in guias}
+    sin_guia = list(
+        Paquete.objects.filter(pedido__cliente=cliente, creado__gte=inicio, creado__lt=fin, guias__isnull=True)
+        .select_related("pedido").order_by("creado", "pk")
+    )
+    pedidos_ids = {g.pedido_id for g in guias} | {p.pedido_id for p in sin_guia}
     primera_guia = dict(
         Guia.objects.filter(pedido_id__in=pedidos_ids).values_list("pedido_id")
         .annotate(m=Min("creado")).values_list("pedido_id", "m")
@@ -143,34 +162,69 @@ def facturar_guias(cliente, inicio, fin):
         if reposicion is None:
             con_originales.add(paquete_id)
     reposiciones = con_lineas - con_originales
-    con_almacen = set()
+    # Evidencia por pedido de lo que sí se hizo en piso.
+    con_guia, con_guia_viva = set(), set()
+    for pedido_id, estado in Guia.objects.filter(pedido_id__in=pedidos_ids).values_list("pedido_id", "estado"):
+        con_guia.add(pedido_id)
+        if estado != Guia.CANCELADA:
+            con_guia_viva.add(pedido_id)
+    con_caja_cerrada = {p.pedido_id for cajas in planes.values() for p in cajas if p.ts_cierre}
+
+    def _pickeado(pedido):
+        return bool(pedido.ts_picking or pedido.ts_empacado) or pedido.pk in con_guia
+
+    def _empacado(pedido):
+        return bool(pedido.ts_empacado) or pedido.pk in con_caja_cerrada or pedido.pk in con_guia_viva
+
+    items = [(g.creado, g.pk, g, g.paquete) for g in guias] + [(p.creado, p.pk, None, p) for p in sin_guia]
+    items.sort(key=lambda i: (i[0], i[1]))
     filas = []
-    for g in guias:
-        pedido = g.pedido
-        zona = zona_de_cp(pedido.cp) or zona_de_carrier(g.carrier)
-        nota = ""
-        if g.estado == Guia.CANCELADA:
-            nota = "guía cancelada (sin cargo)"
-        elif primera_guia.get(pedido.pk) and primera_guia[pedido.pk] < inicio:
-            nota = "reexpedición (sin cargo)"
+    for ts, _pk, g, caja in items:
+        pedido = g.pedido if g is not None else caja.pedido
+        carrier = g.carrier if g is not None else caja.carrier
+        zona = zona_de_cp(pedido.cp) or zona_de_carrier(carrier)
+        notas = []
+        reexpedicion = bool(primera_guia.get(pedido.pk) and primera_guia[pedido.pk] < inicio)
+        if g is None:
+            notas.append("sin guía")
+        elif g.estado == Guia.CANCELADA:
+            notas.append("guía cancelada (sin cargo)")
+        if reexpedicion:
+            notas.append("reexpedición (sin cargo)")
         elif pedido.estado == "CANCELADO":
-            nota = "cancelado (sin cargo)"
-        elif g.paquete_id and g.paquete_id in reposiciones:
-            nota = "reposición (sin cargo)"
-        cobra = not nota
-        transporte = Decimal(str(envio_zona.get(zona, 0))) if cobra else Decimal("0")
-        almacen = Decimal("0")
-        if cobra and pedido.pk not in con_almacen:
-            con_almacen.add(pedido.pk)
-            almacen = almacen_pedido
+            notas.append("cancelado")
+        elif caja is not None and caja.pk in reposiciones:
+            notas.append("reposición (sin cargo)")
+        cobra_envio = g is not None and g.estado != Guia.CANCELADA and not notas
+        guia_viva = g is not None and g.estado != Guia.CANCELADA
+        bulto = guia_viva or (g is None and bool(caja.ts_cierre))
         filas.append({
-            "guia": g, "pedido": pedido, "zona": zona,
+            "guia": g, "caja": caja, "pedido": pedido, "ts": ts, "carrier": carrier, "zona": zona,
             "estado": estado_de_cp(pedido.cp) or NOMBRE_ESTADO.get((pedido.direccion or {}).get("province_code", "")) or SIN_ESTADO,
-            "peso": peso_de_guia(g, planes.get(pedido.pk, [])),
-            "transporte": transporte, "almacen": almacen, "nota": nota,
-            "insumo": insumo if g.estado != Guia.CANCELADA else Decimal("0"),
-            "costo": g.costo_preferencial or Decimal("0"),
+            "peso": peso_facturable(caja, planes.get(pedido.pk, [])),
+            "transporte": Decimal(str(envio_zona.get(zona, 0))) if cobra_envio else Decimal("0"),
+            "picking": Decimal("0"), "empaque": Decimal("0"), "nota": notas,
+            "insumo": insumo if bulto else Decimal("0"),
+            "costo": (g.costo_preferencial or Decimal("0")) if guia_viva else Decimal("0"),
+            "cobra_envio": cobra_envio, "bulto": bulto, "reexpedicion": reexpedicion,
         })
+    # Picking y empaque: una vez por pedido, en su primera fila con envío (o la primera).
+    fila_del_pedido = {}
+    for f in filas:
+        actual = fila_del_pedido.get(f["pedido"].pk)
+        if actual is None or (f["cobra_envio"] and not actual["cobra_envio"]):
+            fila_del_pedido[f["pedido"].pk] = f
+    for f in fila_del_pedido.values():
+        pedido = f["pedido"]
+        if f["reexpedicion"]:
+            continue
+        pickeado, empacado = _pickeado(pedido), _empacado(pedido)
+        f["picking"] = tarifa_picking if pickeado else Decimal("0")
+        f["empaque"] = tarifa_empaque if empacado else Decimal("0")
+        if pickeado and not empacado:
+            f["nota"].append("pickeado sin empacar")
+    for f in filas:
+        f["nota"] = " · ".join(f["nota"])
     return {"filas": filas, "tarifas": tarifas}
 
 
@@ -187,14 +241,18 @@ def resumen_mes(cliente, inicio, fin):
     guias_reexpedicion = 0
     cancelados = set()
     ingreso_envio = Decimal("0")
+    ingreso_alistamiento = sum((f["picking"] for f in filas_guias), Decimal("0"))
+    ingreso_empaque = sum((f["empaque"] for f in filas_guias), Decimal("0"))
     for f in filas_guias:
-        if f["nota"].startswith("reexpedición"):
+        if f["reexpedicion"] and f["guia"] is not None:
             guias_reexpedicion += 1
-        if f["nota"].startswith("cancelado"):
+        if f["pedido"].estado == "CANCELADO":
             cancelados.add(f["pedido"].pk)
-        if f["guia"].estado != "CANCELADA":
-            paquetes += 1  # cada guía es un bulto: insumos
-        if f["nota"]:
+        if f["bulto"]:
+            paquetes += 1  # cada bulto empacado gasta insumos
+        if f["picking"] or f["empaque"]:
+            pedidos_facturables.add(f["pedido"].pk)
+        if not f["cobra_envio"]:
             continue
         pedidos_facturables.add(f["pedido"].pk)
         guias_zona[f["zona"]] += 1
@@ -233,8 +291,6 @@ def resumen_mes(cliente, inicio, fin):
 
     cobra_almacenaje = cliente.activo and inicio <= timezone.now()
     ingreso_almacenaje = Decimal(str(tarifas["almacenaje_mes"])) if cobra_almacenaje else Decimal("0")
-    ingreso_alistamiento = pedidos_facturables * Decimal(str(tarifas["alistamiento_pedido"]))
-    ingreso_empaque = pedidos_facturables * Decimal(str(tarifas["empaque_pedido"]))
     ingreso_fulfillment = ingreso_almacenaje + ingreso_alistamiento + ingreso_empaque + ingreso_recepcion
     ingreso_total = ingreso_fulfillment + ingreso_envio
 
@@ -264,7 +320,7 @@ def resumen_mes(cliente, inicio, fin):
         "tarifario": tarifas,
         "pedidos": pedidos_facturables,
         "paquetes": paquetes,
-        "guias": len(filas_guias),
+        "guias": sum(1 for f in filas_guias if f["guia"] is not None),
         "reexpediciones": guias_reexpedicion,
         "cancelados": cancelados,
         "tarimas": tarimas_facturadas,
