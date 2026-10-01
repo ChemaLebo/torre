@@ -54,3 +54,52 @@ class SinPaqueteriaMesaTests(PisoTestCase):
         self.assertContains(respuesta, "tampoco cotiza")
         self.inc.refresh_from_db()
         self.assertEqual(self.inc.estado, Incidencia.ABIERTA)
+
+
+@override_settings(ENVIA_API_KEY="", TORRE=POOL_CLASICO)
+class SinPaqueteriaPorCajaTests(PisoTestCase):
+    """Chema 2026-10-01: una caja sí consiguió guía y otra no; la incidencia
+    muestra el detalle por caja y rehace SOLO la que se quedó sin paquetería."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Guia, Paquete
+
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=50)
+        mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
+        self.client.force_login(mesa)
+        self.pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
+        self.c1 = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta",
+                                         precio_cotizado=Decimal("120"), estado=Paquete.EMPACADO)
+        Guia.objects.create(pedido=self.pedido, paquete=self.c1, carrier="estafeta", numero="EST-1", proveedor="mock")
+        self.c2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal("4"), carrier="", estado=Paquete.EMPACADO)
+        self.inc = abrir_sin_paqueteria(self.pedido, "La caja 2 no cotiza con nadie.")
+        self.url = reverse("mesa:incidencia_detalle", args=[self.inc.pk])
+
+    def test_detalle_por_caja_y_cambio_solo_de_la_que_fallo(self):
+        html = self.client.get(self.url).content.decode()
+        self.assertIn("Cajas del pedido", html)
+        self.assertIn("sin paquetería", html)
+        self.assertIn("EST-1", html)
+        self.assertEqual(html.count('value="cambiar_paqueteria_caja"'), 2)  # las dos están en bodega
+        respuesta = self.client.post(self.url, {"accion": "cambiar_paqueteria_caja", "caja": self.c2.pk, "carrier": "fedex"}, follow=True)
+        self.assertContains(respuesta, "Caja 2")
+        self.assertContains(respuesta, "la incidencia quedó cerrada")
+        self.c1.refresh_from_db()
+        self.c2.refresh_from_db()
+        self.inc.refresh_from_db()
+        self.assertEqual((self.c2.carrier, self.c2.carrier_forzado), ("fedex", "fedex"))
+        self.assertEqual((self.c1.carrier, self.c1.guia_activa.numero), ("estafeta", "EST-1"))  # la buena no se toca
+        self.assertEqual(self.inc.estado, Incidencia.CERRADA)
+
+    def test_pedido_cancelado_explica_por_que_no_hay_selector(self):
+        from apps.pedidos.models import Pedido as P
+
+        P.objects.filter(pk=self.pedido.pk).update(estado=P.CANCELADO)
+        html = self.client.get(self.url).content.decode()
+        self.assertNotIn('value="cambiar_paqueteria_caja"', html)
+        self.assertNotIn('value="replanear_carrier"', html)
+        self.assertIn("ya no hay cajas en bodega que replanear", html)

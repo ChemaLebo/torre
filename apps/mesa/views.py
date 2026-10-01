@@ -494,6 +494,23 @@ def _gestionar_incidencia(request, incidencia):
             f"{pedido.folio} con {etiqueta_paqueteria(carrier)}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} "
             f"{que} ({detalle}). La incidencia quedó cerrada; el piso sigue con el empaque."
         )
+    if accion == "cambiar_paqueteria_caja":
+        # "Sin paquetería" por CAJA (Chema 2026-10-01): solo la que falló.
+        from apps.envios.models import Paquete  # lazy: modelo de otra app
+        from apps.envios.services import etiqueta_paqueteria  # lazy por contrato
+        from apps.pedidos.services import cambiar_paqueteria_caja  # lazy por contrato
+        pedido = incidencia.pedido
+        if pedido is None:
+            raise ValueError("La incidencia no está ligada a un pedido.")
+        caja = get_object_or_404(Paquete, pk=request.POST.get("caja"), pedido=pedido)
+        carrier = (request.POST.get("carrier") or "").strip()
+        caja = cambiar_paqueteria_caja(pedido, caja, carrier, request.user)
+        etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas del pedido"
+        cerrada = _resolver_paq_si_cotiza(incidencia, request.user)
+        return (
+            f"Caja {caja.numero} de {pedido.folio} con {etiqueta}: ${caja.precio_cotizado or 0}. "
+            + ("Todas las cajas tienen paquetería: la incidencia quedó cerrada." if cerrada else "La incidencia sigue abierta: aún hay cajas sin paquetería.")
+        )
     if accion == "regresar_a_empaque":
         # Cambio de dirección con guía comprada (Chema 2026-09-23): solo si
         # nada ha salido y Shopify ya mandó una dirección distinta (pendiente).
@@ -1046,18 +1063,51 @@ def pedido_detalle(request, pk):
 
 def _contexto_sin_paqueteria(incidencia):
     """Selector de paquetería en la incidencia interna "Sin paquetería que
-    cotice": solo abierta, con pedido y con el pedido aún en bodega."""
+    cotice" (Chema 2026-10-01: detalle por paquete, como en el pedido): cada
+    caja en bodega con su estatus, guía y su propio selector, para rehacer
+    SOLO la que se quedó sin guía; y el selector del pedido entero, que
+    replanea la ola en bodega. Con el pedido cancelado o ya en la calle se
+    explica por qué no hay nada que replanear."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
-    from apps.envios.services import opciones_paqueteria  # lazy por contrato
+    from apps.envios.services import opciones_paqueteria, url_rastreo_carrier  # lazy por contrato
     from apps.incidencias.models import Incidencia
     pedido = incidencia.pedido
     if incidencia.tipo != Incidencia.TIPO_PAQ or pedido is None or not incidencia.abierta:
         return {}
-    en_bodega = pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA")
-    fuera = any(c.estado == Paquete.DESPACHADO for c in pedido.paquetes.all()) or pedido.tiene_despachadas
-    if not en_bodega or fuera:
-        return {}
-    return {"puede_replanear": True, "opciones_paqueteria": opciones_paqueteria()}
+    en_bodega = pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA", "PARCIALMENTE_DESPACHADO")
+    if not en_bodega:
+        return {"paq_motivo": f"{pedido.folio} está {pedido.get_estado_display().lower()}: ya no hay cajas en bodega que replanear."}
+    cajas = sorted(pedido.paquetes.prefetch_related("guias"), key=lambda c: c.numero)
+    for caja in cajas:
+        caja.guia = next((g for g in caja.guias.all() if g.es_activa), None)
+        caja.url_rastreo = url_rastreo_carrier(caja.guia.carrier, caja.guia.numero) if caja.guia else ""
+        caja.puede_cambiar = caja.estado != Paquete.DESPACHADO and (caja.guia is None or caja.guia.estado == "GUIA_CREADA")
+        caja.sin_cotizar = caja.estado != Paquete.DESPACHADO and caja.guia is None and not (caja.precio_cotizado or 0)
+    return {
+        "puede_replanear": pedido.estado != "PARCIALMENTE_DESPACHADO" or bool(pedido.lineas_por_surtir),
+        "paq_cajas": cajas,
+        "opciones_paqueteria": opciones_paqueteria(),
+        "paq_carrier_forzado": pedido.carrier_forzado,
+    }
+
+
+def _resolver_paq_si_cotiza(incidencia, actor):
+    """Tras un cambio por caja: si ya ninguna caja en bodega está sin
+    paquetería, la incidencia "Sin paquetería" se resuelve y cierra sola."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.incidencias.services import cerrar, resolver  # lazy por contrato
+
+    pedido = incidencia.pedido
+    cajas = [c for c in pedido.paquetes.prefetch_related("guias") if c.estado != Paquete.DESPACHADO]
+    if not cajas or not incidencia.abierta:
+        return False
+    sin = [c.numero for c in cajas if c.guia_activa is None and not (c.precio_cotizado or 0)]
+    if sin:
+        return False
+    detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in cajas)
+    resolver(incidencia, f"Paquetería elegida por caja desde Mesa: {detalle}.", actor)
+    cerrar(incidencia, actor)
+    return True
 
 
 def _contexto_cambio_direccion(incidencia):

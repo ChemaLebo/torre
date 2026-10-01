@@ -67,16 +67,45 @@
     <div class="banner warn mt"><span class="foco"></span>Ya salió{% if guias_fuera %} con {{ guias_fuera|join:", " }}{% endif %}{% if cajas_fuera %} (caja {{ cajas_fuera|join:", " }} fuera{% if cajas_dentro %}; en bodega la caja {{ cajas_dentro|join:", " }}{% endif %}){% endif %}: no se regresa a empaque. Se resuelve con el carrier o con el comprador.</div>
     <p class="small mt">Viajó a: <strong>{{ direccion_guia|default:"—" }}</strong>{% if direccion_pendiente %}<br>Shopify ahora dice: <strong>{{ direccion_pendiente }}</strong>. El pedido conserva la dirección a la que viajó.{% endif %}</p>
     {% endif %}
-    {# Sin paquetería que cotice (2026-09-24): Mesa elige y el pedido se replanea con ella. #}
+    {# Sin paquetería que cotice (2026-09-24; por caja desde 2026-10-01): cada caja en bodega con su selector, y el del pedido entero. #}
+    {% if paq_motivo %}<p class="small muted mt">{{ paq_motivo }}</p>{% endif %}
+    {% if paq_cajas %}
+    <div class="eyebrow mt">Cajas del pedido</div>
+    <div class="tabla-wrap mt">
+      <table data-sin-tabla-js>
+        <thead><tr><th>Caja</th><th>Estado</th><th>Paquetería</th><th>Guía</th><th>Cambiar solo esta caja</th></tr></thead>
+        <tbody>
+          {% for caja in paq_cajas %}
+          <tr>
+            <td class="mono">{{ caja.numero }}</td>
+            <td><span class="pill {% if caja.estado == 'DESPACHADO' %}accent{% elif caja.sin_cotizar %}crit{% endif %}">{{ caja.get_estado_display }}{% if caja.sin_cotizar %} · sin paquetería{% endif %}</span></td>
+            <td class="small">{{ caja.carrier|default:"—" }}{% if caja.carrier_forzado %} <span class="pill warn">forzada</span>{% endif %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}</div></td>
+            <td class="small">{% if caja.guia %}{% if caja.url_rastreo %}<a class="mono" href="{{ caja.url_rastreo }}" target="_blank" rel="noopener">{{ caja.guia.numero }} ↗</a>{% else %}<span class="mono">{{ caja.guia.numero }}</span>{% endif %}<div class="muted">{{ caja.guia.get_estado_display|lower }}</div>{% else %}<span class="muted">sin guía</span>{% endif %}</td>
+            <td>
+              {% if caja.puede_cambiar %}
+              <form method="post" class="fila" onsubmit="return confirm('¿Cambiar la paquetería de la caja {{ caja.numero }}? Se recotiza solo esta caja.');">{% csrf_token %}
+                <input type="hidden" name="accion" value="cambiar_paqueteria_caja"><input type="hidden" name="caja" value="{{ caja.pk }}">
+                <select name="carrier" aria-label="Paquetería para la caja {{ caja.numero }}"><option value="">Seguir al pedido</option>{% for codigo, nombre in opciones_paqueteria %}<option value="{{ codigo }}" {% if codigo == caja.carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+                <button class="btn chico{% if caja.sin_cotizar %} primario{% endif %}" type="submit">Cambiar</button>
+              </form>
+              {% else %}<span class="muted small">ya salió</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
     {% if puede_replanear %}
-    <form method="post" class="mt" onsubmit="return confirm('¿Replanear las cajas de {{ incidencia.pedido.folio }} con esta paquetería? Queda forzada para el pedido.');">{% csrf_token %}
+    <form method="post" class="mt" onsubmit="return confirm('¿Replanear las cajas en bodega de {{ incidencia.pedido.folio }} con esta paquetería? Lo que ya salió no se toca.');">{% csrf_token %}
       <input type="hidden" name="accion" value="replanear_carrier">
-      <label for="sel-carrier">Paquetería para {{ incidencia.pedido.folio }} (CP {{ incidencia.pedido.cp }})</label>
+      <label for="sel-carrier">Paquetería para todo el pedido {{ incidencia.pedido.folio }} (CP {{ incidencia.pedido.cp }})</label>
       <select id="sel-carrier" name="carrier">
-        {% for codigo, nombre in opciones_paqueteria %}<option value="{{ codigo }}">{{ nombre }}</option>{% endfor %}
+        <option value="" {% if not paq_carrier_forzado %}selected{% endif %}>Sin forzar: reglas normales del pedido</option>
+        {% for codigo, nombre in opciones_paqueteria %}<option value="{{ codigo }}" {% if codigo == paq_carrier_forzado %}selected{% endif %}>{{ nombre }}</option>{% endfor %}
       </select>
-      <button class="btn chico primario mt" type="submit">Replanear cajas con esta paquetería</button>
-      <p class="small muted">Queda forzada para este pedido: el plan de cajas y la guía se compran con ella. Si cotiza, la incidencia se cierra sola; si tampoco cotiza, sigue abierta con el error.</p>
+      <button class="btn chico primario mt" type="submit">Replanear las cajas en bodega con esta paquetería</button>
+      <p class="small muted">Rehace el plan de lo que sigue en bodega con esa paquetería forzada para el pedido. Si cotiza, la incidencia se cierra sola; si tampoco cotiza, sigue abierta con el error.</p>
     </form>
     {% endif %}
     {% if puede_resolver %}

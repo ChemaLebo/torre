@@ -538,7 +538,11 @@ def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
         raise ValueError("Elige una paquetería de la lista.")
     if caja.pedido_id != pedido.pk:
         raise ValueError(f"La caja {caja.numero} no es de {pedido.folio}.")
-    if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+    # PARCIALMENTE_DESPACHADO (2026-10-01): una caja salió y otra se quedó sin
+    # paquetería; la que se quedó sí se puede cambiar (la despachada no).
+    if pedido.estado not in (
+        Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO,
+    ):
         raise ValueError(
             f"{pedido.folio} está {pedido.get_estado_display().lower()}: la paquetería solo se cambia antes de salir."
         )
