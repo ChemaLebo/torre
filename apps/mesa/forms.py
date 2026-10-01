@@ -127,7 +127,9 @@ class FormCliente(forms.Form):
     incidencias_auto_pausadas_hasta = forms.DateField(
         label="Pausar incidencias automáticas hasta",
         required=False,
-        widget=forms.DateInput(attrs={"type": "date"}),
+        # format ISO (2026-09-30): el <input type="date"> solo acepta AAAA-MM-DD;
+        # con el formato localizado (d/m/Y) el campo se veía vacío al editar.
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
         help_text=(
             "Inclusive. Hasta esa fecha el sistema no abre FAL, CAN, RF, RET ni DES por sí solo; "
             "las manuales y las del comprador siguen. Vacío = activas."

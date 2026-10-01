@@ -101,36 +101,53 @@ class PollTrackingTests(TestCase):
         self.assertEqual(pedido.estado, "RETORNADO")
         self.assertTrue(Incidencia.objects.filter(pedido=pedido, tipo="RF").exists())
 
-    def test_sin_movimiento_foraneo_abre_ret_y_no_duplica(self):
+    def _con_compromiso(self, guia, dias):
+        """Estampa la fecha compromiso como lo haría la salida: hoy + dias."""
+        Guia.objects.filter(pk=guia.pk).update(fecha_compromiso=timezone.localdate() + timedelta(days=dias))
+
+    def test_retraso_abre_ret_al_pasar_la_promesa_y_no_duplica(self):
+        """Chema 2026-09-30: retraso = pasar la fecha compromiso (desde la salida)
+        sin entrega; ya no cuenta el "sin movimiento"."""
         from apps.incidencias.models import Incidencia
 
         pedido, guia = self._pedido_recolectado()
         self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
-        services.poll_tracking()  # fija estado y último evento
-        self._envejecer(guia, horas=80)  # umbral foráneo: 72 h
+        self._con_compromiso(guia, dias=-1)  # prometida ayer
         services.poll_tracking()
         self.assertEqual(Incidencia.objects.filter(pedido=pedido, tipo="RET").count(), 1)
-        # Segundo poll con la incidencia activa: no duplica.
-        self._envejecer(guia, horas=90)
-        services.poll_tracking()
+        inc = Incidencia.objects.get(pedido=pedido, tipo="RET")
+        self.assertTrue(inc.mensajes.filter(texto__contains="1 día de retraso").exists())
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="guia", entidad_id=str(guia.pk), accion="alerta_retraso").exists())
+        services.poll_tracking()  # con la RET abierta no se duplica, aunque siga moviéndose
         self.assertEqual(Incidencia.objects.filter(pedido=pedido, tipo="RET").count(), 1)
 
-    def test_sin_movimiento_respeta_umbral_por_ruta(self):
+    def test_sin_compromiso_o_dentro_de_la_promesa_no_hay_retraso(self):
         from apps.incidencias.models import Incidencia
 
-        # Regla que fuerza carrier externo también para locales.
-        ReglaEnvio.objects.create(cliente=None, prioridad=1, condicion={}, carrier="paquetexpress", servicio="ground")
-        pedido_local, guia_local = self._pedido_recolectado(es_local=True, cp="28017")
-        pedido_foraneo, guia_foraneo = self._pedido_recolectado()
-        for guia in (guia_local, guia_foraneo):
-            self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
+        pedido, guia = self._pedido_recolectado()
+        self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
+        self._envejecer(guia, horas=200)  # quieta días enteros: ya no importa
+        services.poll_tracking()  # sin fecha compromiso = aún no salió: nada
+        self.assertFalse(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
+        self._con_compromiso(guia, dias=0)  # prometida para hoy: todavía no es retraso
         services.poll_tracking()
-        # 30 h sin movimiento: dispara local (24 h), todavía no foráneo (72 h).
-        self._envejecer(guia_local, horas=30)
-        self._envejecer(guia_foraneo, horas=30)
+        self.assertFalse(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
+
+    def test_al_entregar_la_ret_automatica_se_cierra_sola(self):
+        from apps.incidencias.models import Incidencia
+
+        pedido, guia = self._pedido_recolectado()
+        self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
+        self._con_compromiso(guia, dias=-2)
         services.poll_tracking()
-        self.assertTrue(Incidencia.objects.filter(pedido=pedido_local, tipo="RET").exists())
-        self.assertFalse(Incidencia.objects.filter(pedido=pedido_foraneo, tipo="RET").exists())
+        inc = Incidencia.objects.get(pedido=pedido, tipo="RET")
+        self.adapter.avanzar_estado(guia.numero, "ENTREGADO")
+        services.poll_tracking()
+        inc.refresh_from_db()
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.estado, inc.estado), ("ENTREGADO", Incidencia.CERRADA))
+        self.assertTrue(inc.mensajes.filter(texto__contains="Retraso cerrado automáticamente").exists())
+        self.assertFalse(pedido.incidencia_activa)
 
     def test_recoleccion_del_carrier_es_estatus_aparte_y_avisa_una_vez(self):
         """Chema 2026-09-25: el carrier recoge antes del manifiesto → se estampa
@@ -190,17 +207,16 @@ class PollTrackingTests(TestCase):
         resumen = services.poll_tracking()
         self.assertEqual(resumen["rastreadas"], 0)
 
-    def test_sin_movimiento_no_cuenta_si_hubo_evento_nuevo(self):
+    def test_una_guia_que_se_mueve_pero_llega_tarde_tambien_es_retraso(self):
         from apps.incidencias.models import Incidencia
 
         pedido, guia = self._pedido_recolectado()
+        self._con_compromiso(guia, dias=-1)
         self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
-        self._envejecer(guia, horas=80)
-        # El mismo poll trae movimiento nuevo (cambio de estado): resetea el reloj.
-        services.poll_tracking()
+        services.poll_tracking()  # el mismo poll trae movimiento nuevo y aun así está tarde
         guia.refresh_from_db()
         self.assertEqual(guia.estado, Guia.EN_TRANSITO)
-        self.assertFalse(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
+        self.assertTrue(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
 
 
 # La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);

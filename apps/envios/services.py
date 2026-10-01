@@ -1002,8 +1002,8 @@ def _procesar_rastreo(guia, info, ahora):
         # corrían los efectos y el pedido se quedaba en RECOLECTADO.
         _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion or "Entregado según el carrier")
 
-    if guia.estado not in Guia.ESTADOS_TERMINALES and not hubo_movimiento:
-        resultado["incidencias"] += _revisar_sin_movimiento(guia, ahora)
+    if guia.estado not in Guia.ESTADOS_TERMINALES:
+        resultado["incidencias"] += _revisar_retraso(guia, ahora)
     return resultado
 
 
@@ -1125,6 +1125,7 @@ def _aplicar_efectos(guia, estado, descripcion):
     elif estado == Guia.ENTREGADO:
         if _estado_por_guias(pedido) == "ENTREGADO":
             _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion)
+            _cerrar_retrasos(pedido, descripcion)
         elif not en_bodega:
             caja = f"caja {guia.paquete.numero}" if guia.paquete_id else f"guía {guia.numero}"
             _transicionar_pedido(
@@ -1165,29 +1166,59 @@ def _evento_fulfillment_shopify(guia, estado, descripcion):
         pass
 
 
-def _revisar_sin_movimiento(guia, ahora):
-    """Guía viva sin movimiento por más del umbral de su ruta → incidencia RET."""
-    pedido = guia.pedido
-    torre = settings.TORRE
-    horas = torre["SIN_MOVIMIENTO_LOCAL_HORAS"] if pedido.es_local else torre["SIN_MOVIMIENTO_FORANEO_HORAS"]
-    referencia = guia.ts_ultimo_movimiento or guia.creado
-    if referencia is None or ahora - referencia <= timedelta(hours=horas):
+def _revisar_retraso(guia, ahora):
+    """Retraso (Chema 2026-09-30): la guía pasó su fecha compromiso (salida de
+    bodega + días de promesa, `estampar_compromiso`) sin entregarse →
+    incidencia RET, UNA por pedido mientras siga abierta. Una guía sin
+    compromiso aún no ha salido: no hay retraso que medir. Ya no cuenta el
+    "sin movimiento": un paquete que se mueve pero llega tarde también es
+    retraso, y uno quieto dentro de la promesa no lo es."""
+    if guia.fecha_compromiso is None or not guia.es_activa:
         return 0
-    if pedido.incidencia_activa:
-        return 0  # ya hay una incidencia con la pelota en juego: no duplicar cada poll
+    if timezone.localdate(ahora) <= guia.fecha_compromiso:
+        return 0
+    pedido = guia.pedido
+    try:
+        from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+    except ImportError:
+        return 0
+    if Incidencia.objects.filter(pedido=pedido, tipo="RET", estado__in=Incidencia.ESTADOS_ABIERTOS).exists():
+        return 0
+    dias = (timezone.localdate(ahora) - guia.fecha_compromiso).days
     texto = (
-        f"Guía {guia.numero} ({guia.carrier}) sin movimiento por más de {horas} h "
-        f"en ruta {'local' if pedido.es_local else 'foránea'}. "
+        f"Guía {guia.numero} ({guia.carrier}) con {dias} día{'s' if dias != 1 else ''} de retraso: "
+        f"prometida para el {guia.fecha_compromiso:%d/%m/%Y} y sigue {guia.get_estado_display().lower()}. "
         f"Último evento: {guia.ultimo_evento or 'sin eventos'}."
     )
     incidencia = _abrir_incidencia(pedido, "RET", texto)
     if incidencia is None:
         return 0
     registrar_evento(
-        "guia", guia.pk, "alerta_sin_movimiento", cliente=pedido.cliente,
-        delta={"numero": guia.numero, "horas_umbral": horas},
+        "guia", guia.pk, "alerta_retraso", cliente=pedido.cliente,
+        delta={"numero": guia.numero, "compromiso": guia.fecha_compromiso.isoformat(), "dias": dias},
     )
     return 1
+
+
+def _cerrar_retrasos(pedido, descripcion=""):
+    """Al entregarse el pedido, sus incidencias RET automáticas abiertas se
+    resuelven y cierran solas con la nota de entrega (Chema 2026-09-25/30)."""
+    try:
+        from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+        from apps.incidencias.services import cerrar, resolver  # lazy por contrato
+    except ImportError:
+        return 0
+    cerradas = 0
+    for inc in Incidencia.objects.filter(
+        pedido=pedido, tipo="RET", origen="auto", estado__in=Incidencia.ESTADOS_ABIERTOS,
+    ):
+        try:
+            resolver(inc, f"Entregado según el carrier: {descripcion or 'sin detalle'}. Retraso cerrado automáticamente.", None)
+            cerrar(inc, None)
+            cerradas += 1
+        except Exception:  # noqa: BLE001, S110 — el cierre es cortesía; la entrega ya quedó
+            pass
+    return cerradas
 
 
 def _transicionar_pedido(pedido, destino, motivo=""):

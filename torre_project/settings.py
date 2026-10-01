@@ -170,8 +170,9 @@ TORRE = {
     "UMBRAL_COLA_BAJA": 5,
     "COBERTURA_ESTANDAR_MXN": 2500,
     "COBERTURA_AMPLIADA_PCT": 1.2,
-    "SIN_MOVIMIENTO_LOCAL_HORAS": 24,
-    "SIN_MOVIMIENTO_FORANEO_HORAS": 72,
+    # Retraso (2026-09-30): ya no hay umbral de "sin movimiento"; la incidencia
+    # RET se abre al pasar la fecha compromiso de la guía (salida + días de
+    # promesa, envios.estampar_compromiso) sin entrega, una por pedido.
     # Compromiso de entrega (Chema 2026-09-25): días que promete el carrier
     # (del cotizador) contados desde la SALIDA de bodega; local = día
     # siguiente siempre; foráneo sin dato = default. Calendario: lunes a

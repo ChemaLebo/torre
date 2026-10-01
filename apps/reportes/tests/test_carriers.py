@@ -1,7 +1,6 @@
 """Incidencias por paquetería y zona (Chema 2026-09-30)."""
 from datetime import timedelta
 
-from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
