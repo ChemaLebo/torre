@@ -6,8 +6,8 @@ from pathlib import Path
 from django.conf import settings
 from django.test import TestCase, override_settings
 
-from apps.mesa import zonas
-from apps.mesa.finanzas import zona_de_cp
+from apps.finanzas import zonas
+from apps.finanzas.services import zona_de_cp
 
 
 class ZonasCPTests(TestCase):

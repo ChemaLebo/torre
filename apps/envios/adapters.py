@@ -1352,7 +1352,7 @@ def _parsear_fecha_imile(texto, zona=None):
 def _nombre_estado_cp(cp):
     """Nombre del estado por prefijo de CP ("Ciudad de México", "Jalisco") para
     los campos `province` de iMile; "" si no se infiere."""
-    from apps.mesa.finanzas import NOMBRE_ESTADO  # lazy por contrato
+    from apps.finanzas.services import NOMBRE_ESTADO  # lazy por contrato
 
     from .cotizador import CP_ESTADO  # lazy: evita ciclo en carga
 

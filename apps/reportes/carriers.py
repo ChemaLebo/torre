@@ -44,7 +44,7 @@ _TIPOS = {
 
 
 def _zona(pedido, carrier):
-    from apps.mesa.finanzas import zona_de_cp, zona_de_carrier  # lazy por contrato
+    from apps.finanzas.services import zona_de_cp, zona_de_carrier  # lazy por contrato
 
     return zona_de_cp(pedido.cp) or zona_de_carrier(carrier)
 

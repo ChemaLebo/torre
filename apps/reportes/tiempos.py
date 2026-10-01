@@ -66,7 +66,7 @@ def _promedios(titulo, grupos):
 
 
 def generar(cliente, inicio, fin, filtros, es_mesa):
-    from apps.mesa.finanzas import (  # lazy por contrato
+    from apps.finanzas.services import (  # lazy por contrato
         SIN_ESTADO,
         estado_de_cp,
         zona_de_cp,

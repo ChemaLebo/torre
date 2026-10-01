@@ -39,7 +39,7 @@ COLUMNAS_MESA = [("Costo real guía MXN", "dinero"), ("Insumos MXN", "dinero"), 
 
 
 def generar(cliente, inicio, fin, filtros, es_mesa):
-    from apps.mesa.finanzas import facturar_guias  # lazy por contrato
+    from apps.finanzas.services import facturar_guias  # lazy por contrato
 
     facturacion = facturar_guias(cliente, inicio, fin)
     zona_filtro = (filtros or {}).get("zona") or ""

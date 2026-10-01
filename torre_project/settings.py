@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     "apps.mesa",
     "apps.rastreo",
     "apps.reportes",
+    "apps.finanzas",
 ]
 
 MIDDLEWARE = [

@@ -2375,7 +2375,7 @@ def cliente_editar(request, pk):
 
 @rol_requerido("mesa")
 def cliente_tarifario(request, pk):
-    from apps.mesa.finanzas import tarifario_de  # lazy por contrato
+    from apps.finanzas.services import tarifario_de  # lazy por contrato
 
     cliente = get_object_or_404(Cliente, pk=pk)
     default = settings.TORRE["TARIFARIO_DEFAULT"]
@@ -3179,7 +3179,7 @@ def finanzas(request):
     """
     from datetime import date, datetime
 
-    from apps.mesa import finanzas as motor
+    from apps.finanzas import services as motor
 
     hoy = timezone.localdate()
     try:
