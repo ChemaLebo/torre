@@ -810,6 +810,16 @@ def cancelar_guia(guia, actor, motivo=""):
         delta={"numero": guia.numero, "carrier": guia.carrier, "proveedor": guia.proveedor, "detalle": detalle},
         motivo=(motivo or f"Guía {guia.numero} cancelada.")[:300],
     )
+    # Una guía cancelada no se cobra: el carrier la reembolsa. Finanzas la
+    # cobró en el corte de su compra y la descuenta en el corte de hoy
+    # (Chema 2026-10-01); si la tarifa del cliente es 0 no hay nada que devolver.
+    from apps.finanzas.services import registrar_reembolso, tarifa_envio_de  # lazy por contrato
+
+    if tarifa_envio_de(guia) > 0:
+        registrar_reembolso(
+            guia, actor, origen="cancelacion",
+            nota=(motivo or f"Guía {guia.numero} cancelada antes de salir")[:200],
+        )
     return ok
 
 

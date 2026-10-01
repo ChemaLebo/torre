@@ -325,6 +325,8 @@ TORRE = {
     # vs la factura de Melonn ($408,774 sin IVA). El envío se factura POR PEDIDO
     # por cada bloque de `bloque_kg`, NUNCA por guía: así el ruteo interno
     # (dividir/consolidar paquetes) no mueve la factura del cliente.
+    # IVA que se suma a los estados de cuenta (las tarifas van sin IVA; Chema 2026-10-01).
+    "IVA": 0.16,
     "TARIFARIO_DEFAULT": {
         "almacenaje_mes": 18000,
         "alistamiento_pedido": 25,

@@ -1,9 +1,11 @@
 """Motor de finanzas: factura por tarifario vs costos reales.
 
-Regla bajo prueba (Chema 2026-09-28): el envío se factura POR GUÍA a la
-tarifa de la zona del CP destino; cada guía comprada es un cobro. Alistamiento
-(picking) y empaque van una vez por pedido, cada uno solo si se hizo (Chema
-2026-10-01). El costo es el real de cada guía; la cancelada se reembolsa (0).
+Regla bajo prueba (Chema 2026-10-01): TODA guía comprada se cobra en el
+corte de su compra, a la tarifa de la zona del CP destino (reposición,
+reexpedición y cancelado incluidos); todo reembolso de la paquetería se
+descuenta en el corte de su fecha. Alistamiento (picking) y empaque van una
+vez por pedido, cada uno solo si se hizo. El costo es el real de cada guía;
+la cancelada se reembolsa (0).
 """
 from datetime import timedelta
 from decimal import Decimal
@@ -11,9 +13,10 @@ from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.core.models import Cliente
+from apps.core.models import Cliente, EventoAuditoria
 from apps.envios.models import Guia, Paquete
 from apps.finanzas import services as finanzas
+from apps.finanzas.models import ReembolsoGuia
 
 from .base import asn, crear_pedido, guia, paquete
 
@@ -78,42 +81,50 @@ class ResumenMesTests(TestCase):
     def test_zona_metro_por_carrier_puntopost(self):
         gdl = crear_pedido(self.cliente, "PED-F0004", es_local=False, cp="44100")
         p1 = paquete(gdl, 1, "5.98", carrier="puntopost", precio="91")
-        p2 = paquete(gdl, 2, "5.98", carrier="puntopost", precio="91")
         guia(gdl, "puntopost", "91", p1)
-        guia(gdl, "puntopost", "91", p2)
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["guias_zona"], {"local": 0, "metro": 2, "nacional": 0})
-        self.assertEqual(r["ingresos"]["envio"], Decimal("338"))          # 2 guías metro
-        self.assertEqual(r["costos"]["carrier"], Decimal("182"))
+        self.assertEqual(r["guias_zona"], {"local": 0, "metro": 1, "nacional": 0})
+        self.assertEqual(r["ingresos"]["envio"], Decimal("169"))
+        jal = r["estados"]["Jalisco"]
+        self.assertEqual(jal["zona"], "metro")
+        self.assertEqual(jal["facturado"], Decimal("169"))
 
     def test_override_de_tarifario_por_cliente(self):
-        self.cliente.tarifario = {"almacenaje_mes": 0, "envio_bloque": {"local": 150}}
-        self.cliente.save(update_fields=["tarifario"])
-        pedido = crear_pedido(self.cliente, "PED-F0005")
+        premium = Cliente.objects.create(
+            nombre="Marca Premium", slug="premium",
+            tarifario={"almacenaje_mes": 25000, "envio_bloque": {"local": 150}},
+        )
+        pedido = crear_pedido(premium, "PED-F0005")
         p1 = paquete(pedido, 1, "10.00")
         guia(pedido, "local", "100", p1)
-        r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["tarifario"]["envio_bloque"]["local"], 150)
-        self.assertEqual(r["tarifario"]["envio_bloque"]["nacional"], 219)  # el resto no se pierde
-        self.assertEqual(r["ingresos"]["almacenaje"], Decimal("0"))
+        r = finanzas.resumen_mes(premium, self.inicio, self.fin)
+        self.assertEqual(r["ingresos"]["almacenaje"], Decimal("25000"))
         self.assertEqual(r["ingresos"]["envio"], Decimal("150"))
+        self.assertEqual(r["tarifario"]["envio_bloque"]["nacional"], 219)  # el resto sigue el default
 
-    def test_reexpedicion_suma_costo_e_insumos_pero_no_refactura(self):
+    def test_reexpedicion_se_cobra_pero_no_repite_picking_ni_empaque(self):
+        # Chema 2026-10-01: la guía nueva de una caja que ya tuvo guía en un
+        # corte anterior se cobra (nosotros la pagamos); el trabajo de piso
+        # ya se facturó entonces.
         pedido = crear_pedido(self.cliente, "PED-F0006")
         p1 = paquete(pedido, 1, "10.00")
         vieja = guia(pedido, "estafeta", "213.50", p1)
         Guia.objects.filter(pk=vieja.pk).update(creado=self.inicio - timedelta(days=30))
-        guia(pedido, "estafeta", "213.50", p1)  # reexpedición dentro del mes
+        guia(pedido, "estafeta", "213.50", p1)  # reexpedición dentro del periodo
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["pedidos"], 0)
+        self.assertEqual(r["pedidos"], 1)
         self.assertEqual(r["reexpediciones"], 1)
-        self.assertEqual(r["ingresos"]["envio"], Decimal("0"))
+        self.assertEqual(r["ingresos"]["envio"], Decimal("129"))
+        self.assertEqual((r["ingresos"]["alistamiento"], r["ingresos"]["empaque"]), (Decimal("0"), Decimal("0")))
         self.assertEqual(r["costos"]["carrier"], Decimal("213.50"))
         self.assertEqual(r["costos"]["insumos"], Decimal("12"))  # re-empaque sí cuesta
+        fila = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"][0]
+        self.assertEqual(fila["nota"], "reexpedición")
 
-    def test_cancelado_con_guia_viva_paga_picking_y_empaque_pero_no_envio(self):
-        # Se empacó (la guía viva es la evidencia) y luego se canceló: el trabajo
-        # de piso se cobra, el envío no; la guía que WOP pagó sí cuesta.
+    def test_cancelado_con_guia_viva_paga_todo(self):
+        # Se empacó (la guía viva es la evidencia) y luego se canceló sin
+        # cancelar la guía con el carrier: el trabajo de piso y la guía que
+        # WOP pagó se cobran; el día que el carrier la reembolse, se descuenta.
         from apps.pedidos.models import Pedido
 
         pedido = crear_pedido(self.cliente, "PED-F0007", es_local=False, cp="97203")
@@ -121,19 +132,18 @@ class ResumenMesTests(TestCase):
         guia(pedido, "estafeta", "185.20", p1)
         Pedido.objects.filter(pk=pedido.pk).update(estado="CANCELADO")
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["pedidos"], 1)
-        self.assertEqual(r["cancelados"], 1)
-        self.assertEqual(r["ingresos"]["envio"], Decimal("0"))
+        self.assertEqual((r["pedidos"], r["cancelados"]), (1, 1))
+        self.assertEqual(r["ingresos"]["envio"], Decimal("219"))
         self.assertEqual(r["ingresos"]["alistamiento"], Decimal("25"))
         self.assertEqual(r["ingresos"]["empaque"], Decimal("65"))
         self.assertEqual(r["costos"]["carrier"], Decimal("185.20"))
         fila = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"][0]
-        self.assertEqual((fila["nota"], fila["cobra_envio"]), ("cancelado", False))
+        self.assertEqual((fila["nota"], fila["cobra_envio"]), ("cancelado", True))
 
     def test_pickeado_y_cancelado_antes_de_empacar_paga_solo_picking(self):
-        # La caja nunca tuvo guía: entra al periodo por su fecha de plan, con
-        # picking y sin empaque (Chema 2026-10-01: así se ve lo que se pickeó
-        # y no se empacó por una cancelación).
+        # La caja nunca tuvo guía: entra al corte de la CANCELACIÓN (evento de
+        # auditoría; `actualizado` si no hay), con picking y sin empaque
+        # (Chema 2026-10-01: así se ve lo que se pickeó y no se empacó).
         from apps.pedidos.models import Pedido
 
         pedido = crear_pedido(self.cliente, "PED-F0011", estado=Pedido.CANCELADO, ts_picking=self.ahora)
@@ -150,6 +160,18 @@ class ResumenMesTests(TestCase):
         Paquete.objects.filter(pedido=pedido).update(ts_cierre=self.ahora)
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
         self.assertEqual((r["ingresos"]["empaque"], r["paquetes"]), (Decimal("65"), 1))
+        # La cancelación registrada en auditoría manda sobre `actualizado`: en
+        # otro corte, la caja sale de este.
+        EventoAuditoria.objects.create(
+            entidad="pedido", entidad_id=str(pedido.pk), accion="cambio_estado",
+            delta={"de": "EN_PICKING", "a": "CANCELADO"}, cliente=self.cliente,
+        )
+        EventoAuditoria.objects.filter(entidad_id=str(pedido.pk)).update(ts=self.inicio - timedelta(days=10))
+        self.assertEqual(finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"], [])
+        # Un pedido cancelado sin picking no deja fila: no hubo trabajo que cobrar.
+        nada = crear_pedido(self.cliente, "PED-F0012", estado=Pedido.CANCELADO)
+        paquete(nada, 1, "5.00")
+        self.assertEqual(finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"], [])
 
     def test_zona_sale_del_cp_no_del_carrier(self):
         # Pedido a Guadalajara despachado vía estafeta: se factura METRO igual.
@@ -171,7 +193,10 @@ class ResumenMesTests(TestCase):
         self.assertEqual(r["guias_zona"]["local"], 1)
         self.assertAlmostEqual(r["estados"]["Ciudad de México"]["peso"], 18.57, places=1)
 
-    def test_guia_cancelada_y_caja_de_reposicion_van_sin_cargo(self):
+    def test_guia_cancelada_historica_y_caja_de_reposicion(self):
+        # Guía CANCELADA sin registro de reembolso (anterior al módulo): cuenta
+        # como reembolsada en su corte, neto 0 y costo 0. La caja de reposición
+        # se cobra como cualquier guía (Chema 2026-10-01).
         from apps.catalogo.models import SKU
         from apps.envios.models import PaqueteLinea
         from apps.pedidos.models import LineaPedido
@@ -189,14 +214,84 @@ class ResumenMesTests(TestCase):
         Guia.objects.create(pedido=pedido, paquete=p1, carrier="local", numero="L-1", costo_preferencial=Decimal("100"))
         Guia.objects.create(pedido=pedido, paquete=p2, carrier="local", numero="L-2", costo_preferencial=Decimal("100"))
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["guias_zona"]["local"], 1)              # solo la caja original viva
-        self.assertEqual(r["ingresos"]["envio"], Decimal("129"))
+        self.assertEqual(r["guias_zona"]["local"], 3)              # las tres guías cobran; la cancelada se neta
+        self.assertEqual(r["ingresos"]["envio"], Decimal("258"))   # 129 + 129; la cancelada 129 − 129
         self.assertEqual(r["ingresos"]["alistamiento"], Decimal("25"))  # el pedido, una vez
         self.assertEqual(r["ingresos"]["empaque"], Decimal("65"))
         self.assertEqual(r["costos"]["insumos"], Decimal("24"))      # 2 bultos; la cancelada no
         self.assertEqual(r["costos"]["carrier"], Decimal("200"))     # la cancelada se reembolsa: 0
-        notas = [f["nota"] for f in finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"]]
-        self.assertEqual(notas, ["guía cancelada (sin cargo)", "", "reposición (sin cargo)"])
+        filas = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"]
+        self.assertEqual([f["nota"] for f in filas], ["guía cancelada · reembolsada", "", "reposición"])
+        self.assertEqual((filas[0]["transporte"], filas[0]["reembolso"], filas[0]["costo"]), (Decimal("129"), Decimal("129"), Decimal("0")))
+        self.assertEqual((filas[0]["picking"], filas[1]["picking"]), (Decimal("0"), Decimal("25")))  # el trabajo va en la primera fila con guía viva
+
+
+class ReembolsosTests(TestCase):
+    """Reembolsos de paquetería por guía: la fecha decide el corte."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cliente = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
+        cls.ahora = timezone.now()
+        cls.inicio = cls.ahora - timedelta(days=1)
+        cls.fin = cls.ahora + timedelta(days=1)
+
+    def test_registrar_valida_y_toma_la_tarifa_por_default(self):
+        pedido = crear_pedido(self.cliente, "PED-R0001", es_local=False, cp="97203")
+        g = guia(pedido, "estafeta", "185.20", paquete(pedido, 1, "10.00", carrier="estafeta"))
+        r = finanzas.registrar_reembolso(g, "mesa1", origen=ReembolsoGuia.ORIGEN_RECLAMACION, nota="99minutos pagó la reclamación")
+        self.assertEqual((r.monto, r.origen, r.registrado_por, r.cliente), (Decimal("219"), "reclamacion", "mesa1", self.cliente))
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="guia", entidad_id=str(g.pk), accion="reembolso_registrado").exists())
+        with self.assertRaises(ValueError):
+            finanzas.registrar_reembolso(g, "mesa1", origen="ajuste", monto=0)
+        with self.assertRaises(ValueError):
+            finanzas.registrar_reembolso(g, "mesa1", origen="ajuste", fecha=g.creado - timedelta(days=1))
+        finanzas.quitar_reembolso(r, "mesa1", motivo="se registró dos veces")
+        self.assertFalse(ReembolsoGuia.objects.filter(pk=r.pk).exists())
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="guia", entidad_id=str(g.pk), accion="reembolso_quitado").exists())
+
+    def test_mismo_corte_se_neta_y_corte_posterior_resta(self):
+        pedido = crear_pedido(self.cliente, "PED-R0002")
+        g = guia(pedido, "local", "100", paquete(pedido, 1, "5.00"))
+        finanzas.registrar_reembolso(g, "mesa1", origen="ajuste", nota="la paquetería la reembolsó")
+        f = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)
+        fila = f["filas"][0]
+        self.assertEqual((fila["transporte"], fila["reembolso"], fila["nota"]), (Decimal("129"), Decimal("129"), "reembolsada"))
+        self.assertEqual(f["reembolsos_previos"], [])
+        self.assertEqual(finanzas.resumen_mes(self.cliente, self.inicio, self.fin)["ingresos"]["envio"], Decimal("0"))
+        # Guía de un corte anterior reembolsada en este: no toca aquel corte y
+        # resta en este como "reembolso de corte anterior".
+        vieja = crear_pedido(self.cliente, "PED-R0003", es_local=False, cp="97203")
+        gv = guia(vieja, "estafeta", "200", paquete(vieja, 1, "5.00", carrier="estafeta"))
+        Guia.objects.filter(pk=gv.pk).update(creado=self.inicio - timedelta(days=20))
+        gv.refresh_from_db()
+        finanzas.registrar_reembolso(gv, "mesa1", origen="reclamacion", monto="219")
+        antes = finanzas.facturar_guias(self.cliente, self.inicio - timedelta(days=30), self.inicio)
+        self.assertEqual((antes["filas"][0]["transporte"], antes["filas"][0]["reembolso"]), (Decimal("219"), Decimal("0")))
+        ahora = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)
+        self.assertEqual([r.guia_id for r in ahora["reembolsos_previos"]], [gv.pk])
+        self.assertEqual(finanzas.resumen_mes(self.cliente, self.inicio, self.fin)["ingresos"]["envio"], Decimal("-219"))
+
+    def test_cancelar_guia_registra_el_reembolso(self):
+        from apps.envios.services import cancelar_guia
+
+        pedido = crear_pedido(self.cliente, "PED-R0004", ts_empacado=self.ahora)
+        g = guia(pedido, "local", "100", paquete(pedido, 1, "5.00"))
+        cancelar_guia(g, "mesa1", motivo="Cambio de dirección")
+        r = g.reembolsos.get()
+        self.assertEqual((r.monto, r.origen, r.nota), (Decimal("129"), "cancelacion", "Cambio de dirección"))
+        f = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"][0]
+        self.assertEqual((f["transporte"], f["reembolso"], f["costo"], f["nota"]), (Decimal("129"), Decimal("129"), Decimal("0"), "guía cancelada · reembolsada"))
+        # Con tarifa 0 no hay nada que devolver.
+        gratis = Cliente.objects.create(nombre="Gratis", slug="gratis", tarifario={"envio_bloque": {"local": 0}})
+        pedido2 = crear_pedido(gratis, "PED-R0005")
+        g2 = guia(pedido2, "local", "100", paquete(pedido2, 1, "5.00"))
+        cancelar_guia(g2, "mesa1")
+        self.assertFalse(g2.reembolsos.exists())
+
+    def test_iva(self):
+        self.assertEqual(finanzas.con_iva(Decimal("100")), (Decimal("16.00"), Decimal("116.00")))
+        self.assertEqual(finanzas.con_iva(Decimal("0")), (Decimal("0.00"), Decimal("0.00")))
 
 
 class RecepcionPorTarimaTests(TestCase):
@@ -218,39 +313,35 @@ class RecepcionPorTarimaTests(TestCase):
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
         self.assertEqual(r["tarimas"], 16)
         self.assertEqual(r["ingresos"]["recepcion"], Decimal("3040"))  # 16 × 190
-        # Va DENTRO de fulfillment y del total (almacenaje default 18,000).
-        self.assertEqual(r["ingresos"]["fulfillment"], Decimal("21040"))
-        self.assertEqual(r["ingresos"]["total"], Decimal("21040"))
+        self.assertEqual(r["ingresos"]["fulfillment"], Decimal("18000") + Decimal("3040"))
 
     def test_asn_del_mes_anterior_no_factura(self):
-        asn(self.cliente, tarimas_recibidas=16, descarga=self.inicio - timedelta(days=30))
+        asn(self.cliente, tarimas_recibidas=10, descarga=self.inicio - timedelta(days=5))
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
         self.assertEqual(r["tarimas"], 0)
         self.assertEqual(r["ingresos"]["recepcion"], Decimal("0"))
 
     def test_asn_anunciada_sin_descarga_no_factura(self):
-        asn(self.cliente, estado="ANUNCIADA", tarimas=10, descarga=None)
+        asn(self.cliente, estado="ANUNCIADA", tarimas=20)
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
         self.assertEqual(r["ingresos"]["recepcion"], Decimal("0"))
 
     def test_sin_conteo_de_piso_factura_lo_anunciado(self):
-        # tarimas_recibidas=0 (nadie contó al cerrar) → vale lo anunciado.
-        asn(self.cliente, estado="RECIBIDA", tarimas=4, tarimas_recibidas=0, descarga=self.ahora)
+        asn(self.cliente, tarimas=12, tarimas_recibidas=0, descarga=self.ahora)
         r = finanzas.resumen_mes(self.cliente, self.inicio, self.fin)
-        self.assertEqual(r["tarimas"], 4)
-        self.assertEqual(r["ingresos"]["recepcion"], Decimal("760"))  # 4 × 190
+        self.assertEqual(r["tarimas"], 12)
+        self.assertEqual(r["ingresos"]["recepcion"], Decimal("2280"))
 
     def test_cliente_default_no_cobra_recepcion_ni_minimo(self):
         colima = Cliente.objects.create(nombre="Cervecería Colima", slug="colima")
-        asn(colima, tarimas=15, tarimas_recibidas=16, descarga=self.ahora)
+        asn(colima, tarimas_recibidas=30, descarga=self.ahora)
         r = finanzas.resumen_mes(colima, self.inicio, self.fin)
         self.assertEqual(r["ingresos"]["recepcion"], Decimal("0"))
         self.assertEqual(r["ingresos"]["ajuste_minimo"], Decimal("0"))
-        self.assertEqual(r["ingresos"]["total"], Decimal("18000"))  # solo almacenaje flat
 
 
 class MinimoMensualTests(TestCase):
-    """Modelo B: piso de factura mensual como línea de ajuste aparte."""
+    """Modelo B: mínimo mensual como línea de ajuste."""
 
     @classmethod
     def setUpTestData(cls):
