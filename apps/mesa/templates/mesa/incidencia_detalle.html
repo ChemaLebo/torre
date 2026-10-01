@@ -27,6 +27,7 @@
       Origen: {{ incidencia.get_origen_display }}<br>
       Dueño: {{ incidencia.dueno|default:"sin dueño" }}
     </p>
+    {% if incidencia.pedido %}<a class="btn chico mt" href="{% url 'mesa:pedido_detalle' incidencia.pedido.pk %}" title="Detalle del pedido en Torre: cajas, guías, línea de tiempo y acciones">Ver pedido {{ incidencia.pedido.folio }}</a>{% endif %}
     {% if url_shopify %}<a class="btn chico mt" href="{{ url_shopify }}" target="_blank" rel="noopener" title="Orden {{ incidencia.pedido.orden_shopify_legible }} (id {{ incidencia.pedido.shopify_order_id }}) en el admin de Shopify">Ver orden {{ incidencia.pedido.orden_shopify_legible }} en Shopify ↗</a>{% endif %}
   </div>
   <div class="card">

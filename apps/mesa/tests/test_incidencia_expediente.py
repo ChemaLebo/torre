@@ -28,6 +28,9 @@ class ExpedienteIncidenciaTests(TestCase):
         html = self._detalle(pedido)
         self.assertIn(f"https://{self.tienda.dominio}/admin/orders/8401962139810", html)
         self.assertIn("Ver orden #8401962139810 en Shopify", html)
+        # Y al pedido en Torre (Chema 2026-10-01).
+        self.assertIn(reverse("mesa:pedido_detalle", args=[pedido.pk]), html)
+        self.assertIn(f"Ver pedido {pedido.folio}", html)
 
     def test_lista_todas_las_guias_una_por_caja(self):
         from decimal import Decimal
