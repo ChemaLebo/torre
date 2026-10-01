@@ -48,19 +48,20 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
   .bloque { border-bottom: 2px solid #000; padding: 1.5mm 0; }
 
   .cabecera { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; }
-  /* Chema 2026-09-30: folio, número de caja y avisos de manejo MUCHO más visibles. */
-  .folio-grande { font-size: 26px; font-weight: 800; line-height: 1; }
-  .marca { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; margin-top: 1mm; }
-  .paquete-de { font-size: 22px; font-weight: 900; white-space: nowrap; line-height: 1; }
-  .banda-manejo { background: #000; color: #fff; text-align: center; font-size: 20px; font-weight: 900; letter-spacing: 1px; padding: 1.5mm 2mm; margin: 1.5mm 0; line-height: 1.25; }
+  /* Chema 2026-10-01: etiqueta INTERNA, lo grande es lo interno: banda de manejo,
+     folio y paquete N de M. Sin nombre del cliente; carrier y CP chicos. */
+  .banda-manejo { background: #000; color: #fff; text-align: center; font-size: 22px; font-weight: 900; letter-spacing: 1px; padding: 2mm; margin-bottom: 1.5mm; line-height: 1.2; }
+  .identidad { text-align: center; padding: 1mm 0 2mm; }
+  .folio-grande { font-size: 40px; font-weight: 900; line-height: 1; }
+  .paquete-de { font-size: 30px; font-weight: 900; white-space: nowrap; line-height: 1.1; margin-top: 1.5mm; }
 
-  .carrier { font-size: 13px; font-weight: 800; text-transform: uppercase; }
-  .numero-guia { font-size: 24px; font-weight: 800; line-height: 1.05; word-break: break-all; }
+  .carrier { font-size: 10px; font-weight: 800; text-transform: uppercase; display: flex; justify-content: space-between; gap: 2mm; }
+  .numero-guia { font-size: 11px; font-weight: 800; word-break: break-all; }
 
   .label { font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
-  .destinatario .nombre { font-size: 15px; font-weight: 800; }
-  .destinatario .dato { font-size: 12px; line-height: 1.25; }
-  .cp-grande { font-size: 30px; font-weight: 900; line-height: 1; letter-spacing: 1px; }
+  .destinatario .nombre { font-size: 12px; font-weight: 800; }
+  .destinatario .dato { font-size: 10.5px; line-height: 1.25; }
+  .cp-grande { font-size: 12px; font-weight: 800; }
 
   .referencias { background: #000; color: #fff; padding: 1.5mm 2mm; }
   .referencias .label { color: #fff; }
@@ -71,8 +72,10 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
   .qr-caja svg { width: 100%; height: 100%; display: block; }
   .qr-caja .qr-texto { font-size: 8px; word-break: break-all; }
   .qr-lado { min-width: 0; }
-  .qr-lado .titulo-qr { font-size: 13px; font-weight: 800; line-height: 1.2; }
-  .qr-lado .url { font-size: 8px; word-break: break-all; margin-top: 1.5mm; }
+  .qr-lado .peso { font-size: 22px; font-weight: 900; line-height: 1; }
+  .qr-lado .folio-lado { font-size: 13px; font-weight: 800; margin: 1.5mm 0; }
+  .qr-lado .titulo-qr { font-size: 10px; font-weight: 800; line-height: 1.2; }
+  .qr-lado .url { font-size: 7px; word-break: break-all; margin-top: 1mm; }
 
   .pie { border-top: 2px solid #000; padding-top: 1.5mm; display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-size: 11px; font-weight: 700; }
   .pie .folio-chico { font-size: 10px; }
@@ -94,17 +97,17 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
 </div>
 
 <div class="etiqueta">
-  <div class="bloque cabecera">
-    <div>
-      <div class="folio-grande mono">{{ pedido.folio }}</div>
-      <div class="marca">{{ marca }}</div>
-    </div>
-    <div class="paquete-de">CAJA {{ paquete_n }} DE {{ paquete_m }}</div>
+  {% if fragil or este_lado_arriba %}
+  <div class="banda-manejo">{% if fragil %}<div>FRÁGIL</div>{% endif %}{% if este_lado_arriba %}<div>&uarr; ESTE LADO ARRIBA</div>{% endif %}</div>
+  {% endif %}
+
+  <div class="bloque identidad">
+    <div class="folio-grande mono">{{ pedido.folio }}</div>
+    <div class="paquete-de">PAQUETE {{ paquete_n }} DE {{ paquete_m }}</div>
   </div>
 
   <div class="bloque">
-    <div class="carrier">{{ guia.carrier }}{% if guia.servicio %} · {{ guia.servicio }}{% endif %}</div>
-    <div class="numero-guia mono">{{ guia.numero|default:"SIN NÚMERO" }}</div>
+    <div class="carrier"><span>{{ guia.carrier }}{% if guia.servicio %} · {{ guia.servicio }}{% endif %}</span><span class="numero-guia mono">{{ guia.numero|default:"SIN NÚMERO" }}</span></div>
   </div>
 
   <div class="bloque destinatario">
@@ -118,10 +121,6 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
     </div>
     <div class="cp-grande mono">CP {{ cp|default:"—" }}</div>
   </div>
-
-  {% if fragil or este_lado_arriba %}
-  <div class="banda-manejo">{% if fragil %}<div>FRÁGIL</div>{% endif %}{% if este_lado_arriba %}<div>&uarr; ESTE LADO ARRIBA</div>{% endif %}</div>
-  {% endif %}
 
   <div class="referencias">
     <div class="label">Referencias</div>
@@ -137,7 +136,9 @@ en data-qr para poder verificarla server-side sin ejecutar JS.
       <span class="qr-texto mono">{{ qr_url }}</span>
     </div>
     <div class="qr-lado">
-      <div class="titulo-qr">📍 REPARTIDOR: escanea — ubicación exacta + botón de ayuda si no encuentras</div>
+      {% if peso_kg %}<div class="peso">{{ peso_kg }} kg</div>{% endif %}
+      <div class="folio-lado mono">{{ pedido.folio }}</div>
+      <div class="titulo-qr">Escanea para ayuda al repartidor</div>
       <div class="url mono">{{ qr_url }}</div>
     </div>
   </div>

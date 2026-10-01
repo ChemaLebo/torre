@@ -223,8 +223,9 @@ def generar_pdf_etiqueta(guia):
     """PDF de UNA página 100×150 mm listo para la térmica. Regresa los bytes.
 
     Blanco y negro de alto contraste; mismo contenido que piso/etiqueta.html:
-    marca + folio, carrier + Code128 de la guía, destinatario con CP enorme,
-    referencias destacadas y QR a la página del repartidor. JAMÁS imprime
+    banda de manejo, folio y paquete N de M enormes (es la etiqueta interna),
+    carrier + Code128 chicos, destinatario compacto, referencias y QR a la
+    página del repartidor con peso y folio al lado. JAMÁS imprime
     valor declarado ni teléfono del comprador.
     """
     from apps.rastreo.services import (  # lazy por contrato
@@ -235,9 +236,7 @@ def generar_pdf_etiqueta(guia):
 
     pedido = guia.pedido
     direccion = pedido.direccion or {}
-    branding = pedido.cliente.branding or {}
-    marca = branding.get("nombre_publico") or pedido.cliente.nombre
-    paquete_n, paquete_m = _paquete_n_de_m(guia)
+    paquete_n, paquete_m = _paquete_n_de_m(guia)  # sin nombre del cliente (Chema 2026-10-01)
     cp = pedido.cp or str(direccion.get("zip") or "")
     referencias = referencias_direccion(direccion)
     obtener_o_crear_token_etiqueta(guia)  # el QR necesita el token vivo
@@ -252,86 +251,74 @@ def generar_pdf_etiqueta(guia):
 
     y = ALTO - MARGEN  # cursor: se dibuja de arriba hacia abajo
 
-    # 1) Cabecera (Chema 2026-09-30: folio y número de caja MUCHO más visibles):
-    #    FOLIO grande a la izquierda, "CAJA N DE M" grande a la derecha, la
-    #    marca chica debajo. Si no caben juntos, baja el tamaño de la caja.
-    y -= 22
-    etiqueta_paquete = f"CAJA {paquete_n} DE {paquete_m}"
-    tamano_folio, tamano_caja = 22, 20
-    while tamano_caja > 12 and (
-        stringWidth(pedido.folio, MONO_NEGRITA, tamano_folio) + stringWidth(etiqueta_paquete, NEGRITA, tamano_caja)
-        > ANCHO_UTIL - 3 * mm
-    ):
-        tamano_caja -= 1
-    lienzo.setFont(MONO_NEGRITA, tamano_folio)
-    lienzo.drawString(MARGEN, y, pedido.folio)
-    lienzo.setFont(NEGRITA, tamano_caja)
-    lienzo.drawRightString(ANCHO - MARGEN, y, etiqueta_paquete)
-    y -= 11
-    lienzo.setFont(NEGRITA, 9)
-    lienzo.drawString(MARGEN, y, _recortar(str(marca).upper(), NEGRITA, 9, ANCHO_UTIL))
-    y = _separador(lienzo, y - 4)
+    # Jerarquía (Chema 2026-10-01): es la etiqueta INTERNA, así que lo grande
+    # es lo interno: 1) banda de manejo, 2) folio, 3) paquete N de M. El CP y
+    # el número del carrier ya vienen en la guía del carrier: van chicos.
 
-    # 2) Carrier + número de guía en Code128 (o texto grande si es muy largo).
+    # 1) Banda de manejo arriba del todo, solo si alguna pieza lo pide.
+    fragil, arriba = marcas_de_manejo(guia)
+    y = _banda_manejo(lienzo, y + 3, fragil, arriba) if (fragil or arriba) else y
+
+    # 2) Folio enorme y PAQUETE N DE M enorme, centrados.
+    y -= 36
+    tamano_folio = 36
+    while tamano_folio > 18 and stringWidth(pedido.folio, MONO_NEGRITA, tamano_folio) > ANCHO_UTIL:
+        tamano_folio -= 1
+    lienzo.setFont(MONO_NEGRITA, tamano_folio)
+    lienzo.drawCentredString(ANCHO / 2, y, pedido.folio)
+    y -= 30
+    etiqueta_paquete = f"PAQUETE {paquete_n} DE {paquete_m}"
+    tamano_paquete = 28
+    while tamano_paquete > 14 and stringWidth(etiqueta_paquete, NEGRITA, tamano_paquete) > ANCHO_UTIL:
+        tamano_paquete -= 1
+    lienzo.setFont(NEGRITA, tamano_paquete)
+    lienzo.drawCentredString(ANCHO / 2, y, etiqueta_paquete)
+    y = _separador(lienzo, y - 8)
+
+    # 3) Carrier + número de guía: chico (ya viene en la guía del carrier),
+    #    con un Code128 bajo para escanearlo en Salida si hace falta.
     carrier = str(guia.carrier or "").upper()
     if guia.servicio:
         carrier += f" · {str(guia.servicio).upper()}"
-    y -= 10
-    lienzo.setFont(NEGRITA, 10)
-    lienzo.drawString(MARGEN, y, _recortar(carrier, NEGRITA, 10, ANCHO_UTIL))
     numero = (guia.numero or "").strip()
+    y -= 9
+    lienzo.setFont(NEGRITA, 8)
+    lienzo.drawString(MARGEN, y, _recortar(carrier, NEGRITA, 8, ANCHO_UTIL * 0.36))
+    lienzo.setFont(MONO_NEGRITA, 9)
+    lienzo.drawRightString(ANCHO - MARGEN, y, _recortar(numero or "SIN NÚMERO", MONO_NEGRITA, 9, ANCHO_UTIL * 0.62))
     barras = _code128_ajustado(numero)
     if barras is not None:
-        y -= 4 + BARRA_ALTO
+        barras.barHeight = 7 * mm
+        y -= 3 + 7 * mm
         barras.drawOn(lienzo, MARGEN + (ANCHO_UTIL - barras.width) / 2, y)
-        y -= 11
-        lienzo.setFont(MONO_NEGRITA, 10)
-        lienzo.drawCentredString(ANCHO / 2, y, numero)
-    else:
-        texto = numero or "SIN NÚMERO"
-        tamano = 16
-        while tamano > 8 and stringWidth(texto, MONO_NEGRITA, tamano) > ANCHO_UTIL:
-            tamano -= 1
-        y -= 6 + tamano
-        lienzo.setFont(MONO_NEGRITA, tamano)
-        lienzo.drawCentredString(ANCHO / 2, y, _recortar(texto, MONO_NEGRITA, tamano, ANCHO_UTIL))
-    y = _separador(lienzo, y - 5)
+    y = _separador(lienzo, y - 4)
 
-    # 3) Destinatario: nombre + dirección del JSON + CP enorme (≥28 pt).
-    y -= 8
-    lienzo.setFont(NEGRITA, 7)
-    lienzo.drawString(MARGEN, y, "DESTINATARIO")
-    y -= 13
-    lienzo.setFont(NEGRITA, 12)
-    lienzo.drawString(MARGEN, y, _recortar(pedido.comprador_nombre or "—", NEGRITA, 12, ANCHO_UTIL))
+    # 4) Destinatario compacto: nombre, dirección y CP a tamaño normal.
+    y -= 10
+    lienzo.setFont(NEGRITA, 10)
+    lienzo.drawString(MARGEN, y, _recortar(pedido.comprador_nombre or "—", NEGRITA, 10, ANCHO_UTIL))
     lineas_direccion = []
     if direccion.get("address1"):
-        lineas_direccion += _envolver(direccion["address1"], NORMAL, 9.5, ANCHO_UTIL, max_lineas=2)
+        lineas_direccion += _envolver(direccion["address1"], NORMAL, 8.5, ANCHO_UTIL, max_lineas=2)
     if direccion.get("address2"):
-        lineas_direccion += _envolver(direccion["address2"], NORMAL, 9.5, ANCHO_UTIL, max_lineas=1)
+        lineas_direccion += _envolver(direccion["address2"], NORMAL, 8.5, ANCHO_UTIL, max_lineas=1)
     ciudad = ", ".join(
         parte
         for parte in (
             str(direccion.get("city") or "").strip(),
             str(direccion.get("province") or "").strip(),
-            str(direccion.get("zip") or "").strip(),
         )
         if parte
     )
     if ciudad:
-        lineas_direccion += _envolver(ciudad, NORMAL, 9.5, ANCHO_UTIL, max_lineas=1)
-    lienzo.setFont(NORMAL, 9.5)
+        lineas_direccion += _envolver(f"{ciudad} · CP {cp or '—'}", NORMAL, 8.5, ANCHO_UTIL, max_lineas=1)
+    else:
+        lineas_direccion.append(f"CP {cp or '—'}")
+    lienzo.setFont(NORMAL, 8.5)
     for linea in lineas_direccion:
-        y -= 11
+        y -= 10
         lienzo.drawString(MARGEN, y, linea)
-    y -= 26
-    lienzo.setFont(MONO_NEGRITA, 30)
-    lienzo.drawString(MARGEN, y, _recortar(f"CP {cp or '—'}", MONO_NEGRITA, 30, ANCHO_UTIL))
     y = _separador(lienzo, y - 5)
-
-    # Manejo (2026-09-29): FRÁGIL / ESTE LADO ARRIBA en banda propia solo si alguna pieza lo pide.
-    fragil, arriba = marcas_de_manejo(guia)
-    y = _banda_manejo(lienzo, y, fragil, arriba)
     # 4) Referencias destacadas: banda negra con texto blanco (o manda al QR).
     # Cuántos renglones de referencias caben sin que el QR pise la banda:
     # lo que queda arriba del pie menos el QR y el marco de la banda.
@@ -361,18 +348,25 @@ def generar_pdf_etiqueta(guia):
     _dibujar_qr(lienzo, qr_url, MARGEN, y_qr)
     x_leyenda = MARGEN + QR_LADO + 4 * mm
     ancho_leyenda = ANCHO - MARGEN - x_leyenda
-    lienzo.setFont(NEGRITA, 11)
-    y_texto = y_qr + QR_LADO - 14
-    for linea in _envolver(
-        "REPARTIDOR: escanea — ubicación exacta + ayuda", NEGRITA, 11, ancho_leyenda, max_lineas=4
-    ):
+    # Lado derecho del QR (Chema 2026-10-01: que no quede vacío): peso grande,
+    # folio y la leyenda corta del repartidor con su URL chica.
+    y_texto = y_qr + QR_LADO - 16
+    if peso_kg is not None:
+        lienzo.setFont(NEGRITA, 18)
+        lienzo.drawString(x_leyenda, y_texto, f"{peso_kg} kg")
+        y_texto -= 16
+    lienzo.setFont(MONO_NEGRITA, 11)
+    lienzo.drawString(x_leyenda, y_texto, _recortar(pedido.folio, MONO_NEGRITA, 11, ancho_leyenda))
+    y_texto -= 16
+    lienzo.setFont(NEGRITA, 9)
+    for linea in _envolver("Escanea para ayuda al repartidor", NEGRITA, 9, ancho_leyenda, max_lineas=2):
         lienzo.drawString(x_leyenda, y_texto, linea)
-        y_texto -= 13
-    lienzo.setFont(MONO, 6.5)
-    y_texto -= 2
-    for linea in _envolver_crudo(qr_url, MONO, 6.5, ancho_leyenda, max_lineas=3):
+        y_texto -= 11
+    lienzo.setFont(MONO, 6)
+    y_texto -= 1
+    for linea in _envolver_crudo(qr_url, MONO, 6, ancho_leyenda, max_lineas=3):
         lienzo.drawString(x_leyenda, y_texto, linea)
-        y_texto -= 8
+        y_texto -= 7
 
     # 6) Pie: peso + manejo + folio chico. JAMÁS valor declarado ni teléfono.
     lienzo.setLineWidth(1.5)

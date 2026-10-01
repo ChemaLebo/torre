@@ -108,7 +108,7 @@ class QREtiquetaTests(EtiquetaTestCase):
     def test_la_leyenda_menciona_el_boton_de_ayuda(self):
         guia = self.crear_guia()
         respuesta = self.get_etiqueta(guia)
-        self.assertContains(respuesta, "botón de ayuda si no encuentras")
+        self.assertContains(respuesta, "Escanea para ayuda al repartidor")  # leyenda corta (Chema 2026-10-01)
 
 
 class ContenidoEtiquetaTests(EtiquetaTestCase):
@@ -140,13 +140,13 @@ class ContenidoEtiquetaTests(EtiquetaTestCase):
         )
         guia = self.crear_guia(pedido=pedido, paquete=paquete_1)
         respuesta = self.get_etiqueta(guia)
-        self.assertContains(respuesta, "CAJA 1 DE 2")
+        self.assertContains(respuesta, "PAQUETE 1 DE 2")
         self.assertContains(respuesta, "7.50 kg")
 
     def test_guia_legacy_sin_paquete_es_1_de_1(self):
         guia = self.crear_guia()  # paquete=None
         respuesta = self.get_etiqueta(guia)
-        self.assertContains(respuesta, "CAJA 1 DE 1")
+        self.assertContains(respuesta, "PAQUETE 1 DE 1")
 
     def test_marcas_de_manejo_solo_cuando_el_sku_lo_pide(self):
         """Chema 2026-09-29: FRÁGIL y THIS SIDE UP salen del SKU (banderas), no siempre."""
