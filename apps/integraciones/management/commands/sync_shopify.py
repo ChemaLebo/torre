@@ -20,6 +20,12 @@ class Command(BaseCommand):
         for tienda in tiendas:
             nuevos = services.reconciliar_pedidos(tienda)
             self.stdout.write(f"{tienda.dominio}: {nuevos} pedidos nuevos por reconciliación")
+            catalogo = services.sincronizar_catalogo(tienda)
+            if catalogo["nuevos"] or catalogo["renombrados"] or catalogo["recodificados"]:
+                self.stdout.write(
+                    f"{tienda.dominio}: catálogo {catalogo['nuevos']} SKU(s) nuevos por completar, "
+                    f"{catalogo['renombrados']} renombrados, {catalogo['recodificados']} recodificados"
+                )
         replays = services.reprocesar_pendientes()
         if replays:
             self.stdout.write(f"Replay: {replays} webhooks pendientes reprocesados")

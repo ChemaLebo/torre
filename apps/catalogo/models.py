@@ -89,6 +89,10 @@ class SKU(models.Model):
     fragil = models.BooleanField(default=False, help_text="Imprime FRÁGIL en la etiqueta de la caja")
     este_lado_arriba = models.BooleanField(default=False, help_text="Imprime ESTE LADO ARRIBA en la etiqueta de la caja")
     fecha_resurtido = models.DateField(null=True, blank=True)
+    # Id de la variante en Shopify (2026-10-01): lo estampa el pull de catálogo
+    # (integraciones.sincronizar_catalogo) y permite seguir un SKU aunque le
+    # cambien el código allá. Vacío = SKU que no viene de Shopify (kit, manual).
+    shopify_variant_id = models.CharField(max_length=40, blank=True, default="", db_index=True)
     activo = models.BooleanField(default=True)
     creado = models.DateTimeField(auto_now_add=True)
 

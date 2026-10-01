@@ -35,12 +35,12 @@ link del portal cuando exista al menos un manual con audiencia portal.
    manuales de stock en Shopify, marcarlas en Salud de sync y re-empujar.
 2. `fulfillments/create`: un fulfillment que no creó Torre sobre un pedido en
    proceso abre incidencia y detiene el picking (evita doble salida).
-3. `products/create|update|delete`: catálogo. Primero un pull en `sync_shopify`
-   (variantes → alta/actualización por código); Shopify manda código, nombre,
-   variante, código de barras, peso y precio; lo físico (dimensiones, lote,
-   reorden, kit, categoría) es de Torre y no se pisa. Los nuevos nacen inactivos
-   en una cola "por completar" en Mesa; las bajas se marcan, no se borran.
-   Definir qué tienda manda si Colima tiene el mismo código en dos.
+3. Catálogo: HECHO 2026-10-01 como pull en `sync_shopify`
+   (`sincronizar_catalogo`): nuevos inactivos "por completar", cambios de
+   nombre y código seguidos por `shopify_variant_id`; peso y medidas son
+   manuales por decisión de Chema. Pendiente: webhooks `products/*` para
+   tiempo real (hoy 15 min bastan), marcar bajas, y qué tienda manda si un
+   cliente repite código en dos tiendas (hoy gana la primera que liga).
 4. HECHO 2026-09-30: webhooks de rastreo de envia.com (tipo 3, firmado) y
    99minutos entran por `envios/webhooks.py` y el poller queda de respaldo.
    Falta registrarlos: envia en su panel con la URL y el token; 99minutos con

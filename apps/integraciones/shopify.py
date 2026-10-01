@@ -144,6 +144,26 @@ mutation actualizarTracking($fulfillmentId: ID!, $trackingInfoInput: Fulfillment
 }
 """
 
+# Catálogo completo (2026-10-01): todas las variantes con SKU, paginadas de 250
+# en 250, para dar de alta productos nuevos y seguir cambios de nombre o código.
+CONSULTA_CATALOGO = """
+query catalogo($cursor: String) {
+  productVariants(first: 250, after: $cursor) {
+    edges {
+      node {
+        id
+        sku
+        title
+        barcode
+        price
+        product { id title status productType }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+"""
+
 # Fulfillments ya escritos de una orden, con sus números de guía: para
 # recuperar ids de pedidos fulfilleados antes de guardarlos (backfill).
 CONSULTA_FULFILLMENTS_ORDEN = """
@@ -638,6 +658,31 @@ class ShopifyClient:
                 "producto": ((nodo.get("product") or {}).get("title") or ""),
             }
         return resultado
+
+    def catalogo(self):
+        """Todas las variantes de la tienda, en borrador o activas:
+        [{variant_id, sku, titulo_variante, producto, tipo, estado, codigo_barras, precio}]."""
+        variantes, cursor = [], None
+        while True:
+            datos = self.graphql(CONSULTA_CATALOGO, {"cursor": cursor})
+            bloque = datos.get("productVariants") or {}
+            for edge in bloque.get("edges") or []:
+                nodo = edge.get("node") or {}
+                producto = nodo.get("product") or {}
+                variantes.append({
+                    "variant_id": str(nodo.get("id") or "").rsplit("/", 1)[-1],
+                    "sku": (nodo.get("sku") or "").strip(),
+                    "titulo_variante": (nodo.get("title") or "").strip(),
+                    "producto": (producto.get("title") or "").strip(),
+                    "tipo": (producto.get("productType") or "").strip(),
+                    "estado": (producto.get("status") or "").strip(),
+                    "codigo_barras": (nodo.get("barcode") or "").strip(),
+                    "precio": nodo.get("price") or "",
+                })
+            info = bloque.get("pageInfo") or {}
+            if not info.get("hasNextPage") or not info.get("endCursor"):
+                return variantes
+            cursor = info["endCursor"]
 
     def obtener_pedido(self, order_id):
         """GET /orders/{id}.json — la orden completa (re-ingesta tras un move)."""

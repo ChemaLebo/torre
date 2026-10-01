@@ -19,6 +19,12 @@
   </div>
 </div>
 
+{% if por_completar %}
+<div class="banner warn mb"><span class="foco"></span>
+  <span><b>{{ por_completar|length }} producto{{ por_completar|length|pluralize }} nuevo{{ por_completar|length|pluralize }} de Shopify por completar</b>: {% for s in por_completar %}<span class="mono">{{ s.codigo }}</span>{% if not forloop.last %}, {% endif %}{% endfor %}. Captura peso y medidas y actívalos; hasta entonces no se reciben ni se publican.</span>
+</div>
+{% endif %}
+
 <div class="card mb">
   <div class="titulo">
     <h3>SKUs del cliente</h3>
@@ -70,7 +76,7 @@
             <td class="derecha mono">{{ sku.empaques_divisibles }}</td>
             <td class="derecha mono">{{ sku.punto_reorden }}</td>
             <td class="derecha mono">{{ sku.disponible }}</td>
-            <td>{% if sku.activo %}<span class="pill ok">activo</span>{% else %}<span class="pill crit">inactivo</span>{% endif %}</td>
+            <td>{% if sku.activo %}<span class="pill ok">activo</span>{% elif sku.shopify_variant_id and not sku.peso_gr %}<span class="pill warn" title="Llegó del pull de Shopify: falta peso y medidas">por completar</span>{% else %}<span class="pill crit">inactivo</span>{% endif %}</td>
             <td>{% if tienda_principal %}<a class="small" href="https://{{ tienda_principal.dominio }}/admin/products?query={{ sku.codigo|urlencode }}" target="_blank" rel="noopener" title="Buscar el producto por SKU en el admin de Shopify">abrir ↗</a>{% else %}<span class="small muted">—</span>{% endif %}</td>
             <td class="derecha"><a class="btn chico" href="?editar={{ sku.pk }}#form-sku">editar</a></td>
           </tr>

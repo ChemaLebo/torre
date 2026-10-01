@@ -12,6 +12,7 @@
 Todo job puede correr dos veces sin duplicar efecto (BLUEPRINT §2.2.7).
 """
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import IntegrityError
@@ -993,6 +994,100 @@ def _topic_desde_payload(payload):
     if payload.get("cancelled_at"):
         return "orders/cancelled"
     return "orders/updated"
+
+
+_SIN_VARIANTE = "Default Title"
+
+
+def sincronizar_catalogo(tienda):
+    """Pull de catálogo desde Shopify (Chema 2026-10-01), parte de sync_shopify:
+    cada variante con SKU que Torre no conoce nace como SKU INACTIVO "por
+    completar" (código, nombre, variante, código de barras y precio; peso y
+    medidas los captura Mesa: NUNCA vienen de Shopify) y, en los que ya
+    existen, se siguen SOLO los cambios de nombre (descripción/variante) y de
+    código de SKU (por el id de la variante, que se estampa al primer match
+    por código). Lo físico (peso, medidas, lote, reorden, kit, categoría,
+    banderas) no se toca. Borradores y activos entran igual: el producto se
+    da de alta antes de recibirlo. Sin token → nada. Regresa el resumen."""
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+
+    resumen = {"nuevos": 0, "renombrados": 0, "recodificados": 0, "ligados": 0, "variantes": 0}
+    if not tienda.token:
+        return resumen
+    try:
+        variantes = ShopifyClient(tienda).catalogo()
+    except Exception as exc:  # noqa: BLE001 — Shopify caído: queda en SyncLog, el sync sigue
+        SyncLog.objects.create(
+            tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
+            detalle=f"catálogo: {exc}"[:500],
+        )
+        return resumen
+    cliente = tienda.cliente
+    por_variante = {s.shopify_variant_id: s for s in SKU.objects.filter(cliente=cliente).exclude(shopify_variant_id="")}
+    por_codigo = {s.codigo: s for s in SKU.objects.filter(cliente=cliente)}
+    for v in variantes:
+        if not v["sku"]:
+            continue
+        resumen["variantes"] += 1
+        variante = v["titulo_variante"] if v["titulo_variante"] != _SIN_VARIANTE else ""
+        sku = por_variante.get(v["variant_id"])
+        if sku is None:
+            sku = por_codigo.get(v["sku"])
+            if sku is not None and not sku.shopify_variant_id:
+                sku.shopify_variant_id = v["variant_id"]
+                sku.save(update_fields=["shopify_variant_id"])
+                por_variante[v["variant_id"]] = sku
+                resumen["ligados"] += 1
+        if sku is None:
+            try:
+                precio = Decimal(str(v["precio"] or 0))
+            except (InvalidOperation, ValueError):
+                precio = Decimal(0)
+            sku = SKU.objects.create(
+                cliente=cliente, codigo=v["sku"][:60], descripcion=(v["producto"] or v["sku"])[:200],
+                variante=variante[:100], codigo_barras=v["codigo_barras"][:64], precio_declarado=precio,
+                shopify_variant_id=v["variant_id"], activo=False,
+            )
+            por_codigo[sku.codigo] = sku
+            por_variante[v["variant_id"]] = sku
+            resumen["nuevos"] += 1
+            registrar_evento(
+                "sku", sku.codigo, "sku_creado_desde_shopify", cliente=cliente,
+                delta={"tienda": tienda.dominio, "variant_id": v["variant_id"], "estado_shopify": v["estado"]},
+                motivo="Variante nueva en Shopify: nace inactivo, por completar peso y medidas en Mesa.",
+            )
+            continue
+        cambios = {}
+        if v["sku"] != sku.codigo and v["sku"] not in por_codigo:
+            cambios["codigo"] = [sku.codigo, v["sku"][:60]]
+            por_codigo.pop(sku.codigo, None)
+            sku.codigo = v["sku"][:60]
+            por_codigo[sku.codigo] = sku
+            resumen["recodificados"] += 1
+        nombre = (v["producto"] or sku.descripcion)[:200]
+        if nombre and nombre != sku.descripcion:
+            cambios["descripcion"] = [sku.descripcion, nombre]
+            sku.descripcion = nombre
+        if variante[:100] != sku.variante:
+            cambios["variante"] = [sku.variante, variante[:100]]
+            sku.variante = variante[:100]
+        if cambios:
+            sku.save(update_fields=list(cambios))
+            if "descripcion" in cambios or "variante" in cambios:
+                resumen["renombrados"] += 1
+            registrar_evento(
+                "sku", sku.codigo, "sku_actualizado_desde_shopify", cliente=cliente,
+                delta={"tienda": tienda.dominio, **cambios},
+                motivo="Nombre o código cambiados en Shopify; peso y medidas no se tocan.",
+            )
+    SyncLog.objects.create(
+        tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_OK,
+        detalle=(
+            f"catálogo: {resumen['variantes']} variantes con SKU, {resumen['nuevos']} nuevas (inactivas, por completar), "
+            f"{resumen['renombrados']} renombradas, {resumen['recodificados']} recodificadas"
+        ),
+    )
+    return resumen
 
 
 def reconciliar_pedidos(tienda):

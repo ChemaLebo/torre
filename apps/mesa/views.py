@@ -2828,6 +2828,8 @@ def cliente_skus(request, pk):
     from apps.catalogo.models import Categoria
     otros = Categoria.otros_de(cliente)
     skus = list(SKU.objects.filter(cliente=cliente).select_related("categoria").order_by("codigo"))
+    # SKUs que llegaron del pull de Shopify (2026-10-01): inactivos hasta que Mesa capture peso y medidas.
+    por_completar = [s for s in skus if s.shopify_variant_id and not s.activo and not s.peso_gr]
     for sku in skus:
         sku.disponible = resumen_sku(sku)["disponible"]
         sku.categoria_efectiva_id = sku.categoria_id or otros.pk
@@ -2836,6 +2838,7 @@ def cliente_skus(request, pk):
         "seccion": "clientes",
         "cliente": cliente,
         "skus": skus,
+        "por_completar": por_completar,
         "form": form,
         "sku_editar": sku_editar,
         "tienda_principal": tienda_principal,
