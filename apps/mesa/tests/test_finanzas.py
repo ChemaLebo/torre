@@ -61,6 +61,22 @@ class VistaFinanzasTests(TestCase):
         respuesta = self.client.get(reverse("mesa:finanzas"))
         self.assertNotEqual(respuesta.status_code, 200)
 
+    def test_selector_de_cliente_muestra_solo_ese_y_conserva_el_corte(self):
+        otro = Cliente.objects.create(nombre="Mezcal Nocturno", slug="nocturno", facturacion_desde=date(2026, 1, 1))
+        self.client.login(username="mesa1", password="x12345678")
+        html = self.client.get(reverse("mesa:finanzas")).content.decode()
+        self.assertIn("Cervecería Colima · ", html)
+        self.assertIn("Mezcal Nocturno · ", html)
+        corte = corte_actual()
+        html = self.client.get(reverse("mesa:finanzas"), {"cliente": otro.slug, "corte": corte.clave}).content.decode()
+        self.assertIn("Mezcal Nocturno · ", html)
+        self.assertNotIn("Cervecería Colima · ", html)
+        self.assertIn('<option value="nocturno" selected>', html)
+        self.assertIn(f"?corte={corte.anterior().clave}&amp;cliente=nocturno", html)
+        # Un slug desconocido = todos.
+        html = self.client.get(reverse("mesa:finanzas"), {"cliente": "chorizo"}).content.decode()
+        self.assertIn("Cervecería Colima · ", html)
+
     def test_corte_invalido_cae_al_actual(self):
         self.client.login(username="mesa1", password="x12345678")
         respuesta = self.client.get(reverse("mesa:finanzas"), {"corte": "chorizo"})

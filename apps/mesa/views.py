@@ -3264,25 +3264,31 @@ def finanzas(request):
     corte = corte_desde_clave(request.GET.get("corte")) or corte_actual()
     inicio, fin = corte.limites()
 
-    # Activos siempre; inactivos solo si tuvieron guías, recepciones o
-    # reembolsos ese corte (el histórico no se reescribe cuando un cliente
-    # churnea; un corte de SOLO recepción o solo reembolso también cuenta).
+    # Un cliente (`?cliente=slug`, Chema 2026-10-01) o todos: activos siempre;
+    # inactivos solo si tuvieron guías, recepciones o reembolsos ese corte
+    # (el histórico no se reescribe cuando un cliente churnea; un corte de
+    # SOLO recepción o solo reembolso también cuenta).
     from apps.inventario.models import OrdenEntrada  # lazy por contrato
 
-    clientes = (
-        Cliente.objects.filter(
-            Q(activo=True)
-            | Q(pedidos__guias__creado__gte=inicio, pedidos__guias__creado__lt=fin)
-            | Q(reembolsos_guia__fecha__gte=inicio, reembolsos_guia__fecha__lt=fin)
-            | Q(
-                ordenes_entrada__ts_descarga_fin__gte=inicio,
-                ordenes_entrada__ts_descarga_fin__lt=fin,
-                ordenes_entrada__estado__in=(OrdenEntrada.RECIBIDA, OrdenEntrada.CERRADA),
+    todos = list(Cliente.objects.order_by("nombre"))
+    cliente_sel = next((c for c in todos if c.slug == (request.GET.get("cliente") or "")), None)
+    if cliente_sel is not None:
+        clientes = [cliente_sel]
+    else:
+        clientes = (
+            Cliente.objects.filter(
+                Q(activo=True)
+                | Q(pedidos__guias__creado__gte=inicio, pedidos__guias__creado__lt=fin)
+                | Q(reembolsos_guia__fecha__gte=inicio, reembolsos_guia__fecha__lt=fin)
+                | Q(
+                    ordenes_entrada__ts_descarga_fin__gte=inicio,
+                    ordenes_entrada__ts_descarga_fin__lt=fin,
+                    ordenes_entrada__estado__in=(OrdenEntrada.RECIBIDA, OrdenEntrada.CERRADA),
+                )
             )
+            .distinct()
+            .order_by("nombre")
         )
-        .distinct()
-        .order_by("nombre")
-    )
     filas = [motor.resumen_corte(cliente, corte) for cliente in clientes]
 
     torre = settings.TORRE
@@ -3344,6 +3350,9 @@ def finanzas(request):
         "corte": corte,
         "corte_prev": corte.anterior().clave,
         "corte_sig": corte.siguiente().clave,
+        "clientes": todos,
+        "cliente_sel": cliente_sel,
+        "sufijo_cliente": f"&cliente={cliente_sel.slug}" if cliente_sel is not None else "",
         "iva_pct": int(motor.iva() * 100),
         "filas": filas,
         "ingreso_con_iva": ingreso_con_iva,
