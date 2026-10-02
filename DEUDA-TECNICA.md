@@ -81,6 +81,29 @@ propuesta" existe pero no depende del monto.
 **Decisión pendiente:** conectarlo a compensaciones e incidencias, o quitarlo del
 formulario para no confundir.
 
+## Módulo de finanzas: cortes quincenales y reembolsos — hecho 2026-10-01
+
+**Hecho:** app `apps/finanzas` (motor y zonas movidos desde Mesa), cortes
+1–15 y 16–fin de mes, toda guía se cobra, `ReembolsoGuia` con la fecha que
+decide el corte, almacenaje a la mitad por corte prorrateado desde
+`Cliente.facturacion_desde` o el primer pedido, dos estados de cuenta con
+IVA en Mesa → Finanzas, registro de reembolsos en Mesa → Pedido detalle.
+Decisiones de Chema: reembolso = la tarifa que el cliente pagó; reexpedición
+y reposición se cobran; fin de mes real; solo Mesa por ahora.
+
+**Por hacer (fase 2):**
+- "Cerrar corte" con foto fija del estado de cuenta: hoy todo se recalcula
+  en vivo, así que un cambio de tarifa o una corrección de datos sí mueve un
+  corte pasado (los reembolsos y cancelaciones ya no, porque van por fecha).
+- Estado de cuenta por corte en el portal (Chema: "ya que lo tengamos bien
+  armado").
+- Reembolso con un clic desde la reclamación pagada (hoy enlaza al pedido y
+  Mesa captura; con varias guías no se sabe cuál reembolsó el carrier).
+- Negativos en la vista se pintan "$-129.00"; un filtro de dinero con signo
+  antes del símbolo ("−$129.00") los dejaría uniformes.
+- Mínimo mensual (Modelo B) se evalúa solo en el 2º corte: un cliente que
+  churnea a mitad de mes no lo paga.
+
 ## Corte contractual por cliente (Chema, 2026-09-20)
 
 **Estado:** el corte es global (`TORRE["CORTE_CONTRACTUAL"]`, env `TORRE_CORTE`,
