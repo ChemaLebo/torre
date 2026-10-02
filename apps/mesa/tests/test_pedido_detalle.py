@@ -63,6 +63,42 @@ class PedidoDetalleTests(PisoTestCase):
         self.assertIn(f'href="{url}"', lista)
         self.assertIn("2 cajas · 2 guía creada", lista)
 
+    def test_registrar_y_quitar_reembolso_de_paqueteria_por_guia(self):
+        # Chema 2026-10-01: lo que la paquetería nos devuelve por una guía se
+        # le descuenta al cliente (la tarifa que pagó) en el corte de la fecha.
+        from apps.finanzas.models import ReembolsoGuia
+        from apps.finanzas.services import tarifa_envio_de
+
+        pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()
+        g1 = c1.guia_activa
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn("Reembolsos de paquetería", html)
+        self.assertIn('value="registrar_reembolso_guia"', html)
+        self.assertIn(f'value="{tarifa_envio_de(g1):.2f}"', html)
+        # Sin monto: la tarifa de la zona; sin fecha: hoy (este corte).
+        respuesta = self.client.post(url, {"accion": "registrar_reembolso_guia", "folio": pedido.folio, "guia": g1.pk, "origen": "reclamacion", "nota": "pagó la reclamación"}, follow=True)
+        self.assertContains(respuesta, f"Reembolso de ${tarifa_envio_de(g1)} de la guía {g1.numero} registrado")
+        r = ReembolsoGuia.objects.get(guia=g1)
+        self.assertEqual((r.monto, r.origen, r.nota, r.registrado_por, r.cliente), (tarifa_envio_de(g1), "reclamacion", "pagó la reclamación", "mesa1", pedido.cliente))
+        self.assertContains(respuesta, 'value="quitar_reembolso_guia"')
+        self.assertContains(respuesta, "pagó la reclamación")
+        # Monto y fecha explícitos; una fecha anterior a la compra se rechaza.
+        respuesta = self.client.post(url, {"accion": "registrar_reembolso_guia", "folio": pedido.folio, "guia": g1.pk, "monto": "50.50", "fecha": "2020-01-01"}, follow=True)
+        self.assertContains(respuesta, "no puede ser anterior a la compra")
+        respuesta = self.client.post(url, {"accion": "registrar_reembolso_guia", "folio": pedido.folio, "guia": g1.pk, "monto": "chorizo"}, follow=True)
+        self.assertContains(respuesta, "no es un número válido")
+        self.assertEqual(ReembolsoGuia.objects.filter(guia=g1).count(), 1)
+        # Quitar: desaparece y queda auditado en la guía.
+        respuesta = self.client.post(url, {"accion": "quitar_reembolso_guia", "folio": pedido.folio, "reembolso": r.pk}, follow=True)
+        self.assertContains(respuesta, f"Reembolso de ${r.monto} de la guía {g1.numero} quitado")
+        self.assertFalse(ReembolsoGuia.objects.filter(pk=r.pk).exists())
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="guia", entidad_id=str(g1.pk), accion="reembolso_quitado").exists())
+        # Un reembolso de otro pedido no se puede quitar desde aquí.
+        otro = self.crear_pedido(cantidad=1)
+        respuesta = self.client.post(url, {"accion": "quitar_reembolso_guia", "folio": otro.folio, "reembolso": 999999})
+        self.assertEqual(respuesta.status_code, 404)
+
     def test_cambiar_paqueteria_de_una_caja_a_sin_guia_no_toca_la_otra(self):
         pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()
         vieja = c1.guia_activa

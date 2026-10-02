@@ -148,6 +148,46 @@
   {% endif %}
 </div>
 
+{% if reembolsos_guias %}
+<div class="card mt" id="reembolsos">
+  <div class="titulo"><h3>Reembolsos de paquetería</h3><span class="small">lo que la paquetería nos devuelve por una guía se le descuenta al cliente (la tarifa que pagó) en el corte de la fecha del reembolso</span></div>
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Caja</th><th>Guía</th><th>Estatus</th><th>Tarifa cobrada</th><th>Reembolsos</th><th>Registrar reembolso</th></tr></thead>
+      <tbody>
+        {% for r in reembolsos_guias %}
+        <tr>
+          <td class="mono">{% if r.caja %}{{ r.caja.numero }}{% else %}—{% endif %}</td>
+          <td class="mono small">{{ r.guia.numero }}<div class="muted">{{ r.guia.carrier }}</div></td>
+          <td class="small">{{ r.guia.get_estado_display }}</td>
+          <td class="mono small">${{ r.tarifa|floatformat:2 }}<div class="muted">corte {{ r.cobrada }}</div></td>
+          <td class="small">
+            {% for re in r.reembolsos %}
+            <form method="post" class="fila" onsubmit="return confirm('¿Quitar el reembolso de ${{ re.monto }} de la guía {{ r.guia.numero }}?');">{% csrf_token %}
+              <span class="mono">−${{ re.monto|floatformat:2 }}</span> · {{ re.fecha|date:"d/M/Y" }} · {{ re.get_origen_display|lower }}{% if re.nota %} · <span class="muted">{{ re.nota }}</span>{% endif %}
+              <input type="hidden" name="accion" value="quitar_reembolso_guia"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="reembolso" value="{{ re.pk }}">
+              <button class="btn chico" type="submit" title="Se registró por error">Quitar</button>
+            </form>
+            {% empty %}<span class="muted">—</span>{% endfor %}
+          </td>
+          <td>
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="registrar_reembolso_guia"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="guia" value="{{ r.guia.pk }}">
+              <input type="number" name="monto" step="0.01" min="0.01" value="{{ r.tarifa|floatformat:2 }}" style="width:110px" aria-label="Monto del reembolso de la guía {{ r.guia.numero }}">
+              <input type="date" name="fecha" value="{{ hoy }}" aria-label="Fecha del reembolso">
+              <select name="origen" aria-label="Origen del reembolso"><option value="reclamacion">Reclamación pagada</option><option value="ajuste">Ajuste manual</option></select>
+              <input type="text" name="nota" placeholder="nota" maxlength="200" style="width:140px">
+              <button class="btn chico" type="submit">Registrar</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <div class="grid g2 mt">
   <div class="card">
     <div class="titulo"><h3>Líneas</h3></div>

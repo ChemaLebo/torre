@@ -295,6 +295,7 @@
         </div>
         <div class="fila">
           <span class="pill {% if rec.estado == 'PAGADA' %}ok{% elif rec.estado == 'RECHAZADA' %}crit{% else %}warn{% endif %}">{{ rec.get_estado_display }}</span>
+          {% if rec.estado == 'PAGADA' and incidencia.pedido %}<a class="btn chico" href="{% url 'mesa:pedido_detalle' incidencia.pedido.pk %}#reembolsos" title="Lo que la paquetería nos devolvió se le descuenta al cliente en su siguiente corte">Registrar el reembolso de la guía →</a>{% endif %}
           {% for clave, nombre in rec.siguientes %}
           <form method="post" class="fila">{% csrf_token %}
             <input type="hidden" name="accion" value="reclamacion_avanzar">

@@ -154,6 +154,9 @@ class GestionIncidenciaTests(BaseMesaTest):
     def test_flujo_reclamacion_carrier(self):
         from apps.incidencias.models import ReclamacionCarrier
 
+        pedido = crear_pedido(self.colima)
+        self.incidencia.pedido = pedido
+        self.incidencia.save(update_fields=["pedido"])
         self.client.post(self.url, {
             "accion": "reclamacion_crear", "carrier": "paquetexpress", "monto_reclamado": "780.00",
         })
@@ -174,6 +177,12 @@ class GestionIncidenciaTests(BaseMesaTest):
         rec.refresh_from_db()
         self.assertEqual(rec.estado, ReclamacionCarrier.ACEPTADA)
         self.assertEqual(rec.monto_recuperado, Decimal("156.00"))
+        # Pagada: el expediente lleva a registrar el reembolso de la guía en el pedido.
+        self.assertNotContains(self.client.get(self.url), "Registrar el reembolso de la guía")
+        self.client.post(self.url, {"accion": "reclamacion_avanzar", "reclamacion_id": rec.pk, "nuevo_estado": "PAGADA"})
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "Registrar el reembolso de la guía")
+        self.assertContains(respuesta, f"{reverse('mesa:pedido_detalle', args=[self.incidencia.pedido.pk])}#reembolsos")
 
     def test_portal_no_gestiona_incidencias_de_mesa(self):
         self.client.force_login(self.usuario_portal)

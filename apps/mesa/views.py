@@ -823,6 +823,70 @@ def _pedidos_cancelar_guia_caja(request):
     return f"Guía {vieja.numero} de la caja {caja.numero} cancelada; {pedido.folio} regresó a empaquetado sin dueño y el piso la recompra."
 
 
+def _guia_del_post(request):
+    """(pedido, guía) de una acción por guía del detalle (folio + guia pk)."""
+    from apps.envios.models import Guia  # lazy: modelo de otra app
+    from apps.pedidos.models import Pedido
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    guia = get_object_or_404(Guia.objects.select_related("pedido__cliente"), pk=request.POST.get("guia"), pedido=pedido)
+    return pedido, guia
+
+
+def _pedidos_registrar_reembolso(request):
+    """Registra que la paquetería nos reembolsó UNA guía (Chema 2026-10-01):
+    monto (default: la tarifa que el cliente pagó), fecha (default hoy; decide
+    el corte en que se descuenta), origen y nota."""
+    from datetime import date, datetime, time
+
+    from apps.finanzas.cortes import corte_de
+    from apps.finanzas.services import registrar_reembolso
+
+    pedido, guia = _guia_del_post(request)
+    monto = (request.POST.get("monto") or "").strip() or None
+    if monto is not None:
+        try:
+            monto = Decimal(monto)
+        except InvalidOperation:
+            raise ValueError("El monto del reembolso no es un número válido.")
+    fecha = None
+    texto_fecha = (request.POST.get("fecha") or "").strip()
+    if texto_fecha:
+        try:
+            dia = date.fromisoformat(texto_fecha)
+        except ValueError:
+            raise ValueError("La fecha del reembolso no se entiende (usa AAAA-MM-DD).")
+        if dia != timezone.localdate():
+            fecha = timezone.make_aware(datetime.combine(dia, time(12, 0)))
+    origen = request.POST.get("origen") or "ajuste"
+    if origen not in ("reclamacion", "ajuste"):
+        raise ValueError("Origen del reembolso desconocido.")
+    reembolso = registrar_reembolso(
+        guia, request.user, origen=origen, monto=monto, fecha=fecha, nota=(request.POST.get("nota") or "").strip(),
+    )
+    return (
+        f"Reembolso de ${reembolso.monto} de la guía {guia.numero} registrado: se descuenta a "
+        f"{pedido.cliente.nombre} en el corte {corte_de(reembolso.fecha).etiqueta_corta}."
+    )
+
+
+def _pedidos_quitar_reembolso(request):
+    """Quita un reembolso registrado por error (auditado en la guía)."""
+    from apps.finanzas.models import ReembolsoGuia
+    from apps.finanzas.services import quitar_reembolso
+    from apps.pedidos.models import Pedido
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido, folio=folio)
+    reembolso = get_object_or_404(
+        ReembolsoGuia.objects.select_related("guia"), pk=request.POST.get("reembolso"), guia__pedido=pedido,
+    )
+    numero, monto = reembolso.guia.numero, reembolso.monto
+    quitar_reembolso(reembolso, request.user, motivo=(request.POST.get("motivo") or "").strip())
+    return f"Reembolso de ${monto} de la guía {numero} quitado."
+
+
 def _pedidos_replanear_cajas(request):
     """Botón "Replanear cajas" del detalle: rehace el plan de la ola en bodega."""
     from apps.pedidos.models import Pedido
@@ -860,6 +924,8 @@ def _ejecutar_accion_pedido(request):
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
         "reimprimir_caja": _pedidos_reimprimir_caja,
         "replanear_cajas": _pedidos_replanear_cajas,
+        "registrar_reembolso_guia": _pedidos_registrar_reembolso,
+        "quitar_reembolso_guia": _pedidos_quitar_reembolso,
     }
     if accion in simples:
         try:
@@ -1014,6 +1080,20 @@ def pedido_detalle(request, pk):
         (g, url_rastreo_carrier(g.carrier, g.numero))
         for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.paquete_id is None
     ]
+    # Reembolsos de paquetería por guía (Chema 2026-10-01): toda guía del
+    # pedido con la tarifa que el cliente pagó, el corte en que se cobró y
+    # los reembolsos registrados; Mesa registra o quita desde aquí.
+    from apps.finanzas.cortes import corte_de
+    from apps.finanzas.services import tarifa_envio_de, tarifario_de
+
+    tarifas = tarifario_de(pedido.cliente)
+    reembolsos_guias = [
+        {
+            "guia": g, "caja": g.paquete, "tarifa": tarifa_envio_de(g, tarifas),
+            "cobrada": corte_de(g.creado).etiqueta_corta, "reembolsos": list(g.reembolsos.all()),
+        }
+        for g in sorted(pedido.guias.select_related("paquete").prefetch_related("reembolsos"), key=lambda g: (g.paquete.numero if g.paquete_id else 0, g.pk))
+    ]
     ahora = timezone.now()
     incidencias = (
         Incidencia.objects.filter(pedido=pedido).select_related("cliente", "sku")
@@ -1035,6 +1115,8 @@ def pedido_detalle(request, pk):
         "direccion_pendiente": direccion_en_una_linea(pedido.direccion_pendiente) if pedido.direccion_pendiente else "",
         "cajas": cajas,
         "guias_sueltas": guias_sueltas,
+        "reembolsos_guias": reembolsos_guias,
+        "hoy": timezone.localdate().isoformat(),
         "lineas": list(pedido.lineas.all()),
         "piezas_sin_inventario": sum(l.cantidad for l in pedido.lineas_faltantes),
         "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
