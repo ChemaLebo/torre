@@ -175,18 +175,11 @@ class Incidencia(MaquinaEstados):
 
     @classmethod
     def _generar_folio(cls):
-        """Consecutivo por año (zero-pad 4). El orden lexicográfico del folio
-        coincide con el numérico mientras el consecutivo no exceda 9999."""
-        anio = timezone.localtime().year
-        prefijo = f"INC-{anio}-"
-        ultimo = (
-            cls.objects.filter(folio__startswith=prefijo)
-            .order_by("-folio")
-            .values_list("folio", flat=True)
-            .first()
-        )
-        consecutivo = int(ultimo.rsplit("-", 1)[1]) + 1 if ultimo else 1
-        return f"{prefijo}{consecutivo:04d}"
+        """Consecutivo por año (zero-pad 4 como mínimo, sin tope: core.folios
+        toma el máximo numérico, no el alfabético)."""
+        from apps.core.folios import siguiente_folio
+
+        return siguiente_folio(cls, f"INC-{timezone.localtime().year}")
 
     def save(self, *args, **kwargs):
         if not self.folio:

@@ -532,16 +532,11 @@ class Manifiesto(models.Model):
 
     @classmethod
     def _generar_folio(cls):
-        """Consecutivo por año (zero-pad 4), como el folio de incidencias."""
-        prefijo = f"MAN-{timezone.localtime().year}-"
-        ultimo = (
-            cls.objects.filter(folio__startswith=prefijo)
-            .order_by("-folio")
-            .values_list("folio", flat=True)
-            .first()
-        )
-        consecutivo = int(ultimo.rsplit("-", 1)[1]) + 1 if ultimo else 1
-        return f"{prefijo}{consecutivo:04d}"
+        """Consecutivo por año (zero-pad 4 como mínimo, sin tope: core.folios),
+        como el folio de incidencias."""
+        from apps.core.folios import siguiente_folio
+
+        return siguiente_folio(cls, f"MAN-{timezone.localtime().year}")
 
     def save(self, *args, **kwargs):
         if not self.folio:

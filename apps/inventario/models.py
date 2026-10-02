@@ -22,13 +22,11 @@ from django.utils import timezone
 
 
 def siguiente_folio(modelo, prefijo, ancho=4):
-    """Siguiente folio consecutivo `PREFIJO-####` para un modelo con campo `folio`."""
-    numeros = []
-    for folio in modelo.objects.filter(folio__startswith=f"{prefijo}-").values_list("folio", flat=True):
-        sufijo = folio.rsplit("-", 1)[-1]
-        if sufijo.isdigit():
-            numeros.append(int(sufijo))
-    return f"{prefijo}-{max(numeros, default=0) + 1:0{ancho}d}"
+    """Siguiente folio consecutivo `PREFIJO-####` (máximo numérico en la base,
+    compartido en core.folios desde 2026-10-02)."""
+    from apps.core.folios import siguiente_folio as _siguiente
+
+    return _siguiente(modelo, prefijo, ancho)
 
 
 class Saldo(models.Model):

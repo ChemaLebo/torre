@@ -216,25 +216,13 @@ class Pedido(models.Model):
     def __str__(self):
         return f"{self.folio} · {self.get_estado_display()}"
 
-    # ── Folio PED-##### autoincremental ──
+    # ── Folio PED-##### autoincremental (sin tope: core.folios) ──
 
     @staticmethod
     def _siguiente_folio():
-        # Solo folios PED-*: un folio ajeno (import, demo) en la última fila
-        # no debe descarrilar la secuencia.
-        ultimo = (
-            Pedido.objects.filter(folio__startswith="PED-")
-            .order_by("-folio")
-            .values_list("folio", flat=True)
-            .first()
-        )
-        numero = 0
-        if ultimo:
-            try:
-                numero = int(str(ultimo).split("-")[-1])
-            except (TypeError, ValueError):
-                numero = 0
-        return f"PED-{numero + 1:05d}"
+        from apps.core.folios import siguiente_folio
+
+        return siguiente_folio(Pedido, "PED", ancho=5)
 
     def save(self, *args, **kwargs):
         if self.folio:
