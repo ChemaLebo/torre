@@ -3248,10 +3248,11 @@ def _importar_csv_skus(request, cliente):
 
 
 @rol_requerido("mesa")
-def finanzas(request):
+def finanzas_corte(request):
     """Estado de resultados del CORTE (quincena, Chema 2026-10-01): cuánto se
     factura a cada cliente en sus dos estados de cuenta (fulfillment y
-    guías, con IVA) y cuánto nos costó.
+    guías, con IVA) y cuánto nos costó. Se llega desde `finanzas` (cliente y
+    corte elegidos) y las flechas cambian de corte conservando el cliente.
 
     El ingreso sale del tarifario vigente (settings + override por cliente);
     el costo de envío es el REAL de las guías del corte. Los fijos (renta,
@@ -3348,9 +3349,8 @@ def finanzas(request):
     return render(request, "mesa/finanzas.html", {
         "seccion": "finanzas",
         "corte": corte,
-        "corte_prev": corte.anterior().clave,
-        "corte_sig": corte.siguiente().clave,
-        "clientes": todos,
+        "corte_prev": corte.anterior(),
+        "corte_sig": corte.siguiente(),
         "cliente_sel": cliente_sel,
         "sufijo_cliente": f"&cliente={cliente_sel.slug}" if cliente_sel is not None else "",
         "iva_pct": int(motor.iva() * 100),
@@ -3366,6 +3366,32 @@ def finanzas(request):
         "profit": profit,
         "profit_pill": profit_pill,
         "meta_profit": meta,
+    })
+
+
+@rol_requerido("mesa")
+def finanzas(request):
+    """Inicio de Finanzas (Chema 2026-10-01): elegir cliente (default todos)
+    y corte (default el actual) y pasar a los estados de cuenta
+    (`finanzas_corte`). Los últimos 24 cortes y el siguiente, para revisar un
+    corte pasado o adelantar el que viene."""
+    from apps.finanzas.cortes import corte_actual, corte_desde_clave
+
+    actual = corte_actual()
+    elegido = corte_desde_clave(request.GET.get("corte")) or actual
+    cortes, c = [], actual.siguiente()
+    for _ in range(26):
+        cortes.append(c)
+        c = c.anterior()
+    if elegido not in cortes:
+        cortes.append(elegido)
+        cortes.sort(reverse=True)
+    return render(request, "mesa/finanzas_inicio.html", {
+        "seccion": "finanzas",
+        "clientes": list(Cliente.objects.order_by("nombre")),
+        "cliente_slug": request.GET.get("cliente") or "",
+        "cortes": cortes,
+        "elegido": elegido,
     })
 
 

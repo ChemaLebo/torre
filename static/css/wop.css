@@ -194,6 +194,10 @@ small, .small { font-size: 12.5px; color: var(--ink-50); }
 .topbar { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 26px; flex-wrap: wrap; }
 .topbar .quien { font-family: var(--mono); font-size: 12px; color: var(--ink-50); }
 .topbar .quien b { color: var(--ink); font-weight: 600; }
+/* Finanzas → estados de cuenta: el corte como título y las flechas como botones grandes (Chema 2026-10-01). */
+.corte-fechas { font-family: var(--mono); font-size: 15px; color: var(--ink-50); margin-top: 4px; }
+.corte-nav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.corte-nav .btn { font-size: 16px; padding: 12px 22px; }
 
 /* ── Móvil: el sidebar se vuelve barra superior fija con chips ── */
 @media (max-width: 768px) {

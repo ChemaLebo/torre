@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Finanzas · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control</div>
+    <h1>Finanzas</h1>
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <div class="titulo"><h3>Estados de cuenta por corte</h3></div>
+    <form method="get" action="{% url 'mesa:finanzas_corte' %}">
+      <label for="f-cliente">Cliente</label>
+      <select id="f-cliente" name="cliente">
+        <option value="">Todos los clientes</option>
+        {% for c in clientes %}<option value="{{ c.slug }}" {% if c.slug == cliente_slug %}selected{% endif %}>{{ c.nombre }}</option>{% endfor %}
+      </select>
+      <label for="f-corte" class="mt">Corte</label>
+      <select id="f-corte" name="corte">
+        {% for c in cortes %}<option value="{{ c.clave }}" {% if c == elegido %}selected{% endif %}>{{ c.etiqueta }} · {{ c.etiqueta_corta }}</option>{% endfor %}
+      </select>
+      <div class="fila mt">
+        <button class="btn primario" type="submit">Ver estados de cuenta</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h3>Cómo funciona</h3></div>
+    <ul class="timeline">
+      <li class="hito"><span class="cuando">Cortes</span>Del 1 al 15 y del 16 al fin de mes. Cada corte produce dos estados de cuenta por cliente: fulfillment (picking, empaque, almacenaje y recepción) y guías; cada uno con subtotal, IVA y total.</li>
+      <li><span class="cuando">Guías</span>Toda guía comprada se cobra en el corte de su compra, a la tarifa de la zona del CP de destino. Un pedido sin guía aparece cuando se compre, o en el corte en que se cancele si ya se pickeó.</li>
+      <li><span class="cuando">Reembolsos</span>Lo que la paquetería nos devuelve por una guía se le descuenta al cliente (la tarifa que pagó) en el corte de la fecha del reembolso; si la guía se cobró antes, va como "reembolso de corte anterior". Se registran en el detalle del pedido.</li>
+      <li><span class="cuando">Almacenaje</span>La mitad de la tarifa mensual en cada corte, prorrateada por días desde "Cobrar almacenaje desde" del cliente (o su primer pedido).</li>
+    </ul>
+  </div>
+</div>
+
+{% endblock %}

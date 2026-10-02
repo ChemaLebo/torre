@@ -40,6 +40,7 @@ urlpatterns = [
     path("clientes/<int:pk>/lotes/", views.cliente_lotes, name="cliente_lotes"),
     path("clientes/<int:pk>/skus/exportar/", views.cliente_skus_exportar, name="cliente_skus_exportar"),
     path("finanzas/", views.finanzas, name="finanzas"),
+    path("finanzas/corte/", views.finanzas_corte, name="finanzas_corte"),
     path("manuales/", views.manuales, name="manuales"),
     path("manuales/<slug:slug>/", views.manual_detalle, name="manual_detalle"),
 ]

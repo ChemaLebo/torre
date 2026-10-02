@@ -21,14 +21,31 @@ class VistaFinanzasTests(TestCase):
         p1 = paquete(pedido, 1, "12.00")
         cls.guia = guia(pedido, "local", "100", p1)
 
-    def test_mesa_ve_el_corte_actual_con_los_dos_estados_de_cuenta(self):
+    def test_inicio_elige_cliente_y_corte_con_defaults(self):
         self.client.login(username="mesa1", password="x12345678")
         respuesta = self.client.get(reverse("mesa:finanzas"))
+        self.assertEqual(respuesta.status_code, 200)
+        html = respuesta.content.decode()
+        actual = corte_actual()
+        self.assertIn(f'action="{reverse("mesa:finanzas_corte")}"', html)
+        self.assertIn('<option value="" selected', html.replace('<option value="">', '<option value="" selected>'))  # todos los clientes por default
+        self.assertIn(f'<option value="{actual.clave}" selected>{actual.etiqueta}', html)
+        self.assertIn(actual.siguiente().clave, html)
+        self.assertIn("Ver estados de cuenta", html)
+        # Con parámetros, el formulario los pre-llena (volver desde los estados de cuenta).
+        html = self.client.get(reverse("mesa:finanzas"), {"corte": "2026-09-2", "cliente": "colima"}).content.decode()
+        self.assertIn('<option value="2026-09-2" selected>', html)
+        self.assertIn('<option value="colima" selected>', html)
+
+    def test_mesa_ve_el_corte_actual_con_los_dos_estados_de_cuenta(self):
+        self.client.login(username="mesa1", password="x12345678")
+        respuesta = self.client.get(reverse("mesa:finanzas_corte"))
         self.assertEqual(respuesta.status_code, 200)
         html = respuesta.content.decode()
         corte = corte_actual()
         for esperado in (
             "Finanzas", "Cervecería Colima", corte.etiqueta, f"?corte={corte.anterior().clave}", f"?corte={corte.siguiente().clave}",
+            f"← {corte.anterior().etiqueta_corta}", f"{corte.siguiente().etiqueta_corta} →", "Cambiar cliente o corte",
             "Estado de cuenta 1 · Fulfillment", "Estado de cuenta 2 · Guías", "Almacenaje", "½ de $18,000 al mes",
             "Picking (alistamiento)", "IVA 16%", "G-PED-F0100-local", "$129.00",
             "Estado × volumen", "Ciudad de México",
@@ -46,48 +63,54 @@ class VistaFinanzasTests(TestCase):
         self.guia.refresh_from_db()
         registrar_reembolso(self.guia, "mesa1", origen="reclamacion", nota="pagó 99minutos")
         self.client.login(username="mesa1", password="x12345678")
-        html = self.client.get(reverse("mesa:finanzas")).content.decode()
+        html = self.client.get(reverse("mesa:finanzas_corte")).content.decode()
         self.assertIn("Reembolsos de cortes anteriores", html)
         self.assertIn(f"cobrada el {corte_de(self.guia.creado).etiqueta_corta}", html)
         self.assertIn("−$129.00", html)
         self.assertIn("pagó 99minutos", html)
         # En el corte anterior la guía sigue cobrada, sin el reembolso.
-        html = self.client.get(reverse("mesa:finanzas"), {"corte": corte_de(self.guia.creado).clave}).content.decode()
+        html = self.client.get(reverse("mesa:finanzas_corte"), {"corte": corte_de(self.guia.creado).clave}).content.decode()
         self.assertNotIn("Reembolsos de cortes anteriores", html)
         self.assertIn("G-PED-F0100-local", html)
 
     def test_portal_no_entra(self):
         self.client.login(username="karina", password="x12345678")
-        respuesta = self.client.get(reverse("mesa:finanzas"))
-        self.assertNotEqual(respuesta.status_code, 200)
+        for nombre in ("mesa:finanzas", "mesa:finanzas_corte"):
+            self.assertNotEqual(self.client.get(reverse(nombre)).status_code, 200)
 
-    def test_selector_de_cliente_muestra_solo_ese_y_conserva_el_corte(self):
+    def test_cliente_elegido_muestra_solo_ese_y_las_flechas_lo_conservan(self):
         otro = Cliente.objects.create(nombre="Mezcal Nocturno", slug="nocturno", facturacion_desde=date(2026, 1, 1))
         self.client.login(username="mesa1", password="x12345678")
-        html = self.client.get(reverse("mesa:finanzas")).content.decode()
+        html = self.client.get(reverse("mesa:finanzas_corte")).content.decode()
         self.assertIn("Cervecería Colima · ", html)
         self.assertIn("Mezcal Nocturno · ", html)
+        self.assertIn("Finanzas</a> · Todos los clientes", html)
         corte = corte_actual()
-        html = self.client.get(reverse("mesa:finanzas"), {"cliente": otro.slug, "corte": corte.clave}).content.decode()
+        html = self.client.get(reverse("mesa:finanzas_corte"), {"cliente": otro.slug, "corte": corte.clave}).content.decode()
         self.assertIn("Mezcal Nocturno · ", html)
         self.assertNotIn("Cervecería Colima · ", html)
-        self.assertIn('<option value="nocturno" selected>', html)
+        self.assertIn("Finanzas</a> · Mezcal Nocturno", html)
         self.assertIn(f"?corte={corte.anterior().clave}&amp;cliente=nocturno", html)
+        self.assertIn(f"?corte={corte.siguiente().clave}&amp;cliente=nocturno", html)
+        self.assertIn(f'{reverse("mesa:finanzas")}?corte={corte.clave}&amp;cliente=nocturno', html)  # volver a elegir, pre-llenado
         # Un slug desconocido = todos.
-        html = self.client.get(reverse("mesa:finanzas"), {"cliente": "chorizo"}).content.decode()
+        html = self.client.get(reverse("mesa:finanzas_corte"), {"cliente": "chorizo"}).content.decode()
         self.assertIn("Cervecería Colima · ", html)
 
     def test_corte_invalido_cae_al_actual(self):
         self.client.login(username="mesa1", password="x12345678")
-        respuesta = self.client.get(reverse("mesa:finanzas"), {"corte": "chorizo"})
+        respuesta = self.client.get(reverse("mesa:finanzas_corte"), {"corte": "chorizo"})
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, corte_actual().etiqueta)
+        self.assertContains(self.client.get(reverse("mesa:finanzas"), {"corte": "chorizo"}), f'<option value="{corte_actual().clave}" selected>')
 
     def test_corte_sin_actividad_no_truena(self):
         self.client.login(username="mesa1", password="x12345678")
-        respuesta = self.client.get(reverse("mesa:finanzas"), {"corte": "2020-01-2"})
+        respuesta = self.client.get(reverse("mesa:finanzas_corte"), {"corte": "2020-01-2"})
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "2ª quincena de enero 2020")
+        # El inicio ofrece ese corte viejo en la lista para poder volver a él.
+        self.assertContains(self.client.get(reverse("mesa:finanzas"), {"corte": "2020-01-2"}), '<option value="2020-01-2" selected>')
 
 
 class VistaFinanzasRecepcionTests(TestCase):
@@ -107,7 +130,7 @@ class VistaFinanzasRecepcionTests(TestCase):
 
     def test_corte_solo_recepcion_aparece_con_su_facturacion(self):
         self.client.login(username="mesa2", password="x12345678")
-        respuesta = self.client.get(reverse("mesa:finanzas"), {"corte": self.corte.clave})
+        respuesta = self.client.get(reverse("mesa:finanzas_corte"), {"corte": self.corte.clave})
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Mayorista Tarimas")
         self.assertContains(respuesta, "3,040")  # 16 tarimas × $190

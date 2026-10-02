@@ -5,25 +5,15 @@
 
 <div class="topbar">
   <div>
-    <div class="eyebrow">Mesa de Control</div>
-    <h1>Finanzas</h1>
+    <div class="eyebrow"><a href="{% url 'mesa:finanzas' %}?corte={{ corte.clave }}{{ sufijo_cliente }}">Finanzas</a> · {% if cliente_sel %}{{ cliente_sel.nombre }}{% else %}Todos los clientes{% endif %}</div>
+    <h1>{{ corte.etiqueta }}</h1>
+    <div class="corte-fechas">{{ corte.etiqueta_corta }}</div>
   </div>
-  <div class="fila">
-    <form method="get" class="fila">
-      <input type="hidden" name="corte" value="{{ corte.clave }}">
-      <label for="f-cliente" class="small">Cliente</label>
-      <select id="f-cliente" name="cliente" onchange="this.form.submit()">
-        <option value="">Todos los clientes</option>
-        {% for c in clientes %}<option value="{{ c.slug }}" {% if cliente_sel and cliente_sel.pk == c.pk %}selected{% endif %}>{{ c.nombre }}</option>{% endfor %}
-      </select>
-      <noscript><button class="btn chico" type="submit">Ver</button></noscript>
-    </form>
-    <div class="quien mono">
-      <a href="?corte={{ corte_prev }}{{ sufijo_cliente }}" title="Corte anterior">←</a>
-      &nbsp;<b>{{ corte.etiqueta }}</b> <span class="muted">· {{ corte.etiqueta_corta }}</span>&nbsp;
-      <a href="?corte={{ corte_sig }}{{ sufijo_cliente }}" title="Corte siguiente">→</a>
-    </div>
-  </div>
+  <nav class="corte-nav" aria-label="Cambiar de corte">
+    <a class="btn" href="?corte={{ corte_prev.clave }}{{ sufijo_cliente }}" title="{{ corte_prev.etiqueta }}">← {{ corte_prev.etiqueta_corta }}</a>
+    <a class="btn" href="{% url 'mesa:finanzas' %}?corte={{ corte.clave }}{{ sufijo_cliente }}">Cambiar cliente o corte</a>
+    <a class="btn" href="?corte={{ corte_sig.clave }}{{ sufijo_cliente }}" title="{{ corte_sig.etiqueta }}">{{ corte_sig.etiqueta_corta }} →</a>
+  </nav>
 </div>
 <p class="small muted">Cada corte muestra lo comprado en esas fechas: las guías entran por el día en que se compraron, y un pedido todavía sin guía aparece cuando se compre (o en el corte en que se cancele, si ya se pickeó).</p>
 
