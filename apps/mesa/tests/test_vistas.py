@@ -52,6 +52,29 @@ class AccesoPorRolTests(BaseMesaTest):
         respuesta = self.client.get(reverse("mesa:dashboard"))
         self.assertEqual(respuesta.status_code, 200)
 
+    def test_dashboard_lista_las_guias_con_retraso_por_fecha_compromiso(self):
+        # La tarjeta usa la regla de Retraso por promesa (2026-09-30): una guía
+        # viva cuya fecha compromiso ya pasó; el "sin movimiento" ya no existe.
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.envios.models import Guia
+
+        self.client.force_login(self.usuario_mesa)
+        pedido = crear_pedido(self.colima)
+        hoy = timezone.localdate()
+        tarde = Guia.objects.create(pedido=pedido, carrier="estafeta", numero="TARDE-1", proveedor="mock", estado=Guia.EN_TRANSITO, fecha_compromiso=hoy - timedelta(days=3))
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="A-TIEMPO", proveedor="mock", estado=Guia.EN_TRANSITO, fecha_compromiso=hoy + timedelta(days=1))
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="ENTREGADA", proveedor="mock", estado=Guia.ENTREGADO, fecha_compromiso=hoy - timedelta(days=5))
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="SIN-SALIR", proveedor="mock", estado=Guia.GUIA_CREADA)
+        html = self.client.get(reverse("mesa:dashboard")).content.decode()
+        self.assertIn("Guías con retraso", html)
+        self.assertIn(tarde.numero, html)
+        self.assertIn("3 días", html)
+        for numero in ("A-TIEMPO", "ENTREGADA", "SIN-SALIR"):
+            self.assertNotIn(numero, html)
+
     def test_portal_no_entra_a_mesa(self):
         self.client.force_login(self.usuario_portal)
         for nombre in ("mesa:dashboard", "mesa:incidencias", "mesa:pedidos", "mesa:sync", "mesa:clientes"):

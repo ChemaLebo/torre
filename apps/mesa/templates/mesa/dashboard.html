@@ -86,25 +86,25 @@
 
 <div class="grid g2 mt">
   <div class="card">
-    <div class="titulo"><h3>Guías sin movimiento</h3><span class="small">umbral: {{ TORRE.SIN_MOVIMIENTO_LOCAL_HORAS }} h local · {{ TORRE.SIN_MOVIMIENTO_FORANEO_HORAS }} h foráneo</span></div>
-    {% if guias_atoradas %}
+    <div class="titulo"><h3>Guías con retraso</h3><span class="small">pasaron su fecha compromiso sin entregarse</span></div>
+    {% if guias_retrasadas %}
       <div class="tabla-wrap">
         <table>
-          <thead><tr><th>Guía</th><th>Pedido</th><th>Ruta</th><th>Quieta</th></tr></thead>
+          <thead><tr><th>Guía</th><th>Pedido</th><th>Ruta</th><th>Retraso</th></tr></thead>
           <tbody>
-            {% for guia in guias_atoradas %}
+            {% for guia in guias_retrasadas %}
             <tr>
               <td class="mono">{{ guia.carrier }} {{ guia.numero }}</td>
-              <td class="mono">{{ guia.pedido.folio }} · {{ guia.pedido.cliente.nombre }}</td>
+              <td class="mono"><a href="{% url 'mesa:pedido_detalle' guia.pedido.pk %}">{{ guia.pedido.folio }}</a> · {{ guia.pedido.cliente.nombre }}</td>
               <td>{% if guia.pedido.es_local %}local{% else %}foránea{% endif %}</td>
-              <td><span class="pill crit">{{ guia.horas_quietas }} h (umbral {{ guia.horas_umbral }} h)</span></td>
+              <td><span class="pill crit">{{ guia.dias_retraso }} día{{ guia.dias_retraso|pluralize }}</span> <span class="small muted">prometida el {{ guia.fecha_compromiso|date:"d/M" }} · {{ guia.get_estado_display|lower }}</span></td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
     {% else %}
-      <p class="muted">Ninguna guía dormida más allá de su umbral de ruta.</p>
+      <p class="muted">Ninguna guía fuera de su fecha compromiso.</p>
     {% endif %}
   </div>
 

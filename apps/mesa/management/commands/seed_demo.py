@@ -1123,15 +1123,14 @@ class Command(BaseCommand):
             self._fechar_mensajes(inc, [apertura, self._dt(1, 10, 25),
                                         self._dt(1, 10, 40), self._dt(1, 12, 0)])
 
-        # ── RET resuelta (guía dormida detectada por el poller) ──
+        # ── RET resuelta (promesa de entrega vencida, detectada por el poller) ──
         pedido, creado = pedidos["transito_ret"]
         if creado:
             guia = pedido.guias.order_by("-id").first()
-            horas = settings.TORRE["SIN_MOVIMIENTO_FORANEO_HORAS"]
             inc = abrir_incidencia(
                 colima, "RET", "auto", pedido=pedido,
-                texto=(f"Guía {guia.numero} (paquetexpress) sin movimiento por más de {horas} h "
-                       "en ruta foránea. Último evento: En tránsito hacia destino."),
+                texto=(f"Guía {guia.numero} (paquetexpress) no se entregó en la fecha compromiso "
+                       "(ruta foránea). Último evento: En tránsito hacia destino."),
             )
             responder(inc, "mesa1", "mesa",
                       ("Levantamos reporte con Paquetexpress: el embarque está detenido en el hub "

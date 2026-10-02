@@ -117,33 +117,22 @@ def _anotar_reloj_sla(incidencia, ahora):
     return incidencia
 
 
-def _guias_sin_movimiento(ahora):
-    """Guías vivas quietas más allá del umbral de su ruta (settings.TORRE)."""
+def _guias_con_retraso(hoy):
+    """Guías vivas que pasaron su fecha compromiso sin entregarse (la misma
+    regla que `envios.services._revisar_retraso`, Chema 2026-09-30: ya no
+    cuenta el "sin movimiento"), con sus días de retraso, las más tardías
+    primero. Una guía sin compromiso aún no ha salido."""
     from apps.envios.models import Guia
 
-    torre = settings.TORRE
-    atoradas = []
-    guias = (
-        Guia.objects.exclude(estado__in=list(Guia.ESTADOS_TERMINALES))
-        .exclude(carrier="local")
+    retrasadas = list(
+        Guia.objects.filter(fecha_compromiso__lt=hoy)
+        .exclude(estado__in=list(Guia.ESTADOS_TERMINALES))
         .select_related("pedido", "pedido__cliente")
     )
-    for guia in guias:
-        umbral = (
-            torre["SIN_MOVIMIENTO_LOCAL_HORAS"]
-            if guia.pedido.es_local
-            else torre["SIN_MOVIMIENTO_FORANEO_HORAS"]
-        )
-        referencia = guia.ts_ultimo_movimiento or guia.creado
-        if referencia is None:
-            continue
-        horas_quietas = (ahora - referencia).total_seconds() / 3600
-        if horas_quietas > umbral:
-            guia.horas_quietas = int(horas_quietas)
-            guia.horas_umbral = umbral
-            atoradas.append(guia)
-    atoradas.sort(key=lambda g: -g.horas_quietas)
-    return atoradas
+    for guia in retrasadas:
+        guia.dias_retraso = (hoy - guia.fecha_compromiso).days
+    retrasadas.sort(key=lambda g: -g.dias_retraso)
+    return retrasadas
 
 
 def _pct_salida_mismo_dia(ahora):
@@ -235,16 +224,16 @@ def dashboard(request):
 
     salida_pct, salida_medibles, salida_a_tiempo = _pct_salida_mismo_dia(ahora)
     exactitud_pct, conteos_30d = _exactitud_inventario()
-    atoradas = _guias_sin_movimiento(ahora)
+    retrasadas = _guias_con_retraso(hoy)
     eventos = EventoAuditoria.objects.select_related("cliente")[:15]
 
     # Banner semáforo del día.
-    if fuera_de_sla or atoradas:
+    if fuera_de_sla or retrasadas:
         problemas = []
         if fuera_de_sla:
             problemas.append(f"{fuera_de_sla} incidencia(s) fuera de SLA")
-        if atoradas:
-            problemas.append(f"{len(atoradas)} guía(s) sin movimiento")
+        if retrasadas:
+            problemas.append(f"{len(retrasadas)} guía(s) con retraso")
         banner = {"nivel": "crit", "texto": "Atención: " + " y ".join(problemas) + ". La pelota es nuestra."}
     elif any(i.reloj_pill == "warn" for i in abiertas):
         banner = {
@@ -269,7 +258,7 @@ def dashboard(request):
         "salida_a_tiempo": salida_a_tiempo,
         "exactitud_pct": exactitud_pct,
         "conteos_30d": conteos_30d,
-        "guias_atoradas": atoradas,
+        "guias_retrasadas": retrasadas,
         "eventos": eventos,
     })
 
