@@ -300,6 +300,8 @@ TORRE = {
         "dhl": "https://www.dhl.com/mx-es/home/tracking/tracking-express.html?submit=1&tracking-id={numero}",
         "noventa9Minutos": "https://tracking.99minutos.com/search/{numero}",
         "imile": "https://www.imile.com/mx/track?waybillNo={numero}",
+        # amPm con la M mayúscula, como lo nombra envia.com (Chema 2026-10-05).
+        "amPm": "https://grupoampm.com/rastreador/?tracking-id={numero}",
     },
     # Primer sync de una tienda: solo pedidos pagados + sin fulfillear de esta
     # ventana (acuerdo con el founder). El sync recurrente no se acota.
