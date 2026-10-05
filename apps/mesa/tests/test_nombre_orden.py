@@ -25,6 +25,19 @@ class NombreOrdenTests(TestCase):
         self.assertIn(self.pedido.folio, self.client.get(reverse("mesa:pedidos"), {"q": "#4074"}).content.decode())
         self.assertNotIn(self.pedido.folio, self.client.get(reverse("mesa:pedidos"), {"q": "#9999"}).content.decode())
 
+    def test_lista_de_mesa_busca_por_numero_de_guia(self):
+        # Chema 2026-10-05: folio, comprador, orden de Shopify o # de guía (viva o cancelada).
+        from apps.envios.models import Guia
+
+        Guia.objects.create(pedido=self.pedido, carrier="estafeta", numero="005870980061070999ARYW", proveedor="mock")
+        Guia.objects.create(pedido=self.pedido, carrier="imile", numero="6092226496868", proveedor="mock", estado=Guia.CANCELADA)
+        for q in ("005870980061070999ARYW", "0610709", "6092226496868"):
+            html = self.client.get(reverse("mesa:pedidos"), {"q": q}).content.decode()
+            self.assertIn(self.pedido.folio, html)
+            self.assertEqual(html.count(f">{self.pedido.folio}<"), self.client.get(reverse("mesa:pedidos")).content.decode().count(f">{self.pedido.folio}<"))  # sin filas duplicadas
+        self.assertNotIn(self.pedido.folio, self.client.get(reverse("mesa:pedidos"), {"q": "1111111111"}).content.decode())
+        self.assertIn("# de guía", self.client.get(reverse("mesa:pedidos")).content.decode())
+
     def test_rastreo_publico_muestra_la_orden(self):
         self.client.logout()
         html = self.client.get(f"/r/{obtener_o_crear_token(self.pedido)}/").content.decode()

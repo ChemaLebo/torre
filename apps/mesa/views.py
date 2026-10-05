@@ -957,8 +957,17 @@ def _filtrar_pedidos(GET):
             | Q(comprador_nombre__icontains=q)
             | Q(shopify_order_id__icontains=q)
             | Q(shopify_order_name__icontains=q)  # "#4074", como lo busca servicio al cliente
+            | Q(pk__in=_pedidos_con_guia(q))  # número de guía, viva o cancelada (Chema 2026-10-05)
         )
     return qs, filtro
+
+
+def _pedidos_con_guia(q):
+    """Ids de pedidos con alguna guía cuyo número contiene `q` (subconsulta:
+    no duplica filas ni infla los conteos de la lista)."""
+    from apps.envios.models import Guia
+
+    return Guia.objects.filter(numero__icontains=q).values("pedido_id")
 
 
 def _resumen_cajas(pedido):

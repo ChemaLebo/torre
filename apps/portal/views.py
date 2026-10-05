@@ -12,7 +12,7 @@ from datetime import time as dt_time
 
 from django.conf import settings
 from django.contrib import messages
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -366,6 +366,19 @@ def pedidos(request):
     canal = request.GET.get("canal", "").strip()
     if canal:
         qs = qs.filter(canal=canal)
+    # Buscador (Chema 2026-10-05): folio, comprador, orden de Shopify o número
+    # de guía. Busca en TODOS los pedidos del cliente, sin importar la pestaña.
+    q = request.GET.get("q", "").strip()
+    if q:
+        from apps.envios.models import Guia  # lazy: modelo de otra app
+
+        qs = Pedido.objects.filter(cliente=request.cliente).select_related("tienda").filter(
+            Q(folio__icontains=q) | Q(comprador_nombre__icontains=q)
+            | Q(shopify_order_id__icontains=q) | Q(shopify_order_name__icontains=q)
+            | Q(pk__in=Guia.objects.filter(numero__icontains=q).values("pedido_id"))
+        )
+        if canal:
+            qs = qs.filter(canal=canal)
     lista = list(qs.prefetch_related("lineas__sku").annotate(piezas=Sum("lineas__cantidad"))[:200])
     for pedido in lista:
         pedido.pill = _PILL_PEDIDO.get(pedido.estado, "")
@@ -376,6 +389,7 @@ def pedidos(request):
         "seccion": "pedidos",
         "ver": ver,
         "canal": canal,
+        "q": q,
         "canales": _canales_del_cliente(request.cliente),
         "pedidos_lista": lista,
     })

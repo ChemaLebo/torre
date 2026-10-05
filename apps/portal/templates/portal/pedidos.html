@@ -15,6 +15,12 @@
     <a class="btn chico {% if ver == 'todos' %}primario{% endif %}" href="?ver=todos">Todos</a>
   </div>
 </div>
+<form method="get" class="fila mb">
+  <input type="hidden" name="ver" value="{{ ver }}">{% if canal %}<input type="hidden" name="canal" value="{{ canal }}">{% endif %}
+  <input type="text" name="q" value="{{ q }}" placeholder="Folio, comprador, orden de Shopify o # de guía" aria-label="Buscar pedido" style="flex:1;min-width:220px;max-width:420px">
+  <button class="btn chico" type="submit">Buscar</button>
+  {% if q %}<a class="btn chico" href="?ver={{ ver }}">Quitar búsqueda</a> <span class="small muted">buscando en todos tus pedidos</span>{% endif %}
+</form>
 {% if canales|length > 1 %}
 <div class="fila mb">
   <span class="small muted">Canal:</span>

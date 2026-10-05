@@ -122,6 +122,23 @@ class TestLinkShopify(BasePortal):
             comprador_nombre="Enrique Lopez", cp="72830",
         )
 
+    def test_buscador_por_folio_orden_o_guia_en_todos_los_pedidos(self):
+        # Chema 2026-10-05: el buscador ignora la pestaña y encuentra por # de guía.
+        from apps.envios.models import Guia
+        from apps.pedidos.models import Pedido
+
+        pedido = self._pedido_shopify()
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.ENTREGADO)
+        Guia.objects.create(pedido=pedido, carrier="estafeta", numero="005870980061070999ARYW", proveedor="mock", estado=Guia.ENTREGADO)
+        self.entrar()
+        self.assertNotContains(self.client.get(reverse("portal:pedidos")), pedido.folio)  # entregado: no está "en proceso"
+        for q in ("005870980061070999ARYW", pedido.folio, "8396980125858"):
+            respuesta = self.client.get(reverse("portal:pedidos"), {"q": q})
+            self.assertContains(respuesta, pedido.folio)
+            self.assertContains(respuesta, "buscando en todos tus pedidos")
+        self.assertNotContains(self.client.get(reverse("portal:pedidos"), {"q": "1111111111"}), pedido.folio)
+        self.assertContains(self.client.get(reverse("portal:pedidos")), "# de guía")
+
     def test_lista_enlaza_la_orden_de_shopify(self):
         pedido = self._pedido_shopify()
         self.entrar()
