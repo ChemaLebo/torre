@@ -3,7 +3,7 @@
 {% block title %}{{ pedido.folio }}{% endblock %}
 
 {% block content %}
-<div class="topbar">
+<div class="topbar fija">
   <div>
     <div class="eyebrow"><a href="{% url 'portal:pedidos' %}">Pedidos</a> / {{ pedido.folio }}</div>
     <h1>{{ pedido.folio }}</h1>
@@ -57,25 +57,6 @@
       {% endif %}
     </div>
 
-    <div class="card mb">
-      <div class="titulo"><h3>Envío y rastreo</h3></div>
-      {% if guia %}
-        <p>
-          {{ guia.carrier|title }}{% if guia.servicio %} · {{ guia.servicio }}{% endif %}<br>
-          <span class="mono">{{ guia.numero|default:"guía en generación" }}</span>
-        </p>
-        <div class="fila entre">
-          <span class="pill {% if guia.estado == 'ENTREGADO' %}ok{% elif guia.estado == 'RETORNO' or guia.estado == 'INTENTO_FALLIDO' %}crit{% else %}accent{% endif %}">{{ guia.get_estado_display }}</span>{% if guia.sustituida_motivo %} <span class="pill warn">sustituida · {{ guia.get_sustituida_motivo_display|lower }}</span>{% endif %}
-          <span class="small">Último movimiento {{ guia.movio_hace }}</span>
-        </div>
-        {% if guia.ultimo_evento %}<p class="small mt">“{{ guia.ultimo_evento }}”</p>{% endif %}
-        {% if guia.ts_recolectado_carrier %}<p class="small mt">Recolectado por la paquetería: {{ guia.ts_recolectado_carrier|date:"d/M/Y H:i" }}</p>{% endif %}
-        {% if guia.fecha_compromiso and guia.estado != 'ENTREGADO' %}<p class="small mt">Compromiso de entrega: <b>{{ guia.fecha_compromiso|date:"d/M/Y" }}</b></p>{% elif guia.dias_promesa and guia.estado == 'GUIA_CREADA' %}<p class="small mt">Compromiso: {{ guia.dias_promesa }} día{{ guia.dias_promesa|pluralize }} a partir de la salida de bodega.</p>{% endif %}
-      {% else %}
-        <p class="muted">Todavía no hay guía: se genera en cuanto el pedido queda empacado y verificado.</p>
-      {% endif %}
-    </div>
-
     <div class="card">
       <div class="titulo"><h3>Incidencias de este pedido</h3></div>
       {# Abiertas primero, cerradas al fondo; el estado junto al folio (Chema 2026-09-29). #}
@@ -99,19 +80,18 @@
 
 <div class="grid g2 mt">
   <div class="card">
-    <div class="titulo"><h3>Qué lleva la caja</h3></div>
+    <div class="titulo"><h3>Artículos del pedido</h3></div>
     <div class="tabla-wrap">
       <table>
-        <thead><tr><th>Producto</th><th>Pedidas</th><th>Preparadas</th></tr></thead>
+        <thead><tr><th>Producto</th><th>Pedidas</th></tr></thead>
         <tbody>
           {% for linea in pedido.lineas.all %}
             <tr>
               <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div>{% if linea.reposicion_de_id %}<span class="pill accent">Reposición</span> {% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span> <span class="small muted">sale después, con el mismo folio</span>{% endif %}</td>
               <td class="mono">{{ linea.cantidad }}</td>
-              <td class="mono">{{ linea.cantidad_pickeada }}</td>
             </tr>
           {% empty %}
-            <tr><td colspan="3" class="muted">Sin renglones registrados.</td></tr>
+            <tr><td colspan="2" class="muted">Sin renglones registrados.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -173,7 +153,7 @@
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
       <thead>
-        <tr><th>Pedido</th><th>Paquete</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
+        <tr><th>Paquete</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
       </thead>
       <tbody>
         {% for f in filas %}{% include 'pedidos/_fila_linea_tiempo.html' %}{% endfor %}

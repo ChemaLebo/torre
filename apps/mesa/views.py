@@ -1057,6 +1057,8 @@ def pedido_detalle(request, pk):
     for caja in cajas:
         caja.guia = next((g for g in caja.guias.all() if g.es_activa), None)
         caja.historial = sorted((g for g in caja.guias.all() if not g.es_activa), key=lambda g: g.pk)
+        for g in caja.historial:
+            g.url_rastreo = url_rastreo_carrier(g.carrier, g.numero)
         caja.url_rastreo = url_rastreo_carrier(caja.guia.carrier, caja.guia.numero) if caja.guia else ""
         caja.puede_cambiar = puede_cambiar and caja.estado != "DESPACHADO" and (
             caja.guia is None or caja.guia.estado == "GUIA_CREADA"
@@ -1079,6 +1081,7 @@ def pedido_detalle(request, pk):
     reembolsos_guias = [
         {
             "guia": g, "caja": g.paquete, "tarifa": tarifa_envio_de(g, tarifas),
+            "url_rastreo": url_rastreo_carrier(g.carrier, g.numero),
             "cobrada": corte_de(g.creado).etiqueta_corta, "reembolsos": list(g.reembolsos.all()),
         }
         for g in sorted(pedido.guias.select_related("paquete").prefetch_related("reembolsos"), key=lambda g: (g.paquete.numero if g.paquete_id else 0, g.pk))
@@ -1110,6 +1113,7 @@ def pedido_detalle(request, pk):
         "piezas_sin_inventario": sum(l.cantidad for l in pedido.lineas_faltantes),
         "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
         "es_mesa": True,
+        "sin_pedido": True,
         "grupo": grupo,
         "compensaciones": compensaciones,
         "fotos": fotos,

@@ -54,6 +54,8 @@ class PedidoDetalleTests(PisoTestCase):
         ):
             self.assertIn(esperado, html)
         self.assertIn('value="cambiar_paqueteria"', html)  # la del pedido entero replanea la ola en bodega
+        self.assertIn('class="topbar fija"', html)  # folio y botones siguen visibles al hacer scroll
+        self.assertNotIn("<th>Pedido</th>", html)   # en el detalle la columna Pedido de la línea de tiempo sobra
         # Anterior = el más reciente (otro), con el filtro conservado; Siguiente no hay.
         self.assertIn(f"{reverse('mesa:pedido_detalle', args=[otro.pk])}?q=PED-", html)
         self.assertIn(f"{reverse('mesa:pedidos')}?q=PED-", html)

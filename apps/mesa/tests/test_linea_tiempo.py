@@ -41,7 +41,7 @@ class LineaTiempoTests(TestCase):
     def test_mesa_muestra_pasos_caja_manifiesto_y_eventos(self):
         self._mesa()
         html = self.client.get(reverse("mesa:linea_tiempo")).content.decode()
-        for esperado in (self.pedido.folio, "#4074", "24/Sep 19:52", "MAN-2026-0007 · Luis", "29/Sep", "Shipped",
+        for esperado in (self.pedido.folio, "#4074", "24/Sep 19:52", "MAN-2026-0007 ↗</a> · Luis", "29/Sep", "Shipped",
                          "6092426140197", "6092426140198", "1 de 2", "2 de 2", "5 días desde la salida", self.ajeno.folio):
             self.assertIn(esperado, html)
         self.assertNotIn('<details class="colapsable"', html)  # sin acordeones en la tabla: una fila por paquete (el menú sí usa details)
@@ -82,5 +82,5 @@ class LineaTiempoTests(TestCase):
         self.client.force_login(karina)
         html = self.client.get(reverse("portal:linea_tiempo")).content.decode()
         self.assertIn(self.pedido.folio, html)
-        self.assertIn("MAN-2026-0007", html)
+        self.assertNotIn("MAN-2026-0007", html)  # el manifiesto es interno: el cliente no lo ve (Chema 2026-10-05)
         self.assertNotIn(self.ajeno.folio, html)

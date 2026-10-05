@@ -470,6 +470,7 @@ def pedido_detalle(request, pk):
     ahorro_division = paquetes[0].ahorro_plan_mxn if paquetes else 0
     return render(request, "portal/pedido_detalle.html", {
         "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
+        "sin_pedido": True,
         "es_mesa": False,
         "seccion": "pedidos",
         "pedido": pedido,

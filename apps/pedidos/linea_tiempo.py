@@ -75,6 +75,8 @@ def _horas_de_la_ola(pedido, caja, guia, eventos):
 
 def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
     """Una fila de la tabla: la caja (o el envío entero, legacy) con su guía."""
+    from apps.envios.services import url_rastreo_carrier  # lazy por contrato
+
     linea = manifiestos.get(guia.pk) if guia else None
     picking, empacado = _horas_de_la_ola(pedido, caja, guia, eventos)
     eventos = list(guia.eventos.all()) if guia else []
@@ -95,6 +97,7 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
         "caja": caja.numero if caja else None, "total_cajas": total_cajas,
         "caja_estado": caja.get_estado_display() if caja else "",
         "guia": guia,
+        "url_rastreo": url_rastreo_carrier(guia.carrier, guia.numero) if guia else "",
         "manifiesto": linea.manifiesto if linea else None,
         "ts": {
             "recibido": pedido.creado, "picking": picking, "empacado": empacado,

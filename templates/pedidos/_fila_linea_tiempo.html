@@ -1,18 +1,18 @@
-{# Una fila de la línea de tiempo por caja (pedidos.linea_tiempo.construir); la usan la pantalla Línea de tiempo y el detalle del pedido en Mesa. #}
+{# Una fila de la línea de tiempo por caja (pedidos.linea_tiempo.construir); la usan la pantalla Línea de tiempo y el detalle del pedido en Mesa y portal. En el detalle (`sin_pedido`) la columna Pedido sobra. El folio del manifiesto es interno: solo Mesa lo ve, con link a su hoja (Chema 2026-10-05). #}
       <tr>
-        <td>
+        {% if not sin_pedido %}<td>
           <a class="mono" href="{% if es_mesa %}{% url 'mesa:pedido_detalle' f.pedido.pk %}{% else %}{% url 'portal:pedido_detalle' f.pedido.pk %}{% endif %}">{{ f.pedido.folio }}</a>
           {% if f.pedido.orden_shopify_legible %}<div class="small mono">{{ f.pedido.orden_shopify_legible }}</div>{% endif %}
           {% if es_mesa %}<div class="small muted">{{ f.pedido.cliente.nombre }}</div>{% endif %}
           <span class="pill {% if f.pedido.estado == 'ENTREGADO' %}ok{% elif f.pedido.estado == 'CANCELADO' or f.pedido.estado == 'RETORNADO' %}crit{% else %}accent{% endif %}">{{ f.pedido.get_estado_display }}</span>
-        </td>
+        </td>{% endif %}
         <td class="mono small">{% if f.caja %}{{ f.caja }} de {{ f.total_cajas }}{% else %}envío{% endif %}{% if f.caja_estado %}<div class="muted">{{ f.caja_estado }}</div>{% endif %}</td>
-        <td class="small">{% if f.guia %}{{ f.guia.carrier }}<div class="mono">{{ f.guia.numero }}</div><span class="pill {% if f.guia.estado == 'ENTREGADO' %}ok{% elif f.guia.estado == 'RETORNO' or f.guia.estado == 'INTENTO_FALLIDO' or f.guia.estado == 'EXCEPCION' or f.guia.estado == 'CANCELADA' %}crit{% elif f.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}">{{ f.guia.get_estado_display }}</span>{% if f.guia.sustituida_motivo %} <span class="pill warn">sustituida · {{ f.guia.get_sustituida_motivo_display|lower }}</span>{% endif %}{% else %}<span class="muted">sin guía</span>{% endif %}</td>
+        <td class="small">{% if f.guia %}{{ f.guia.carrier }}<div class="mono">{% if f.url_rastreo %}<a href="{{ f.url_rastreo }}" target="_blank" rel="noopener" title="Rastreo público de la paquetería">{{ f.guia.numero }} ↗</a>{% else %}{{ f.guia.numero }}{% endif %}</div><span class="pill {% if f.guia.estado == 'ENTREGADO' %}ok{% elif f.guia.estado == 'RETORNO' or f.guia.estado == 'INTENTO_FALLIDO' or f.guia.estado == 'EXCEPCION' or f.guia.estado == 'CANCELADA' %}crit{% elif f.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}">{{ f.guia.get_estado_display }}</span>{% if f.guia.sustituida_motivo %} <span class="pill warn">sustituida · {{ f.guia.get_sustituida_motivo_display|lower }}</span>{% endif %}{% else %}<span class="muted">sin guía</span>{% endif %}</td>
         <td class="mono small">{{ f.ts.recibido|date:"d/M H:i" }}</td>
         <td class="mono small">{% if f.ts.picking %}{{ f.ts.picking|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="mono small">{% if f.ts.empacado %}{{ f.ts.empacado|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="mono small">{% if f.ts.guia %}{{ f.ts.guia|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="mono small">{% if f.ts.salida %}{{ f.ts.salida|date:"d/M H:i" }}{% if f.manifiesto %}<div class="muted" title="Manifiesto{% if f.manifiesto.chofer %} · chofer {{ f.manifiesto.chofer }}{% endif %}">{{ f.manifiesto.folio }}{% if f.manifiesto.chofer %} · {{ f.manifiesto.chofer }}{% endif %}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="mono small">{% if f.ts.salida %}{{ f.ts.salida|date:"d/M H:i" }}{% if f.manifiesto and es_mesa %}<div class="muted" title="Manifiesto de salida{% if f.manifiesto.chofer %} · chofer {{ f.manifiesto.chofer }}{% endif %}"><a href="{% url 'piso:manifiesto' f.manifiesto.pk %}" target="_blank" rel="noopener">{{ f.manifiesto.folio }} ↗</a>{% if f.manifiesto.chofer %} · {{ f.manifiesto.chofer }}{% endif %}</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="mono small">{% if f.ts.recolectado_carrier %}{{ f.ts.recolectado_carrier|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="mono small">{% if f.ts.en_transito %}{{ f.ts.en_transito|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="mono small">{% if f.ts.en_ruta %}{{ f.ts.en_ruta|date:"d/M H:i" }}{% else %}<span class="muted">—</span>{% endif %}</td>

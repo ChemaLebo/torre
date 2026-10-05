@@ -2,7 +2,7 @@
 {% block title %}{{ pedido.folio }} · Mesa{% endblock %}
 {% block content %}
 {# Detalle de un pedido en Mesa (Chema 2026-09-30): todo lo del pedido en una página, acciones por caja y de orden completa. #}
-<div class="topbar">
+<div class="topbar fija">
   <div>
     <div class="eyebrow"><a href="{{ url_lista }}">Pedidos</a> / {{ pedido.folio }}</div>
     <h1>{{ pedido.folio }}{% if pedido.orden_shopify_legible %} · {{ pedido.orden_shopify_legible }}{% endif %}</h1>
@@ -100,7 +100,7 @@
           <td class="small">{{ caja.carrier }}{% if caja.carrier_forzado %} <span class="pill warn" title="Paquetería forzada desde Mesa para esta caja">forzada</span>{% endif %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}{% if caja.estimado_entrega %} · {{ caja.estimado_entrega }}{% endif %}</div></td>
           <td class="small">
             {% if caja.guia %}{% if caja.url_rastreo %}<a class="mono" href="{{ caja.url_rastreo }}" target="_blank" rel="noopener">{{ caja.guia.numero }} ↗</a>{% else %}<span class="mono">{{ caja.guia.numero }}</span>{% endif %}<div class="muted">{{ caja.guia.carrier }}{% if caja.guia.proveedor %} · {{ caja.guia.proveedor }}{% endif %}</div>{% else %}<span class="muted">sin guía</span>{% endif %}
-            {% for g in caja.historial %}<div class="muted mono" title="Guía anterior de esta caja">{{ g.numero }} · {{ g.get_estado_display|lower }}</div>{% endfor %}
+            {% for g in caja.historial %}<div class="muted mono" title="Guía anterior de esta caja">{% if g.url_rastreo %}<a href="{{ g.url_rastreo }}" target="_blank" rel="noopener">{{ g.numero }} ↗</a>{% else %}{{ g.numero }}{% endif %} · {{ g.get_estado_display|lower }}</div>{% endfor %}
           </td>
           <td>
             {% if caja.guia %}<span class="pill {% if caja.guia.estado == 'ENTREGADO' %}ok{% elif caja.guia.estado == 'RETORNO' or caja.guia.estado == 'INTENTO_FALLIDO' or caja.guia.estado == 'EXCEPCION' %}crit{% elif caja.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ caja.guia.ultimo_evento }}">{{ caja.guia.get_estado_display }}</span>
@@ -158,7 +158,7 @@
         {% for r in reembolsos_guias %}
         <tr>
           <td class="mono">{% if r.caja %}{{ r.caja.numero }}{% else %}—{% endif %}</td>
-          <td class="mono small">{{ r.guia.numero }}<div class="muted">{{ r.guia.carrier }}</div></td>
+          <td class="mono small">{% if r.url_rastreo %}<a href="{{ r.url_rastreo }}" target="_blank" rel="noopener">{{ r.guia.numero }} ↗</a>{% else %}{{ r.guia.numero }}{% endif %}<div class="muted">{{ r.guia.carrier }}</div></td>
           <td class="small">{{ r.guia.get_estado_display }}</td>
           <td class="mono small">${{ r.tarifa|floatformat:2 }}<div class="muted">corte {{ r.cobrada }}</div></td>
           <td class="small">
@@ -227,7 +227,7 @@
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
       <thead>
-        <tr><th>Pedido</th><th>Caja</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
+        <tr><th>Caja</th><th>Guía</th><th>Recibido</th><th>Picking</th><th>Empacado</th><th>Guía creada</th><th>Salió de bodega</th><th>Recolectado por carrier</th><th>En tránsito</th><th>En ruta</th><th>Entregado</th><th>Compromiso</th><th>Último evento</th></tr>
       </thead>
       <tbody>
         {% for f in filas %}{% include 'pedidos/_fila_linea_tiempo.html' %}{% endfor %}

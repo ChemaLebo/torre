@@ -143,6 +143,12 @@ class TestLinkShopify(BasePortal):
         self.entrar()
         html = self.client.get(reverse("portal:pedido_detalle", args=[self.pedido.pk])).content.decode()
         self.assertIn("Tus paquetes", html)
+        # Detalle sin repetidos (Chema 2026-10-05): fuera "Envío y rastreo", la
+        # columna Preparadas y la columna Pedido de la línea de tiempo; encabezado fijo.
+        self.assertIn("Artículos del pedido", html)
+        for fuera in ("Envío y rastreo", "Qué lleva la caja", "<th>Preparadas</th>", "<th>Pedido</th>"):
+            self.assertNotIn(fuera, html)
+        self.assertIn('class="topbar fija"', html)
         self.assertIn("1 de 1", html)
         self.assertIn("EST-900", html)
         self.assertIn("cs.estafeta.com/es/Tracking/searchByGet?wayBill=", html)
