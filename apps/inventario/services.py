@@ -2105,7 +2105,27 @@ def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
                    "lote": codigo_lote},
             motivo="Sin anaquel con espacio en el plan: a la zona de desborde, vendible con su lote.",
         )
+    if ubicacion.tipo == Ubicacion.RESERVA and ubicacion.codigo.startswith(PREFIJO_TARIMA):
+        _replanear_por_tarima(orden, sku, ubicacion, cantidad, codigo_lote, actor)
     return ubicacion
+
+
+def _replanear_por_tarima(orden, sku, tarima, cantidad, codigo_lote, actor):
+    """Lo que se queda en tarima libera el anaquel que el plan le tenía
+    apartado (Chema 2026-10-05): se rehace el plan de lo que falta de la orden
+    para que ese espacio lo tomen los demás SKUs. Solo si el plan existe y
+    todavía tiene pasos pendientes; lo ya ubicado no se vuelve a planear."""
+    pasos = (orden.plan_acomodo or {}).get("pasos", [])
+    if not any(p["ubicadas"] < p["cantidad"] for p in pasos):
+        return
+    antes = sum(p["cantidad"] - p["ubicadas"] for p in pasos)
+    plan = planear_acomodo(orden, actor)
+    registrar_evento(
+        "asn", orden.folio, "acomodo_replaneado_por_tarima", actor=actor, cliente=orden.cliente,
+        delta={"sku": sku.codigo, "lote": codigo_lote, "tarima": tarima.codigo, "cantidad": cantidad,
+               "pendientes_antes": antes, "pasos": len(plan.get("pasos", []))},
+        motivo=f"{cantidad} de {sku.codigo} a {tarima.codigo}: el anaquel apartado queda libre y se replanea lo que falta.",
+    )
 
 
 def marcar_danada(linea_asn, actor):
