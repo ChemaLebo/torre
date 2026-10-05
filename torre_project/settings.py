@@ -292,7 +292,9 @@ TORRE = {
     # y visibles en Mesa → Sync, donde se reactivan o se descartan.
     "SHOPIFY_REINTENTOS_HORAS": 24,
     "RASTREO_CARRIER_URL": {
-        "estafeta": "https://rastreo3.estafeta.com/RastreoWebInternet/consultaEnvio.do?dispatch=doRastreoInternet&tipoGuia=ESTAFETA&guias={numero}",
+        # rastreo3.estafeta.com murió (NXDOMAIN, 2026-10-05). Este abre el estatus
+        # directo; sin isShipmentDetail, que pinta una flecha de regreso que no hace nada.
+        "estafeta": "https://cs.estafeta.com/es/Tracking/searchByGet?wayBill={numero}",
         "paquetexpress": "https://www.paquetexpress.com.mx/rastreo/{numero}",
         "fedex": "https://www.fedex.com/fedextrack/?trknbr={numero}",
         "dhl": "https://www.dhl.com/mx-es/home/tracking/tracking-express.html?submit=1&tracking-id={numero}",

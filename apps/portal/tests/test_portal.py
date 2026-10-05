@@ -145,7 +145,7 @@ class TestLinkShopify(BasePortal):
         self.assertIn("Tus paquetes", html)
         self.assertIn("1 de 1", html)
         self.assertIn("EST-900", html)
-        self.assertIn("rastreo3.estafeta.com", html)
+        self.assertIn("cs.estafeta.com/es/Tracking/searchByGet?wayBill=", html)
         self.assertIn("Línea de tiempo por paquete", html)
         self.assertIn("Salió de bodega", html)
         self.assertNotIn('<details class="colapsable"', html.split("Línea de tiempo por paquete")[1])  # sin acordeones en la tabla

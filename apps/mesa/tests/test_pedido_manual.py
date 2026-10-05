@@ -229,7 +229,7 @@ class ReintentarReservasDesdeMesaTests(BasePedidoManualVista):
         self.assertContains(respuesta, "EST-123")
         self.assertContains(respuesta, "estafeta")
         self.assertContains(respuesta, "Guía creada")
-        self.assertContains(respuesta, "rastreo3.estafeta.com")  # link al rastreo público del carrier
+        self.assertContains(respuesta, "cs.estafeta.com/es/Tracking/searchByGet?wayBill=")  # link al rastreo público del carrier
 
     def test_la_lista_marca_las_piezas_sin_inventario(self):
         from apps.catalogo.models import SKU
