@@ -223,6 +223,18 @@ def dashboard(request):
     abiertas.sort(key=lambda i: (i.reloj_limite is None, i.reloj_limite or ahora))
     fuera_de_sla = abiertas_fuera_de_sla().count()
 
+    # Detenidos en piso (Chema 2026-10-06): pedidos fuera de la cola con su incidencia DET/PAQ abierta.
+    from apps.incidencias.services import TIPOS_QUE_DETIENEN, resolucion_de  # lazy por contrato
+    detenidos = []
+    for inc in (
+        Incidencia.objects.filter(pedido__detenido=True, tipo__in=TIPOS_QUE_DETIENEN, estado__in=Incidencia.ESTADOS_ABIERTOS)
+        .select_related("pedido", "pedido__cliente").order_by("pedido__creado")
+    ):
+        ultimo = inc.mensajes.order_by("-pk").first()
+        detenidos.append({
+            "incidencia": _anotar_reloj_sla(inc, ahora), "pedido": inc.pedido,
+            "motivo": (ultimo.texto if ultimo else "") or resolucion_de(inc) or "",
+        })
     salida_pct, salida_medibles, salida_a_tiempo = _pct_salida_mismo_dia(ahora)
     exactitud_pct, conteos_30d = _exactitud_inventario()
     retrasadas = _guias_con_retraso(hoy)
@@ -260,6 +272,7 @@ def dashboard(request):
         "exactitud_pct": exactitud_pct,
         "conteos_30d": conteos_30d,
         "guias_retrasadas": retrasadas,
+        "detenidos": detenidos,
         "eventos": eventos,
     })
 

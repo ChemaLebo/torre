@@ -60,11 +60,16 @@ class SinPaqueteriaTests(PisoTestCase):
         with self.assertRaises(SinPaqueteria):
             services.generar_guia(pedido)
         inc = sin_paqueteria_abierta(pedido)
-        self.assertIsNotNone(pedido.asignado_a)
+        pedido.refresh_from_db()
+        # Sin paquetería el pedido queda detenido en piso y sin dueño (2026-10-06).
+        self.assertEqual((pedido.detenido, pedido.asignado_a), (True, None))
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="pedido_detenido").exists())
         with override_settings(TORRE=POOL_CLASICO):
             resultado = services.replanear_con_carrier(pedido, "estafeta", self.operador, incidencia=inc)
         pedido.refresh_from_db()
         inc.refresh_from_db()
+        self.assertFalse(pedido.detenido)  # resolver la PAQ lo reanuda
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="pedido_reanudado").exists())
         self.assertEqual(resultado["modo"], "replaneadas")
         self.assertEqual(len(resultado["cajas"]), 2)  # 24 kg → dos cajas ≤20 kg
         self.assertEqual({c.carrier for c in pedido.paquetes.all()}, {"estafeta"})

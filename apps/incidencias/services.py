@@ -31,7 +31,10 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_DES: Incidencia.P3,
     Incidencia.TIPO_CDR: Incidencia.P1,  # hay que cancelar la guía ANTES de que salga
     Incidencia.TIPO_PAQ: Incidencia.P1,  # el pedido no puede salir hasta elegir paquetería
+    Incidencia.TIPO_DET: Incidencia.P1,  # el pedido está parado en el piso hasta que Mesa resuelva
 }
+# Tipos que detienen el pedido en piso: al resolverlos o cerrarlos, se reanuda.
+TIPOS_QUE_DETIENEN = (Incidencia.TIPO_DET, Incidencia.TIPO_PAQ)
 
 
 def _nombre_actor(actor):
@@ -354,7 +357,32 @@ def resolver(incidencia, resolucion_texto, actor):
             incidencia.pedido, actor,
             f"Cancelación tardía cerrada al resolver {incidencia.folio}.",
         )
+    _reanudar_si_detenia(incidencia, actor)
     return incidencia
+
+
+def _reanudar_si_detenia(incidencia, actor):
+    """Resolver o cerrar una DET/PAQ reanuda el pedido detenido (Chema
+    2026-10-06): vuelve a la cola de Mi turno, el primero por antigüedad, y
+    la lista de correos se entera. Si otra DET/PAQ del pedido sigue abierta,
+    el pedido se queda detenido."""
+    if incidencia.tipo not in TIPOS_QUE_DETIENEN or incidencia.pedido_id is None:
+        return
+    from apps.pedidos.services import reanudar_pedido  # lazy por contrato
+
+    pedido = incidencia.pedido
+    pedido.refresh_from_db(fields=["detenido", "estado"])
+    if not pedido.detenido:
+        return
+    if Incidencia.objects.filter(
+        pedido=pedido, tipo__in=TIPOS_QUE_DETIENEN, estado__in=Incidencia.ESTADOS_ABIERTOS,
+    ).exclude(pk=incidencia.pk).exists():
+        return
+    if reanudar_pedido(pedido, actor, motivo=f"Reanudado al resolver {incidencia.folio}."):
+        avisar_por_correo(
+            incidencia, "reanudada", f"{pedido.folio} se reanudó: vuelve a la cola del piso",
+            resolucion_de(incidencia) or "",
+        )
 
 
 def cerrar(incidencia, actor):
@@ -371,6 +399,7 @@ def cerrar(incidencia, actor):
         if not quedan_abiertas and pedido.incidencia_activa:
             pedido.incidencia_activa = False
             pedido.save(update_fields=["incidencia_activa"])
+    _reanudar_si_detenia(incidencia, actor)
     return incidencia
 
 
@@ -760,6 +789,15 @@ def abrir_sin_paqueteria(pedido, detalle):
         "pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente,
         delta={"incidencia": str(getattr(incidencia, "folio", "") or ""), "cp": pedido.cp}, motivo=texto[:300],
     )
+    # Sin paquetería el pedido no puede salir: detenido en piso hasta que Mesa elija (2026-10-06).
+    if not pedido.detenido and pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA", "PARCIALMENTE_DESPACHADO"):
+        pedido.detenido = True
+        pedido.asignado_a = None
+        pedido.save(update_fields=["detenido", "asignado_a", "actualizado"])
+        registrar_evento(
+            "pedido", pedido.pk, "pedido_detenido", cliente=pedido.cliente,
+            delta={"origen": "auto", "estado": pedido.estado, "de": None}, motivo=texto[:300],
+        )
     return incidencia
 
 

@@ -20,7 +20,7 @@
     <div class="eyebrow">Expediente</div>
     <p class="mono" style="margin:8px 0 0">
       Cliente: {{ incidencia.cliente.nombre }}<br>
-      {% if incidencia.pedido %}Pedido: {{ incidencia.pedido.folio }} ({{ incidencia.pedido.get_estado_display }})<br>{% endif %}
+      {% if incidencia.pedido %}Pedido: {{ incidencia.pedido.folio }} ({{ incidencia.pedido.get_estado_display }}){% if incidencia.pedido.detenido %} <span class="pill crit">detenido en piso</span>{% endif %}<br>{% endif %}
       {# Todas las guías (una por caja si el envío va dividido), con el rastreo del carrier. #}
       {% for g in guias %}Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}{{ g.numero }}{% endif %}{% if not g.activa %} <span class="muted">({{ g.estado|lower }})</span>{% endif %}{% if g.sustituida %} <span class="pill warn">{{ g.sustituida }}</span>{% endif %}<br>{% endfor %}
       {% if incidencia.sku %}SKU: {{ incidencia.sku.codigo }}<br>{% endif %}
@@ -114,7 +114,7 @@
       <input type="hidden" name="accion" value="resolver">
       <label for="txt-resolver">Resolución propuesta</label>
       <textarea id="txt-resolver" name="texto" rows="2" placeholder="Qué se resolvió y cómo (visible para el cliente)"></textarea>
-      <button class="btn chico primario mt" type="submit">Marcar resuelta</button>
+      <button class="btn chico primario mt" type="submit">{% if incidencia.pedido.detenido and incidencia.tipo in "DET PAQ" %}Resolver y reanudar el pedido{% else %}Marcar resuelta{% endif %}</button>
     </form>
     {% endif %}
   </div>

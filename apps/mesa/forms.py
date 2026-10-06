@@ -337,8 +337,11 @@ class FormNuevaIncidenciaMesa(forms.Form):
         campo = self.fields["pedido"]
         campo.queryset = recientes.select_related("cliente").order_by("-creado")
         campo.label_from_instance = self.etiqueta_pedido
-        # "Sin paquetería que cotice" la abre el planificador, no una persona.
-        self.fields["tipo"].choices = [(c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c != Incidencia.TIPO_PAQ]
+        # "Sin paquetería que cotice" la abre el planificador y "Detenido en
+        # piso" el botón Detener del piso (o Torre sola), no una persona en Mesa.
+        self.fields["tipo"].choices = [
+            (c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c not in (Incidencia.TIPO_PAQ, Incidencia.TIPO_DET)
+        ]
 
     @staticmethod
     def etiqueta_pedido(p):

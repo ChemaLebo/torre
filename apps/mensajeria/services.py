@@ -62,6 +62,9 @@ TIPO_INCIDENCIA_LEGIBLE = {
     "DIR": "dirección",
     "CAN": "cancelación",
     "DES": "descuadre de inventario",
+    "CDR": "cambio de dirección",
+    "PAQ": "sin paquetería que cotice",
+    "DET": "detenido en piso",
 }
 ESTADOS_INCIDENCIA_ABIERTOS = ("ABIERTA", "EN_CURSO", "RESOLUCION_PROPUESTA")
 

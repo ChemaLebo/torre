@@ -24,37 +24,63 @@ class PickingPisoTests(PisoTestCase):
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
         self.assertIsNotNone(self.pedido.ts_picking)
 
-    def test_soltar_pedido_lo_deja_libre_con_su_avance_y_otro_lo_toma(self):
+    def test_detener_saca_el_pedido_de_la_cola_abre_su_incidencia_y_mesa_lo_reanuda(self):
         from django.contrib.auth.models import User
+        from django.core import mail
 
+        from apps.configuracion.models import CorreoIncidencias
         from apps.core.models import EventoAuditoria, PerfilUsuario
+        from apps.incidencias.models import Incidencia
+        from apps.incidencias.services import resolver
 
+        CorreoIncidencias.objects.create(correo="ops@torre.mx")
         self._iniciar()
         self.client.post(self.url_detalle, {"codigo": "7501234567890", "cantidad": "1"})
         self.assertEqual(self.pedido.asignado_a, self.operador)
-        respuesta = self.client.post(self.url_detalle, {"accion": "soltar", "motivo": "Faltante de producto"}, follow=True)
-        self.assertRedirects(respuesta, reverse("piso:picking"), fetch_redirect_response=False)
-        self.assertContains(respuesta, "liberado con su avance")
+        respuesta = self.client.get(self.url_detalle)
+        self.assertContains(respuesta, 'value="detener"')
+        self.assertNotContains(respuesta, 'value="soltar"')  # Soltar desapareció: todo bloqueo es Detener
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.client.post(self.url_detalle, {"accion": "detener", "motivo": "No encuentro el producto", "detalle": "el six no está en A-01-1"}, follow=True)
+        self.assertRedirects(respuesta, reverse("piso:home"), fetch_redirect_response=False)
+        self.assertContains(respuesta, "detenido (INC-")
+        self.assertContains(respuesta, "Detenidos en piso")
         self.pedido.refresh_from_db()
-        self.assertIsNone(self.pedido.asignado_a)
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+        self.assertEqual((self.pedido.detenido, self.pedido.asignado_a, self.pedido.estado), (True, None, Pedido.EN_PICKING))
         self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)  # el avance no se pierde
-        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.pedido.pk), accion="pedido_soltado")
-        self.assertEqual((evento.delta["de"], evento.delta["motivo"]), ("piso1", "Faltante de producto"))
-        # Otro operador lo ve en la lista, lo abre y al escanear se vuelve su
-        # dueño; el avance del anterior se reinicia (Chema 2026-09-22: se
-        # re-escanea desde el carrito), así que queda 0 + la pieza recién leída.
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.pedido.pk), accion="pedido_detenido")
+        self.assertEqual((evento.delta["origen"], evento.delta["de"], evento.motivo), ("manual", "piso1", "No encuentro el producto: el six no está en A-01-1"))
+        det = Incidencia.objects.get(pedido=self.pedido, tipo=Incidencia.TIPO_DET)
+        self.assertEqual((det.interna, det.prioridad, det.origen), (True, Incidencia.P1, Incidencia.ORIGEN_MANUAL))
+        self.assertTrue(det.mensajes.filter(texto="Detenido en piso (piso1): No encuentro el producto: el six no está en A-01-1").exists())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("DET", mail.outbox[0].subject)
+        # Fuera de la cola: ni EMPEZAR lo da (ni a otro operador) ni se abre por URL; la lista lo marca.
         otro = User.objects.create_user("piso2", password="pin-piso")
         PerfilUsuario.objects.create(usuario=otro, rol=PerfilUsuario.ROL_PISO, pin="2222")
         self.client.force_login(otro)
-        respuesta = self.client.get(reverse("piso:picking"))
-        self.assertContains(respuesta, self.pedido.folio)
+        respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
+        self.assertContains(respuesta, "Todo al día")
+        respuesta = self.client.get(self.url_detalle, follow=True)
+        self.assertContains(respuesta, "no está en tu cola")
+        self.assertContains(self.client.get(reverse("piso:picking")), "detenido · Mesa")
+        # Mesa resuelve: vuelve a la cola, el primero, para quien dé EMPEZAR; otro correo avisa.
+        with self.captureOnCommitCallbacks(execute=True):
+            resolver(det, "Ya apareció el producto en B-02.", self.operador)
+        self.pedido.refresh_from_db()
+        self.assertFalse(self.pedido.detenido)
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk), accion="pedido_reanudado").exists())
+        self.assertEqual(len(mail.outbox), 2)
+        self.assertIn("se reanudó", mail.outbox[1].subject)
+        respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"})
+        self.assertRedirects(respuesta, self.url_detalle, fetch_redirect_response=False)
+        # Al escanear, piso2 se vuelve dueño y el avance del anterior se reinicia (re-escanea desde el carrito).
         self.client.post(self.url_detalle, {"codigo": "7501234567890", "cantidad": "1"})
         self.pedido.refresh_from_db()
         self.assertEqual((self.pedido.asignado_a, self.pedido.lineas.get().cantidad_pickeada), (otro, 1))
-        # Y el primero ya no puede soltar lo que no es suyo.
+        # Y el primero ya no puede detener lo que no es suyo.
         self.client.force_login(self.operador)
-        respuesta = self.client.post(self.url_detalle, {"accion": "soltar"}, follow=True)
+        respuesta = self.client.post(self.url_detalle, {"accion": "detener", "motivo": "Otro", "detalle": "x"}, follow=True)
         self.assertContains(respuesta, "lo tiene piso2")
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.asignado_a, otro)

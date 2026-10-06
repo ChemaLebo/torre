@@ -180,6 +180,11 @@ class Pedido(models.Model):
     ts_entregado = models.DateTimeField(null=True, blank=True)
     # Flag ortogonal: un pedido EN_TRANSITO puede tener incidencia; no es estado terminal.
     incidencia_activa = models.BooleanField(default=False)
+    # Detenido en piso (Chema 2026-10-06): un pedido con problema (guía fallida,
+    # sin paquetería, "no encuentro el producto"…) sale de la cola de Mi turno
+    # con una incidencia interna DET/PAQ; vuelve a la cola, el primero por
+    # antigüedad, cuando Mesa la resuelve (pedidos.services.reanudar_pedido).
+    detenido = models.BooleanField(default=False, db_index=True)
     # Dueño del pedido en piso (sep-2026): se asigna al iniciar picking y el
     # pedido DESAPARECE para los demás operadores hasta la última foto de
     # cierre. Cambio de manos = transferencia con ACEPTACIÓN del receptor.

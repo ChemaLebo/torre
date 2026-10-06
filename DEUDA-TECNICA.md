@@ -674,3 +674,18 @@ compatibilidad y se puede retirar; el tope de acomodo por lote en el
 navegador usa "lo de antes en recepción" del SKU completo (el servidor
 valida el total, no por lote, porque lo que está en recepción no tiene lote).
 
+## Cola única, detenidos y correos de incidencias — hecho 2026-10-06
+
+Una sola puerta (EMPEZAR / CONTINUAR), FIFO global, pedidos detenidos con
+incidencia DET, correos a la lista de `configuracion.CorreoIncidencias`
+(fija + por cliente). Ver CONVENTIONS.
+
+**Queda:** las pantallas de picking/empaque todavía tienen "Transferir" a
+otro operador (se conservó; el receptor acepta). `soltar_pedido` ya no
+tiene botón; se puede retirar con sus pruebas de servicio. Mesa no puede
+detener desde Mesa (solo el piso o Torre sola); si hace falta, botón en el
+detalle del pedido. Un pedido PENDIENTE detenido (p. ej. PAQ al ingerir)
+no es visible en Mi turno más que en el contador; la tarjeta de Mesa es la
+fuente. Las variables del `.env` que son ajustes de sistema (ZONA_DESBORDE,
+TORRE_PESO_MODO, EMAIL_REPLY_TO, pausa de incidencias) migran a
+`apps/configuracion` cuando se toquen.

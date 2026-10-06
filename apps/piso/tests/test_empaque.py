@@ -285,3 +285,27 @@ class ListaEmpaqueTests(PisoTestCase):
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, empacado.folio)
         self.assertContains(respuesta, "piso2")
+
+
+class DetenerEnEmpaqueTests(PisoTestCase):
+    """Detener también vive en el wizard de empaque (Chema 2026-10-06)."""
+
+    def setUp(self):
+        self.login_piso()
+        self.crear_stock(cantidad=50)
+
+    def test_detener_desde_el_wizard(self):
+        from apps.incidencias.models import Incidencia
+
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        url = reverse("piso:empaque_pedido", args=[pedido.pk])
+        self.assertContains(self.client.get(url), 'value="detener"')
+        respuesta = self.client.post(url, {"accion": "detener", "motivo": "No cabe / falta insumo de empaque"}, follow=True)
+        self.assertRedirects(respuesta, reverse("piso:home"), fetch_redirect_response=False)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.detenido, pedido.asignado_a, pedido.estado), (True, None, Pedido.EMPACADO))
+        self.assertTrue(Incidencia.objects.filter(pedido=pedido, tipo=Incidencia.TIPO_DET, interna=True).exists())
+        self.assertNotContains(self.client.get(reverse("piso:empaque")), "Completar")  # no está en la mesa
+        self.assertRedirects(self.client.get(url), reverse("piso:home"), fetch_redirect_response=False)
+        respuesta = self.client.post(url, {"accion": "detener", "motivo": "Otro", "detalle": ""}, follow=True)
+        self.assertContains(respuesta, "no está en tu cola")  # ya detenido: ni se abre

@@ -464,4 +464,20 @@ function agregarRenglonKit(kitPk) {
 })();
 </script>
 {% endif %}
+{% if paso != "exito" %}
+{# Detener (Chema 2026-10-06, sustituye a Soltar): sale de la cola con su avance y abre una incidencia interna con el motivo; Mesa lo reanuda al resolver. #}
+<details class="colapsable mt">
+  <summary>Detener este pedido · algo no deja seguir</summary>
+  <form method="post" class="colapsable-cuerpo" onsubmit="return confirm('¿Detener {{ pedido.folio }}? Sale de la cola y Mesa recibe la incidencia; tú tomas el que sigue.');">{% csrf_token %}
+    <input type="hidden" name="accion" value="detener">
+    <div class="fila">
+      <select name="motivo" class="crece" aria-label="Motivo">
+        {% for valor, nombre in motivos_detener %}<option value="{{ valor }}">{{ nombre }}</option>{% endfor %}
+      </select>
+      <input type="text" name="detalle" class="crece" maxlength="300" placeholder="Detalle (qué producto, qué pasó)" aria-label="Detalle">
+      <button class="btn chico peligro" type="submit">Detener</button>
+    </div>
+  </form>
+</details>
+{% endif %}
 {% endblock %}

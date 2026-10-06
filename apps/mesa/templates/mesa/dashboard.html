@@ -84,6 +84,31 @@
   </div>
 </div>
 
+{# Detenidos en piso (Chema 2026-10-06): fuera de la cola de Mi turno hasta que Mesa resuelva su DET/PAQ. #}
+<div class="card mt">
+  <div class="titulo"><h3>Detenidos en piso</h3><span class="pill {% if detenidos %}crit{% else %}ok{% endif %}">{{ detenidos|length }}</span></div>
+  {% if detenidos %}
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Pedido</th><th>Motivo</th><th>Desde</th><th>Reloj SLA</th></tr></thead>
+      <tbody>
+        {% for d in detenidos %}
+        <tr>
+          <td class="mono"><a href="{% url 'mesa:pedido_detalle' d.pedido.pk %}">{{ d.pedido.folio }}</a> · {{ d.pedido.cliente.nombre }} <span class="small muted">{{ d.pedido.get_estado_display }}</span></td>
+          <td>{{ d.motivo|truncatechars:140 }} <a class="small" href="{% url 'mesa:incidencia_detalle' d.incidencia.pk %}">{{ d.incidencia.folio }} →</a></td>
+          <td class="mono">{{ d.incidencia.ts_apertura|date:"d/M H:i" }}</td>
+          <td><span class="pill {{ d.incidencia.reloj_pill }}">{{ d.incidencia.reloj_texto }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted mt">Resolver (o cerrar) la incidencia reanuda el pedido: vuelve a la cola del piso, el primero por antigüedad.</p>
+  {% else %}
+  <p class="muted">Ningún pedido detenido en el piso.</p>
+  {% endif %}
+</div>
+
 <div class="grid g2 mt">
   <div class="card">
     <div class="titulo"><h3>Guías con retraso</h3><span class="small">pasaron su fecha compromiso sin entregarse</span></div>

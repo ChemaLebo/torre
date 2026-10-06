@@ -275,6 +275,13 @@ def _reclamar_si_libre(pedido, request):
     return reiniciado
 
 
+def _motivos_detener():
+    """Motivos del botón Detener (catálogo en pedidos.services, lazy por contrato)."""
+    from apps.pedidos.services import MOTIVOS_DETENER
+
+    return MOTIVOS_DETENER
+
+
 def _operadores_piso(request):
     from django.contrib.auth.models import User
     return list(
@@ -283,22 +290,30 @@ def _operadores_piso(request):
     )
 
 
-def _pedido_soltar(request, pedido):
-    """Soltar el pedido en picking: queda libre con su avance para que lo tome
-    cualquier operador; el que lo soltó regresa a la lista a tomar otro."""
-    from apps.pedidos.services import soltar_pedido  # lazy por contrato
+def _pedido_detener(request, pedido, volver):
+    """Detener el pedido (Chema 2026-10-06, sustituye a "Soltar"): sale de la
+    cola con su avance y una incidencia interna DET con el motivo; Mesa se
+    entera (push + correo) y lo reanuda al resolver. Quien lo detuvo vuelve
+    a Mi turno a tomar el que sigue."""
+    from apps.pedidos.services import detener_pedido  # lazy por contrato
 
     motivo = (request.POST.get("motivo") or "").strip()[:120]
+    detalle = (request.POST.get("detalle") or "").strip()[:300]
+    if motivo == "Otro" or not motivo:
+        motivo = detalle or motivo
+    elif detalle:
+        motivo = f"{motivo}: {detalle}"
     try:
-        soltar_pedido(pedido, request.user, motivo=motivo)
+        incidencia = detener_pedido(pedido, request.user, motivo)
     except ValueError as exc:
         messages.error(request, str(exc))
-        return redirect("piso:picking_pedido", pk=pedido.pk)
+        return redirect(volver, pk=pedido.pk)
+    folio = f" ({incidencia.folio})" if incidencia is not None else ""
     messages.success(
         request,
-        f"{pedido.folio} liberado con su avance: lo puede tomar cualquier operador desde 'En picking'.",
+        f"{pedido.folio} detenido{folio}: Mesa ya lo sabe; cuando lo resuelva vuelve a la cola. Toma el que sigue.",
     )
-    return redirect("piso:picking")
+    return redirect("piso:home")
 
 
 def _pedido_transferir(request, pedido):
@@ -329,7 +344,7 @@ def _pendientes_por_prioridad():
     ve en la lista de picking con su tag y espera stock."""
     corte = _corte_hoy()
     pendientes = [
-        p for p in Pedido.objects.filter(estado=Pedido.PENDIENTE)
+        p for p in Pedido.objects.filter(estado=Pedido.PENDIENTE, detenido=False)
         .select_related("cliente").prefetch_related("lineas__sku")
         if p.lineas_por_surtir
     ]
@@ -352,7 +367,7 @@ def _empaque_incompleto(user):
     cuentan. Lo de otro operador es suyo hasta transferencia aceptada."""
     from django.db.models import Q
     candidatos = (
-        Pedido.objects.filter(estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA))
+        Pedido.objects.filter(estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA), detenido=False)
         .filter(Q(asignado_a__isnull=True) | Q(asignado_a=user))
         .select_related("cliente").prefetch_related("lineas__sku", "paquetes__guias", "guias")
     )
@@ -369,7 +384,7 @@ def _empaque_incompleto(user):
 def _picking_a_medias(user, libre=False):
     """EN_PICKING sin terminar: MÍOS (libre=False) o SIN dueño (libre=True: los
     soltaron; al escanear se vuelven míos), el más viejo primero."""
-    qs = Pedido.objects.filter(estado=Pedido.EN_PICKING)
+    qs = Pedido.objects.filter(estado=Pedido.EN_PICKING, detenido=False)
     qs = qs.filter(asignado_a__isnull=True) if libre else qs.filter(asignado_a=user)
     return _por_antiguedad([
         p for p in qs.select_related("cliente").prefetch_related("lineas__sku")
@@ -486,11 +501,12 @@ def home(request):
     recepciones_abiertas = list(
         OrdenEntrada.objects.filter(estado__in=ESTADOS_ASN_ABIERTOS).select_related("cliente")
     )
-    pendientes = list(Pedido.objects.filter(estado=Pedido.PENDIENTE).select_related("cliente"))
+    pendientes = list(Pedido.objects.filter(estado=Pedido.PENDIENTE, detenido=False).select_related("cliente"))
     en_picking = list(
-        Pedido.objects.filter(estado=Pedido.EN_PICKING)
+        Pedido.objects.filter(estado=Pedido.EN_PICKING, detenido=False)
         .select_related("cliente").prefetch_related("lineas__sku")
     )
+    detenidos = Pedido.objects.filter(detenido=True).count()
     if not _es_mesa(request):
         # Los pedidos con dueño desaparecen para los demás operadores.
         en_picking = [p for p in en_picking if _pedido_libre_o_mio(p, request.user)]
@@ -501,7 +517,7 @@ def home(request):
     # mesa, a nombre de quien lo tiene: "Completar empaquetado".
     en_empaque = list(
         Pedido.objects.filter(
-            estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO],
+            estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO], detenido=False,
         ).select_related("cliente", "asignado_a").prefetch_related("paquetes__guias", "guias")
     )
     # Esperando inventario tras una salida parcial: ni en el corral ni en la mesa.
@@ -551,6 +567,7 @@ def home(request):
         "es_mesa": _es_mesa(request),
         "todo_al_dia": todo_al_dia,
         "siguiente": siguiente,
+        "detenidos": detenidos,
         "transferencias": transferencias,
         "recepciones_abiertas": recepciones_abiertas,
         "num_por_pickear": total_picking,
@@ -1273,8 +1290,8 @@ def picking_pedido(request, pk):
         if request.POST.get("accion") == "transferir":
             _pedido_transferir(request, pedido)
             return redirect("piso:picking_pedido", pk=pedido.pk)
-        if request.POST.get("accion") == "soltar":
-            return _pedido_soltar(request, pedido)
+        if request.POST.get("accion") == "detener":
+            return _pedido_detener(request, pedido, "piso:picking_pedido")
         reiniciado = _reclamar_si_libre(pedido, request)
         return _picking_escanear(request, pedido, reiniciado=reiniciado)
 
@@ -1282,6 +1299,7 @@ def picking_pedido(request, pk):
     pickeadas, total, _ = _avance(pedido)
     contexto = {
         "reinicia_al_tomar": _reinicia_al_tomar(pedido, request) and pickeadas > 0,
+        "motivos_detener": _motivos_detener(),
         "quien_lo_solto": _quien_lo_solto(pedido),
         "operadores": _operadores_piso(request),
         "paquetes": _paquetes_con_lineas(pedido),
@@ -1522,6 +1540,8 @@ def empaque_pedido(request, pk):
 
     if request.method == "POST":
         accion = request.POST.get("accion") or "empacar"
+        if accion == "detener":
+            return _pedido_detener(request, pedido, "piso:empaque_pedido")
         if accion == "transferir":
             _pedido_transferir(request, pedido)
             return redirect("piso:empaque_pedido", pk=pedido.pk)
@@ -1786,6 +1806,7 @@ def _render_paso_empacar(request, pedido, elegida=None):
             })
 
     contexto["operadores"] = _operadores_piso(request)
+    contexto["motivos_detener"] = _motivos_detener()
     contexto["duenio"] = pedido.asignado_a
     if cajas and pendientes:
         caja = pendientes[0]

@@ -31,7 +31,7 @@
             {% if p.piezas_sin_inventario %}<span class="pill crit">Sin inventario · {{ p.piezas_sin_inventario }} pza{{ p.piezas_sin_inventario|pluralize }}</span>{% endif %}
           </div>
         </div>
-        <span class="pill{% if p.lugar == 1 %} accent{% endif %}">{% if p.nada_que_surtir %}espera inventario{% else %}{{ p.lugar }}º en la cola{% endif %}</span>
+        <span class="pill{% if p.lugar == 1 %} accent{% endif %}{% if p.detenido %} crit{% endif %}">{% if p.detenido %}detenido · Mesa{% elif p.nada_que_surtir %}espera inventario{% else %}{{ p.lugar }}º en la cola{% endif %}</span>
       </div>
       {% if p.nada_que_surtir %}
       <p class="small muted mt">Nada que surtir todavía: todas sus líneas están sin inventario. Sale solo cuando entre stock.</p>
@@ -50,7 +50,7 @@
         <span class="num">{{ p.pickeadas }} / {{ p.total_piezas }}</span>
       </div>
       <div class="medidor mt {% if p.avance_pct == 100 %}ok{% endif %}"><span style="width:{{ p.avance_pct }}%"></span></div>
-      {% if p.asignado_a %}<p class="small muted mt">Lo está surtiendo {{ p.asignado_a.username }}.</p>{% else %}<p class="small muted mt">Libre: se lo da Mi turno a quien le toque.</p>{% endif %}
+      {% if p.detenido %}<p class="small muted mt"><span class="pill crit">detenido · Mesa</span> Vuelve a la cola cuando Mesa resuelva.</p>{% elif p.asignado_a %}<p class="small muted mt">Lo está surtiendo {{ p.asignado_a.username }}.</p>{% else %}<p class="small muted mt">Libre: se lo da Mi turno a quien le toque.</p>{% endif %}
     </div>
     {% endfor %}
     {# Fulfillment parcial: una parte ya salió; el resto espera inventario y vuelve solo a esta lista. #}

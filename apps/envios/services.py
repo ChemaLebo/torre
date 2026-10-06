@@ -699,7 +699,10 @@ def generar_guias(pedido):
 
     if error_pendiente is not None:
         # Las guías que sí salieron quedan committeadas; el pedido sigue
-        # EMPACADO y recuperable desde Salida (reintento = solo lo que falta).
+        # EMPACADO y recuperable desde el empaque (reintento = solo lo que
+        # falta). Detenido en piso (Chema 2026-10-06): sale de la cola con su
+        # incidencia DET para que Mesa vea el error del carrier y lo reanude.
+        _detener_por_guia(pedido, str(error_pendiente))
         raise error_pendiente
 
     if pedido.estado == "EMPACADO":
@@ -1268,6 +1271,17 @@ def _transicionar_pedido(pedido, destino, motivo=""):
         except Exception:  # noqa: BLE001, S110 — la compensación es registro; la entrega no se deshace
             pass
     return avanzo
+
+
+def _detener_por_guia(pedido, detalle):
+    """El carrier falló al comprar la guía: el pedido se detiene en piso con
+    incidencia DET (lazy por contrato, best-effort: el error se levanta igual)."""
+    try:
+        from apps.pedidos.services import detener_pedido  # lazy por contrato
+
+        detener_pedido(pedido, None, f"El carrier no dio la guía: {detalle}"[:900], origen="auto")
+    except Exception:  # noqa: BLE001 — el aviso jamás tapa el error real
+        registrar_evento("pedido", pedido.pk, "pedido_detenido_fallo", cliente=pedido.cliente, motivo=detalle[:300])
 
 
 def _avisar_sin_paqueteria(pedido, detalle):

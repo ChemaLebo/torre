@@ -126,6 +126,13 @@
   </div>
   {% endif %}
 
+  {% if detenidos %}
+  <div class="card">
+    <div class="titulo"><h2>Detenidos en piso</h2><span class="pill crit">{{ detenidos }}</span></div>
+    <p class="small">{{ detenidos }} pedido{{ detenidos|pluralize }} fuera de la cola con incidencia; Mesa {{ detenidos|pluralize:"lo,los" }} reanuda al resolver.</p>
+  </div>
+  {% endif %}
+
   {% if staging %}
   <div class="card">
     <div class="titulo"><h2>En salida</h2><a class="btn chico" href="{% url 'piso:salida' %}">Ir a salida</a></div>

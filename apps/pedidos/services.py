@@ -1578,6 +1578,81 @@ def soltar_pedido(pedido, usuario, motivo=""):
     return pedido
 
 
+MOTIVOS_DETENER = [
+    ("No encuentro el producto", "No encuentro el producto"),
+    ("Producto dañado", "Producto dañado"),
+    ("No cabe / falta insumo de empaque", "No cabe / falta insumo de empaque"),
+    ("Otro", "Otro"),
+]
+
+
+def detener_pedido(pedido, usuario, motivo, origen="manual"):
+    """Detenido en piso (Chema 2026-10-06): el pedido sale de la cola de Mi
+    turno (detenido=True, sin dueño, con su avance), queda la incidencia
+    interna DET con el motivo (una por pedido: un segundo motivo se suma al
+    caso) y Mesa se entera por push y correo. `usuario` = quien lo detiene
+    (su dueño o Mesa); None cuando Torre lo detiene sola (origen "auto":
+    guía fallida con el carrier). Mesa lo reanuda al resolver la incidencia.
+    Sustituye a "Soltar pedido": un bloqueo ya no es invisible para Mesa."""
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise ValueError("Di por qué se detiene el pedido.")
+    if usuario is not None:
+        es_mesa = getattr(getattr(usuario, "perfil", None), "rol", "") == "mesa" or getattr(usuario, "is_superuser", False)
+        if pedido.asignado_a_id not in (None, usuario.pk) and not es_mesa:
+            raise ValueError(f"{pedido.folio} no es tuyo: solo su dueño (o Mesa) puede detenerlo.")
+    if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+        raise ValueError(f"{pedido.folio} está {pedido.get_estado_display()}: ya no está en el piso.")
+    with transaction.atomic():
+        anterior = pedido.asignado_a
+        pedido.detenido = True
+        pedido.asignado_a = None
+        pedido.transferencia_a = None
+        pedido.save(update_fields=["detenido", "asignado_a", "transferencia_a", "actualizado"])
+        if anterior is not None:
+            registrar_evento(
+                "pedido", pedido.pk, "pedido_soltado", actor=usuario, cliente=pedido.cliente,
+                delta={"de": _nombre_usuario(anterior), "motivo": motivo},
+                motivo=f"Detenido: {motivo}"[:300],
+            )
+        registrar_evento(
+            "pedido", pedido.pk, "pedido_detenido", actor=usuario, cliente=pedido.cliente,
+            delta={"origen": origen, "estado": pedido.estado, "de": _nombre_usuario(anterior) if anterior else None},
+            motivo=motivo[:300],
+        )
+        incidencia = None
+        try:
+            from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+            from apps.incidencias.services import abrir_incidencia  # lazy por contrato
+        except ImportError:
+            pass
+        else:
+            quien = f" ({_nombre_usuario(usuario)})" if usuario is not None else ""
+            incidencia = abrir_incidencia(
+                pedido.cliente, Incidencia.TIPO_DET,
+                Incidencia.ORIGEN_AUTO if origen == "auto" else Incidencia.ORIGEN_MANUAL,
+                pedido=pedido, texto=f"Detenido en piso{quien}: {motivo}", interna=True,
+            )
+    return incidencia
+
+
+def reanudar_pedido(pedido, actor, motivo=""):
+    """Mesa resolvió el problema: el pedido vuelve a la cola de Mi turno, el
+    primero por antigüedad (sigue con su `creado` / `ts_picking`), sin dueño
+    (lo toma quien le toque). Las incidencias DET/PAQ abiertas se resuelven
+    al reanudar desde ellas; si quedara otra abierta, no se toca. Sin efecto
+    si no estaba detenido."""
+    if not pedido.detenido:
+        return False
+    pedido.detenido = False
+    pedido.save(update_fields=["detenido", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "pedido_reanudado", actor=actor, cliente=pedido.cliente,
+        motivo=(motivo or "Mesa reanudó el pedido: vuelve a la cola, el primero por antigüedad.")[:300],
+    )
+    return True
+
+
 def aceptar_transferencia(pedido, usuario):
     """El destinatario acepta: cambia de manos y, si sigue en picking, el
     avance se reinicia (Chema 2026-09-22: quien recibe re-escanea desde el

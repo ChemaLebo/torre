@@ -98,15 +98,29 @@ class WizardCajasTests(PisoTestCase):
         self.assertEqual(imprimir.call_count, 2)  # carrier + interna de la que sí salió
         self.assertContains(respuesta, "El carrier no respondió")
         self.assertContains(respuesta, "que sí tienen guía ya se mandaron a imprimir")
+        # Guía fallida = pedido detenido en piso (Chema 2026-10-06): sale de la cola sin dueño,
+        # con su incidencia DET para Mesa; el operador vuelve a Mi turno.
+        from apps.incidencias.models import Incidencia
+        self.pedido.refresh_from_db()
+        self.assertEqual((self.pedido.estado, self.pedido.detenido, self.pedido.asignado_a), (Pedido.EMPACADO, True, None))
+        det = Incidencia.objects.get(pedido=self.pedido, tipo=Incidencia.TIPO_DET)
+        self.assertTrue(det.interna)
+        self.assertTrue(det.mensajes.filter(texto__contains="El carrier no dio la guía: envia.com regresó error: 1300").exists())
+        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
+        home = self.client.get(reverse("piso:home"))
+        self.assertNotContains(home, "sin guía: caja 1")
+        self.assertContains(home, "Detenidos en piso")
+        self.assertRedirects(self.client.get(self.url), reverse("piso:home"), fetch_redirect_response=False)
+        # Mesa resuelve la DET: el pedido vuelve a la cola, CONTINUAR abre el wizard y el reintento vive ahí.
+        from apps.incidencias.services import resolver
+        resolver(det, "El carrier ya responde; reintenta la guía.", self.operador)
+        self.pedido.refresh_from_db()
+        self.assertFalse(self.pedido.detenido)
+        self.assertContains(self.client.get(reverse("piso:home")), "sin guía: caja 1")
+        respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
         self.assertContains(respuesta, "Sin guía: caja 1")
-        self.assertContains(respuesta, "(caja 2)")
         self.assertContains(respuesta, 'value="generar_guia"')  # el reintento vive aquí
         self.assertContains(respuesta, "Reintentar guía · caja 1")
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)
-        # Sin guía en la caja 1 el pedido no llega a Salida: sigue en la mesa.
-        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
-        self.assertContains(self.client.get(reverse("piso:home")), "sin guía: caja 1")
 
         # Reintentar guía desde el cierre: ahora el carrier responde y sale la que faltaba.
         with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
