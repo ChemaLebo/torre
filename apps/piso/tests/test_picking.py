@@ -15,9 +15,8 @@ class PickingPisoTests(PisoTestCase):
         self.url_detalle = reverse("piso:picking_pedido", args=[self.pedido.pk])
 
     def _iniciar(self):
-        self.client.post(reverse("piso:picking"), {
-            "accion": "iniciar", "pedido_id": self.pedido.pk,
-        })
+        """EMPEZAR en Mi turno: la única puerta (Chema 2026-10-06); el pedido del test es el más viejo."""
+        self.client.post(reverse("piso:home"), {"accion": "siguiente"})
         self.pedido.refresh_from_db()
 
     def test_iniciar_picking_transiciona_y_estampa_ts(self):
@@ -78,20 +77,21 @@ class PickingPisoTests(PisoTestCase):
         self.assertEqual(nombres, ["Cervecería Colima", "Infinitea"])
         self.assertContains(respuesta, "lo tiene <b>piso1</b>")
         self.assertContains(respuesta, "Lo está surtiendo piso1")
-        self.assertContains(respuesta, "Iniciar picking")  # el de Infinitea, pendiente, sí se puede tomar
-        self.assertNotContains(respuesta, f'href="{self.url_detalle}"')  # el de piso1 no se abre
+        self.assertContains(respuesta, "1º en la cola")  # el de Infinitea, pendiente, es el que sigue
+        self.assertNotContains(respuesta, f'href="{self.url_detalle}"')  # ningún botón: la puerta es Mi turno
 
-    def test_iniciar_pedido_ya_tomado_avisa_la_carrera(self):
-        # Dos tablets con la misma lista: el segundo POST de "iniciar" llega
-        # cuando el pedido ya está EN_PICKING — la vista valida bajo lock y
-        # avisa sin drama (jamás doble inicio ni transición inválida).
-        self._iniciar()
+    def test_la_lista_ya_no_toma_pedidos(self):
+        # Chema 2026-10-06: la lista es informativa; un POST viejo (tablet con
+        # la pantalla cacheada) no inicia nada y manda a Mi turno.
         respuesta = self.client.post(reverse("piso:picking"), {
             "accion": "iniciar", "pedido_id": self.pedido.pk,
         }, follow=True)
-        self.assertContains(respuesta, "Otro operador ya tomó")
+        self.assertContains(respuesta, "la cola decide")
         self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+        self.assertEqual(self.pedido.estado, Pedido.PENDIENTE)
+        respuesta = self.client.get(reverse("piso:picking"))
+        self.assertContains(respuesta, "1º en la cola")
+        self.assertNotContains(respuesta, "Iniciar picking")
 
     def test_escaneo_equivocado_no_pickea_y_avisa(self):
         self._iniciar()
@@ -155,13 +155,13 @@ class PickingParcialTests(PisoTestCase):
         self.url_detalle = reverse("piso:picking_pedido", args=[self.pedido.pk])
 
     def _iniciar(self):
-        self.client.post(reverse("piso:picking"), {"accion": "iniciar", "pedido_id": self.pedido.pk})
+        self.client.post(reverse("piso:home"), {"accion": "siguiente"})
         self.pedido.refresh_from_db()
 
-    def test_la_lista_avisa_y_deja_iniciar(self):
+    def test_la_lista_avisa_y_la_cola_lo_da(self):
         respuesta = self.client.get(reverse("piso:picking"))
         self.assertContains(respuesta, "Sin inventario · 1 pza")
-        self.assertContains(respuesta, "Iniciar picking")
+        self.assertContains(respuesta, "1º en la cola")
         self._iniciar()
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
 
@@ -201,11 +201,7 @@ class PickingParcialTests(PisoTestCase):
         pedido = self.crear_pedido(cantidad=1, reservar_stock=False)
         respuesta = self.client.get(reverse("piso:picking"))
         self.assertContains(respuesta, "espera inventario")
-        self.assertNotContains(respuesta, "Iniciar picking")
-        respuesta = self.client.post(
-            reverse("piso:picking"), {"accion": "iniciar", "pedido_id": pedido.pk}, follow=True,
-        )
-        self.assertContains(respuesta, "no tiene nada que surtir")
+        self.assertNotContains(respuesta, "en la cola")
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.PENDIENTE)
         # EMPEZAR en Mi turno tampoco lo ofrece: no hay ola que empezar.
@@ -223,7 +219,7 @@ class PickingParcialTests(PisoTestCase):
         self.assertContains(respuesta, pedido.folio)
         self.assertContains(respuesta, "espera inventario")
         self.assertContains(respuesta, "ya salió una parte")
-        self.assertNotContains(respuesta, "Iniciar picking")
+        self.assertNotContains(respuesta, "en la cola")
         self.assertNotContains(self.client.get(reverse("piso:salida")), pedido.folio)
         home = self.client.get(reverse("piso:home"))
         self.assertNotContains(home, pedido.folio)

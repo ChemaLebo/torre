@@ -215,3 +215,76 @@ class OrdenDeEmpezarTests(PisoTestCase):
         LineaPedido.objects.create(pedido=pedido, sku=agotado, cantidad=1)
         respuesta = self.client.get(self.url)
         self.assertIsNone(respuesta.context["siguiente"])
+
+
+class ColaUnicaTests(PisoTestCase):
+    """Chema 2026-10-06: EMPEZAR / CONTINUAR es la ÚNICA puerta. Un operador
+    no abre por URL un pedido que no es suyo ni el que la cola le da (FIFO
+    global, sin importar cliente); Mesa sí, pero queda el evento
+    `tomado_fuera_de_orden`."""
+
+    def setUp(self):
+        from apps.core.models import Cliente
+
+        self.login_piso()
+        self.crear_stock(cantidad=50)
+        self.viejo = self.crear_pedido(cantidad=1)
+        self.nuevo = self.crear_pedido(cantidad=1)
+        otro_cliente = Cliente.objects.create(nombre="Infinitea", slug="infinitea", integracion_envios="envia")
+        Pedido.objects.filter(pk=self.viejo.pk).update(cliente=otro_cliente)  # el más viejo es de OTRO cliente
+
+    def test_por_url_solo_se_abre_el_que_toca(self):
+        from apps.pedidos.services import iniciar_picking
+
+        iniciar_picking(self.nuevo, self.operador)  # mío (p. ej. una transferencia): se abre aunque no sea el más viejo
+        self.assertEqual(self.client.get(reverse("piso:picking_pedido", args=[self.nuevo.pk])).status_code, 200)
+        # Dos pickings libres: la cola da el más viejo (de Infinitea, FIFO global); el otro no se abre.
+        iniciar_picking(self.viejo, self.operador)
+        Pedido.objects.filter(pk__in=[self.nuevo.pk, self.viejo.pk]).update(asignado_a=None)
+        Pedido.objects.filter(pk=self.viejo.pk).update(ts_picking=self.viejo.creado)  # se empezó antes
+        respuesta = self.client.get(reverse("piso:picking_pedido", args=[self.nuevo.pk]), follow=True)
+        self.assertRedirects(respuesta, reverse("piso:home"), fetch_redirect_response=False)
+        self.assertContains(respuesta, f"{self.nuevo.folio} no es el que sigue: te toca {self.viejo.folio}")
+        respuesta = self.client.post(
+            reverse("piso:picking_pedido", args=[self.nuevo.pk]), {"codigo": "7501234567890", "cantidad": "1"},
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 409)
+        self.assertIn("te toca", respuesta.json()["error"])
+        self.assertIsNone(Pedido.objects.get(pk=self.nuevo.pk).asignado_a)  # no se lo quedó
+        # EMPEZAR manda al que toca, y ese sí se abre.
+        respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"})
+        self.assertRedirects(respuesta, reverse("piso:picking_pedido", args=[self.viejo.pk]), fetch_redirect_response=False)
+        self.assertEqual(self.client.get(reverse("piso:picking_pedido", args=[self.viejo.pk])).status_code, 200)
+
+    def test_empaque_por_url_tambien_sigue_la_cola(self):
+        from apps.pedidos.services import confirmar_linea_pick, iniciar_picking
+
+        iniciar_picking(self.nuevo, self.operador)
+        confirmar_linea_pick(self.nuevo.lineas.get(), 1, self.operador)
+        Pedido.objects.filter(pk=self.nuevo.pk).update(asignado_a=None)  # listo para empacar, libre
+        # A medias y libre va antes que el pendiente viejo: la cola lo da y se abre.
+        self.assertEqual(self.client.get(reverse("piso:empaque_pedido", args=[self.nuevo.pk])).status_code, 200)
+        # Un empacado sin guía más viejo (libre) pasa adelante: el otro ya no se abre.
+        empacado = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        Pedido.objects.filter(pk=empacado.pk).update(asignado_a=None, ts_picking=self.viejo.creado)
+        respuesta = self.client.get(reverse("piso:empaque_pedido", args=[self.nuevo.pk]), follow=True)
+        self.assertContains(respuesta, f"te toca {empacado.folio}")
+
+    def test_mesa_abre_por_url_y_queda_el_evento(self):
+        from apps.core.models import EventoAuditoria
+        from apps.pedidos.services import iniciar_picking
+
+        iniciar_picking(self.nuevo, self.operador)
+        iniciar_picking(self.viejo, self.operador)
+        Pedido.objects.filter(pk__in=[self.nuevo.pk, self.viejo.pk]).update(asignado_a=None)
+        Pedido.objects.filter(pk=self.viejo.pk).update(ts_picking=self.viejo.creado)
+        mesa = get_user_model().objects.create_user("mesa-cola", password="x12345678")
+        PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
+        self.client.force_login(mesa)
+        self.assertEqual(self.client.get(reverse("piso:picking_pedido", args=[self.nuevo.pk])).status_code, 200)
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.nuevo.pk), accion="tomado_fuera_de_orden")
+        self.assertEqual(evento.delta["tocaba"], self.viejo.folio)
+        # El que sí tocaba no deja evento.
+        self.client.get(reverse("piso:picking_pedido", args=[self.viejo.pk]))
+        self.assertEqual(EventoAuditoria.objects.filter(accion="tomado_fuera_de_orden").count(), 1)

@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Picking{% endblock %}
 {% block content %}
-{# Todos los pedidos por surtir, separados por cliente: el operador elige cuál toma. Los que tiene otro operador se ven sin botón. #}
+{# Lista informativa (Chema 2026-10-06): todos los pedidos por surtir con su lugar en la cola y quién tiene cada uno. Aquí no se toma ninguno: la única puerta es EMPEZAR / CONTINUAR en Mi turno. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Picking</div>
     <h1>Picking</h1>
     <div class="small"><b>{{ pendientes|length }}</b> por iniciar · <b>{{ en_picking|length }}</b> en picking</div>
   </div>
-  <div class="quien">Si prefieres que la cola elija por ti, en <a href="{% url 'piso:home' %}"><b>Mi turno</b></a> el botón EMPEZAR lo hace.</div>
+  <div class="quien">La cola decide el orden (el más viejo primero, sin importar cliente): se toman solo con <a href="{% url 'piso:home' %}"><b>EMPEZAR en Mi turno</b></a>.</div>
 </div>
 
 {% for c in clientes %}
@@ -31,16 +31,10 @@
             {% if p.piezas_sin_inventario %}<span class="pill crit">Sin inventario · {{ p.piezas_sin_inventario }} pza{{ p.piezas_sin_inventario|pluralize }}</span>{% endif %}
           </div>
         </div>
-        <span class="pill">{% if p.nada_que_surtir %}espera inventario{% else %}por iniciar{% endif %}</span>
+        <span class="pill{% if p.lugar == 1 %} accent{% endif %}">{% if p.nada_que_surtir %}espera inventario{% else %}{{ p.lugar }}º en la cola{% endif %}</span>
       </div>
       {% if p.nada_que_surtir %}
       <p class="small muted mt">Nada que surtir todavía: todas sus líneas están sin inventario. Sale solo cuando entre stock.</p>
-      {% else %}
-      <form method="post" class="mt">{% csrf_token %}
-        <input type="hidden" name="accion" value="iniciar">
-        <input type="hidden" name="pedido_id" value="{{ p.pk }}">
-        <button class="btn primario bloque" type="submit">Iniciar picking</button>
-      </form>
       {% endif %}
     </div>
     {% endfor %}
@@ -56,11 +50,7 @@
         <span class="num">{{ p.pickeadas }} / {{ p.total_piezas }}</span>
       </div>
       <div class="medidor mt {% if p.avance_pct == 100 %}ok{% endif %}"><span style="width:{{ p.avance_pct }}%"></span></div>
-      {% if p.puedo_abrir %}
-      <a class="btn primario bloque mt" href="{% url 'piso:picking_pedido' p.pk %}">Escanear</a>
-      {% else %}
-      <p class="small muted mt">Lo está surtiendo {{ p.asignado_a.username }}. Si lo suelta o te lo envía, aquí sale el botón.</p>
-      {% endif %}
+      {% if p.asignado_a %}<p class="small muted mt">Lo está surtiendo {{ p.asignado_a.username }}.</p>{% else %}<p class="small muted mt">Libre: se lo da Mi turno a quien le toque.</p>{% endif %}
     </div>
     {% endfor %}
     {# Fulfillment parcial: una parte ya salió; el resto espera inventario y vuelve solo a esta lista. #}

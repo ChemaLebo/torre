@@ -120,7 +120,7 @@
       <div class="crece"><span class="mono">{{ p.folio }}</span> · {{ p.cliente.nombre }}
         <div class="small muted">{{ p.falta }}{% if es_mesa and p.asignado_a %} · {{ p.asignado_a.username }}{% endif %}</div>
       </div>
-      <a class="btn chico" href="{% url 'piso:empaque_pedido' p.pk %}">Continuar</a>
+      {% if es_mesa or p.asignado_a_id == request.user.pk %}<a class="btn chico" href="{% url 'piso:empaque_pedido' p.pk %}">Continuar</a>{% endif %}
     </div>
     {% endfor %}
   </div>

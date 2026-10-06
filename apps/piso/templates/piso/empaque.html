@@ -7,7 +7,7 @@
     <h1>Empaque</h1>
     <div class="small"><b>{{ listos|length }}</b> por empacar · <b>{{ en_empaque|length }}</b> en empaquetado</div>
   </div>
-  <div class="quien">Báscula ±{{ TORRE.TOLERANCIA_PESO_PCT }}% y fotos por caja. Sin foto no hay botón.</div>
+  <div class="quien">Lista informativa: se empaca con <a href="{% url 'piso:home' %}"><b>CONTINUAR en Mi turno</b></a>, lo más viejo primero. Báscula ±{{ TORRE.TOLERANCIA_PESO_PCT }}% y fotos por caja.</div>
 </div>
 
 {% if listos %}
@@ -21,9 +21,8 @@
     </div>
     <p>{{ p.cliente.nombre }} · {{ p.total_piezas }} piezas
       {% if p.nota_regalo %}<span class="pill accent">nota de regalo</span>{% endif %}
-      {% if p.asignado_a %}· lo tiene <b>{{ p.asignado_a.username }}</b>{% endif %}
+      {% if p.asignado_a %}· lo tiene <b>{{ p.asignado_a.username }}</b>{% else %}· libre{% endif %}
     </p>
-    <a class="btn primario bloque" href="{% url 'piso:empaque_pedido' p.pk %}">Empacar</a>
   </div>
   {% endfor %}
 </div>
@@ -43,7 +42,6 @@
           {% if p.asignado_a %}<span class="small muted">· lo tiene <b>{{ p.asignado_a.username }}</b></span>{% endif %}</div>
         <span class="pill accent">{{ p.falta }}</span>
       </div>
-      <a class="btn primario bloque mt" href="{% url 'piso:empaque_pedido' p.pk %}">Completar empaquetado</a>
     </div>
     {% endfor %}
   </div>

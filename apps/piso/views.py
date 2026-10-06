@@ -203,6 +203,42 @@ def _acceso_pedido(request, pedido):
     return _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
 
 
+def _me_toca(request, pedido):
+    """La cola decide (Chema 2026-10-06): un operador solo abre el pedido que
+    ya es suyo o el que _siguiente_en_cola le asigna; las listas de Picking y
+    Empaque son informativas y EMPEZAR / CONTINUAR es la única puerta. Mesa
+    abre cualquiera por URL, pero si no era el que tocaba queda el evento
+    `tomado_fuera_de_orden` (red de seguridad, sin tarjeta). Regresa
+    (me_toca, el_que_tocaba)."""
+    if pedido.asignado_a_id == request.user.pk:
+        return True, None
+    siguiente = _siguiente_en_cola(request.user)
+    if siguiente is not None and siguiente.pk == pedido.pk:
+        return True, None
+    if _es_mesa(request):
+        if request.method == "GET":
+            registrar_evento(
+                "pedido", pedido.pk, "tomado_fuera_de_orden", actor=request.user, cliente=pedido.cliente,
+                delta={"tocaba": siguiente.folio if siguiente else None},
+                motivo=f"Mesa abrió {pedido.folio} por URL; la cola daba {siguiente.folio if siguiente else 'nada'}.",
+            )
+        return True, None
+    return False, siguiente
+
+
+def _no_me_toca(request, pedido, siguiente):
+    """Respuesta cuando la cola no da ese pedido: aviso con el que sí toca y
+    de vuelta a Mi turno (JSON 409 para el visor del escáner)."""
+    texto = (
+        f"{pedido.folio} no es el que sigue: te toca {siguiente.folio}. Usa EMPEZAR en Mi turno."
+        if siguiente is not None else f"{pedido.folio} no está en tu cola. Usa EMPEZAR en Mi turno."
+    )
+    if _quiere_json(request):
+        return JsonResponse({"ok": False, "error": texto}, status=409)
+    messages.error(request, texto)
+    return redirect("piso:home")
+
+
 def _quien_lo_solto(pedido):
     """Username de quien soltó el pedido (último evento pedido_soltado), o ""."""
     from apps.core.models import EventoAuditoria  # lazy por contrato
@@ -1116,31 +1152,15 @@ def _marcar_paquetes_empacados(pedido, actor):
 
 @rol_requerido("piso", "mesa")
 def picking(request):
-    if request.method == "POST" and request.POST.get("accion") == "iniciar":
-        from apps.pedidos.services import iniciar_picking  # lazy por contrato
-        # Mismo patrón de _home_siguiente: select_for_update decide quién ganó
-        # el pedido — dos operadores jamás inician el mismo.
-        with transaction.atomic():
-            pedido = get_object_or_404(
-                Pedido.objects.select_for_update(), pk=request.POST.get("pedido_id"),
-            )
-            if pedido.estado == Pedido.EN_PICKING:
-                messages.error(
-                    request,
-                    f"Otro operador ya tomó {pedido.folio}. Elige otro pedido de la lista.",
-                )
-                return redirect("piso:picking")
-            try:
-                iniciar_picking(pedido, request.user)
-            except ValueError as exc:
-                messages.error(request, str(exc))
-                return redirect("piso:picking")
-        messages.success(request, f"Picking de {pedido.folio} iniciado. Escanea línea por línea.")
-        return redirect("piso:picking_pedido", pk=pedido.pk)
+    """Lista de picking, solo informativa (Chema 2026-10-06): todos los
+    pedidos por surtir con su lugar en la cola y quién tiene cada uno. La
+    única puerta para tomar un pedido es EMPEZAR / CONTINUAR en Mi turno:
+    la cola es global por antigüedad, sin importar cliente ni operador."""
+    if request.method == "POST":
+        messages.error(request, "Aquí ya no se toman pedidos: la cola decide. Usa EMPEZAR en Mi turno.")
+        return redirect("piso:home")
 
-    # Todos los pedidos por surtir, agrupados por cliente, para elegir el que se
-    # quiera (Chema 2026-09-21). Los que tiene otro operador se ven pero no se
-    # abren: se sabe quién los tiene; si los suelta, aparecen con botón.
+    lugar = {p.pk: i for i, p in enumerate(_pendientes_por_prioridad(), start=1)}
     pendientes = list(
         Pedido.objects.filter(estado=Pedido.PENDIENTE)
         .select_related("cliente").prefetch_related("lineas__sku").order_by("creado")
@@ -1150,6 +1170,7 @@ def picking(request):
         pedido.piezas_sin_inventario = _piezas_sin_inventario(pedido)
         # Todo sin inventario: se ve con su tag pero no hay ola que iniciar.
         pedido.nada_que_surtir = not pedido.lineas_por_surtir
+        pedido.lugar = lugar.get(pedido.pk)
     en_picking = list(
         Pedido.objects.filter(estado=Pedido.EN_PICKING)
         .select_related("cliente", "asignado_a").prefetch_related("lineas__sku").order_by("creado")
@@ -1157,7 +1178,6 @@ def picking(request):
     for pedido in en_picking:
         pedido.pickeadas, pedido.total_piezas, pedido.avance_pct = _avance(pedido)
         pedido.piezas_sin_inventario = _piezas_sin_inventario(pedido)
-        pedido.puedo_abrir = _es_mesa(request) or _pedido_libre_o_mio(pedido, request.user)
     # Fulfillment parcial: ya salió una parte y el resto espera inventario.
     # Se ven aquí, con su tag, para que el piso sepa que siguen vivos.
     esperando = [
@@ -1245,6 +1265,9 @@ def picking_pedido(request, pk):
             f"{pedido.folio} lo tiene {duenio}: pídele que te lo envíe desde su pantalla.",
         )
         return redirect("piso:picking")
+    toca, siguiente = _me_toca(request, pedido)
+    if not toca:
+        return _no_me_toca(request, pedido, siguiente)
 
     if request.method == "POST":
         if request.POST.get("accion") == "transferir":
@@ -1493,6 +1516,9 @@ def empaque_pedido(request, pk):
             f"{pedido.folio} lo tiene {duenio}: pídele que te lo envíe desde su pantalla.",
         )
         return redirect("piso:empaque")
+    toca, siguiente = _me_toca(request, pedido)
+    if not toca:
+        return _no_me_toca(request, pedido, siguiente)
 
     if request.method == "POST":
         accion = request.POST.get("accion") or "empacar"

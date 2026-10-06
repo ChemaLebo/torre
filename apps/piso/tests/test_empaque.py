@@ -264,7 +264,8 @@ class ListaEmpaqueTests(PisoTestCase):
         self.assertEqual([p.pk for p in respuesta.context["en_empaque"]], [empacado.pk])
         self.assertContains(respuesta, "En empaquetado")
         self.assertContains(respuesta, "sin guía")
-        self.assertContains(respuesta, "Completar empaquetado")
+        self.assertContains(respuesta, "CONTINUAR en Mi turno")  # lista informativa: sin botón por pedido
+        self.assertNotContains(respuesta, f"empaque/{empacado.pk}/")
         self.assertNotContains(respuesta, a_medias.folio)  # el picking a medias vive en Picking
         self.assertNotContains(respuesta, "Terminar picking")
 
