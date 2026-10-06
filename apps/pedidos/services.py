@@ -2914,6 +2914,34 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
 
 # ── Entrega propia (POD por caja) ──
 
+def fijar_costo_entrega_propia(pedido, monto, actor):
+    """Costo de la entrega propia de un pedido (Chema 2026-10-06): sin flota,
+    salir "sin guía" no cuesta nada o cuesta una cantidad arbitraria que Mesa
+    captura aquí (sin IVA). `monto` = Decimal/str ≥ 0, o None/"" para
+    quitarlo (vuelve a $0). Finanzas lo reparte entre las guías internas
+    LOCAL-* vivas del pedido como su costo; no cambia lo que se cobra al
+    cliente. Auditado como costo_entrega_propia. Regresa el pedido."""
+    if monto in (None, ""):
+        nuevo = None
+    else:
+        try:
+            nuevo = Decimal(str(monto).strip().replace(",", ""))
+        except InvalidOperation:
+            raise ValueError("El costo de entrega propia no es un número válido.") from None
+        if nuevo < 0:
+            raise ValueError("El costo de entrega propia no puede ser negativo.")
+        nuevo = nuevo.quantize(Decimal("0.01"))
+    anterior = pedido.costo_entrega_propia
+    pedido.costo_entrega_propia = nuevo
+    pedido.save(update_fields=["costo_entrega_propia", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "costo_entrega_propia", actor=actor, cliente=pedido.cliente,
+        delta={"de": str(anterior) if anterior is not None else None, "a": str(nuevo) if nuevo is not None else None},
+        motivo="Costo de la entrega propia capturado en Mesa (no es cobro al cliente).",
+    )
+    return pedido
+
+
 CARRIER_LOCAL = "local"
 TIPO_FOTO_POD = "pod"
 

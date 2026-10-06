@@ -97,7 +97,7 @@
           <td class="mono">{{ caja.numero }}<div class="small muted">{{ caja.get_estado_display }}</div></td>
           <td class="small">{% for pl in caja.lineas.all %}{{ pl.texto_para_piso }}{% if pl.repone_a_id %} <span class="pill accent" title="Repone piezas que viajaron en esa caja">reposición de la caja {{ pl.repone_a.numero }}</span>{% endif %}<br>{% empty %}<span class="muted">sin contenido registrado</span>{% endfor %}</td>
           <td class="mono small">{{ caja.peso_kg }} kg{% if caja.peso_real_gr %}<div class="muted">báscula {{ caja.peso_real_gr }} g</div>{% endif %}</td>
-          <td class="small">{{ caja.carrier }}{% if caja.carrier_forzado %} <span class="pill warn" title="Paquetería forzada desde Mesa para esta caja">forzada</span>{% endif %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}{% if caja.estimado_entrega %} · {{ caja.estimado_entrega }}{% endif %}</div></td>
+          <td class="small">{{ caja.carrier }}{% if caja.carrier_forzado %} <span class="pill warn" title="Paquetería forzada desde Mesa para esta caja">forzada</span>{% endif %}{% if caja.carrier == 'local' %}<div class="muted">entrega propia</div>{% else %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}{% if caja.estimado_entrega %} · {{ caja.estimado_entrega }}{% endif %}</div>{% endif %}</td>
           <td class="small">
             {% if caja.guia %}{% if caja.url_rastreo %}<a class="mono" href="{{ caja.url_rastreo }}" target="_blank" rel="noopener">{{ caja.guia.numero }} ↗</a>{% else %}<span class="mono">{{ caja.guia.numero }}</span>{% endif %}<div class="muted">{{ caja.guia.carrier }}{% if caja.guia.proveedor %} · {{ caja.guia.proveedor }}{% endif %}</div>{% else %}<span class="muted">sin guía</span>{% endif %}
             {% for g in caja.historial %}<div class="muted mono" title="Guía anterior de esta caja">{% if g.url_rastreo %}<a href="{{ g.url_rastreo }}" target="_blank" rel="noopener">{{ g.numero }} ↗</a>{% else %}{{ g.numero }}{% endif %} · {{ g.get_estado_display|lower }}</div>{% endfor %}
@@ -147,6 +147,15 @@
   </div>
   {% else %}
   <p class="muted">Sin plan de cajas todavía: se arma al reservar el stock o al generar la guía.</p>
+  {% endif %}
+  {% if entrega_propia %}
+  <form method="post" class="fila mt" onsubmit="return confirm('¿Guardar el costo de entrega propia de {{ pedido.folio }}? Es costo para finanzas; no cambia lo que se cobra al cliente.');">{% csrf_token %}
+    <input type="hidden" name="accion" value="costo_entrega_propia"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+    <label for="costo-entrega-propia" class="small">Costo de entrega propia (sin IVA; vacío = $0)</label>
+    <input id="costo-entrega-propia" type="number" name="costo" step="0.01" min="0" value="{% if pedido.costo_entrega_propia is not None %}{{ pedido.costo_entrega_propia|stringformat:'.2f' }}{% endif %}" placeholder="0.00" style="width:120px">
+    <button class="btn chico" type="submit">Guardar costo</button>
+    <span class="small muted">Lo que nos costó llevarlo (sin flota: $0 o lo que se pagó); finanzas lo reparte entre sus guías internas. El cobro al cliente sigue el tarifario por zona.</span>
+  </form>
   {% endif %}
   {% if guias_sueltas %}
   <p class="small mt">Guías sin caja (pedido sin plan):

@@ -326,8 +326,8 @@ class GenerarGuiaTests(TestCase):
         self.assertEqual(guia.carrier, "local")
         self.assertEqual(guia.servicio, "entrega_local")
         self.assertTrue(guia.numero.startswith(f"LOCAL-{pedido.folio}"))  # sufijo -N por paquete
-        # Flota local: $100 flat por paquete ≤20 kg (CDMX + metro hasta Toluca)
-        self.assertEqual(guia.costo_preferencial, Decimal("100"))
+        # Sin flota (2026-10-06): la guía interna no cuesta; lo que costó llevarlo se captura en el pedido.
+        self.assertEqual(guia.costo_preferencial, Decimal("0"))
         self.assertEqual(guia.etiqueta_url, "")
         self.assertEqual(guia.proveedor, "local")
 

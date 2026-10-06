@@ -477,7 +477,7 @@ def _gestionar_incidencia(request, incidencia):
         carrier = (request.POST.get("carrier") or "").strip()
         resultado = replanear_con_carrier(pedido, carrier, request.user, incidencia=incidencia)
         cajas = resultado["cajas"]
-        detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in cajas)
+        detalle = ", ".join(f"caja {c.numero} {c.carrier} {_precio_caja(c)}" for c in cajas)
         que = "recotizadas" if resultado["modo"] == "recotizadas" else "planeadas"
         return (
             f"{pedido.folio} con {etiqueta_paqueteria(carrier)}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} "
@@ -497,7 +497,7 @@ def _gestionar_incidencia(request, incidencia):
         etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas del pedido"
         cerrada = _resolver_paq_si_cotiza(incidencia, request.user)
         return (
-            f"Caja {caja.numero} de {pedido.folio} con {etiqueta}: ${caja.precio_cotizado or 0}. "
+            f"Caja {caja.numero} de {pedido.folio} con {etiqueta}: {_precio_caja(caja)}. "
             + ("Todas las cajas tienen paquetería: la incidencia quedó cerrada." if cerrada else "La incidencia sigue abierta: aún hay cajas sin paquetería.")
         )
     if accion == "regresar_a_empaque":
@@ -733,6 +733,26 @@ def _pedidos_cancelar_guias(request):
 ESTADOS_CAMBIO_PAQUETERIA = ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA")
 
 
+def _precio_caja(caja):
+    """"$150.00" para el mensaje de Mesa; la entrega propia no lleva precio (sin
+    flota, su costo lo captura Mesa en el pedido: Pedido.costo_entrega_propia)."""
+    return "sin costo de carrier" if caja.carrier == "local" else f"${caja.precio_cotizado or 0}"
+
+
+def _pedidos_costo_entrega_propia(request):
+    """Costo de la entrega propia del pedido (Chema 2026-10-06): monto sin IVA,
+    vacío = $0; es costo para finanzas, no cobro al cliente."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import fijar_costo_entrega_propia
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    pedido = fijar_costo_entrega_propia(pedido, request.POST.get("costo"), request.user)
+    if pedido.costo_entrega_propia is None:
+        return f"{pedido.folio}: costo de entrega propia en $0."
+    return f"{pedido.folio}: costo de entrega propia ${pedido.costo_entrega_propia} (sin IVA), solo para finanzas."
+
+
 def _pedidos_cambiar_paqueteria(request):
     """Selector por renglón (Chema 2026-09-28): fuerza la paquetería del pedido
     antes de salir (pedidos.replanear_con_carrier), incluida la salida SIN
@@ -747,7 +767,7 @@ def _pedidos_cambiar_paqueteria(request):
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
     resultado = replanear_con_carrier(pedido, carrier, request.user)
     cajas = resultado["cajas"]
-    detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in cajas)
+    detalle = ", ".join(f"caja {c.numero} {c.carrier} {_precio_caja(c)}" for c in cajas)
     que = "recotizadas" if resultado["modo"] == "recotizadas" else "planeadas"
     etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas normales del pedido"
     return f"{pedido.folio} con {etiqueta}: {len(cajas)} caja{'s' if len(cajas) != 1 else ''} {que} ({detalle})."
@@ -787,7 +807,7 @@ def _pedidos_cambiar_paqueteria_caja(request):
     caja = cambiar_paqueteria_caja(pedido, caja, carrier, request.user)
     etiqueta = etiqueta_paqueteria(carrier) if carrier else "las reglas del pedido"
     return (
-        f"Caja {caja.numero} de {pedido.folio} con {etiqueta}: ${caja.precio_cotizado or 0}"
+        f"Caja {caja.numero} de {pedido.folio} con {etiqueta}: {_precio_caja(caja)}"
         + (" · guía cancelada, el piso la recompra." if pedido.estado == "EMPACADO" else ".")
     )
 
@@ -903,7 +923,7 @@ def _pedidos_replanear_cajas(request):
     folio = (request.POST.get("folio") or "").strip()
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
     nuevas = replanear_cajas(pedido, request.user)
-    detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in nuevas)
+    detalle = ", ".join(f"caja {c.numero} {c.carrier} {_precio_caja(c)}" for c in nuevas)
     return f"{pedido.folio} replaneado: {len(nuevas)} caja{'s' if len(nuevas) != 1 else ''} ({detalle})."
 
 
@@ -932,6 +952,7 @@ def _ejecutar_accion_pedido(request):
         "cambiar_paqueteria_caja": _pedidos_cambiar_paqueteria_caja,
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
         "quitar_de_salida_caja": _pedidos_quitar_de_salida_caja,
+        "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
         "replanear_cajas": _pedidos_replanear_cajas,
         "registrar_reembolso_guia": _pedidos_registrar_reembolso,
@@ -1146,6 +1167,8 @@ def pedido_detalle(request, pk):
         "cajas": cajas,
         "guias_sueltas": guias_sueltas,
         "reembolsos_guias": reembolsos_guias,
+        # Entrega propia (2026-10-06): el costo se captura por pedido cuando alguna caja o guía es "local".
+        "entrega_propia": any(c.carrier == "local" for c in cajas) or any(g.carrier == "local" for g in pedido.guias.all()),
         "hoy": timezone.localdate().isoformat(),
         "lineas": list(pedido.lineas.all()),
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
@@ -1217,7 +1240,7 @@ def _resolver_paq_si_cotiza(incidencia, actor):
     sin = [c.numero for c in cajas if c.guia_activa is None and not (c.precio_cotizado or 0)]
     if sin:
         return False
-    detalle = ", ".join(f"caja {c.numero} {c.carrier} ${c.precio_cotizado or 0}" for c in cajas)
+    detalle = ", ".join(f"caja {c.numero} {c.carrier} {_precio_caja(c)}" for c in cajas)
     resolver(incidencia, f"Paquetería elegida por caja desde Mesa: {detalle}.", actor)
     cerrar(incidencia, actor)
     return True

@@ -452,8 +452,10 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
     sufijo = f"-{paquete.numero}" if paquete is not None else ""
 
     if carrier == CARRIER_LOCAL:
-        costo_local = (paquete.precio_cotizado if paquete is not None
-                       else Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100))))
+        # Sin flota (Chema 2026-10-06): la guía interna no cuesta nada por sí
+        # misma; lo que de verdad costó llevar el pedido lo captura Mesa en
+        # Pedido.costo_entrega_propia y finanzas lo toma de ahí.
+        costo_local = Decimal("0")
         guia = Guia.objects.create(
             pedido=pedido, paquete=paquete, carrier=carrier, servicio=servicio,
             dias_promesa=dias_promesa_de(pedido, carrier, paquete),

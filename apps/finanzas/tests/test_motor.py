@@ -58,9 +58,9 @@ class ResumenCorteTests(TestCase):
         self.assertEqual(r["ingresos"]["empaque"], Decimal("130"))        # 2 × 65: por pedido
         self.assertEqual(r["ingresos"]["total"], Decimal("9657"))
         self.assertEqual((r["ingresos"]["iva"], r["ingresos"]["total_con_iva"]), (Decimal("1545.12"), Decimal("11202.12")))
-        self.assertEqual(r["costos"]["carrier"], Decimal("413.50"))
+        self.assertEqual(r["costos"]["carrier"], Decimal("213.50"))  # sin flota, las guías locales cuestan lo capturado en el pedido ($0 aquí)
         self.assertEqual(r["costos"]["insumos"], Decimal("36"))           # 3 guías × 12
-        self.assertEqual(r["margen_bruto"], Decimal("9207.50"))
+        self.assertEqual(r["margen_bruto"], Decimal("9407.50"))  # +200: la entrega propia ya no carga $100 por guía
         # Dos estados de cuenta: fulfillment y guías, cada uno con IVA.
         ful, gui = r["facturas"]["fulfillment"], r["facturas"]["guias"]
         self.assertEqual([l["concepto"] for l in ful["lineas"]], ["Almacenaje", "Picking (alistamiento)", "Empaque"])
@@ -74,7 +74,7 @@ class ResumenCorteTests(TestCase):
         self.assertEqual(cdmx["guias"], 2)
         self.assertEqual(cdmx["zona"], "local")
         self.assertAlmostEqual(cdmx["peso"], 18.0, places=1)              # 18.9 sin el +5%
-        self.assertEqual(cdmx["costo"], Decimal("200"))
+        self.assertEqual(cdmx["costo"], Decimal("0"))  # entrega propia sin flota: cuesta lo capturado en el pedido
         self.assertEqual(cdmx["facturado"], Decimal("258"))
         yuc = r["estados"]["Yucatán"]
         self.assertEqual(yuc["ordenes"], 1)
@@ -232,11 +232,22 @@ class ResumenCorteTests(TestCase):
         self.assertEqual(r["ingresos"]["alistamiento"], Decimal("25"))  # el pedido, una vez
         self.assertEqual(r["ingresos"]["empaque"], Decimal("65"))
         self.assertEqual(r["costos"]["insumos"], Decimal("24"))      # 2 bultos; la cancelada no
-        self.assertEqual(r["costos"]["carrier"], Decimal("200"))     # la cancelada se reembolsa: 0
+        # Entrega propia sin flota (2026-10-06): las guías LOCAL-* no cuestan por sí mismas;
+        # el costo es lo que Mesa capture en el pedido, repartido entre sus guías internas vivas.
+        self.assertEqual(r["costos"]["carrier"], Decimal("0"))
         filas = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"]
         self.assertEqual([f["nota"] for f in filas], ["guía cancelada · reembolsada", "", "reposición"])
         self.assertEqual((filas[0]["transporte"], filas[0]["reembolso"], filas[0]["costo"]), (Decimal("129"), Decimal("129"), Decimal("0")))
         self.assertEqual((filas[0]["picking"], filas[1]["picking"]), (Decimal("0"), Decimal("25")))  # el trabajo va en la primera fila con guía viva
+        from apps.pedidos.services import fijar_costo_entrega_propia
+        fijar_costo_entrega_propia(pedido, "250.50", None)
+        filas = finanzas.facturar_guias(self.cliente, self.inicio, self.fin)["filas"]
+        self.assertEqual([f["costo"] for f in filas], [Decimal("0"), Decimal("125.25"), Decimal("125.25")])  # la cancelada no reparte
+        self.assertEqual(finanzas.resumen_corte(self.cliente, self.corte)["costos"]["carrier"], Decimal("250.50"))
+        fijar_costo_entrega_propia(pedido, "", None)  # vacío = $0
+        self.assertEqual(finanzas.resumen_corte(self.cliente, self.corte)["costos"]["carrier"], Decimal("0"))
+        with self.assertRaises(ValueError):
+            fijar_costo_entrega_propia(pedido, "-1", None)
 
 
 class ReembolsosTests(TestCase):

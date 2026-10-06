@@ -73,8 +73,8 @@ class CostosTests(ReportesTestCase):
         repuesto = self._pedido("06600", [3.0], [90])
         Guia.objects.filter(pedido=repuesto).update(estado=Guia.CANCELADA)
         caja = repuesto.paquetes.get()
-        Guia.objects.create(pedido=repuesto, paquete=caja, carrier="local", numero="L-2", proveedor="mock",
-                            costo_preferencial=Decimal(80))
+        Guia.objects.create(pedido=repuesto, paquete=caja, carrier="local", numero="L-2", proveedor="mock")
+        Pedido.objects.filter(pk=repuesto.pk).update(costo_entrega_propia=Decimal(80))  # lo que costó llevarlo (2026-10-06)
         r = costos.generar(self.colima, self.inicio, self.fin, {}, es_mesa=True)
         picking, empaque = Decimal(self.tarifas["alistamiento_pedido"]), Decimal(self.tarifas["empaque_pedido"])
         local = Decimal(self.tarifas["envio_bloque"]["local"])

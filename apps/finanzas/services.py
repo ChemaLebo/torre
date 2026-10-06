@@ -36,8 +36,10 @@ anunciado) y mínimo mensual — si la factura no llega al piso pactado se
 agrega una línea de ajuste al total, sin inflar fulfillment ni envío. Con
 los defaults en 0 (Modelo A, Colima) nada de esto se cobra.
 
-Costos: carrier = Guia.costo_preferencial real (incluye flota local LOCAL-*;
-la guía cancelada cuesta 0: se reembolsa); insumos = TORRE["INSUMO_PAQUETE_MXN"]
+Costos: carrier = Guia.costo_preferencial real (la guía cancelada cuesta 0:
+se reembolsa); entrega propia LOCAL-* = Pedido.costo_entrega_propia repartido
+entre sus guías internas vivas (Chema 2026-10-06: sin flota, vacío = $0);
+insumos = TORRE["INSUMO_PAQUETE_MXN"]
 por bulto; fijos = globales, en la vista. Las tarifas van SIN IVA; los
 estados de cuenta suman TORRE["IVA"].
 """
@@ -272,6 +274,18 @@ def facturar_guias(cliente, inicio, fin):
     reembolsos = defaultdict(list)
     for r in ReembolsoGuia.objects.filter(guia__in=guias):
         reembolsos[r.guia_id].append(r)
+    # Entrega propia: el costo capturado en el pedido se reparte entre sus
+    # guías internas vivas (todas las del pedido, no solo las del periodo).
+    locales_vivas = defaultdict(int)
+    for pedido_id in Guia.objects.filter(pedido_id__in=pedidos_ids, carrier="local").exclude(estado=Guia.CANCELADA).values_list("pedido_id", flat=True):
+        locales_vivas[pedido_id] += 1
+
+    def _costo_de(g):
+        if g.carrier == "local":
+            total = g.pedido.costo_entrega_propia or Decimal("0")
+            partes = locales_vivas.get(g.pedido_id) or 1
+            return (total / partes).quantize(Decimal("0.01"))
+        return g.costo_preferencial or Decimal("0")
     items = [(g.creado, g.pk, g, g.paquete) for g in guias]
     items += [(fechas_cancelacion[p.pedido_id], p.pk, None, p) for p in sin_guia if _pickeado(p.pedido)]
     items.sort(key=lambda i: (i[0], i[1]))
@@ -307,7 +321,7 @@ def facturar_guias(cliente, inicio, fin):
             "transporte": transporte, "reembolso": reembolso,
             "picking": Decimal("0"), "empaque": Decimal("0"), "nota": notas,
             "insumo": insumo if bulto else Decimal("0"),
-            "costo": (g.costo_preferencial or Decimal("0")) if g is not None and not cancelada else Decimal("0"),
+            "costo": _costo_de(g) if g is not None and not cancelada else Decimal("0"),
             "cobra_envio": g is not None, "guia_viva": g is not None and not cancelada,
             "bulto": bulto, "reexpedicion": reexpedicion,
         })

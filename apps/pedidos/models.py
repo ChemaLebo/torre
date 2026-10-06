@@ -151,6 +151,12 @@ class Pedido(models.Model):
     # más barato de la lista de envia.com. Manda sobre reglas, reparto y la
     # integración del cliente (envios.services.carriers_del_pedido).
     carrier_forzado = models.CharField(max_length=40, blank=True)
+    # Costo de la entrega propia (Chema 2026-10-06): sin flota, un pedido que
+    # sale "sin guía" no nos cuesta nada o nos cuesta una cantidad arbitraria
+    # que Mesa captura aquí (sin IVA; vacío = $0). Finanzas lo usa como costo
+    # de las guías internas LOCAL-* del pedido; lo que se cobra al cliente
+    # sigue el tarifario por zona.
+    costo_entrega_propia = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     parcial_de_orden = models.BooleanField(
         default=False,
         help_text="La orden de Shopify se dividió entre locations: este pedido ampara solo NUESTRO ticket",

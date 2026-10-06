@@ -333,3 +333,43 @@ class QuitarDeSalidaTests(PisoTestCase):
         self.assertIn("<b>1</b> no salió", html)
         lista = self.client.get(reverse("mesa:manifiestos")).content.decode()
         self.assertIn("1 no salió", lista)
+
+
+@override_settings(ENVIA_API_KEY="")
+class CostoEntregaPropiaTests(PisoTestCase):
+    """Chema 2026-10-06: sin flota, un pedido que sale "sin guía" no cuesta nada
+    o cuesta una cantidad arbitraria que Mesa captura por pedido; es costo para
+    finanzas, no cobro al cliente, y la guía interna nace con costo 0."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+        self.client.force_login(self.mesa)
+
+    def test_captura_por_pedido_desde_el_detalle_y_la_guia_interna_no_cuesta(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))
+        caja = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        self.assertNotIn('value="costo_entrega_propia"', self.client.get(url).content.decode())  # sin entrega propia no aplica
+        respuesta = self.client.post(url, {"accion": "cambiar_paqueteria_caja", "folio": pedido.folio, "caja": caja.pk, "carrier": "local"}, follow=True)
+        self.assertContains(respuesta, "sin costo de carrier")  # ya no sale "$100.00"
+        self.assertNotContains(respuesta, "$100.00")
+        services.generar_guia(pedido)
+        caja.refresh_from_db()
+        self.assertEqual((caja.guia_activa.costo_cotizado, caja.guia_activa.costo_preferencial), (Decimal("0"), Decimal("0")))
+        html = self.client.get(url).content.decode()
+        self.assertIn('value="costo_entrega_propia"', html)
+        respuesta = self.client.post(url, {"accion": "costo_entrega_propia", "folio": pedido.folio, "costo": "180"}, follow=True)
+        self.assertContains(respuesta, "costo de entrega propia $180.00 (sin IVA), solo para finanzas")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.costo_entrega_propia, Decimal("180.00"))
+        self.assertContains(respuesta, 'value="180.00"')
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="costo_entrega_propia").exists())
+        respuesta = self.client.post(url, {"accion": "costo_entrega_propia", "folio": pedido.folio, "costo": "abc"}, follow=True)
+        self.assertContains(respuesta, "no es un número válido")
+        respuesta = self.client.post(url, {"accion": "costo_entrega_propia", "folio": pedido.folio, "costo": ""}, follow=True)
+        self.assertContains(respuesta, "costo de entrega propia en $0")
+        pedido.refresh_from_db()
+        self.assertIsNone(pedido.costo_entrega_propia)
