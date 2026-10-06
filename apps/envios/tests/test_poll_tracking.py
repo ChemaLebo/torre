@@ -101,6 +101,24 @@ class PollTrackingTests(TestCase):
         self.assertEqual(pedido.estado, "RETORNADO")
         self.assertTrue(Incidencia.objects.filter(pedido=pedido, tipo="RF").exists())
 
+    def test_el_retorno_abre_la_rf_aunque_las_automaticas_esten_pausadas(self):
+        # Chema 2026-10-06 (PED-00067): la pausa se comía la RF del retorno; sin RF no hay dónde decidir el reenvío.
+        from apps.incidencias.models import Incidencia
+
+        pedido, guia = self._pedido_recolectado()
+        pedido.cliente.incidencias_auto_pausadas_hasta = timezone.localdate() + timedelta(days=30)
+        pedido.cliente.save()
+        self.adapter.avanzar_estado(guia.numero, "EN_TRANSITO")
+        services.poll_tracking()
+        self.adapter.avanzar_estado(guia.numero, "RETORNO")
+        services.poll_tracking()
+        self.assertTrue(Incidencia.objects.filter(pedido=pedido, tipo="RF").exists())
+        # Los demás avisos automáticos (p. ej. un intento fallido) siguen pausados.
+        otro, g2 = self._pedido_recolectado()
+        self.adapter.avanzar_estado(g2.numero, "INTENTO_FALLIDO")
+        services.poll_tracking()
+        self.assertFalse(Incidencia.objects.filter(pedido=otro).exists())
+
     def _con_compromiso(self, guia, dias):
         """Estampa la fecha compromiso como lo haría la salida: hoy + dias."""
         Guia.objects.filter(pk=guia.pk).update(fecha_compromiso=timezone.localdate() + timedelta(days=dias))

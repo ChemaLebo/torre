@@ -75,14 +75,16 @@ def auto_pausadas(cliente):
 
 
 def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", prioridad=None, orden=None,
-                     interna=False):
+                     interna=False, pese_a_pausa=False):
     """Abre una incidencia con folio y relojes SLA. Un caso por tipo y pedido
     (Chema 2026-09-28): si ya hay una del mismo tipo sobre el pedido sin
     cerrar, el reporte nuevo se suma a ese caso (_agrupar_reporte) y se
     regresa esa incidencia con `agrupada=True`; tipos distintos conviven.
     `orden`: la recepción (OrdenEntrada) de la que nace, para las DES de recepción.
     Con las automáticas pausadas (auto_pausadas) una de origen "auto" NO nace:
-    regresa None, no toca el pedido y deja el evento "auto_omitida" con el texto.
+    regresa None, no toca el pedido y deja el evento "auto_omitida" con el texto;
+    salvo `pese_a_pausa` (Chema 2026-10-06): el retorno al remitente abre su
+    RF aunque la pausa esté activa, porque exige reingreso y reenvío (PED-00067).
     `interna` (Chema 2026-09-24): incidencia de la bodega, no del cliente: no se
     pausa, no le avisa al cliente, no marca pedido.incidencia_activa (el
     portal muestra ese flag) y el portal jamás la lista.
@@ -93,7 +95,7 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
     - Congela la evidencia del pedido y marca pedido.incidencia_activa.
     - Notifica al cliente vía mensajeria (lazy; tolera módulo ausente).
     """
-    if origen == Incidencia.ORIGEN_AUTO and not interna and auto_pausadas(cliente):
+    if origen == Incidencia.ORIGEN_AUTO and not interna and not pese_a_pausa and auto_pausadas(cliente):
         referencia = (
             getattr(pedido, "folio", None) or getattr(orden, "folio", None)
             or getattr(sku, "codigo", None) or cliente.slug

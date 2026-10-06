@@ -1164,7 +1164,9 @@ def _aplicar_efectos(guia, estado, descripcion):
             f"El carrier marcó retorno al remitente en la guía {guia.numero} ({guia.carrier}). "
             f"Último evento: {descripcion or 'sin detalle'}. Requiere reingreso y reexpedición."
         )
-        if _abrir_incidencia(pedido, "RF", texto):
+        # Aunque las incidencias automáticas estén pausadas (Chema 2026-10-06):
+        # un retorno exige reingreso y reenvío, y la RF es donde se decide.
+        if _abrir_incidencia(pedido, "RF", texto, pese_a_pausa=True):
             abiertas += 1
     # RECOLECTADO del carrier NO mueve el pedido: el manifiesto es autoritativo.
     _evento_fulfillment_shopify(guia, estado, descripcion)
@@ -1279,7 +1281,7 @@ def _avisar_sin_paqueteria(pedido, detalle):
         return None
 
 
-def _abrir_incidencia(pedido, tipo, texto, prioridad=None):
+def _abrir_incidencia(pedido, tipo, texto, prioridad=None, pese_a_pausa=False):
     """Abre incidencia vía el módulo incidencias (import lazy por contrato)."""
     try:
         from apps.incidencias.services import abrir_incidencia
@@ -1290,5 +1292,5 @@ def _abrir_incidencia(pedido, tipo, texto, prioridad=None):
         )
         return None
     return abrir_incidencia(
-        pedido.cliente, tipo, "auto", pedido=pedido, texto=texto, prioridad=prioridad
+        pedido.cliente, tipo, "auto", pedido=pedido, texto=texto, prioridad=prioridad, pese_a_pausa=pese_a_pausa,
     )
