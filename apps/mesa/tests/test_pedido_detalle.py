@@ -1,14 +1,15 @@
 """Mesa → Pedidos → detalle de un pedido (Chema 2026-09-30): toda la orden en
 una página (cajas con guía, líneas, línea de tiempo, incidencias, fotos,
 auditoría), Anterior / Siguiente con los filtros de la lista y las acciones
-POR CAJA: cambiar paquetería (incluida la salida sin guía), cancelar guía y
-reimprimir etiqueta."""
+POR CAJA: cambiar paquetería (incluida la salida sin guía), cancelar guía,
+reimprimir etiqueta y quitar de salida una caja que nunca se fue."""
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.core.models import EventoAuditoria, PerfilUsuario
 from apps.envios.adapters import MockAdapter
@@ -245,3 +246,90 @@ class SinForzarTests(PisoTestCase):
         caja.refresh_from_db()
         self.assertEqual(caja.carrier_forzado, "")
         self.assertNotEqual(caja.carrier, "local")
+
+
+@override_settings(ENVIA_API_KEY="")
+class QuitarDeSalidaTests(PisoTestCase):
+    """PED-00319 (Chema 2026-10-05): las cajas firmaron manifiesto pero el
+    carrier nunca las recogió; Mesa canceló las guías y las regresa a bodega
+    con el botón "Quitar de salida" por caja, para sacarlas con la flota propia."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+        self.client.force_login(self.mesa)
+
+    def dos_cajas_fuera(self):
+        from apps.envios.services import registrar_manifiesto
+
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
+        linea = pedido.lineas.get()
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        c2 = Paquete.objects.create(pedido=pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=2)
+        services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        with patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, self.operador)
+        registrar_manifiesto("estafeta", "SAL-OTRO", self.operador, [(pedido, [c1, c2])], chofer="Juan")
+        pedido.refresh_from_db()
+        return pedido, Paquete.objects.get(pk=c1.pk), Paquete.objects.get(pk=c2.pk)
+
+    def test_el_boton_aparece_solo_con_la_guia_cancelada_y_regresa_la_caja(self):
+        pedido, c1, c2 = self.dos_cajas_fuera()
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertNotIn('value="quitar_de_salida_caja"', html)  # guías vivas: primero se cancelan
+        # Cancelar la guía de la caja 1 (despachada, el carrier nunca la registró) la vuelve quitable.
+        respuesta = self.client.post(url, {"accion": "cancelar_guia_caja", "folio": pedido.folio, "caja": c1.pk}, follow=True)
+        self.assertContains(respuesta, "la caja sigue como despachada")
+        html = respuesta.content.decode()
+        self.assertEqual(html.count('value="quitar_de_salida_caja"'), 1)
+        self.assertIn("Quitar de salida", html)
+        with patch("apps.integraciones.services.cancelar_fulfillment_caja") as shopify, self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.client.post(url, {"accion": "quitar_de_salida_caja", "folio": pedido.folio, "caja": c1.pk}, follow=True)
+        shopify.assert_called_once()
+        self.assertContains(respuesta, "Caja 1 de " + pedido.folio + " quitada de salida")
+        self.assertContains(respuesta, "parcialmente despachado")
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        self.assertEqual((pedido.estado, c1.estado), (Pedido.PARCIALMENTE_DESPACHADO, Paquete.EMPACADO))
+        html = respuesta.content.decode()
+        # De vuelta en bodega: la caja 1 ya tiene su selector de paquetería (incluida la entrega propia) y ya no el botón.
+        self.assertEqual(html.count('value="cambiar_paqueteria_caja"'), 1)
+        self.assertNotIn('value="quitar_de_salida_caja"', html)
+        respuesta = self.client.post(url, {"accion": "cambiar_paqueteria_caja", "folio": pedido.folio, "caja": c1.pk, "carrier": "local"}, follow=True)
+        self.assertContains(respuesta, "Caja 1")
+        c1.refresh_from_db()
+        self.assertEqual((c1.carrier, c1.carrier_forzado), ("local", "local"))
+        # La caja 2 sigue fuera con su guía viva: nada que quitar.
+        respuesta = self.client.post(url, {"accion": "quitar_de_salida_caja", "folio": pedido.folio, "caja": c2.pk}, follow=True)
+        self.assertContains(respuesta, "cancela la guía primero")
+        # Otra caja despachada con guía cancelada que el carrier sí recogió: la acción avisa.
+        from apps.envios.models import Guia
+        g2 = c2.guia_activa
+        self.client.post(url, {"accion": "cancelar_guia_caja", "folio": pedido.folio, "caja": c2.pk})
+        Guia.objects.filter(pk=g2.pk).update(ts_recolectado_carrier=timezone.now())
+        html = self.client.get(url).content.decode()
+        self.assertNotIn('value="quitar_de_salida_caja"', html)
+        respuesta = self.client.post(url, {"accion": "quitar_de_salida_caja", "folio": pedido.folio, "caja": c2.pk}, follow=True)
+        self.assertContains(respuesta, "El carrier reportó que recogió la caja 2")
+
+    def test_la_hoja_del_manifiesto_conserva_la_caja_con_la_nota(self):
+        from apps.envios.models import Manifiesto
+
+        pedido, c1, c2 = self.dos_cajas_fuera()
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        self.client.post(url, {"accion": "cancelar_guia_caja", "folio": pedido.folio, "caja": c1.pk})
+        with patch("apps.integraciones.services.cancelar_fulfillment_caja"), self.captureOnCommitCallbacks(execute=True):
+            self.client.post(url, {"accion": "quitar_de_salida_caja", "folio": pedido.folio, "caja": c1.pk})
+        hoja = Manifiesto.objects.get()
+        html = self.client.get(reverse("piso:manifiesto", args=[hoja.pk])).content.decode()
+        self.assertIn("NO SALIÓ", html)
+        self.assertIn("<b>2</b> caja", html)  # la hoja firmada no cambia su conteo
+        self.assertIn("<b>1</b> no salió", html)
+        lista = self.client.get(reverse("mesa:manifiestos")).content.decode()
+        self.assertIn("1 no salió", lista)

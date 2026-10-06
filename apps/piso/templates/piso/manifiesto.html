@@ -44,7 +44,7 @@ la hoja que firma el chofer por lo que subió a su camión. Blanco y negro.
     </div>
   </div>
   <div class="datos">
-    <div><b>{{ lineas|length }}</b> caja{{ lineas|length|pluralize }} · <b>{{ pedidos }}</b> pedido{{ pedidos|pluralize }}</div>
+    <div><b>{{ lineas|length }}</b> caja{{ lineas|length|pluralize }} · <b>{{ pedidos }}</b> pedido{{ pedidos|pluralize }}{% if no_salieron %} · <b>{{ no_salieron }}</b> no salió (quitada de salida en Mesa después de firmar){% endif %}</div>
     <div>WOP Fulfillment · Local 380 E</div>
   </div>
 </div>
@@ -57,7 +57,7 @@ la hoja que firma el chofer por lo que subió a su camión. Blanco y negro.
       <td class="mono">{{ forloop.counter }}</td>
       <td class="mono">{{ l.pedido.folio }}</td>
       <td>{% if l.caja %}{{ l.caja }}{% else %}—{% endif %}</td>
-      <td class="mono">{{ l.numero_guia|default:"—" }}</td>
+      <td class="mono">{{ l.numero_guia|default:"—" }}{% if l.no_salio %}<br><b>NO SALIÓ</b> <span style="color:#444">· quitada de salida {{ l.ts_no_salio|date:"d/M H:i" }}</span>{% endif %}</td>
       <td>{{ l.pedido.cliente.nombre }}</td>
       <td>{{ l.pedido.comprador_nombre|default:"—" }}<br><span style="color:#444">{{ l.destino }}</span></td>
     </tr>

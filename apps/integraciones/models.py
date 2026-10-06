@@ -142,10 +142,12 @@ class EscrituraShopifyPendiente(models.Model):
     ACCION_FULFILLMENT = "fulfillment"
     ACCION_TRACKING = "tracking"
     ACCION_EVENTO = "evento"
+    ACCION_CANCELAR = "cancelar"
     ACCIONES = [
         (ACCION_FULFILLMENT, "Crear fulfillment"),
         (ACCION_TRACKING, "Actualizar rastreo (reposición)"),
         (ACCION_EVENTO, "Evento de avance"),
+        (ACCION_CANCELAR, "Cancelar fulfillment (caja que no salió)"),
     ]
 
     tienda = models.ForeignKey(Tienda, on_delete=models.CASCADE, related_name="escrituras_pendientes")

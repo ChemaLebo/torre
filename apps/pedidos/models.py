@@ -62,7 +62,10 @@ class Pedido(models.Model):
         # tardía (Mesa decide el reingreso o resuelve la incidencia CAN).
         # → PENDIENTE desde la calle o ya entregado SOLO por una reposición de
         # producto (services.reponer_lineas, 2026-09-28): líneas nuevas, mismo folio.
-        RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO, PENDIENTE},
+        # RECOLECTADO / PARCIALMENTE_DESPACHADO → EMPACADO SOLO por "Quitar de
+        # salida" (services.quitar_de_salida, 2026-10-05): la última caja que
+        # seguía fuera resultó que nunca se fue y todo vuelve a bodega.
+        RECOLECTADO: {EN_TRANSITO, ENTREGADO, PARCIALMENTE_DESPACHADO, CANCELADO, PENDIENTE, EMPACADO},
         EN_TRANSITO: {ENTREGADO, ENTREGA_PRESUNTA, RETORNADO, CANCELADO, PENDIENTE},
         ENTREGA_PRESUNTA: {ENTREGADO, RETORNADO, CANCELADO, PENDIENTE},
         # PARCIALMENTE_DESPACHADO = salieron algunas cajas y otras siguen en
@@ -71,7 +74,7 @@ class Pedido(models.Model):
         # estado de espera del fulfillment parcial (2026-09-22): salió lo que
         # había y una línea sin inventario espera stock; al reservarse el
         # pedido vuelve a PENDIENTE (segunda ola, mismo folio).
-        PARCIALMENTE_DESPACHADO: {RECOLECTADO, EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO, PENDIENTE},
+        PARCIALMENTE_DESPACHADO: {RECOLECTADO, EN_TRANSITO, ENTREGADO, RETORNADO, CANCELADO, PENDIENTE, EMPACADO},
         CANCELACION_PENDIENTE: {CANCELADO},
         ENTREGADO: {PENDIENTE},  # reposición
         CANCELADO: set(),

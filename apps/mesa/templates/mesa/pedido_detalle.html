@@ -86,7 +86,7 @@
 </div>
 
 <div class="card mt" id="cajas">
-  <div class="titulo"><h3>Cajas</h3><span class="small">{{ cajas|length }} caja{{ cajas|length|pluralize }} · las acciones son por caja y solo antes de salir</span></div>
+  <div class="titulo"><h3>Cajas</h3><span class="small">{{ cajas|length }} caja{{ cajas|length|pluralize }} · las acciones son por caja y antes de salir; una caja que firmó manifiesto pero nunca se fue (guía cancelada, sin recolección del carrier) se quita de salida</span></div>
   {% if cajas %}
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
@@ -130,7 +130,13 @@
                 <button class="btn chico" type="submit" title="Etiqueta del carrier y etiqueta interna">Reimprimir etiqueta</button>
               </form>
               {% endif %}
-              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia %}<span class="muted small">—</span>{% endif %}
+              {% if caja.puede_quitar_de_salida %}
+              <form method="post" onsubmit="return confirm('La caja {{ caja.numero }} firmó en el manifiesto pero nunca se fue (guía cancelada y el carrier no la recogió). ¿Regresarla a bodega? Vuelve a empacada con su cierre, su contenido regresa al kardex y su fulfillment se cancela en Shopify sin avisar al comprador. Después cámbiale la paquetería aquí mismo.');">{% csrf_token %}
+                <input type="hidden" name="accion" value="quitar_de_salida_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
+                <button class="btn chico peligro" type="submit" title="La caja firmó manifiesto pero nunca se fue: vuelve a bodega para salir por otra paquetería o con la flota propia">Quitar de salida</button>
+              </form>
+              {% endif %}
+              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida %}<span class="muted small">—</span>{% endif %}
             </div>
           </td>
         </tr>

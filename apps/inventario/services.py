@@ -318,6 +318,31 @@ def despachar(sku, cantidad, referencia):
     _notificar_cambio_disponible(sku)
 
 
+def regresar_de_salida(sku, cantidad, referencia, actor, ubicacion=None):
+    """Reverso exacto de `despachar` para una caja que firmó manifiesto pero
+    nunca se fue ("Quitar de salida", Chema 2026-10-05): despachado →
+    en_empaque, delta positivo. La caja sigue cerrada con su contenido, así
+    que vuelve a EN_EMPAQUE (no a vendible) y la siguiente salida la vuelve a
+    despachar. Cae en `ubicacion` (el corral del que salió) o, sin ella, en
+    la primera de salida / recepción activa; sin lote (la salida tampoco lo
+    lleva). Sin reintento de reservas: no entra stock vendible."""
+    cantidad = _validar_cantidad(cantidad, "regresar de salida")
+    ubic = ubicacion or _ubicacion_tipo(Ubicacion.SALIDA, Ubicacion.RECEPCION)
+    if ubic is None:
+        raise ValueError("No hay ubicación de salida ni de recepción activa para regresar la caja.")
+    with transaction.atomic():
+        _incrementar(sku, ubic.pk, None, Saldo.EN_EMPAQUE, cantidad)
+        _mov(
+            sku, Movimiento.RETORNO, cantidad,
+            origen="despachado", destino=Saldo.EN_EMPAQUE, referencia=referencia, actor=actor,
+        )
+        registrar_evento(
+            "sku", sku.codigo, "regreso_de_salida", actor=actor, cliente=sku.cliente,
+            delta={"cantidad": cantidad, "referencia": str(referencia), "ubicacion": ubic.codigo},
+        )
+    _notificar_cambio_disponible(sku)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Contrato: recepción y put-away
 # ─────────────────────────────────────────────────────────────────────────────

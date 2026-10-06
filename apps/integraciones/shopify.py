@@ -144,6 +144,18 @@ mutation actualizarTracking($fulfillmentId: ID!, $trackingInfoInput: Fulfillment
 }
 """
 
+# "Quitar de salida" (2026-10-05): la caja firmó manifiesto pero nunca se fue;
+# su fulfillment se cancela y sus líneas vuelven a quedar por surtir en la
+# orden (la siguiente salida escribe uno nuevo). Shopify no manda correo.
+MUTACION_CANCELAR_FULFILLMENT = """
+mutation cancelarFulfillment($id: ID!) {
+  fulfillmentCancel(id: $id) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
 # Catálogo completo (2026-10-01): todas las variantes con SKU, paginadas de 250
 # en 250, para dar de alta productos nuevos y seguir cambios de nombre o código.
 CONSULTA_CATALOGO = """
@@ -560,6 +572,18 @@ class ShopifyClient:
         errores = resultado.get("userErrors") or []
         if errores:
             raise ShopifyError(f"fulfillmentTrackingInfoUpdate {self.tienda.dominio}: {errores}")
+        return resultado.get("fulfillment") or {}
+
+    def cancelar_fulfillment(self, fulfillment_gid):
+        """fulfillmentCancel: la caja nunca salió ("Quitar de salida"). Sus line
+        items vuelven a quedar por surtir en sus fulfillment orders y el admin
+        regresa a Unfulfilled / Partially fulfilled; sin correo al comprador.
+        Regresa el fulfillment ({id, status})."""
+        datos = self.graphql(MUTACION_CANCELAR_FULFILLMENT, {"id": fulfillment_gid})
+        resultado = datos.get("fulfillmentCancel") or {}
+        errores = resultado.get("userErrors") or []
+        if errores:
+            raise ShopifyError(f"fulfillmentCancel {self.tienda.dominio}: {errores}")
         return resultado.get("fulfillment") or {}
 
     def fulfillments_de_orden(self, order_id):

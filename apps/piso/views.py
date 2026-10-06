@@ -1801,7 +1801,10 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         "pedido": pedido,
         "fotos_sueltas": _fotos_sueltas(pedido, cajas),
     }
-    if pedido.cajas_cerradas_completas:
+    # Éxito solo cuando Salida lo va a aceptar: cada caja con cierre Y guía
+    # viva (empaque_completo). Una caja quitada de salida conserva su cierre
+    # pero no tiene guía: cae al paso de cierre, que ofrece "Reintentar guía".
+    if pedido.empaque_completo:
         contexto.update({
             "paso": "exito",
             "corral": _corral_de_carrier(_carrier_probable(pedido)),
@@ -2535,6 +2538,8 @@ def manifiesto(request, pk):
     return render(request, "piso/manifiesto.html", {
         "manifiesto": hoja, "lineas": lineas, "firma": firma_de_manifiesto(hoja),
         "sin_escaneo": [l for l in todas if l.sin_escaneo],
+        # Firmó pero nunca se fue (Mesa la quitó de salida): la hoja se conserva tal cual, con la nota.
+        "no_salieron": sum(1 for l in lineas if l.no_salio),
         "pedidos": len({l.pedido_id for l in lineas}), "es_mesa": _es_mesa(request),
     })
 

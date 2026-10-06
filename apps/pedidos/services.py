@@ -2574,6 +2574,168 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     return pedido
 
 
+def motivo_no_quitable_de_salida(pedido, caja):
+    """Por qué una caja NO se puede quitar de salida; "" si sí se puede. Regla
+    (Chema 2026-10-05, PED-00319): la caja firmó manifiesto (DESPACHADO) pero
+    nunca se fue — su guía está cancelada (ninguna viva; una guía que viajó y
+    regresó es un retorno, no esto) y ningún carrier reportó haberla recogido
+    (ts_recolectado_carrier). Solo con el pedido RECOLECTADO o PARCIALMENTE
+    DESPACHADO: en tránsito o entregado ya hay algo del pedido en la calle
+    que el carrier movió, y eso se resuelve con él. Lee `caja.guias.all()`
+    para respetar el prefetch del detalle."""
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+
+    if pedido.estado not in (Pedido.RECOLECTADO, Pedido.PARCIALMENTE_DESPACHADO):
+        return (
+            f"{pedido.folio} está {pedido.get_estado_display().lower()}: solo se quita de salida una caja "
+            "de un pedido recolectado o parcialmente despachado."
+        )
+    if caja.estado != Paquete.DESPACHADO:
+        return f"La caja {caja.numero} de {pedido.folio} no ha salido: no hay nada que quitar."
+    guias = list(caja.guias.all())
+    if not guias:
+        return f"La caja {caja.numero} de {pedido.folio} salió sin guía registrada: no se puede quitar de salida."
+    viva = next((g for g in guias if g.es_activa), None)
+    if viva is not None:
+        return (
+            f"La caja {caja.numero} de {pedido.folio} todavía tiene su guía viva ({viva.numero}): "
+            "si el carrier no la recogió, cancela la guía primero."
+        )
+    recogida = next((g for g in guias if g.ts_recolectado_carrier is not None), None)
+    if recogida is not None:
+        return (
+            f"El carrier reportó que recogió la caja {caja.numero} de {pedido.folio} (guía {recogida.numero}, "
+            f"{timezone.localtime(recogida.ts_recolectado_carrier):%d/%b %H:%M}): no se puede quitar de salida."
+        )
+    if any(g.estado == Guia.RETORNO for g in guias):
+        return f"La caja {caja.numero} de {pedido.folio} viajó y regresó (retorno): eso es un reingreso, no una salida que no fue."
+    return ""
+
+
+def _regresar_contenido_caja(pedido, caja, actor, ubicacion=None):
+    """Reverso del kardex de marcar_recolectado para UNA caja que nunca se
+    fue: lo que viaja en ella (PaqueteLinea, en unidades de venta enteras:
+    una media caja reempacada no devuelve nada hasta que vuelvan las dos
+    mitades) regresa de despachado a en_empaque y baja de
+    `LineaPedido.cantidad_despachada`, con tope en lo despachado. Un kit
+    arrastra a sus hijas (el kardex despachó a las hijas, nunca al kit
+    virtual): todas si la caja llevaba el kit completo, proporcional si no.
+    Regresa [[sku, unidades]] de lo devuelto."""
+    from fractions import Fraction
+
+    from apps.inventario.services import regresar_de_salida  # lazy
+
+    unidades = {}
+    lineas = {}
+    for pl in caja.lineas.select_related("linea_pedido__sku"):
+        lineas[pl.linea_pedido_id] = pl.linea_pedido
+        unidades[pl.linea_pedido_id] = unidades.get(pl.linea_pedido_id, Fraction(0)) + Fraction(pl.cantidad, pl.fraccion_de or 1)
+    devuelto = []
+
+    def _devolver(linea, cuantas):
+        cuantas = min(int(cuantas), linea.cantidad_despachada)
+        if cuantas <= 0:
+            return
+        if not linea.sku.es_kit:
+            regresar_de_salida(linea.sku, cuantas, pedido.folio, actor, ubicacion=ubicacion)
+            devuelto.append([linea.sku.codigo, cuantas])
+        linea.cantidad_despachada -= cuantas
+        linea.save(update_fields=["cantidad_despachada"])
+
+    for pk, linea in lineas.items():
+        enteras = int(unidades[pk])
+        if linea.sku.es_kit:
+            for hija in linea.componentes.select_related("sku"):
+                _devolver(hija, hija.cantidad if enteras >= linea.cantidad else hija.cantidad * enteras // max(linea.cantidad, 1))
+        _devolver(linea, enteras)
+    return devuelto
+
+
+def quitar_de_salida(pedido, caja, actor, motivo=""):
+    """"Quitar de salida" (Chema 2026-10-05, PED-00319): la caja subió al
+    manifiesto y firmó, pero nunca se fue — Mesa canceló su guía y el carrier
+    no la recogió — y regresa a bodega para salir por otra paquetería o con
+    la flota propia. Solo con motivo_no_quitable_de_salida en blanco. En UNA
+    transacción: 1) la línea del manifiesto se marca `no_salio` (la hoja y
+    la firma se conservan; deja de contar como salida en la línea de tiempo);
+    2) el contenido de la caja vuelve al kardex (despachado → en_empaque, en
+    el corral del manifiesto) y baja de cantidad_despachada
+    (_regresar_contenido_caja); 3) la caja vuelve a EMPACADO conservando su
+    cierre, peso y fotos; 4) con otras cajas aún fuera el pedido queda
+    PARCIALMENTE_DESPACHADO; si era la última, vuelve a EMPACADO sin dueño y
+    sin ts_recolectado (la siguiente salida lo vuelve a estampar). Después,
+    desde el detalle, Mesa le cambia la paquetería a la caja (incluida la
+    salida sin guía) y el piso recompra la guía. 5) Shopify, best-effort en
+    on_commit: el fulfillment de ESA caja se cancela y se desliga
+    (integraciones.cancelar_fulfillment_caja) para que la siguiente salida
+    escriba uno nuevo; sin correo al comprador. Auditado como
+    caja_quitada_de_salida (manifiesto, chofer, lo devuelto). Regresa la caja."""
+    from apps.catalogo.models import Ubicacion  # lazy: modelo de otra app
+    from apps.envios.models import LineaManifiesto, Paquete  # lazy: modelos de otra app
+
+    razon = motivo_no_quitable_de_salida(pedido, caja)
+    if razon:
+        raise ValueError(razon)
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        caja = Paquete.objects.select_for_update().get(pk=caja.pk)
+        razon = motivo_no_quitable_de_salida(fresco, caja)
+        if razon:
+            raise ValueError(razon)
+        ahora = timezone.now()
+        hojas = list(
+            LineaManifiesto.objects.filter(paquete=caja, no_salio=False).select_related("manifiesto").order_by("pk")
+        )
+        for linea in hojas:
+            linea.no_salio, linea.ts_no_salio = True, ahora
+            linea.save(update_fields=["no_salio", "ts_no_salio"])
+        corral = None
+        if hojas and hojas[-1].manifiesto.corral:
+            corral = Ubicacion.objects.filter(codigo=hojas[-1].manifiesto.corral, tipo=Ubicacion.SALIDA, activo=True).first()
+        devuelto = _regresar_contenido_caja(fresco, caja, actor, ubicacion=corral)
+        caja.transicionar(
+            Paquete.EMPACADO, actor=actor,
+            motivo=f"Caja {caja.numero} de {fresco.folio} quitada de salida: nunca se fue, vuelve a bodega.",
+        )
+        quedan_fuera = [c.numero for c in fresco.paquetes.all() if c.pk != caja.pk and c.estado == Paquete.DESPACHADO]
+        if quedan_fuera:
+            if fresco.estado != Pedido.PARCIALMENTE_DESPACHADO:
+                fresco.transicionar(
+                    Pedido.PARCIALMENTE_DESPACHADO, actor=actor,
+                    motivo=f"La caja {caja.numero} nunca se fue; la caja {', '.join(str(n) for n in quedan_fuera)} sigue fuera.",
+                )
+        else:
+            fresco.asignado_a, fresco.ts_recolectado = None, None
+            fresco.save(update_fields=["asignado_a", "ts_recolectado", "actualizado"])
+            fresco.transicionar(
+                Pedido.EMPACADO, actor=actor,
+                motivo=f"La caja {caja.numero} nunca se fue y no queda ninguna fuera: el pedido vuelve a bodega.",
+            )
+        registrar_evento(
+            "pedido", fresco.pk, "caja_quitada_de_salida", actor=actor, cliente=fresco.cliente,
+            delta={
+                "caja": caja.numero,
+                "manifiestos": [l.manifiesto.folio for l in hojas],
+                "chofer": hojas[-1].manifiesto.chofer if hojas else "",
+                "guias": [g.numero for g in caja.guias.all()],
+                "devuelto": devuelto,
+                "quedan_fuera": quedan_fuera,
+                "estado": fresco.estado,
+            },
+            motivo=(motivo or f"Caja {caja.numero} quitada de salida: guía cancelada y el carrier no la recogió.")[:300],
+        )
+
+        def _shopify():
+            try:
+                from apps.integraciones.services import cancelar_fulfillment_caja  # lazy
+                cancelar_fulfillment_caja(fresco, caja, actor)
+            except Exception:  # noqa: BLE001, S110 — best-effort: Shopify jamás frena el regreso de la caja
+                pass
+        transaction.on_commit(_shopify)
+    pedido.estado = fresco.estado
+    return caja
+
+
 def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
     """Entrega en mano / recolección en bodega (Chema 2026-09-21): el pedido
     sale sin carrier ni guía y queda ENTREGADO. Vale desde PENDIENTE,

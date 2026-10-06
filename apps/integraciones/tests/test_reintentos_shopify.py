@@ -264,3 +264,86 @@ class ClienteShopifyTests(TestCase):
         with patch.object(ShopifyClient, "graphql", return_value={"fulfillmentTrackingInfoUpdate": {"fulfillment": None, "userErrors": [{"field": "id", "message": "no existe"}]}}):
             with self.assertRaises(ShopifyError):
                 api.actualizar_tracking_fulfillment("gid://shopify/Fulfillment/A", "imile", "IM-2", "")
+
+    def test_cancelar_fulfillment_manda_la_mutacion_y_levanta_user_errors(self):
+        from apps.integraciones.shopify import ShopifyClient
+
+        api = ShopifyClient(crear_tienda(crear_cliente(), token="shpat_prueba"))
+        with patch.object(ShopifyClient, "graphql", return_value={"fulfillmentCancel": {"fulfillment": {"id": "gid://shopify/Fulfillment/A", "status": "CANCELLED"}, "userErrors": []}}) as graphql:
+            resultado = api.cancelar_fulfillment("gid://shopify/Fulfillment/A")
+        self.assertEqual(resultado["status"], "CANCELLED")
+        self.assertIn("fulfillmentCancel", graphql.call_args.args[0])
+        self.assertEqual(graphql.call_args.args[1], {"id": "gid://shopify/Fulfillment/A"})
+        with patch.object(ShopifyClient, "graphql", return_value={"fulfillmentCancel": {"fulfillment": None, "userErrors": [{"field": "id", "message": "ya cancelado"}]}}):
+            with self.assertRaises(ShopifyError):
+                api.cancelar_fulfillment("gid://shopify/Fulfillment/A")
+
+
+class CancelarFulfillmentCajaTests(Base):
+    """"Quitar de salida" (2026-10-05): el fulfillment de la caja que nunca se
+    fue se cancela en Shopify y la caja se desliga; si falla, a la cola."""
+
+    FID = "gid://shopify/Fulfillment/A"
+
+    def setUp(self):
+        super().setUp()
+        Paquete.objects.filter(pk=self.c1.pk).update(shopify_fulfillment_id=self.FID)
+        self.c1.refresh_from_db()
+
+    def test_cancela_en_shopify_y_desliga_la_caja(self):
+        from apps.core.models import EventoAuditoria
+        from apps.integraciones.services import cancelar_fulfillment_caja
+
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.cancelar_fulfillment.return_value = {"id": self.FID, "status": "CANCELLED"}
+            self.assertTrue(cancelar_fulfillment_caja(self.pedido, self.c1))
+        api.cancelar_fulfillment.assert_called_once_with(self.FID)
+        self.c1.refresh_from_db()
+        self.assertEqual(self.c1.shopify_fulfillment_id, "")
+        self.assertEqual(SyncLog.objects.latest("ts").resultado, SyncLog.RESULTADO_OK)
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="paquete", entidad_id=str(self.c1.pk), accion="fulfillment_cancelado_shopify").exists())
+        # Sin id no hay nada que hacer (y no se llama a Shopify).
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            self.assertTrue(cancelar_fulfillment_caja(self.pedido, self.c1))
+        cliente_cls.return_value.cancelar_fulfillment.assert_not_called()
+
+    def test_id_compartido_con_otra_caja_o_con_el_pedido_solo_se_desliga(self):
+        from apps.integraciones.services import cancelar_fulfillment_caja
+
+        c2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal(4), carrier="estafeta", estado="DESPACHADO", shopify_fulfillment_id=self.FID)
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            self.assertTrue(cancelar_fulfillment_caja(self.pedido, self.c1))
+        cliente_cls.return_value.cancelar_fulfillment.assert_not_called()
+        self.c1.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual((self.c1.shopify_fulfillment_id, c2.shopify_fulfillment_id), ("", self.FID))
+        self.assertIn("no se cancela", SyncLog.objects.latest("ts").detalle)
+        # El del pedido entero (líneas no separables) tampoco se cancela.
+        Paquete.objects.filter(pk=c2.pk).update(shopify_fulfillment_id="")
+        Paquete.objects.filter(pk=self.c1.pk).update(shopify_fulfillment_id=self.FID)
+        self.pedido.shopify_fulfillment_id = self.FID
+        self.pedido.save(update_fields=["shopify_fulfillment_id"])
+        self.c1.refresh_from_db()
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            self.assertTrue(cancelar_fulfillment_caja(self.pedido, self.c1))
+        cliente_cls.return_value.cancelar_fulfillment.assert_not_called()
+
+    def test_shopify_caido_se_encola_y_el_reintento_cancela_con_el_id_guardado(self):
+        from apps.integraciones.services import cancelar_fulfillment_caja
+
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            cliente_cls.return_value.cancelar_fulfillment.side_effect = ShopifyError("502 caído")
+            self.assertFalse(cancelar_fulfillment_caja(self.pedido, self.c1))
+        self.c1.refresh_from_db()
+        self.assertEqual(self.c1.shopify_fulfillment_id, "")  # la caja ya quedó desligada en Torre
+        escritura = EscrituraShopifyPendiente.objects.get()
+        self.assertEqual((escritura.accion, escritura.datos), (EscrituraShopifyPendiente.ACCION_CANCELAR, {"fid": self.FID, "caja": self.c1.pk}))
+        self.assertIn("502", escritura.ultimo_error)
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            api.cancelar_fulfillment.return_value = {"id": self.FID, "status": "CANCELLED"}
+            resumen = reintentar_escrituras_shopify()
+        self.assertEqual(resumen, {"pendientes": 1, "ok": 1, "error": 0, "vencidas": 0})
+        api.cancelar_fulfillment.assert_called_once_with(self.FID)
+        self.assertFalse(EscrituraShopifyPendiente.objects.exists())

@@ -32,7 +32,7 @@
         <td>{{ m.ts|date:"d/M/Y H:i" }}</td>
         <td class="mono">{{ m.carrier }}</td>
         <td class="mono">{{ m.corral|default:"—" }}</td>
-        <td class="mono">{{ m.cajas }}</td>
+        <td class="mono">{{ m.cajas }}{% if m.no_salieron %} <span class="pill warn" title="Firmó pero nunca se fue: Mesa la quitó de salida">{{ m.no_salieron }} no salió</span>{% endif %}</td>
         <td class="mono small">{% for f in m.folios %}{{ f }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
         <td>{{ m.operador.username|default:"—" }}</td>
         <td>{{ m.chofer|default:"—" }}</td>

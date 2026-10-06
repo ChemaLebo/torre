@@ -812,6 +812,25 @@ def _pedidos_cancelar_guia_caja(request):
     return f"Guía {vieja.numero} de la caja {caja.numero} cancelada; {pedido.folio} regresó a empaquetado sin dueño y el piso la recompra."
 
 
+def _pedidos_quitar_de_salida_caja(request):
+    """Botón "Quitar de salida" por caja (Chema 2026-10-05, PED-00319): la
+    caja firmó manifiesto pero nunca se fue (guía cancelada, el carrier no la
+    recogió) y regresa a bodega (pedidos.quitar_de_salida)."""
+    from apps.pedidos.services import quitar_de_salida
+
+    pedido, caja = _caja_del_post(request)
+    caja = quitar_de_salida(pedido, caja, request.user, motivo=(request.POST.get("motivo") or "").strip())
+    pedido.refresh_from_db()
+    if pedido.estado == "EMPACADO":
+        que = "no queda ninguna caja fuera: el pedido volvió a empaquetado sin dueño"
+    else:
+        que = "las demás cajas siguen fuera (parcialmente despachado)"
+    return (
+        f"Caja {caja.numero} de {pedido.folio} quitada de salida: su contenido regresó al kardex y {que}. "
+        "Cámbiale la paquetería aquí mismo y el piso recompra la guía."
+    )
+
+
 def _guia_del_post(request):
     """(pedido, guía) de una acción por guía del detalle (folio + guia pk)."""
     from apps.envios.models import Guia  # lazy: modelo de otra app
@@ -903,7 +922,8 @@ def _pedidos_reimprimir_caja(request):
 def _ejecutar_accion_pedido(request):
     """Acciones POST de Mesa sobre un pedido (lista y detalle comparten):
     cancelar, cancelar guías, cambiar paquetería (pedido o caja), reintentar
-    reservas, cancelar guía de una caja, reimprimir etiqueta de una caja."""
+    reservas, cancelar guía de una caja, quitar una caja de salida,
+    reimprimir etiqueta de una caja."""
     accion = request.POST.get("accion")
     simples = {
         "cancelar_guias": _pedidos_cancelar_guias,
@@ -911,6 +931,7 @@ def _ejecutar_accion_pedido(request):
         "cambiar_paqueteria": _pedidos_cambiar_paqueteria,
         "cambiar_paqueteria_caja": _pedidos_cambiar_paqueteria_caja,
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
+        "quitar_de_salida_caja": _pedidos_quitar_de_salida_caja,
         "reimprimir_caja": _pedidos_reimprimir_caja,
         "replanear_cajas": _pedidos_replanear_cajas,
         "registrar_reembolso_guia": _pedidos_registrar_reembolso,
@@ -1043,7 +1064,7 @@ def pedido_detalle(request, pk):
     from apps.pedidos.linea_tiempo import construir
     from apps.pedidos.models import Pedido
     from apps.pedidos.reportes import url_orden_shopify
-    from apps.pedidos.services import direccion_en_una_linea
+    from apps.pedidos.services import direccion_en_una_linea, motivo_no_quitable_de_salida
 
     pedido = get_object_or_404(
         Pedido.objects.select_related("cliente", "tienda", "asignado_a")
@@ -1062,6 +1083,10 @@ def pedido_detalle(request, pk):
     siguiente = qs.filter(creado__lt=pedido.creado).first()
 
     puede_cambiar = pedido.estado in ESTADOS_CAMBIO_PAQUETERIA
+    # Por caja también con el pedido PARCIALMENTE_DESPACHADO (2026-10-05): la
+    # caja que se quedó (o que se quitó de salida) sí cambia de paquetería;
+    # las despachadas no (el servicio lo valida igual).
+    puede_cambiar_caja = puede_cambiar or pedido.estado == Pedido.PARCIALMENTE_DESPACHADO
     cajas = sorted(pedido.paquetes.all(), key=lambda c: c.numero)
     for caja in cajas:
         caja.guia = next((g for g in caja.guias.all() if g.es_activa), None)
@@ -1069,13 +1094,15 @@ def pedido_detalle(request, pk):
         for g in caja.historial:
             g.url_rastreo = url_rastreo_carrier(g.carrier, g.numero)
         caja.url_rastreo = url_rastreo_carrier(caja.guia.carrier, caja.guia.numero) if caja.guia else ""
-        caja.puede_cambiar = puede_cambiar and caja.estado != "DESPACHADO" and (
+        caja.puede_cambiar = puede_cambiar_caja and caja.estado != "DESPACHADO" and (
             caja.guia is None or caja.guia.estado == "GUIA_CREADA"
         )
         # Guía de una caja ya despachada que el carrier nunca registró (perdida): se cancela para que no la cobre.
         caja.guia_perdida = caja.estado == "DESPACHADO" and caja.guia is not None and caja.guia.estado == "GUIA_CREADA"
         caja.puede_cancelar_guia = (caja.puede_cambiar and caja.guia is not None) or caja.guia_perdida
         caja.puede_reimprimir = caja.guia is not None and caja.estado != "DESPACHADO"
+        # Firmó manifiesto pero nunca se fue (guía cancelada, sin recolección del carrier): vuelve a bodega.
+        caja.puede_quitar_de_salida = not motivo_no_quitable_de_salida(pedido, caja)
     guias_sueltas = [
         (g, url_rastreo_carrier(g.carrier, g.numero))
         for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.paquete_id is None
@@ -1275,6 +1302,7 @@ def manifiestos(request):
     for hoja in filas:
         lineas = list(hoja.lineas.all())
         hoja.cajas = len(lineas)
+        hoja.no_salieron = sum(1 for l in lineas if l.no_salio)  # quitadas de salida después de firmar
         hoja.folios = sorted({l.pedido.folio for l in lineas})
         hoja.firma = firmas.get(hoja.folio)
     return render(request, "mesa/manifiestos.html", {

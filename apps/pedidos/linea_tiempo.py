@@ -126,7 +126,8 @@ def construir(pedidos, guia_estado=""):
         pedidos.select_related("cliente", "tienda")
         .prefetch_related("guias__eventos", "paquetes__guias__eventos")
     )
-    lineas = LineaManifiesto.objects.filter(pedido__in=pedidos).select_related("manifiesto")
+    # Una caja quitada de salida (no_salio) nunca se fue: su hoja no cuenta.
+    lineas = LineaManifiesto.objects.filter(pedido__in=pedidos, no_salio=False).select_related("manifiesto")
     por_guia = {l.guia_id: l for l in lineas if l.guia_id}
     # Entradas a picking/empaque y cierres por caja: las horas de cada ola.
     eventos_por_pedido = {}

@@ -211,11 +211,15 @@ class Paquete(models.Model):
         (EMPACADO, "Empacado"),
         (DESPACHADO, "Despachado"),
     ]
+    # DESPACHADO → EMPACADO solo por "Quitar de salida" en Mesa (Chema
+    # 2026-10-05, PED-00319): la caja subió al manifiesto pero nunca se fue
+    # (guía cancelada, el carrier no la recogió) y vuelve a bodega
+    # (pedidos.services.quitar_de_salida).
     TRANSICIONES = {
         PLANEADO: {EN_EMPAQUE, EMPACADO},
         EN_EMPAQUE: {EMPACADO},
         EMPACADO: {DESPACHADO},
-        DESPACHADO: set(),
+        DESPACHADO: {EMPACADO},
     }
 
     pedido = models.ForeignKey("pedidos.Pedido", on_delete=models.CASCADE, related_name="paquetes")
@@ -562,6 +566,12 @@ class LineaManifiesto(models.Model):
     # registro (Chema 2026-09-23, control del corral): se registra igual pero
     # en la hoja va aparte, fuera del conteo que firma el chofer.
     sin_escaneo = models.BooleanField(default=False)
+    # "Quitar de salida" (Chema 2026-10-05, PED-00319): la caja firmó en esta
+    # hoja pero nunca se fue (guía cancelada, el carrier no la recogió) y
+    # Mesa la regresó a bodega. La hoja y la firma no se tocan: la línea se
+    # marca y deja de contar como salida (línea de tiempo, reportes).
+    no_salio = models.BooleanField(default=False)
+    ts_no_salio = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["pedido_id", "caja", "pk"]

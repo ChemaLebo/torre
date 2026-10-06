@@ -334,6 +334,30 @@ con cajas en bodega. Sin migración.
 con Chema si un pedido con una caja regresada y otra entregada debe cerrar
 como ENTREGADO (hoy sí, con la incidencia RF abierta) o quedarse abierto.
 
+## Quitar de salida — hecho 2026-10-05
+
+PED-00319: cuatro cajas firmaron manifiesto, 99minutos nunca las recogió,
+Mesa canceló las guías y había que sacarlas con la flota propia. Botón
+"Quitar de salida" por caja en el detalle (`pedidos.quitar_de_salida`,
+CONVENTIONS "Quitar de salida"): la línea del manifiesto queda `no_salio`,
+el contenido vuelve al kardex, la caja a EMPACADO y el pedido a parcial o a
+empacado; el fulfillment de la caja se cancela en Shopify.
+
+**Queda:**
+- Con otras cajas aún fuera (pedido PARCIALMENTE_DESPACHADO) la caja que
+  regresó no tiene quién le recompre la guía: "Reintentar guía" del wizard
+  solo vive con el pedido EMPACADO y `generar_guias` compra para TODA caja
+  sin guía activa (también las despachadas con guía cancelada, PED-00031).
+  Se destraba con "compra de guías solo para cajas que aún no salen"
+  (pendiente de go) y permitiendo el reintento en PARCIALMENTE_DESPACHADO.
+  Hoy, con todas las cajas de vuelta (el caso real) el flujo cierra completo.
+- Si el fulfillment en Shopify era del pedido entero (líneas no separables
+  por caja: kits, SKU que Shopify no conoce) no se cancela ni se actualiza:
+  la guía nueva no llega a Shopify; queda en SyncLog.
+- La caja conserva su cierre (decisión de Chema): si sale por otro carrier,
+  la foto de cierre muestra la etiqueta vieja; el piso pega la nueva sin
+  volver a fotografiar.
+
 ## Fulfillment parcial (líneas sin inventario) — hecho 2026-09-22
 
 Chema: "el picking y empaquetado ignoran la existencia de los faltantes… el

@@ -867,6 +867,65 @@ def _tracking_reposicion(pedido, tienda, cajas, notificar, evento_inicial):
     return todo_ok
 
 
+def cancelar_fulfillment_caja(pedido, caja, actor=None):
+    """"Quitar de salida" (Chema 2026-10-05, PED-00319): la caja firmó
+    manifiesto pero nunca se fue y su fulfillment en Shopify
+    (Paquete.shopify_fulfillment_id) ya dice "enviada" con una guía cancelada.
+    Se desliga la caja (id en blanco: la siguiente salida escribe un
+    fulfillment nuevo con la guía nueva) y el fulfillment se cancela en
+    Shopify (fulfillmentCancel: sus líneas vuelven a quedar por surtir, sin
+    correo al comprador). Si el id lo comparte otra caja (segunda media de
+    una caja reempacada) o es el del pedido entero (líneas no separables),
+    NO se cancela: solo se desliga esta caja. Best-effort: Shopify caído
+    queda en SyncLog y en la cola de reintentos; jamás frena la operación.
+    Regresa True si quedó (o no había nada que hacer)."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    fid = caja.shopify_fulfillment_id
+    if not fid:
+        return True
+    Paquete.objects.filter(pk=caja.pk).update(shopify_fulfillment_id="")
+    caja.shopify_fulfillment_id = ""
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return True
+    compartido = (
+        pedido.shopify_fulfillment_id == fid
+        or pedido.paquetes.exclude(pk=caja.pk).filter(shopify_fulfillment_id=fid).exists()
+    )
+    if compartido:
+        _log_push(tienda, True, f"quitar de salida: caja {caja.numero} de {pedido.folio} desligada del fulfillment {fid} (lo comparten otras cajas o el pedido; no se cancela)")
+        return True
+    return _cancelar_fulfillment(tienda, pedido, caja, fid, actor)
+
+
+def _cancelar_fulfillment(tienda, pedido, caja, fid, actor=None):
+    """fulfillmentCancel de UN fulfillment (ver cancelar_fulfillment_caja);
+    también lo reproduce la cola de reintentos con el id guardado."""
+    if not tienda.token:
+        if not settings.DEBUG:
+            _log_push(tienda, False, f"quitar de salida: fulfillment {fid} de la caja {caja.numero} de {pedido.folio} NO se canceló (tienda sin token)")
+            return False
+        _log_push(tienda, True, f"ok (mock): fulfillment {fid} de la caja {caja.numero} de {pedido.folio} cancelado")
+        return True
+    try:
+        ShopifyClient(tienda).cancelar_fulfillment(fid)
+    except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no frena el regreso de la caja
+        _log_push(tienda, False, f"quitar de salida: fulfillment {fid} de la caja {caja.numero} de {pedido.folio}: {exc}")
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_CANCELAR, f"cancelar:{pedido.pk}:{caja.pk}:{fid}",
+            {"fid": fid, "caja": caja.pk}, exc,
+        )
+        return False
+    _log_push(tienda, True, f"quitar de salida: fulfillment {fid} de la caja {caja.numero} de {pedido.folio} cancelado en Shopify")
+    registrar_evento(
+        "paquete", caja.pk, "fulfillment_cancelado_shopify", actor=actor, cliente=pedido.cliente,
+        delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero, "fulfillment": fid},
+        motivo=f"La caja {caja.numero} de {pedido.folio} no salió: su fulfillment se canceló en Shopify.",
+    )
+    return True
+
+
 def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=None):
     """Avance de una guía → FulfillmentEvent en Shopify ("Delivery status").
 
@@ -975,6 +1034,11 @@ def _reintentar_escritura(escritura):
         if caja is None or caja.shopify_fulfillment_id:
             return True  # ya no existe o ya quedó
         return _tracking_reposicion(pedido, escritura.tienda, [caja], datos.get("notificar"), datos.get("evento_inicial"))
+    if escritura.accion == EscrituraShopifyPendiente.ACCION_CANCELAR:
+        caja = Paquete.objects.filter(pedido=pedido, pk=datos.get("caja")).first()
+        if caja is None or not datos.get("fid"):
+            return True  # la caja ya no existe: nada que cancelar
+        return _cancelar_fulfillment(escritura.tienda, pedido, caja, datos["fid"])
     ts = parse_datetime(datos["ts"]) if datos.get("ts") else None
     if datos.get("fid"):
         return _evento_inicial(
