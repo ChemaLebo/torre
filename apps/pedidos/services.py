@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.core.models import EvidenciaFoto
@@ -66,6 +66,11 @@ def _datos_comprador(payload):
 
 # ── Helpers compartidos del alta de pedido (ingesta Shopify y alta manual) ──
 
+# Líneas a las que les falta stock: sin reserva de lo pedido, o con piezas
+# repuestas aún sin apartar (reposición esperando inventario).
+SIN_STOCK = Q(reservada=False) | Q(cantidad_repuesta_reservada__lt=F("cantidad_repuesta"))
+
+
 def _reservar_linea(linea):
     """Aparta el stock de una línea vía inventario.reservar; marca linea.reservada.
 
@@ -98,15 +103,15 @@ def reintentar_reservas_sku(sku):
     """
     lineas = (
         LineaPedido.objects.select_related("pedido", "pedido__cliente", "sku")
-        .filter(sku=sku, reservada=False, pedido__estado__in=_ESTADOS_REINTENTO)
+        .filter(SIN_STOCK, sku=sku, pedido__estado__in=_ESTADOS_REINTENTO)
         .order_by("pedido__creado", "pk")
     )
     logradas = []
     for linea in lineas:
-        if not _reservar_linea(linea):
+        if not _reservar_lo_que_falte(linea):
             continue  # sin stock para esta; una posterior podría pedir menos piezas
         pedido = linea.pedido
-        completo = not pedido.lineas.filter(reservada=False).exists()
+        completo = not pedido.lineas.filter(SIN_STOCK).exists()
         registrar_evento(
             "pedido", pedido.pk, "reserva_reintentada", actor="sistema",
             cliente=pedido.cliente,
@@ -129,15 +134,15 @@ def reintentar_reservas_pedido(pedido, actor):
             f"{pedido.folio} está {pedido.get_estado_display()}: solo reservan stock los "
             "pedidos PENDIENTES o los que esperan inventario tras una salida parcial."
         )
-    pendientes = list(pedido.lineas.select_related("sku").filter(reservada=False))
+    pendientes = list(pedido.lineas.select_related("sku").filter(SIN_STOCK))
     if not pendientes:
         return f"{pedido.folio} ya tiene todas sus líneas reservadas."
-    con_stock = [linea for linea in pendientes if _reservar_linea(linea)]
+    con_stock = [linea for linea in pendientes if _reservar_lo_que_falte(linea)]
     registrar_evento(
         "pedido", pedido.pk, "reserva_reintentada", actor=actor, cliente=pedido.cliente,
         delta={
             "logradas": [l.sku.codigo for l in con_stock],
-            "sin_stock": [l.sku.codigo for l in pendientes if not l.reservada],
+            "sin_stock": [l.sku.codigo for l in pendientes if l not in con_stock],
         },
         motivo="Reintento manual de reservas desde Mesa de Control.",
     )
@@ -1685,9 +1690,9 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
             raise ValueError("La cantidad debe ser un número entero mayor a cero.")
         if cantidad <= 0:
             raise ValueError("La cantidad debe ser mayor a cero.")
-        if fresca.cantidad_pickeada + cantidad > fresca.cantidad:
+        if fresca.cantidad_pickeada + cantidad > fresca.con_stock:
             raise ValueError(
-                f"Te pasas: la línea pide {fresca.cantidad} y ya llevas {fresca.cantidad_pickeada}. "
+                f"Te pasas: la línea pide {fresca.con_stock} y ya llevas {fresca.cantidad_pickeada}. "
                 "Revisa la cantidad antes de confirmar."
             )
         fresca.cantidad_pickeada += cantidad
@@ -1889,10 +1894,10 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
             )
         # Solo cuenta lo que ESTA ola surte: las faltantes (sin inventario)
         # y lo que ya salió con una ola anterior no detienen el empaque.
-        incompletas = [l for l in fresco.lineas_por_surtir if l.cantidad_pickeada < l.cantidad]
+        incompletas = [l for l in fresco.lineas_por_surtir if l.cantidad_pickeada < l.con_stock]
         if incompletas:
             detalle = ", ".join(
-                f"{l.sku.codigo} ({l.cantidad_pickeada}/{l.cantidad})" for l in incompletas
+                f"{l.sku.codigo} ({l.cantidad_pickeada}/{l.con_stock})" for l in incompletas
             )
             raise ValueError(
                 f"Faltan unidades por pickear: {detalle}. Escanea todo antes de empacar."
@@ -2042,10 +2047,10 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
             f"El pedido {pedido.folio} no se puede empacar: está {pedido.get_estado_display()} "
             "y el empaque solo aplica a pedidos en picking."
         )
-    incompletas = [l for l in pedido.lineas_por_surtir if l.cantidad_pickeada < l.cantidad]
+    incompletas = [l for l in pedido.lineas_por_surtir if l.cantidad_pickeada < l.con_stock]
     if incompletas:
         detalle = ", ".join(
-            f"{l.sku.codigo} ({l.cantidad_pickeada}/{l.cantidad})" for l in incompletas
+            f"{l.sku.codigo} ({l.cantidad_pickeada}/{l.con_stock})" for l in incompletas
         )
         raise ValueError(
             f"Faltan unidades por pickear: {detalle}. Escanea todo antes de empacar."
@@ -2857,7 +2862,7 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
         lineas = list(pedido.lineas.select_related("sku"))
         if pedido.estado == Pedido.EN_PICKING:
             for linea in lineas:
-                faltan = linea.cantidad - linea.cantidad_pickeada
+                faltan = linea.por_pickear
                 if faltan > 0:
                     confirmar_linea_pick(linea, faltan, actor)
         for linea in lineas:
@@ -3139,12 +3144,19 @@ def _devolver_stock_y_cancelar(pedido, actor, motivo, tardia=False):
             if pickeada > 0:
                 reingresar_desde_pedido(linea.sku, pickeada, pedido.folio, actor, desde_empaque=empacado)
                 reingreso.append((linea.sku, pickeada))
-            resto = linea.cantidad - linea.cantidad_pickeada
-            if resto > 0 and linea.reservada:
+            resto = linea.con_stock - linea.cantidad_pickeada
+            if resto > 0:
                 liberar_reserva(linea.sku, resto, pedido.folio)
+            campos = []
             if linea.reservada and not linea.cantidad_despachada:
                 linea.reservada = False
-                linea.save(update_fields=["reservada"])
+                campos.append("reservada")
+            if linea.cantidad_repuesta_reservada and linea.cantidad_repuesta_reservada > max(linea.cantidad_despachada - linea.cantidad, 0):
+                # Repuestas apartadas que no salieron: su reserva se liberó arriba.
+                linea.cantidad_repuesta_reservada = max(linea.cantidad_despachada - linea.cantidad, 0)
+                campos.append("cantidad_repuesta_reservada")
+            if campos:
+                linea.save(update_fields=campos)
         orden = None
         if reingreso:
             ahora = timezone.now()
@@ -3333,12 +3345,14 @@ def marcar_no_recuperado(pedido, actor, motivo=""):
 def _liberar_reservas(pedido):
     """Libera en inventario las líneas que sí alcanzaron reserva."""
     from apps.inventario.services import liberar_reserva  # lazy
-    for linea in pedido.lineas.filter(reservada=True).select_related("sku"):
+    for linea in pedido.lineas.filter(Q(reservada=True) | Q(cantidad_repuesta_reservada__gt=0)).select_related("sku"):
         if linea.sku.es_kit:
             continue  # reservada=True del kit es bookkeeping: no hay RESERVADO real
-        liberar_reserva(linea.sku, linea.cantidad, pedido.folio)
+        if linea.con_stock > 0:
+            liberar_reserva(linea.sku, linea.con_stock, pedido.folio)
         linea.reservada = False
-        linea.save(update_fields=["reservada"])
+        linea.cantidad_repuesta_reservada = 0
+        linea.save(update_fields=["reservada", "cantidad_repuesta_reservada"])
 
 
 # ── Job: entregas presuntas ──

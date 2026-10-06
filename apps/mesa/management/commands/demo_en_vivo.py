@@ -77,7 +77,7 @@ class Command(BaseCommand):
                 p.refresh_from_db()
                 if p.estado == Pedido.EN_PICKING:
                     for ln in p.lineas.all():
-                        faltan = ln.cantidad - ln.cantidad_pickeada
+                        faltan = ln.por_pickear
                         if faltan > 0:
                             confirmar_linea_pick(ln, faltan, piso, codigo_escaneado=ln.sku.codigo)
                     empacar_con_fotos(p)

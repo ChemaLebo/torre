@@ -1032,7 +1032,7 @@ def pedidos(request):
         pedido.url_detalle = reverse("mesa:pedido_detalle", args=[pedido.pk]) + sufijo
         pedido.resumen_cajas = _resumen_cajas(pedido)
         # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
-        pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
+        pedido.piezas_sin_inventario = sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes)
         # Incidencia interna "Sin paquetería que cotice" abierta: tag con link (2026-09-24).
         pedido.sin_paqueteria = sin_paqueteria_abierta(pedido)
 
@@ -1148,7 +1148,7 @@ def pedido_detalle(request, pk):
         "reembolsos_guias": reembolsos_guias,
         "hoy": timezone.localdate().isoformat(),
         "lineas": list(pedido.lineas.all()),
-        "piezas_sin_inventario": sum(l.cantidad for l in pedido.lineas_faltantes),
+        "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
         "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
         "es_mesa": True,
         "sin_pedido": True,

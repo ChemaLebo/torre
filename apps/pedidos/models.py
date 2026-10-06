@@ -483,6 +483,12 @@ class LineaPedido(models.Model):
         return max(self.cantidad_repuesta - self.cantidad_repuesta_reservada, 0)
 
     @property
+    def pendiente_sin_stock(self):
+        """Piezas que esperan inventario (tag "Sin inventario"): lo pedido si
+        la línea no reservó, más las repuestas sin apartar."""
+        return (0 if self.reservada else self.cantidad) + self.repuestas_sin_stock
+
+    @property
     def faltante(self):
         """True si a la línea le falta stock para algo de lo que debe surtir:
         la ingesta no encontró existencias (reservada=False) o una reposición

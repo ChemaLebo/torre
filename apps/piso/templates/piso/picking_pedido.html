@@ -52,7 +52,7 @@
   {% for linea in faltantes %}
   <div class="corral-fila">
     <div class="crece">{{ linea.sku.descripcion }} <span class="small mono">{{ linea.sku.codigo }}</span></div>
-    <span class="pill crit">Sin inventario · {{ linea.cantidad }} pza{{ linea.cantidad|pluralize }}</span>
+    <span class="pill crit">Sin inventario · {{ linea.pendiente_sin_stock }} pza{{ linea.pendiente_sin_stock|pluralize }}</span>
   </div>
   {% endfor %}
 </div>
@@ -85,13 +85,13 @@
 {# Una línea por pantalla, en orden de ruta (primera ubicación FEFO). #}
 {% for linea in lineas %}
 <section class="pick-linea card" {% if linea.completa %}hidden{% endif %}
-         data-linea-id="{{ linea.pk }}" data-cantidad="{{ linea.cantidad }}"
+         data-linea-id="{{ linea.pk }}" data-cantidad="{{ linea.con_stock }}"
          data-pickeada="{{ linea.cantidad_pickeada }}"
          data-barras="{{ linea.sku.codigo_barras|default:'' }}"
          data-codigo="{{ linea.sku.codigo }}">
   {% if linea.primera_ubicacion %}
   <div class="eyebrow">Ve a</div>
-  {% if linea.reposicion_de_id %}<span class="pill accent">Reposición</span>{% endif %}
+  {% if linea.cantidad_repuesta %}<span class="pill accent" title="Piezas repuestas de este producto (ya salieron mal en otra caja)">Reposición · {{ linea.cantidad_repuesta }} pza{{ linea.cantidad_repuesta|pluralize }}</span>{% endif %}
   <div class="pick-ubicacion">{{ linea.primera_ubicacion.ubicacion.codigo }}</div>
   <div class="small mono">
     {% if linea.primera_ubicacion.lote %}
@@ -109,7 +109,7 @@
   {% endif %}
   {% endif %}
   <p class="pick-producto mt">{{ linea.sku.descripcion }}<br><span class="small mono">{{ linea.sku.codigo }} · {{ linea.sku.codigo_barras|default:"sin barras" }}</span></p>
-  <div class="pick-avance">{{ linea.cantidad_pickeada }} de {{ linea.cantidad }}</div>
+  <div class="pick-avance">{{ linea.cantidad_pickeada }} de {{ linea.con_stock }}</div>
 </section>
 {% endfor %}
 

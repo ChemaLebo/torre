@@ -384,7 +384,7 @@ def pedidos(request):
         pedido.pill = _PILL_PEDIDO.get(pedido.estado, "")
         pedido.url_shopify = url_orden_shopify(pedido)  # la orden en el admin de Shopify, como en Mesa
         # Fulfillment parcial: piezas que esperan inventario (tag "Sin inventario").
-        pedido.piezas_sin_inventario = sum(l.cantidad for l in pedido.lineas_faltantes)
+        pedido.piezas_sin_inventario = sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes)
     return render(request, "portal/pedidos.html", {
         "seccion": "pedidos",
         "ver": ver,

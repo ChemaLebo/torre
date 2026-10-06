@@ -215,9 +215,9 @@ def zonas_bodega(cliente=None):
         qs_picking = qs_picking.filter(cliente=cliente)
     surtiendo, listos_empaque = [], []
     for pedido in qs_picking:
-        pedido.piezas = sum(l.cantidad for l in pedido.lineas.all())
+        pedido.piezas = sum(l.con_stock for l in pedido.lineas.all())  # lo que esta ola surte (pedidas + repuestas)
         pedido.piezas_pickeadas = sum(
-            min(l.cantidad_pickeada, l.cantidad) for l in pedido.lineas.all()
+            min(l.cantidad_pickeada, l.con_stock) for l in pedido.lineas.all()
         )
         (listos_empaque if pedido.lineas_completas else surtiendo).append(pedido)
 

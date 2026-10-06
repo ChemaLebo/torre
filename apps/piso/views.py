@@ -134,15 +134,15 @@ def _piezas(pedido):
 
 def _piezas_sin_inventario(pedido):
     """Piezas del pedido que esperan inventario (tag "Sin inventario")."""
-    return sum(linea.cantidad for linea in pedido.lineas_faltantes)
+    return sum(linea.pendiente_sin_stock for linea in pedido.lineas_faltantes)
 
 
 def _avance(pedido):
     """(pickeadas, total, porcentaje) de lo que esta ola surte, para medidores."""
     total = pickeadas = 0
     for linea in pedido.lineas_por_surtir:
-        total += linea.cantidad
-        pickeadas += min(linea.cantidad_pickeada, linea.cantidad)
+        total += linea.con_stock
+        pickeadas += min(linea.cantidad_pickeada, linea.con_stock)
     pct = int(round(pickeadas * 100.0 / total)) if total else 0
     return pickeadas, total, pct
 
@@ -1176,7 +1176,7 @@ def _lineas_en_ruta(pedido):
     """
     lineas = [l for l in pedido.lineas.select_related("sku") if l.pendiente > 0]
     for linea in lineas:
-        linea.completa = linea.cantidad_pickeada >= linea.cantidad
+        linea.completa = linea.cantidad_pickeada >= linea.con_stock
         linea.ubicaciones = list(
             Saldo.objects.filter(sku=linea.sku, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0)
             .select_related("ubicacion", "lote")
@@ -1255,15 +1255,15 @@ def _picking_json(pedido, linea, lineas, reiniciado=False):
     `reiniciado` (el pedido cambió de manos en este escaneo) el visor recarga
     la página: los contadores de las demás líneas volvieron a cero."""
     pickeadas, total, _ = _avance(pedido)
-    completo = all(l.cantidad_pickeada >= l.cantidad for l in lineas)
+    completo = all(l.cantidad_pickeada >= l.con_stock for l in lineas)
     return JsonResponse({
         "ok": True,
         "reiniciado": reiniciado,
         "linea_id": linea.pk,
         "sku": linea.sku.codigo,
         "pickeada": linea.cantidad_pickeada,
-        "cantidad": linea.cantidad,
-        "restante": max(linea.cantidad - linea.cantidad_pickeada, 0),
+        "cantidad": linea.con_stock,  # lo pedido más lo repuesto con stock
+        "restante": linea.por_pickear,
         "completo": completo,
         "avance": {"pickeadas": pickeadas, "total": total},
         "siguiente": reverse("piso:empaque_pedido", args=[pedido.pk]) if completo else None,
@@ -1310,7 +1310,7 @@ def _picking_escanear(request, pedido, reiniciado=False):
             "esta ola. Regresa la pieza al anaquel y avisa a Mesa si sí había existencia."
         )
     linea = next(
-        (l for l in candidatas if l.pendiente > 0 and l.cantidad_pickeada < l.cantidad), None,
+        (l for l in candidatas if l.pendiente > 0 and l.por_pickear > 0), None,
     )
     if linea is None:
         return error(
@@ -1328,11 +1328,11 @@ def _picking_escanear(request, pedido, reiniciado=False):
     if quiere_json:
         return _picking_json(pedido, linea, lineas, reiniciado=reiniciado)
 
-    if all(l.cantidad_pickeada >= l.cantidad for l in lineas):
+    if all(l.cantidad_pickeada >= l.con_stock for l in lineas):
         messages.success(request, f"Pedido {pedido.folio} completo. Llévalo a la mesa de empaque.")
         return redirect("piso:empaque_pedido", pk=pedido.pk)
     messages.success(
-        request, f"{linea.sku.codigo}: van {linea.cantidad_pickeada} de {linea.cantidad}."
+        request, f"{linea.sku.codigo}: van {linea.cantidad_pickeada} de {linea.con_stock}."
     )
     return destino
 

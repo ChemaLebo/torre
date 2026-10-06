@@ -196,13 +196,13 @@
   {% for linea in lineas %}
   <div class="corral-fila">
     <div class="crece"><span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}</div>
-    <span class="num">{{ linea.cantidad_pickeada }} / {{ linea.cantidad }}</span>
+    <span class="num">{{ linea.cantidad_pickeada }} / {{ linea.con_stock }}</span>
   </div>
   {% endfor %}
   {% for linea in faltantes %}
   <div class="corral-fila">
     <div class="crece"><span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}</div>
-    <span class="pill crit">Sin inventario · {{ linea.cantidad }} pza{{ linea.cantidad|pluralize }}</span>
+    <span class="pill crit">Sin inventario · {{ linea.pendiente_sin_stock }} pza{{ linea.pendiente_sin_stock|pluralize }}</span>
   </div>
   {% endfor %}
 </div>
