@@ -258,7 +258,8 @@ def _unidades(pedido, cubiertas=None):
     Fulfillment parcial (2026-09-22): solo entra lo que ESTA ola surte. Una
     línea faltante (sin inventario) no se planea; lo que ya salió en un
     manifiesto (cantidad_despachada) o ya viaja en una caja fija con guía
-    (`cubiertas`: {linea_pk: unidades}) tampoco.
+    (`cubiertas`: {linea_pk: unidades}) tampoco. Reposición (2026-10-05): se
+    planea lo que tiene stock (`con_stock` = pedidas + repuestas con reserva).
     """
     cubiertas = cubiertas or {}
     unidades = []
@@ -266,7 +267,7 @@ def _unidades(pedido, cubiertas=None):
         if linea.faltante:
             continue
         ya = max(linea.cantidad_despachada, cubiertas.get(linea.pk, 0))
-        por_planear = max(linea.cantidad - ya, 0)
+        por_planear = max(linea.con_stock - ya, 0)
         if por_planear <= 0:
             continue
         peso = Decimal(linea.sku.peso_gr or 1000) / 1000
@@ -458,6 +459,7 @@ def _planificar(pedido, force, carriers, preferido=None):
                    "modalidad": "entrega_local_flat", "cajas_previas": [p.numero for p in fijas]},
             motivo=f"Entrega local: {len(paquetes)} paquete(s) × ${tarifa_local} flat",
         )
+        _marcar_reposiciones(pedido, fijas, paquetes)
         return fijas + paquetes
 
     candidatas = _particiones_candidatas(unidades, max_kg)
@@ -516,7 +518,63 @@ def _planificar(pedido, force, carriers, preferido=None):
         },
         motivo=f"División de envío: {len(paquetes)} paquete(s), total ${costo_elegido}",
     )
+    _marcar_reposiciones(pedido, fijas, paquetes)
     return fijas + paquetes
+
+
+def _marcar_reposiciones(pedido, fijas, nuevas):
+    """Estampa `PaqueteLinea.repone_a` en las cajas recién planeadas (Chema
+    2026-10-05): por cada línea con reposiciones aprobadas
+    (`LineaPedido.origen_reposicion`: de qué caja salieron las piezas), lo
+    aprobado por caja origen menos lo ya estampado en las cajas FIJAS (las
+    que no se replanean) se reparte sobre los renglones nuevos de esa línea,
+    de la última caja hacia la primera (las piezas originales que sigan
+    pendientes, si las hay, quedan en las primeras); un renglón con más
+    unidades de las necesarias se parte en dos. Reproducible en cada
+    replaneo: las cajas vivas se tiran y se vuelven a marcar."""
+    fijas_ids = {p.pk for p in fijas}
+    nuevas_ids = {p.pk for p in nuevas}
+    for linea in pedido.lineas.all():
+        if not linea.origen_reposicion:
+            continue
+        pendiente = {}
+        for origen in linea.origen_reposicion:
+            caja = origen.get("caja")
+            if caja is None:
+                continue  # pedido viejo sin cajas: no hay a qué apuntar
+            pendiente[caja] = pendiente.get(caja, Fraction(0)) + Fraction(int(origen.get("cantidad") or 0))
+        for pl in PaqueteLinea.objects.filter(linea_pedido=linea, paquete_id__in=fijas_ids, repone_a__isnull=False):
+            if pl.repone_a_id in pendiente:
+                pendiente[pl.repone_a_id] -= Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+        restantes = [(caja, u) for caja, u in pendiente.items() if u > 0]
+        if not restantes:
+            continue
+        filas = list(
+            PaqueteLinea.objects.filter(linea_pedido=linea, paquete_id__in=nuevas_ids)
+            .select_related("paquete").order_by("-paquete__numero", "-pk")
+        )
+        for caja, unidades in restantes:
+            for pl in filas:
+                if unidades <= 0:
+                    break
+                if pl.repone_a_id:
+                    continue
+                propias = Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+                if propias <= unidades:
+                    pl.repone_a_id = caja
+                    pl.save(update_fields=["repone_a"])
+                    unidades -= propias
+                    continue
+                subunidades = int(unidades * max(pl.fraccion_de, 1))
+                if subunidades <= 0:
+                    continue
+                pl.cantidad -= subunidades
+                pl.save(update_fields=["cantidad"])
+                PaqueteLinea.objects.create(
+                    paquete=pl.paquete, linea_pedido=linea, cantidad=subunidades,
+                    fraccion_de=pl.fraccion_de, repone_a_id=caja,
+                )
+                unidades = Fraction(0)
 
 
 def _copiar_unidades(paquete, unidades_bin):

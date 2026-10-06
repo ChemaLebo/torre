@@ -87,7 +87,7 @@ class CompensacionesMesaTests(TestCase):
                 "accion": "compensacion_crear", "tipo": "reposicion", f"linea_{self.linea.pk}": "1", "aprobar": "1",
             }, follow=True)
         reponer.assert_called_once()
-        self.assertEqual(reponer.call_args.args[1], [(self.linea, 2)])  # sin cantidad capturada: todas
+        self.assertEqual(reponer.call_args.args[1], [(self.linea, 2, None)])  # sin cantidad capturada: todas
         self.assertEqual(Compensacion.objects.get().estado, Compensacion.APROBADA)
 
     def test_reembolso_rechazado_se_reintenta_desde_el_expediente(self):

@@ -66,6 +66,8 @@ class TrabajoImpresionAdmin(admin.ModelAdmin):
 
 class PaqueteLineaInline(admin.TabularInline):
     model = PaqueteLinea
+    fk_name = "paquete"  # repone_a también apunta a Paquete (reposición por renglón)
+    raw_id_fields = ("linea_pedido", "repone_a")
     extra = 0
 
 

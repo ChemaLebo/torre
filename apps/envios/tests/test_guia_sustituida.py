@@ -40,10 +40,9 @@ class GuiaSustituidaTests(TestCase):
         self.assertTrue(self.guia.sustituida)
         self.assertIsNotNone(self.guia.ts_sustituida)
         self.assertTrue(EventoAuditoria.objects.filter(entidad="guia", entidad_id=str(self.guia.pk), accion="guia_sustituida").exists())
-        # La caja de reposición que la cubre, cuando existe:
-        repuesta = LineaPedido.objects.create(pedido=self.pedido, sku=self.linea.sku, cantidad=1, reposicion_de=self.linea)
+        # La caja de reposición que la cubre, cuando existe (renglón de la MISMA línea con repone_a):
         caja3 = Paquete.objects.create(pedido=self.pedido, numero=3, peso_kg=Decimal("4"), carrier="local")
-        PaqueteLinea.objects.create(paquete=caja3, linea_pedido=repuesta, cantidad=1)
+        PaqueteLinea.objects.create(paquete=caja3, linea_pedido=self.linea, cantidad=1, repone_a=self.guia.paquete)
         self.assertEqual(self.guia.cajas_reposicion, [3])
         self.assertEqual(guias_del_pedido(self.pedido)[0]["sustituida"], "sustituida · paquete dañado · por caja 3")
         self.assertEqual(marcar_guias_sustituidas(self.comp, actor=None), [])  # no se marca dos veces

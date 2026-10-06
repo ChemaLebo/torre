@@ -121,15 +121,11 @@ class Guia(models.Model):
 
     @property
     def cajas_reposicion(self):
-        """Números de las cajas que reponen el contenido de esta guía (las
-        líneas de reposición ligadas a las líneas de su caja); [] si no hay."""
+        """Números de las cajas que reponen piezas de la caja de esta guía
+        (PaqueteLinea.repone_a); [] si no hay o si la guía no tiene caja."""
         if not self.paquete_id:
             return []
-        originales = list(self.paquete.lineas.values_list("linea_pedido_id", flat=True))
-        return sorted({
-            n for n in PaqueteLinea.objects.filter(linea_pedido__reposicion_de_id__in=originales)
-            .values_list("paquete__numero", flat=True)
-        })
+        return self.paquete.cajas_de_reposicion
 
     @property
     def es_activa(self):
@@ -281,6 +277,21 @@ class Paquete(models.Model):
     def guia_activa(self):
         return next((g for g in self.guias.all() if g.es_activa), None)
 
+    @property
+    def es_reposicion(self):
+        """True si algún renglón de la caja repone piezas de otra caja."""
+        return any(pl.repone_a_id for pl in self.lineas.all())
+
+    @property
+    def cajas_que_repone(self):
+        """Números de las cajas originales cuyas piezas viajan repuestas aquí."""
+        return sorted({pl.repone_a.numero for pl in self.lineas.all() if pl.repone_a_id})
+
+    @property
+    def cajas_de_reposicion(self):
+        """Números de las cajas que reponen piezas de ESTA caja; [] si ninguna."""
+        return sorted({pl.paquete.numero for pl in self.repuesta_en.select_related("paquete")})
+
     def transicionar(self, nuevo, actor=None, motivo=""):
         permitidos = self.TRANSICIONES.get(self.estado, set())
         if nuevo not in permitidos:
@@ -339,6 +350,16 @@ class PaqueteLinea(models.Model):
         default=1,
         help_text=">1 = la unidad de venta se reempacó: cantidad cuenta subunidades "
                   "(ej. cantidad=1, fraccion_de=2 → media caja)",
+    )
+    # Reposición (Chema 2026-10-05): estas unidades reponen piezas de ESE
+    # producto que viajaron en la caja `repone_a` (dañadas, extraviadas, no
+    # entregadas). Va por renglón de producto, no por caja: una caja nueva
+    # puede reponer producto1 de la caja 1 y producto4 de la caja 2, y el
+    # mismo SKU venido de dos cajas viejas son dos renglones. La caja vieja y
+    # su guía siguen vivas, rastreadas y cobradas.
+    repone_a = models.ForeignKey(
+        Paquete, null=True, blank=True, on_delete=models.SET_NULL, related_name="repuesta_en",
+        help_text="Caja original cuyas piezas de este producto repone este renglón",
     )
 
     @property

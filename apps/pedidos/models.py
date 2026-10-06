@@ -323,9 +323,10 @@ class Pedido(models.Model):
 
     @property
     def lineas_completas(self):
-        """True si toda línea POR SURTIR tiene su cantidad completa pickeada;
-        las faltantes no cuentan (van con el tag "Sin inventario")."""
-        return all(l.cantidad_pickeada >= l.cantidad for l in self.lineas_por_surtir)
+        """True si toda línea POR SURTIR tiene pickeado todo lo que tiene
+        stock (lo pedido más las repuestas); las faltantes no cuentan (van
+        con el tag "Sin inventario")."""
+        return all(l.cantidad_pickeada >= l.con_stock for l in self.lineas_por_surtir)
 
     @property
     def cajas_cerradas_completas(self):
@@ -416,9 +417,25 @@ class LineaPedido(models.Model):
     cantidad_despachada = models.PositiveIntegerField(
         default=0, help_text="Unidades que ya salieron de bodega en un manifiesto anterior",
     )
-    # Reposición de producto (Chema 2026-09-28): línea nueva del mismo pedido
-    # que repone piezas de la original (daño, faltante, extravío). No es venta
-    # (sin precio, fuera del reporte de ventas) y no se fulfillea en Shopify.
+    # Reposición de producto (Chema 2026-10-05): la línea es el line item de
+    # Shopify y NUNCA se agrega otra; reponer piezas dañadas/extraviadas suma
+    # aquí lo aprobado por Mesa y el planeador arma cajas nuevas (cada renglón
+    # de esas cajas apunta a la caja original que repone: PaqueteLinea.repone_a).
+    # Lo pedido sigue siendo `cantidad`; lo que el piso surte en total es
+    # `por_surtir`; pickeada y despachada acumulan y pueden rebasar lo pedido.
+    cantidad_repuesta = models.PositiveIntegerField(
+        default=0, help_text="Piezas aprobadas para reponer (se suman a lo pedido para surtir)",
+    )
+    cantidad_repuesta_reservada = models.PositiveIntegerField(
+        default=0, help_text="De las repuestas, cuántas ya tienen stock apartado",
+    )
+    # De qué caja salieron las piezas que se reponen: [{"caja": pk, "numero": n,
+    # "cantidad": c}, ...] en orden de aprobación. El planeador lo usa para
+    # estampar PaqueteLinea.repone_a en las cajas nuevas, también al replanear.
+    origen_reposicion = models.JSONField(default=list, blank=True)
+    # Reposición de producto (modelo viejo, 2026-09-28 → 2026-10-05): línea
+    # nueva ligada a la original. Ya no se crea; la migración 0020 fundió las
+    # existentes en su original y la 0021 quita la columna.
     reposicion_de = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reposiciones",
         help_text="Línea original que esta línea repone",
@@ -450,21 +467,44 @@ class LineaPedido(models.Model):
         return self.reposicion_de_id is not None
 
     @property
+    def por_surtir(self):
+        """Lo que el piso surte en total: lo pedido más lo repuesto."""
+        return self.cantidad + self.cantidad_repuesta
+
+    @property
+    def con_stock(self):
+        """De `por_surtir`, lo que ya tiene stock apartado: lo pedido si la
+        línea reservó, más las repuestas con reserva. Es el tope del picking
+        y lo que el plan de cajas reparte."""
+        return (self.cantidad if self.reservada else 0) + self.cantidad_repuesta_reservada
+
+    @property
+    def repuestas_sin_stock(self):
+        return max(self.cantidad_repuesta - self.cantidad_repuesta_reservada, 0)
+
+    @property
     def faltante(self):
-        """True si la línea se queda sin surtir por falta de existencias: la
-        ingesta no encontró stock (reservada=False) y el reintento aún no lo
-        consigue. Picking, plan de cajas y empaque la ignoran y el piso la ve
-        con el tag "Sin inventario" (Chema 2026-09-22). Un kit (nace
+        """True si a la línea le falta stock para algo de lo que debe surtir:
+        la ingesta no encontró existencias (reservada=False) o una reposición
+        aprobada aún no las consigue (repuestas_sin_stock), y el reintento no
+        lo ha resuelto. Picking, plan de cajas y empaque la ignoran y el piso
+        la ve con el tag "Sin inventario" (Chema 2026-09-22). Un kit (nace
         reservada=True, sin stock propio) es faltante cuando alguna de sus
         hijas lo es: la caja del kit no viaja incompleta."""
         if self.sku.es_kit:
             return any(h.faltante for h in self.componentes.all())
-        return not self.reservada
+        return not self.reservada or self.repuestas_sin_stock > 0
 
     @property
     def pendiente(self):
-        """Unidades por surtir en la ola en curso: lo pedido menos lo que ya
-        salió en un manifiesto (cantidad_despachada); 0 si es faltante."""
+        """Unidades por surtir en la ola en curso: lo que tiene stock menos
+        lo que ya salió en un manifiesto (cantidad_despachada). Una línea
+        esperando stock (faltante) no entra a la ola: 0."""
         if self.faltante:
             return 0
-        return max(self.cantidad - self.cantidad_despachada, 0)
+        return max(self.con_stock - self.cantidad_despachada, 0)
+
+    @property
+    def por_pickear(self):
+        """Lo que falta por pickear de lo que tiene stock (tope del escaneo)."""
+        return max(self.con_stock - self.cantidad_pickeada, 0)

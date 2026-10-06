@@ -65,7 +65,7 @@ class SalidaSinGuiaTests(PisoTestCase):
         Guia.objects.create(pedido=pedido, paquete=caja1, carrier="estafeta", numero="EST-1", proveedor="mock",
                             estado=Guia.ENTREGADO)
         with self.captureOnCommitCallbacks(execute=True):
-            nuevas = services.reponer_lineas(pedido, [(linea, 1)], self.mesa)
+            services.reponer_lineas(pedido, [(linea, 1)], self.mesa)
         pedido.refresh_from_db()
         with self.captureOnCommitCallbacks(execute=True):
             resultado = services.replanear_con_carrier(pedido, "local", self.mesa)
@@ -73,7 +73,8 @@ class SalidaSinGuiaTests(PisoTestCase):
         self.assertEqual((caja1.carrier, caja1.estado, caja1.precio_cotizado), ("estafeta", Paquete.DESPACHADO, D("150")))
         self.assertEqual([c.carrier for c in resultado["cajas"]], ["local"])
         nueva = resultado["cajas"][0]
-        self.assertEqual([(pl.linea_pedido_id, pl.cantidad) for pl in nueva.lineas.all()], [(nuevas[0].pk, 1)])
+        # El replaneo conserva el origen: el renglón nuevo sigue apuntando a la caja 1 y a la MISMA línea.
+        self.assertEqual([(pl.linea_pedido_id, pl.cantidad, pl.repone_a_id) for pl in nueva.lineas.all()], [(linea.pk, 1, caja1.pk)])
         self.assertEqual(pedido.paquetes.count(), 2)
 
     def test_con_algo_en_la_calle_no_se_cambia(self):

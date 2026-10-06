@@ -348,7 +348,10 @@ class Compensacion(MaquinaEstados):
     @property
     def resumen_lineas(self):
         """"2× SIX-COL, 1× C12": lo elegido del pedido; "" sin líneas."""
-        return ", ".join(f"{l.get('cantidad')}× {l.get('sku')}" for l in (self.lineas or []))
+        return ", ".join(
+            f"{l.get('cantidad')}× {l.get('sku')}" + (f" (caja {l['caja']})" if l.get("caja") else "")
+            for l in (self.lineas or [])
+        )
 
     @property
     def ejecutable(self):

@@ -350,18 +350,25 @@ def lineas_para_compensar(incidencia):
         return []
     reponibles = piezas_reponibles(incidencia.pedido)
     lineas = list(
-        incidencia.pedido.lineas.filter(reposicion_de__isnull=True, parte_de_kit__isnull=True)
+        incidencia.pedido.lineas.filter(parte_de_kit__isnull=True)
         .select_related("sku").order_by("pk")
     )
     for linea in lineas:
         info = reponibles.get(linea.pk)
         linea.salieron = info["piezas"] if info else 0
         linea.cajas_salida = ", ".join(str(n) for n in info["cajas"]) if info else ""
+        # Caja de origen por producto (2026-10-05): [(pk, "caja 1 · 2 pzas")] para el selector.
+        linea.cajas_origen = [
+            (pk, f"caja {c['numero']} · {c['piezas']} pza{'s' if c['piezas'] != 1 else ''}")
+            for pk, c in (info["por_caja"].items() if info else [])
+        ]
     return lineas
 
 
 def seleccion_desde_post(post, incidencia):
-    """[(línea, cantidad)] marcadas en el formulario (linea_<pk> + cantidad_<pk>)."""
+    """[(línea, cantidad, caja_pk|None)] marcadas en el formulario (linea_<pk>
+    + cantidad_<pk> + caja_<pk>: de qué caja salieron las piezas, solo para
+    reposición)."""
     seleccion = []
     for linea in lineas_para_compensar(incidencia):
         if not post.get(f"linea_{linea.pk}"):
@@ -370,7 +377,8 @@ def seleccion_desde_post(post, incidencia):
             cantidad = int(post.get(f"cantidad_{linea.pk}") or linea.cantidad)
         except (TypeError, ValueError):
             raise ValueError(f"Cantidad inválida para {linea.sku.codigo}.") from None
-        seleccion.append((linea, cantidad))
+        caja = post.get(f"caja_{linea.pk}") or None
+        seleccion.append((linea, cantidad, int(caja) if caja and str(caja).isdigit() else None))
     return seleccion
 
 
@@ -395,29 +403,46 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
         monto = Decimal(str(monto).strip()) if monto not in (None, "") else None
     except InvalidOperation:
         raise ValueError("Captura el monto en MXN (ej. 450.00).") from None
-    seleccion = [(linea, int(cantidad)) for linea, cantidad in (lineas or []) if int(cantidad or 0) > 0]
-    for linea, cantidad in seleccion:
+    # (línea, cantidad[, caja origen]): la caja solo importa para reponer.
+    seleccion = [
+        (item[0], int(item[1]), item[2] if len(item) > 2 else None)
+        for item in (lineas or []) if int(item[1] or 0) > 0
+    ]
+    for linea, cantidad, _caja in seleccion:
         if cantidad > linea.cantidad:
             raise ValueError(f"{linea.sku.codigo}: el pedido lleva {linea.cantidad} pieza(s), no {cantidad}.")
+    cajas_elegidas = {}
     if tipo == Compensacion.TIPO_REPOSICION:
         if not seleccion:
             raise ValueError("Elige qué productos se reponen.")
         from apps.pedidos.services import piezas_reponibles  # lazy por contrato
 
         reponibles = piezas_reponibles(incidencia.pedido)
-        for linea, cantidad in seleccion:
+        for linea, cantidad, caja in seleccion:
             info = reponibles.get(linea.pk)
             if info is None:
                 raise ValueError(f"{linea.sku.codigo}: no ha salido de bodega; eso se corrige en el pedido, no se repone.")
             if cantidad > info["piezas"]:
                 raise ValueError(f"{linea.sku.codigo}: salieron {info['piezas']} pieza(s); no se reponen {cantidad}.")
-        monto = sum((Decimal(linea.sku.precio_declarado or 0) * cantidad for linea, cantidad in seleccion), Decimal(0))
+            if caja is None and info["por_caja"]:
+                caja = next(iter(info["por_caja"]))  # la única que lo llevó, o la primera
+            if caja is not None:
+                en_caja = info["por_caja"].get(caja)
+                if en_caja is None:
+                    raise ValueError(f"{linea.sku.codigo}: esa caja no llevaba ese producto.")
+                if cantidad > en_caja["piezas"]:
+                    raise ValueError(
+                        f"{linea.sku.codigo}: en la caja {en_caja['numero']} salieron {en_caja['piezas']} pieza(s); "
+                        f"no se reponen {cantidad} de esa caja (registra otra reposición para la otra caja)."
+                    )
+                cajas_elegidas[linea.pk] = (caja, en_caja["numero"])
+        monto = sum((Decimal(linea.sku.precio_declarado or 0) * cantidad for linea, cantidad, _ in seleccion), Decimal(0))
         reembolsar_envio = False
     elif tipo == Compensacion.TIPO_REEMBOLSO:
         if not seleccion and not reembolsar_envio and not (monto and monto > 0):
             raise ValueError("Elige qué se reembolsa: productos, el envío o un monto.")
         if seleccion:
-            monto = sum((_precio_linea(linea) * cantidad for linea, cantidad in seleccion), Decimal(0))
+            monto = sum((_precio_linea(linea) * cantidad for linea, cantidad, _ in seleccion), Decimal(0))
         elif monto is None:
             monto = Decimal(0)  # solo envío: Shopify dice cuánto
     else:
@@ -426,7 +451,14 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
         reembolsar_envio = False
     comp = Compensacion.objects.create(
         incidencia=incidencia, tipo=tipo, monto=monto,
-        lineas=[{"linea_id": linea.pk, "sku": linea.sku.codigo, "cantidad": cantidad} for linea, cantidad in seleccion],
+        lineas=[
+            {
+                "linea_id": linea.pk, "sku": linea.sku.codigo, "cantidad": cantidad,
+                "caja_id": cajas_elegidas.get(linea.pk, (None, None))[0],
+                "caja": cajas_elegidas.get(linea.pk, (None, None))[1],
+            }
+            for linea, cantidad, _ in seleccion
+        ],
         reembolsar_envio=bool(reembolsar_envio), avisar_comprador=bool(avisar_comprador),
         creada_por=Compensacion.CREADA_CLIENTE if rol == "cliente" else Compensacion.CREADA_MESA,
         motivo=(motivo or "")[:20] if tipo == Compensacion.TIPO_REPOSICION else "",
@@ -445,10 +477,14 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
 
 
 def _seleccion_de(comp):
+    """[(línea, cantidad, caja origen pk|None)] guardados en la compensación."""
     from apps.pedidos.models import LineaPedido  # lazy por contrato
 
     por_id = {l.pk: l for l in LineaPedido.objects.filter(pk__in=[x.get("linea_id") for x in comp.lineas]).select_related("sku")}
-    return [(por_id[x["linea_id"]], int(x["cantidad"])) for x in comp.lineas if x.get("linea_id") in por_id]
+    return [
+        (por_id[x["linea_id"]], int(x["cantidad"]), x.get("caja_id"))
+        for x in comp.lineas if x.get("linea_id") in por_id
+    ]
 
 
 def aprobar_compensacion(comp, actor, rol="mesa"):
@@ -517,8 +553,16 @@ def marcar_guias_sustituidas(comp, actor):
     pero lo que reporten ya no mueve el pedido. Regresa las guías marcadas."""
     from apps.envios.models import Guia, PaqueteLinea  # lazy: modelos de otra app
 
-    lineas_ids = [x.get("linea_id") for x in comp.lineas if x.get("linea_id")]
-    cajas_ids = set(PaqueteLinea.objects.filter(linea_pedido_id__in=lineas_ids).values_list("paquete_id", flat=True))
+    # Solo las cajas elegidas como origen (2026-10-05); compensaciones viejas
+    # sin caja: todas las despachadas que llevaban el producto, sin contar las
+    # que lo reponen.
+    cajas_ids = {x["caja_id"] for x in comp.lineas if x.get("caja_id")}
+    if not cajas_ids:
+        lineas_ids = [x.get("linea_id") for x in comp.lineas if x.get("linea_id")]
+        cajas_ids = set(
+            PaqueteLinea.objects.filter(linea_pedido_id__in=lineas_ids, repone_a__isnull=True, paquete__estado="DESPACHADO")
+            .values_list("paquete_id", flat=True)
+        )
     guias = list(
         Guia.objects.filter(paquete_id__in=cajas_ids, sustituida_motivo="")
         .exclude(estado=Guia.CANCELADA).exclude(carrier="local")

@@ -41,16 +41,18 @@ class CompensacionesTests(TestCase):
 
     def test_seleccion_desde_el_formulario(self):
         post = {f"linea_{self.l1.pk}": "1", f"cantidad_{self.l1.pk}": "1", f"cantidad_{self.l2.pk}": "1"}
-        self.assertEqual(seleccion_desde_post(post, self.inc), [(self.l1, 1)])
-        self.assertEqual(seleccion_desde_post({f"linea_{self.l2.pk}": "1"}, self.inc), [(self.l2, 1)])  # sin cantidad: todas
+        self.assertEqual(seleccion_desde_post(post, self.inc), [(self.l1, 1, None)])
+        self.assertEqual(seleccion_desde_post({f"linea_{self.l2.pk}": "1"}, self.inc), [(self.l2, 1, None)])  # sin cantidad: todas
+        # Reposición: la caja de la que salieron las piezas viaja en caja_<pk>.
+        self.assertEqual(seleccion_desde_post({f"linea_{self.l1.pk}": "1", f"caja_{self.l1.pk}": "7"}, self.inc), [(self.l1, 2, 7)])
         with self.assertRaises(ValueError):
             seleccion_desde_post({f"linea_{self.l1.pk}": "1", f"cantidad_{self.l1.pk}": "dos"}, self.inc)
 
     def test_reposicion_cotiza_con_el_catalogo_y_al_aprobar_repone(self):
         comp = crear_compensacion(self.inc, "reposicion", None, "cliente", lineas=[(self.l1, 1), (self.l2, 1)])
         self.assertEqual((comp.estado, comp.monto, comp.creada_por), (Compensacion.COTIZADA, Decimal("900"), "cliente"))
-        self.assertEqual(comp.lineas, [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1},
-                                       {"linea_id": self.l2.pk, "sku": "C12", "cantidad": 1}])
+        self.assertEqual(comp.lineas, [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": None, "caja": None},
+                                       {"linea_id": self.l2.pk, "sku": "C12", "cantidad": 1, "caja_id": None, "caja": None}])
         self.assertEqual(comp.resumen_lineas, "1× SIX, 1× C12")
         ultimo = self.inc.mensajes.order_by("-pk").first()
         self.assertEqual((ultimo.rol_autor, ultimo.texto), (MensajeIncidencia.ROL_CLIENTE, "Propuso reposición física: 1× SIX, 1× C12."))
@@ -58,7 +60,7 @@ class CompensacionesTests(TestCase):
             aprobar_compensacion(comp, None)
         reponer.assert_called_once()
         args, kwargs = reponer.call_args
-        self.assertEqual((args[0], args[1], kwargs["incidencia"]), (self.pedido, [(self.l1, 1), (self.l2, 1)], self.inc))
+        self.assertEqual((args[0], args[1], kwargs["incidencia"]), (self.pedido, [(self.l1, 1, None), (self.l2, 1, None)], self.inc))
         comp.refresh_from_db()
         self.assertEqual(comp.estado, Compensacion.APROBADA)
         self.assertIn("regresó a picking con 2 pieza(s)", comp.nota)
@@ -105,7 +107,7 @@ class CompensacionesTests(TestCase):
             crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l1, 2)])
         self.assertIn("salieron 1 pieza(s)", str(ctx.exception))
         comp = crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l1, 1)])
-        self.assertEqual(comp.lineas, [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1}])
+        self.assertEqual(comp.lineas, [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": None, "caja": None}])
 
     def test_reembolso_lo_ejecuta_shopify_y_queda_pagado(self):
         comp = crear_compensacion(self.inc, "reembolso", None, "mesa", lineas=[(self.l1, 2)], reembolsar_envio=True)

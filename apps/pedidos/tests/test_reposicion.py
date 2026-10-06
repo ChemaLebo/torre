@@ -1,7 +1,9 @@
-"""Reposición de producto (Chema 2026-09-28): líneas nuevas en el MISMO pedido
-ligadas a la original, reserva de stock (sin stock: faltante que espera), el
-pedido regresa a PENDIENTE sin dueño con un plan solo de lo repuesto, lo que ya
-salió queda estampado como despachado, y al entregarse la reposición la
+"""Reposición de producto (Chema 2026-10-05): la línea es el line item de
+Shopify y NUNCA se agrega otra; lo repuesto se suma a la línea original
+(cantidad_repuesta, con su caja de origen), se reserva stock (sin stock:
+faltante que espera), el pedido regresa a PENDIENTE sin dueño con un plan solo
+de lo repuesto cuyos renglones apuntan a la caja original (repone_a), lo que
+ya salió queda estampado como despachado, y al entregarse la reposición la
 compensación aprobada se paga sola."""
 import tempfile
 from decimal import Decimal
@@ -60,21 +62,29 @@ class ReposicionTests(TestCase):
         pedido.refresh_from_db()
         la.refresh_from_db()
         lb.refresh_from_db()
+        caja_vieja = Paquete.objects.get(pedido=pedido, numero=1)
         self.assertEqual(pedido.estado, Pedido.PENDIENTE)
         self.assertIsNone(pedido.asignado_a)
-        self.assertEqual([(n.sku.codigo, n.cantidad, n.reposicion_de_id, n.reservada) for n in nuevas],
-                         [("A-SIX", 1, la.pk, True), ("B-SIX", 1, lb.pk, False)])  # B sin stock: faltante
-        self.assertTrue(nuevas[0].es_reposicion)
-        # Lo que ya salió queda como despachado: el plan no lo repite.
-        self.assertEqual((la.cantidad_despachada, lb.cantidad_despachada), (2, 1))
-        self.assertEqual([l.pk for l in pedido.lineas_por_surtir], [nuevas[0].pk])
+        # Ninguna línea nueva: lo repuesto se suma a la original, con su caja de origen.
+        self.assertEqual(pedido.lineas.count(), 2)
+        self.assertEqual([(n.sku.codigo, n.cantidad, n.caja.numero) for n in nuevas], [("A-SIX", 1, 1), ("B-SIX", 1, 1)])
+        self.assertEqual((la.cantidad, la.cantidad_repuesta, la.cantidad_repuesta_reservada, la.por_surtir, la.con_stock), (2, 1, 1, 3, 3))
+        self.assertEqual((lb.cantidad, lb.cantidad_repuesta, lb.cantidad_repuesta_reservada), (1, 1, 0))  # B sin stock: faltante
+        self.assertTrue(lb.faltante)
+        self.assertEqual(la.origen_reposicion, [{"caja": caja_vieja.pk, "numero": 1, "cantidad": 1, "incidencia": ""}])
+        # Lo que ya salió queda como despachado: el plan no lo repite; A tiene 1 pendiente (la repuesta).
+        self.assertEqual((la.cantidad_despachada, lb.cantidad_despachada, la.pendiente, lb.pendiente), (2, 1, 1, 0))
+        self.assertEqual([l.pk for l in pedido.lineas_por_surtir], [la.pk])
         self.assertTrue(pedido.pendiente_de_completar)
         planeadas = list(Paquete.objects.filter(pedido=pedido, estado=Paquete.PLANEADO))
         self.assertEqual(len(planeadas), 1)
-        self.assertEqual([(pl.linea_pedido_id, pl.cantidad) for pl in planeadas[0].lineas.all()], [(nuevas[0].pk, 1)])
+        # El renglón de la caja nueva apunta a la caja original que repone.
+        self.assertEqual([(pl.linea_pedido_id, pl.cantidad, pl.repone_a_id) for pl in planeadas[0].lineas.all()], [(la.pk, 1, caja_vieja.pk)])
+        self.assertTrue(planeadas[0].es_reposicion)
+        self.assertEqual((planeadas[0].cajas_que_repone, caja_vieja.cajas_de_reposicion), ([1], [planeadas[0].numero]))
         self.assertEqual(Paquete.objects.filter(pedido=pedido, estado=Paquete.DESPACHADO).count(), 1)  # la caja vieja sigue
         evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="reposicion")
-        self.assertEqual(evento.delta["sin_stock"], ["B-SIX"])
+        self.assertEqual((evento.delta["sin_stock"], evento.delta["lineas"]), (["B-SIX"], [["A-SIX", 1, 1], ["B-SIX", 1, 1]]))
 
     def test_al_empacar_la_reposicion_no_se_reimprimen_las_cajas_que_ya_salieron(self):
         """PED-00045 (2026-09-28): al cerrar la caja 3 salieron también las
@@ -123,6 +133,8 @@ class ReposicionTests(TestCase):
         pedido, la, lb = self.pedido_ola_dos_pendiente()
         reponibles = services.piezas_reponibles(pedido)
         self.assertEqual({k: (v["piezas"], v["cajas"]) for k, v in reponibles.items()}, {la.pk: (2, [1])})
+        caja = Paquete.objects.get(pedido=pedido, numero=1)
+        self.assertEqual(reponibles[la.pk]["por_caja"], {caja.pk: {"numero": 1, "piezas": 2}})
         # Pedido anterior al fulfillment parcial (sin cantidad_despachada) entregado: todo salió.
         viejo, va, vb = self.pedido_entregado()
         self.assertEqual({k: v["piezas"] for k, v in services.piezas_reponibles(viejo).items()}, {va.pk: 2, vb.pk: 1})
@@ -142,11 +154,13 @@ class ReposicionTests(TestCase):
             nuevas = services.reponer_lineas(pedido, [(la, 1)], self.mesa)
         pedido.refresh_from_db()
         lb.refresh_from_db()
+        la.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.PENDIENTE)  # sin transición: ya estaba
-        self.assertEqual([(n.sku.codigo, n.cantidad, n.reposicion_de_id, n.reservada) for n in nuevas], [("A-SIX", 1, la.pk, True)])
+        self.assertEqual([(n.sku.codigo, n.cantidad, n.caja.numero) for n in nuevas], [("A-SIX", 1, 1)])
+        self.assertEqual((la.cantidad_repuesta, la.cantidad_repuesta_reservada, la.pendiente), (1, 1, 1))
         self.assertEqual(lb.cantidad_despachada, 0)  # la ola 2 no se estampa como salida
         # Una sola ola: la reposición se surte ya; B sigue faltante (sin stock) en el mismo pedido.
-        self.assertEqual([l.pk for l in pedido.lineas_por_surtir], [nuevas[0].pk])
+        self.assertEqual([l.pk for l in pedido.lineas_por_surtir], [la.pk])
         self.assertEqual([l.pk for l in pedido.lineas_faltantes], [lb.pk])
         self.assertFalse(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="cambio_estado").exists())
         self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="reposicion").exists())

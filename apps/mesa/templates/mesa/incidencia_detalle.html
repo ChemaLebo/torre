@@ -238,7 +238,7 @@
               <td><span class="mono">{{ linea.sku.codigo }}</span> <span class="small">{{ linea.sku.descripcion }}</span></td>
               <td class="mono">{{ linea.cantidad }}</td>
               <td class="mono">{{ linea.salieron }}</td>
-              <td class="small">{% if linea.cajas_salida %}{{ linea.cajas_salida }}{% elif linea.salieron %}—{% else %}<span class="muted">en bodega</span>{% endif %}</td>
+              <td class="small">{% if linea.cajas_origen|length > 1 %}<select name="caja_{{ linea.pk }}" aria-label="Caja de la que salieron las piezas de {{ linea.sku.codigo }}" title="Reposición: de qué caja salieron las piezas que llegaron mal (una reposición por caja)">{% for pk, texto in linea.cajas_origen %}<option value="{{ pk }}">{{ texto }}</option>{% endfor %}</select>{% elif linea.cajas_salida %}{{ linea.cajas_salida }}{% elif linea.salieron %}—{% else %}<span class="muted">en bodega</span>{% endif %}</td>
               <td><input type="number" name="cantidad_{{ linea.pk }}" min="1" max="{{ linea.cantidad }}" value="{{ linea.cantidad }}" style="width:90px" aria-label="Piezas de {{ linea.sku.codigo }}"></td>
             </tr>
             {% endfor %}
