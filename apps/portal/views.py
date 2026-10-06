@@ -190,12 +190,14 @@ def _decorar_incidencia(incidencia):
 
 
 def _filas_inventario(cliente):
-    """Resumen por SKU (servicio de inventario) + bandera de resurtido."""
-    from apps.inventario.services import resumen_sku  # lazy: servicio de otra app
+    """Resumen por SKU (servicio de inventario, por lote: dos consultas) + bandera de resurtido."""
+    from apps.inventario.services import resumen_skus  # lazy: servicio de otra app
 
+    skus = list(SKU.objects.filter(cliente=cliente, activo=True).select_related("cliente").order_by("codigo"))
+    resumenes = resumen_skus(skus)
     filas = []
-    for sku in SKU.objects.filter(cliente=cliente, activo=True).order_by("codigo"):
-        fila = resumen_sku(sku)
+    for sku in skus:
+        fila = resumenes[sku.pk]
         fila["bajo_reorden"] = sku.punto_reorden > 0 and fila["disponible"] <= sku.punto_reorden
         fila["ultimo_conteo_hace"] = (
             _hace(fila["ultimo_conteo"]) if fila["ultimo_conteo"] else "sin conteo aún"

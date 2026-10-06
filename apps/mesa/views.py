@@ -1536,13 +1536,15 @@ def _redirect_inventario(**params):
 
 
 def _filas_inventario_mesa(cliente):
-    """Resumen por SKU activo del cliente (servicio resumen_sku) + resurtido."""
+    """Resumen por SKU activo del cliente (servicio resumen_skus, por lote) + resurtido."""
     from apps.catalogo.models import SKU
-    from apps.inventario.services import resumen_sku  # lazy por contrato
+    from apps.inventario.services import resumen_skus  # lazy por contrato
 
+    skus = list(SKU.objects.filter(cliente=cliente, activo=True).select_related("cliente").order_by("codigo"))
+    resumenes = resumen_skus(skus)  # dos consultas para todo el catálogo, no dos por SKU
     filas = []
-    for sku in SKU.objects.filter(cliente=cliente, activo=True).order_by("codigo"):
-        fila = resumen_sku(sku)
+    for sku in skus:
+        fila = resumenes[sku.pk]
         fila["bajo_reorden"] = sku.punto_reorden > 0 and fila["disponible"] <= sku.punto_reorden
         fila["ultimo_conteo_hace"] = (
             _frescura(fila["ultimo_conteo"]) if fila["ultimo_conteo"] else "sin conteo aún"
@@ -3010,7 +3012,7 @@ def cliente_lotes(request, pk):
 @rol_requerido("mesa")
 def cliente_skus(request, pk):
     from apps.catalogo.models import SKU
-    from apps.inventario.services import resumen_sku  # lazy por contrato
+    from apps.inventario.services import resumen_skus  # lazy por contrato
 
     cliente = get_object_or_404(Cliente, pk=pk)
 
@@ -3096,11 +3098,14 @@ def cliente_skus(request, pk):
 
     from apps.catalogo.models import Categoria
     otros = Categoria.otros_de(cliente)
-    skus = list(SKU.objects.filter(cliente=cliente).select_related("categoria").order_by("codigo"))
+    skus = list(SKU.objects.filter(cliente=cliente).select_related("categoria", "cliente").order_by("codigo"))
     # SKUs que llegaron del pull de Shopify (2026-10-01): inactivos hasta que Mesa capture peso y medidas.
     por_completar = [s for s in skus if s.shopify_variant_id and not s.activo and not s.peso_gr]
+    # Disponible por lote (2026-10-06): dos consultas para todo el catálogo; una por SKU tardaba
+    # más que el timeout del service worker y la pantalla salía como "Sin conexión".
+    resumenes = resumen_skus(skus)
     for sku in skus:
-        sku.disponible = resumen_sku(sku)["disponible"]
+        sku.disponible = resumenes[sku.pk]["disponible"]
         sku.categoria_efectiva_id = sku.categoria_id or otros.pk
 
     return render(request, "mesa/cliente_skus.html", {

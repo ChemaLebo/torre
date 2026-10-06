@@ -16,7 +16,9 @@ var SHELL = [
   "/static/pwa/manifest.webmanifest"
 ];
 
-var TIMEOUT_NAVEGACION_MS = 4000;
+/* 8 s (Chema 2026-10-06; antes 4 s): una página lenta no es "sin WiFi". Si el
+   servidor tarda más, el aviso lo dice así y deja recargar. */
+var TIMEOUT_NAVEGACION_MS = 8000;
 
 self.addEventListener("install", function (ev) {
   ev.waitUntil(
@@ -38,16 +40,25 @@ self.addEventListener("activate", function (ev) {
   );
 });
 
-function respuestaOffline() {
+/* Dos avisos distintos (2026-10-06): red caída de verdad vs servidor lento
+   (timeout). Antes los dos decían "sin WiFi" y una página lenta parecía
+   falla de red. El botón recarga la misma URL. */
+function respuestaOffline(porTimeout) {
+  var titulo = porTimeout ? "El servidor tarda en responder" : "Sin conexión";
+  var detalle = porTimeout
+    ? "La página está tardando más de lo normal. Espera unos segundos y recarga."
+    : "Sin conexión — reintenta cuando vuelva el WiFi.";
   return new Response(
     "<!doctype html><html lang='es'><meta charset='utf-8'>" +
     "<meta name='viewport' content='width=device-width, initial-scale=1'>" +
-    "<title>Sin conexión</title>" +
+    "<title>" + titulo + "</title>" +
     "<body style='margin:0;display:grid;place-items:center;min-height:100vh;" +
     "background:#F7F6F3;color:#050505;font-family:system-ui,sans-serif'>" +
     "<div style='text-align:center;padding:24px'>" +
-    "<h1 style='margin:0 0 8px'>Sin conexión</h1>" +
-    "<p style='margin:0'>Sin conexión — reintenta cuando vuelva el WiFi.</p>" +
+    "<h1 style='margin:0 0 8px'>" + titulo + "</h1>" +
+    "<p style='margin:0 0 16px'>" + detalle + "</p>" +
+    "<button onclick='location.reload()' style='font:inherit;padding:10px 18px;border:1px solid #050505;" +
+    "border-radius:999px;background:#fff;cursor:pointer'>Recargar</button>" +
     "</div></body></html>",
     { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } }
   );
@@ -89,9 +100,10 @@ self.addEventListener("fetch", function (ev) {
 
   if (ev.request.mode === "navigate") {
     ev.respondWith(
-      conTimeout(fetch(ev.request), TIMEOUT_NAVEGACION_MS).catch(function () {
+      conTimeout(fetch(ev.request), TIMEOUT_NAVEGACION_MS).catch(function (err) {
+        var porTimeout = !!(err && err.message === "timeout");
         return caches.match(ev.request).then(function (respuesta) {
-          return respuesta || respuestaOffline();
+          return respuesta || respuestaOffline(porTimeout);
         });
       })
     );

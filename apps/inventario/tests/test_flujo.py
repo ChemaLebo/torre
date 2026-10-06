@@ -187,3 +187,22 @@ class ResumenTests(InventarioTestCase):
         self.assertEqual(resumen["cuarentena"], 2)
         self.assertEqual(resumen["disponible"], 7)
         self.assertEqual(resumen["fisico"], 12)  # la reserva es capa, no suma físico
+
+    def test_resumen_skus_cuadra_con_el_individual_en_dos_consultas(self):
+        # 2026-10-06: la lista de SKUs hacía dos consultas POR SKU y tardaba más que el service worker.
+        from apps.catalogo.models import SKU
+
+        self.poner_vendible(10)
+        services.reservar(self.sku, 3, "PED-00006")
+        services.registrar_conteo(self.sku, 10, "piso1")
+        otro = SKU.objects.create(cliente=self.cliente, codigo="OTRO-SIX", descripcion="Otro", peso_gr=1000, requiere_lote=False)
+        vacio = SKU.objects.create(cliente=self.cliente, codigo="VACIO", descripcion="Sin saldo", peso_gr=1000, requiere_lote=False)
+        skus = list(SKU.objects.filter(pk__in=[self.sku.pk, otro.pk, vacio.pk]).select_related("cliente"))
+        with self.assertNumQueries(2):
+            lote = services.resumen_skus(skus)
+        for sku in skus:
+            esperado = services.resumen_sku(sku)
+            self.assertEqual(lote[sku.pk], esperado, sku.codigo)
+        self.assertEqual((lote[self.sku.pk]["disponible"], lote[vacio.pk]["disponible"], lote[vacio.pk]["fisico"]), (7, 0, 0))
+        self.assertIsNotNone(lote[self.sku.pk]["ultimo_conteo"])
+        self.assertIsNone(lote[otro.pk]["ultimo_conteo"])

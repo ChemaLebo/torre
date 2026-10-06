@@ -41,12 +41,14 @@ def en_transito_por_sku(cliente):
 
 
 def generar(cliente, inicio, fin, filtros, es_mesa):
-    from apps.inventario.services import resumen_sku  # lazy por contrato
+    from apps.inventario.services import resumen_skus  # lazy por contrato
 
     transito = en_transito_por_sku(cliente)
     filas, alertas = [], 0
-    for sku in SKU.objects.filter(cliente=cliente, activo=True).order_by("codigo"):
-        r = resumen_sku(sku)
+    skus = list(SKU.objects.filter(cliente=cliente, activo=True).select_related("cliente").order_by("codigo"))
+    resumenes = resumen_skus(skus)  # dos consultas para todo el catálogo, no dos por SKU
+    for sku in skus:
+        r = resumenes[sku.pk]
         if sku.punto_reorden and r["disponible"] <= sku.punto_reorden:
             alerta = "bajo punto de reorden"
         elif r["fisico"] == 0 and not transito.get(sku.pk):

@@ -184,6 +184,51 @@ window.addEventListener("load", function () {
   </main>
 </div>
 
+{# Throbber global (Chema 2026-10-06): barra roja arriba + spinner mientras llega la página siguiente. #}
+<div id="cargando" class="cargando" hidden aria-live="polite" aria-label="Cargando">
+  <div class="cargando-barra"></div>
+  <div class="cargando-spinner"></div>
+</div>
+<script>
+// Throbber: en cualquier navegación (clic en link del sitio o envío de un
+// formulario) que tarde más de 400 ms se muestra la barra y el spinner, y el
+// botón que la disparó se bloquea (adiós doble clic en "Caja cerrada ✓").
+// Se oculta al cargar la página nueva o al volver con el botón atrás (pageshow).
+(function () {
+  var capa = document.getElementById("cargando");
+  if (!capa) return;
+  var temporizador = null;
+  function mostrar() {
+    if (temporizador) return;
+    temporizador = setTimeout(function () { capa.hidden = false; }, 400);
+  }
+  function ocultar() {
+    if (temporizador) { clearTimeout(temporizador); temporizador = null; }
+    capa.hidden = true;
+    document.querySelectorAll("[data-cargando]").forEach(function (b) { b.disabled = false; b.removeAttribute("data-cargando"); });
+  }
+  document.addEventListener("click", function (ev) {
+    var a = ev.target.closest && ev.target.closest("a[href]");
+    if (!a || ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    if (a.target && a.target !== "_self") return;
+    if (a.hasAttribute("download") || a.getAttribute("href").charAt(0) === "#") return;
+    if (a.origin !== location.origin) return;
+    mostrar();
+  }, true);
+  document.addEventListener("submit", function (ev) {
+    if (ev.defaultPrevented) return;
+    var boton = ev.submitter || ev.target.querySelector("button[type=submit], input[type=submit]");
+    if (boton && !boton.disabled) {
+      boton.setAttribute("data-cargando", "1");
+      setTimeout(function () { boton.disabled = true; }, 0); // después de que el navegador lea el botón
+    }
+    mostrar();
+  }, true);
+  window.addEventListener("pageshow", ocultar);
+  window.addEventListener("beforeunload", function () {}); // el estado se limpia en pageshow
+})();
+</script>
+
 {% if rol_actual == "piso" %}
 {# Tab bar inferior fija del carril único (solo móvil ≤860px vía CSS). #}
 <div class="hoja-mas" id="hoja-mas" hidden>

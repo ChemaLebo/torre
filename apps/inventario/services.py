@@ -1109,18 +1109,13 @@ def dictaminar_cuarentena(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def resumen_sku(sku):
-    """Resumen por SKU para el portal: físico / en recepción / apartado /
-    cuarentena / disponible + fecha del último conteo.
-    """
-    filas = Saldo.objects.filter(sku=sku).values("estado").annotate(t=Sum("cantidad"))
-    por_estado = {f["estado"]: f["t"] or 0 for f in filas}
+def _armar_resumen(sku, por_estado, ultimo_conteo, buffer_stock):
+    """El dict de resumen_sku a partir de los saldos por estado ya agregados."""
     vendible = por_estado.get(Saldo.UBICADO_VENDIBLE, 0)
     reservado = por_estado.get(Saldo.RESERVADO, 0)
     en_putaway = por_estado.get(Saldo.EN_PUTAWAY, 0)
     en_empaque = por_estado.get(Saldo.EN_EMPAQUE, 0)
     cuarentena = por_estado.get(Saldo.CUARENTENA, 0)
-    ultimo = sku.conteos.order_by("-ts").first()
     return {
         "sku": sku,
         "fisico": vendible + en_putaway + en_empaque + cuarentena,
@@ -1129,8 +1124,40 @@ def resumen_sku(sku):
         "apartado": reservado,
         "en_empaque": en_empaque,
         "cuarentena": cuarentena,
-        "disponible": vendible - reservado - (sku.cliente.buffer_stock or 0),
-        "ultimo_conteo": ultimo.ts if ultimo else None,
+        "disponible": vendible - reservado - (buffer_stock or 0),
+        "ultimo_conteo": ultimo_conteo,
+    }
+
+
+def resumen_sku(sku):
+    """Resumen por SKU para el portal: físico / en recepción / apartado /
+    cuarentena / disponible + fecha del último conteo. Para listas enteras
+    usa resumen_skus (dos consultas en total, no dos por SKU).
+    """
+    filas = Saldo.objects.filter(sku=sku).values("estado").annotate(t=Sum("cantidad"))
+    por_estado = {f["estado"]: f["t"] or 0 for f in filas}
+    ultimo = sku.conteos.order_by("-ts").first()
+    return _armar_resumen(sku, por_estado, ultimo.ts if ultimo else None, sku.cliente.buffer_stock)
+
+
+def resumen_skus(skus):
+    """resumen_sku para MUCHOS SKUs en DOS consultas (saldos por SKU y estado;
+    último conteo por SKU) en vez de dos por SKU (2026-10-06: la lista de
+    SKUs de Colima hacía ~1,100 queries y tardaba más que el timeout del
+    service worker, que la pintaba como "Sin conexión"). Regresa
+    {sku_id: resumen} con el mismo shape que resumen_sku; los SKUs deben
+    traer `cliente` cargado (select_related) para el buffer."""
+    skus = list(skus)
+    ids = [s.pk for s in skus]
+    por_sku = {}
+    for f in Saldo.objects.filter(sku_id__in=ids).values("sku_id", "estado").annotate(t=Sum("cantidad")):
+        por_sku.setdefault(f["sku_id"], {})[f["estado"]] = f["t"] or 0
+    ultimos = dict(
+        Conteo.objects.filter(sku_id__in=ids).values("sku_id").annotate(ultimo=Max("ts")).values_list("sku_id", "ultimo")
+    )
+    return {
+        s.pk: _armar_resumen(s, por_sku.get(s.pk, {}), ultimos.get(s.pk), s.cliente.buffer_stock)
+        for s in skus
     }
 
 
