@@ -357,13 +357,10 @@ el contenido vuelve al kardex, la caja a EMPACADO y el pedido a parcial o a
 empacado; el fulfillment de la caja se cancela en Shopify.
 
 **Queda:**
-- Con otras cajas aún fuera (pedido PARCIALMENTE_DESPACHADO) la caja que
-  regresó no tiene quién le recompre la guía: "Reintentar guía" del wizard
-  solo vive con el pedido EMPACADO y `generar_guias` compra para TODA caja
-  sin guía activa (también las despachadas con guía cancelada, PED-00031).
-  Se destraba con "compra de guías solo para cajas que aún no salen"
-  (pendiente de go) y permitiendo el reintento en PARCIALMENTE_DESPACHADO.
-  Hoy, con todas las cajas de vuelta (el caso real) el flujo cierra completo.
+- ~~Caso mixto sin quien recompre la guía~~ — resuelto el mismo día:
+  `generar_guias` ya no compra para cajas despachadas, `empaque_completo` y
+  el wizard solo miran las cajas en bodega y "Reintentar guía" también vive
+  con el pedido PARCIALMENTE_DESPACHADO.
 - Si el fulfillment en Shopify era del pedido entero (líneas no separables
   por caja: kits, SKU que Shopify no conoce) no se cancela ni se actualiza:
   la guía nueva no llega a Shopify; queda en SyncLog.

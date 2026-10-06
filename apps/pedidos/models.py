@@ -379,7 +379,13 @@ class Pedido(models.Model):
         """
         cajas = [c for c in self.paquetes.all() if c.estado in ("EMPACADO", "DESPACHADO")]
         if cajas:
-            return all(c.ts_cierre is not None and c.guia_activa is not None for c in cajas)
+            # Solo las que siguen en bodega (2026-10-05): una caja despachada
+            # cuya guía se canceló después (el carrier la perdió) ya no frena
+            # la salida de las demás.
+            return all(
+                c.ts_cierre is not None and c.guia_activa is not None
+                for c in cajas if c.estado == "EMPACADO"
+            )
         if not any(g.es_activa for g in self.guias.all()):
             return False
         return self.cajas_cerradas_completas

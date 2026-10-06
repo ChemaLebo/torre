@@ -34,3 +34,33 @@ class CarrierPorCajaTests(TestCase):
         carrier, _servicio = _carrier_de_paquete(self.pedido, self.caja)
         self.caja.refresh_from_db()
         self.assertEqual((carrier, self.caja.carrier), ("fedex", "fedex"))
+
+
+@override_settings(ENVIA_API_KEY="")
+class GuiasSoloEnBodegaTests(TestCase):
+    """PED-00031 (Chema 2026-10-05): al comprar las guías de la ola siguiente,
+    una caja ya despachada cuya guía se canceló después (el carrier la perdió)
+    NO recibe guía nueva; solo las cajas en bodega."""
+
+    def setUp(self):
+        from apps.envios.adapters import MockAdapter
+
+        MockAdapter.reiniciar()
+        self.cliente = crear_cliente()
+        self.pedido = crear_pedido(self.cliente, crear_tienda(self.cliente), estado="EMPACADO")
+        self.fuera = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        self.en_bodega = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+
+    def test_no_compra_guia_para_la_caja_despachada_sin_guia_viva(self):
+        from apps.envios.models import Guia
+        from apps.envios.services import generar_guias
+
+        Guia.objects.create(pedido=self.pedido, paquete=self.fuera, carrier="imile", numero="IM-1", estado=Guia.CANCELADA)
+        guias = generar_guias(self.pedido)
+        self.assertEqual([g.paquete_id for g in guias], [self.en_bodega.pk])
+        self.assertIsNone(self.fuera.guia_activa)
+        self.assertEqual(Guia.objects.filter(pedido=self.pedido).count(), 2)  # la cancelada y la nueva de la caja 2
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, "GUIA_GENERADA")
+        # Reintentar no duplica nada.
+        self.assertEqual([g.pk for g in generar_guias(self.pedido)], [g.pk for g in guias])

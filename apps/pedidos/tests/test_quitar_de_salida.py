@@ -162,3 +162,64 @@ class QuitarDeSalidaTests(PisoTestCase):
         self.assertEqual((pedido.estado, linea.cantidad_despachada, suma(self.sku, Saldo.EN_EMPAQUE)), (Pedido.RECOLECTADO, 4, 0))
         self.assertIsNotNone(pedido.ts_recolectado)
         self.assertEqual(Movimiento.objects.filter(sku=self.sku, tipo=Movimiento.SALIDA).aggregate(t=Sum("delta"))["t"], -8)
+
+
+@override_settings(ENVIA_API_KEY="")
+class CasoMixtoTests(PisoTestCase):
+    """Una caja regresa y la otra sigue fuera (PARCIALMENTE_DESPACHADO): el
+    piso le recompra la guía SOLO a la que está en bodega (2026-10-05) y la
+    caja vuelve a salir con su propio manifiesto."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+
+    def test_la_caja_de_vuelta_recompra_su_guia_y_vuelve_a_salir(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
+        linea = pedido.lineas.get()
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        c2 = Paquete.objects.create(pedido=pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=2)
+        services.generar_guia(pedido)
+        Paquete.objects.filter(pedido=pedido).update(ts_cierre=timezone.now())
+        pedido.refresh_from_db()
+        with patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, self.operador)
+        registrar_manifiesto("estafeta", "SAL-OTRO", self.operador, [(pedido, [c1, c2])], chofer="Juan")
+        pedido.refresh_from_db()
+        c1 = Paquete.objects.get(pk=c1.pk)
+        c2 = Paquete.objects.get(pk=c2.pk)
+        g2 = c2.guia_activa
+        cancelar_guia(c1.guia_activa, self.mesa)
+        c1 = Paquete.objects.get(pk=c1.pk)
+        with patch("apps.integraciones.services.cancelar_fulfillment_caja"), self.captureOnCommitCallbacks(execute=True):
+            services.quitar_de_salida(pedido, c1, self.mesa)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+        services.cambiar_paqueteria_caja(pedido, Paquete.objects.get(pk=c1.pk), "local", self.mesa)
+        # Mi turno la lista como "sin guía: caja 1" y el wizard ofrece Reintentar guía aunque la caja 2 siga fuera.
+        self.login_piso()
+        self.assertIn("sin guía: caja 1", self.client.get(reverse("piso:home")).content.decode())
+        html = self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk])).content.decode()
+        self.assertIn('value="generar_guia"', html)
+        self.assertFalse(pedido.empaque_completo)
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value=""):
+            respuesta = self.client.post(reverse("piso:empaque_pedido", args=[pedido.pk]), {"accion": "generar_guia"}, follow=True)
+        self.assertContains(respuesta, "1 guía(s) listas")
+        pedido.refresh_from_db()
+        c1 = Paquete.objects.get(pk=c1.pk)
+        c2 = Paquete.objects.get(pk=c2.pk)
+        # Solo la caja 1 compró guía (interna); la 2 conserva la suya y el pedido sigue parcial.
+        self.assertTrue(c1.guia_activa.numero.startswith("LOCAL-"))
+        self.assertEqual((c2.guia_activa.pk, pedido.estado), (g2.pk, Pedido.PARCIALMENTE_DESPACHADO))
+        self.assertTrue(pedido.empaque_completo)
+        self.assertEqual(Guia.objects.filter(pedido=pedido).count(), 3)
+        # Segunda salida: solo la caja 1; el kardex despacha sus 2 piezas y el pedido queda recolectado.
+        with patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(pedido, self.operador, paquetes=[c1])
+        pedido.refresh_from_db()
+        linea.refresh_from_db()
+        self.assertEqual((pedido.estado, linea.cantidad_despachada, suma(self.sku, Saldo.EN_EMPAQUE)), (Pedido.RECOLECTADO, 4, 0))

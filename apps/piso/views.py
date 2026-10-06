@@ -1417,12 +1417,13 @@ def _que_falta_empaque(pedido):
             return "sin empacar: caja " + ", ".join(str(c.numero) for c in pendientes)
         return "por empacar"
     empacadas = [c for c in cajas if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
-    sin_guia = [c for c in empacadas if c.guia_activa is None]
+    en_bodega = [c for c in empacadas if c.estado == Paquete.EMPACADO]  # las despachadas ya no piden nada
+    sin_guia = [c for c in en_bodega if c.guia_activa is None]
     if sin_guia:
         return "sin guía: caja " + ", ".join(str(c.numero) for c in sin_guia)
     if not empacadas and not any(g.es_activa for g in pedido.guias.all()):
         return "sin guía"
-    sin_cierre = [c for c in empacadas if c.ts_cierre is None]
+    sin_cierre = [c for c in en_bodega if c.ts_cierre is None]
     if sin_cierre:
         return "falta foto de cierre: caja " + ", ".join(str(c.numero) for c in sin_cierre)
     return "falta foto de cierre"
@@ -1811,7 +1812,8 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
     )
     cajas_empacadas = [c for c in cajas if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
-    por_cerrar = [c for c in cajas_empacadas if not _caja_cerrada(c)]
+    en_bodega = [c for c in cajas_empacadas if c.estado == Paquete.EMPACADO]  # las despachadas ya no piden nada
+    por_cerrar = [c for c in en_bodega if not _caja_cerrada(c)]
     caja_cierre = por_cerrar[0] if por_cerrar else None
     if elegida is not None:
         caja_cierre = next((c for c in por_cerrar if c.pk == elegida.pk), caja_cierre)
@@ -1820,8 +1822,8 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         "paso": "cierre",
         "guias": guias,
         "tiene_guia": bool(guias),
-        # Cajas del plan sin guía activa (el carrier falló en esa caja): se generan desde Salida.
-        "cajas_sin_guia": [c for c in cajas_empacadas if c.pk not in con_guia],
+        # Cajas en bodega sin guía activa (el carrier falló, o se quitó de salida): se reintentan aquí.
+        "cajas_sin_guia": [c for c in en_bodega if c.pk not in con_guia],
         "cajas_empacadas": cajas_empacadas,
         "por_cerrar": por_cerrar,
         "caja_cierre": caja_cierre,
@@ -1831,8 +1833,11 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         "total_cierres": max(len(cajas_empacadas), 1),
         "cierres_hechos": max(len(cajas_empacadas), 1) - (len(por_cerrar) or 1),
         # La guía que falló con el carrier se reintenta AQUÍ (antes vivía en
-        # Salida): nada llega al corral sin guía y foto de cierre.
-        "puede_reintentar_guia": pedido.estado == Pedido.EMPACADO,
+        # Salida): nada llega al corral sin guía y foto de cierre. Con otras
+        # cajas ya fuera (parcial) solo cuando alguna en bodega no tiene guía.
+        "puede_reintentar_guia": pedido.estado == Pedido.EMPACADO or (
+            pedido.estado == Pedido.PARCIALMENTE_DESPACHADO and any(c.pk not in con_guia for c in en_bodega)
+        ),
     })
     if caja_cierre is not None:
         contexto.update(_contexto_peso(caja_cierre))
@@ -1941,7 +1946,7 @@ def _empaque_generar_guia(request, pedido):
     """Reintento de guía desde el paso de cierre: el pedido EMPACADO cuya guía
     falló con el carrier se vuelve a intentar aquí (antes vivía en Salida)."""
     destino = redirect("piso:empaque_pedido", pk=pedido.pk)
-    if pedido.estado != Pedido.EMPACADO:
+    if pedido.estado not in (Pedido.EMPACADO, Pedido.PARCIALMENTE_DESPACHADO):
         messages.error(
             request,
             f"{pedido.folio} no está esperando guía (está {pedido.get_estado_display().lower()}).",

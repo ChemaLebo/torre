@@ -599,6 +599,10 @@ def generar_guias(pedido):
     Si el pedido no tiene plan, se planifica aquí (división ≤20 kg optimizada
     por costo, ver cotizador.planificar_envio). Idempotente por paquete: un
     paquete con guía activa no genera otra. Solo un RETORNO libera reexpedición.
+    Solo cajas EN BODEGA (Chema 2026-10-05, PED-00031): una caja ya despachada
+    cuya guía se canceló después (el carrier la perdió) NO recibe guía nueva
+    al comprar las de la ola siguiente; eso lo decide Mesa (quitar de salida
+    o perdida con el carrier).
     Un carrier que cotizó el lane y falla al COMPRAR no se sustituye solo
     (Chema 2026-09-22): el error queda auditado (error_generacion_guia) y la
     caja se reintenta desde el empaque; el respaldo por precio vive solo al
@@ -658,6 +662,8 @@ def generar_guias(pedido):
                 guias = [_crear_guia(pedido, carrier, servicio)]
     else:
         for paquete in paquetes:
+            if paquete.estado == Paquete.DESPACHADO:
+                continue  # ya salió: su guía (viva o cancelada) no se repone aquí
             try:
                 with transaction.atomic():
                     # Candado por caja: quien gane el lock compra la guía; el

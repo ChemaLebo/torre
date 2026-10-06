@@ -2246,8 +2246,11 @@ def reemplazar_foto_pedido(pedido, actor, evidencia_id, foto):
 # ── Guía y salida ──
 
 def generar_guia(pedido):
-    """EMPACADO → GUIA_GENERADA vía envios.services.generar_guia (lazy, idempotente)."""
-    if pedido.estado not in (Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+    """EMPACADO → GUIA_GENERADA vía envios.services.generar_guia (lazy,
+    idempotente). También con PARCIALMENTE_DESPACHADO (2026-10-05): la caja
+    que se quedó o que se quitó de salida recompra SU guía (las despachadas
+    no se tocan) y el pedido conserva su estado."""
+    if pedido.estado not in (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         raise ValueError(
             f"El pedido {pedido.folio} debe estar empacado antes de generar guía "
             f"(está {pedido.get_estado_display()})."
