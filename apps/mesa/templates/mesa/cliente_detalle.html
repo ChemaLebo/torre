@@ -222,6 +222,42 @@
   </div>
 
   <div class="card">
+    {# Correos de incidencias (Chema 2026-10-06): un renglón por correo; la lista fija de Torre vive en el admin (Configuraciones de sistema). #}
+    <div class="titulo"><h3>Correos de incidencias</h3><span class="small">{{ correos_fijos }} fijo{{ correos_fijos|pluralize }} de Torre</span></div>
+    <p class="small muted">Cada incidencia que se abre sobre esta marca (y cada pedido detenido que se reanuda) llega a estos correos y a la lista fija de Torre.</p>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Correo</th><th>Nombre</th><th></th></tr></thead>
+        <tbody>
+          {% for c in correos_incidencias %}
+          <tr>
+            <td class="mono">{{ c.correo }}{% if not c.activo %} <span class="pill crit">inactivo</span>{% endif %}</td>
+            <td>{{ c.nombre|default:"—" }}</td>
+            <td class="derecha">
+              <form method="post" style="display:inline">{% csrf_token %}
+                <input type="hidden" name="accion" value="correo_incidencias_baja">
+                <input type="hidden" name="correo_id" value="{{ c.pk }}">
+                <button class="btn chico peligro" type="submit">Quitar</button>
+              </form>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="3" class="muted centro">Sin correos: solo la lista fija de Torre recibe sus incidencias.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <form method="post" class="mt">{% csrf_token %}
+      <input type="hidden" name="accion" value="correo_incidencias_alta">
+      <div class="grid g2">
+        <div><label for="id_correo_inc">Correo</label><input type="email" name="correo" id="id_correo_inc" required placeholder="nombre@dominio"></div>
+        <div><label for="id_correo_inc_nombre">Nombre (opcional)</label><input type="text" name="nombre" id="id_correo_inc_nombre" placeholder="Karina · logística"></div>
+      </div>
+      <button class="btn chico mt" type="submit">Agregar correo</button>
+    </form>
+  </div>
+
+  <div class="card">
     <div class="titulo"><h3>Reglas de envío</h3><span class="small">menor prioridad gana</span></div>
     {% for regla in reglas_envio %}
     <div style="padding:6px 0;border-bottom:1px solid var(--hair)">

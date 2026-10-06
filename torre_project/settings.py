@@ -71,6 +71,7 @@ INSTALLED_APPS = [
     "apps.rastreo",
     "apps.reportes",
     "apps.finanzas",
+    "apps.configuracion",
 ]
 
 MIDDLEWARE = [

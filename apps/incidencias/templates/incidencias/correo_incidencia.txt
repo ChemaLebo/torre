@@ -1,0 +1,12 @@
+{{ titulo }}
+
+Incidencia: {{ incidencia.folio }} · {{ incidencia.get_tipo_display }} · {{ incidencia.prioridad }}{% if incidencia.interna %} · interna (bodega){% endif %}
+Cliente: {{ incidencia.cliente.nombre }}
+{% if pedido %}Pedido: {{ pedido.folio }}{% if pedido.shopify_order_name %} · orden {{ pedido.shopify_order_name }}{% endif %}{% if pedido.comprador_nombre %} · {{ pedido.comprador_nombre }}{% endif %}
+{% endif %}{% if incidencia.sku %}Producto: {{ incidencia.sku.codigo }}
+{% endif %}{% if incidencia.orden %}Recepción: {{ incidencia.orden.folio }}
+{% endif %}Abierta: {{ incidencia.ts_apertura|date:"Y-m-d H:i" }} · origen {{ incidencia.get_origen_display }}
+{% if detalle %}
+{{ detalle }}
+{% endif %}
+Verla en Mesa: {{ url }}

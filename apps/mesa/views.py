@@ -22,6 +22,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.configuracion.models import CorreoIncidencias
 from apps.core.decorators import redirigir_rol, rol_requerido
 from apps.core.models import Cliente, EventoAuditoria, EvidenciaFoto, PerfilUsuario
 from apps.core.services import email_real, enviar_acceso, registrar_evento
@@ -2513,6 +2514,8 @@ def cliente_detalle(request, pk):
         "reglas_envio": ReglaEnvio.objects.filter(Q(cliente=cliente) | Q(cliente__isnull=True)),
         "reparto": _resumen_reparto(cliente),
         "plantillas": PlantillaMensaje.objects.filter(Q(cliente=cliente) | Q(cliente__isnull=True)),
+        "correos_incidencias": cliente.correos_incidencias.order_by("correo"),
+        "correos_fijos": CorreoIncidencias.objects.filter(cliente__isnull=True, activo=True).count(),
     })
 
 
@@ -2767,6 +2770,21 @@ def _gestionar_cliente(request, cliente):
             f"Usuario {username} creado. Contraseña: {password} — compártela por "
             "canal seguro, no se vuelve a mostrar."
         )
+
+    if accion == "correo_incidencias_alta":
+        from apps.configuracion.services import agregar_correo_incidencias  # lazy por contrato
+
+        fila = agregar_correo_incidencias(
+            cliente, request.POST.get("correo"), request.POST.get("nombre"), actor=request.user,
+        )
+        return f"{fila.correo} recibirá las incidencias de {cliente.nombre}."
+
+    if accion == "correo_incidencias_baja":
+        from apps.configuracion.services import quitar_correo_incidencias  # lazy por contrato
+
+        fila = get_object_or_404(CorreoIncidencias, pk=request.POST.get("correo_id"), cliente=cliente)
+        quitar_correo_incidencias(fila, actor=request.user)
+        return f"{fila.correo} ya no recibe las incidencias de {cliente.nombre}."
 
     if accion == "usuario_enviar_acceso":
         usuario = _usuario_portal_del_cliente(request, cliente)

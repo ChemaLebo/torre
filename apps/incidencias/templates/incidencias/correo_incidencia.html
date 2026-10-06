@@ -1,0 +1,16 @@
+{% extends "core/_correo_base.html" %}
+{% block titulo %}{{ asunto }}{% endblock %}
+{% block titulo_cuerpo %}{{ titulo }}{% endblock %}
+{% block cuerpo %}
+<table role="presentation" cellpadding="0" cellspacing="0" style="font-size:15px;line-height:1.6;">
+  <tr><td style="padding:2px 14px 2px 0;color:#666;">Incidencia</td><td><b>{{ incidencia.folio }}</b> · {{ incidencia.get_tipo_display }} · {{ incidencia.prioridad }}{% if incidencia.interna %} · interna (bodega){% endif %}</td></tr>
+  <tr><td style="padding:2px 14px 2px 0;color:#666;">Cliente</td><td>{{ incidencia.cliente.nombre }}</td></tr>
+  {% if pedido %}<tr><td style="padding:2px 14px 2px 0;color:#666;">Pedido</td><td><b>{{ pedido.folio }}</b>{% if pedido.shopify_order_name %} · orden {{ pedido.shopify_order_name }}{% endif %}{% if pedido.comprador_nombre %} · {{ pedido.comprador_nombre }}{% endif %}</td></tr>{% endif %}
+  {% if incidencia.sku %}<tr><td style="padding:2px 14px 2px 0;color:#666;">Producto</td><td>{{ incidencia.sku.codigo }}</td></tr>{% endif %}
+  {% if incidencia.orden %}<tr><td style="padding:2px 14px 2px 0;color:#666;">Recepción</td><td>{{ incidencia.orden.folio }}</td></tr>{% endif %}
+  <tr><td style="padding:2px 14px 2px 0;color:#666;">Abierta</td><td>{{ incidencia.ts_apertura|date:"Y-m-d H:i" }} · origen {{ incidencia.get_origen_display }}</td></tr>
+</table>
+{% if detalle %}<p style="margin:14px 0 0;padding:12px 14px;background:#f3f3f1;border-radius:8px;white-space:pre-line;">{{ detalle }}</p>{% endif %}
+{% endblock %}
+{% block boton %}{% include "core/_correo_boton.html" with url=url texto="Ver en Mesa" %}{% endblock %}
+{% block pie %}Recibes este correo porque estás en la lista de correos de incidencias de Torre{% if incidencia.cliente %} para {{ incidencia.cliente.nombre }}{% endif %}.{% endblock %}

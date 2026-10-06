@@ -6,6 +6,7 @@ Consumidores conocidos (llaman lazy a este módulo):
 - envios.poll_tracking → abrir_incidencia (RET/RF) por intento fallido,
   retorno o silencio del carrier.
 """
+import os
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -182,8 +183,50 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
             notificar_cliente_incidencia(incidencia)
 
     _push_mesa(incidencia, f"⚠️ Incidencia {incidencia.folio}")
+    avisar_por_correo(incidencia, "abierta", f"Se abrió la incidencia {incidencia.folio}", texto)
     incidencia.agrupada = False
     return incidencia
+
+
+def avisar_por_correo(incidencia, evento, titulo, detalle=""):
+    """Correo a la lista de correos de incidencias (configuracion: la fija de
+    Torre más la del cliente) con pedido, folio, tipo, prioridad y motivo
+    (Chema 2026-10-06: "vital" que los bloqueos se vean fuera de Torre). Sale
+    en transaction.on_commit y es best-effort: un SMTP caído jamás bloquea la
+    operación (queda `correo_fallido`). Uno por incidencia y evento
+    (`correo_enviado` en auditoría): reintentar no duplica. Sin destinatarios
+    no manda nada y deja `correo_sin_destinatarios`."""
+    from apps.configuracion.services import correos_incidencias  # lazy por contrato
+    from apps.core.services import branding_correo, enviar_correo  # lazy por contrato
+
+    def _mandar():
+        clave = f"{evento}:{incidencia.folio}"
+        if EventoAuditoria.objects.filter(entidad="incidencia", entidad_id=incidencia.folio, accion="correo_enviado", motivo=clave).exists():
+            return
+        destinatarios = correos_incidencias(incidencia.cliente)
+        if not destinatarios:
+            registrar_evento("incidencia", incidencia.folio, "correo_sin_destinatarios", cliente=incidencia.cliente, motivo=clave)
+            return
+        pedido = incidencia.pedido
+        asunto = f"[Torre] {incidencia.folio} · {incidencia.tipo}" + (f" · {pedido.folio}" if pedido is not None else "") + f" · {titulo}"
+        contexto = {
+            "asunto": asunto, "titulo": titulo, "detalle": (detalle or "").strip(), "incidencia": incidencia,
+            "pedido": pedido, "marca": branding_correo(None),
+            "url": os.environ.get("BASE_URL_PUBLICA", "http://127.0.0.1:8380").rstrip("/") + f"/mesa/incidencias/{incidencia.pk}/",
+        }
+        try:
+            enviar_correo(destinatarios, asunto, "incidencias/correo_incidencia", contexto)
+        except Exception as exc:  # noqa: BLE001 — el correo es aviso; la incidencia ya quedó
+            registrar_evento(
+                "incidencia", incidencia.folio, "correo_fallido", cliente=incidencia.cliente,
+                delta={"a": destinatarios, "error": str(exc)[:200]}, motivo=clave,
+            )
+            return
+        registrar_evento(
+            "incidencia", incidencia.folio, "correo_enviado", cliente=incidencia.cliente,
+            delta={"a": destinatarios, "asunto": asunto}, motivo=clave,
+        )
+    transaction.on_commit(_mandar)
 
 
 def _push_mesa(incidencia, titulo):

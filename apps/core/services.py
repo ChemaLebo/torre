@@ -47,7 +47,8 @@ def branding_correo(cliente=None):
 
 def enviar_correo(destinatario, asunto, plantilla, contexto):
     """Correo multipart: texto plano desde `<plantilla>.txt` y HTML brandeado
-    desde `<plantilla>.html`, con Reply-To de settings.EMAIL_REPLY_TO."""
+    desde `<plantilla>.html`, con Reply-To de settings.EMAIL_REPLY_TO.
+    `destinatario`: un correo o una lista de correos."""
     from django.conf import settings
     from django.core.mail import EmailMultiAlternatives
     from django.template.loader import render_to_string
@@ -55,7 +56,7 @@ def enviar_correo(destinatario, asunto, plantilla, contexto):
     correo = EmailMultiAlternatives(
         subject=asunto,
         body=render_to_string(f"{plantilla}.txt", contexto),
-        to=[destinatario],
+        to=[destinatario] if isinstance(destinatario, str) else list(destinatario),
         reply_to=[settings.EMAIL_REPLY_TO] if settings.EMAIL_REPLY_TO else None,
     )
     correo.attach_alternative(render_to_string(f"{plantilla}.html", contexto), "text/html")
