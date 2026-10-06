@@ -41,8 +41,8 @@ def generar(cliente, inicio, fin, filtros, es_mesa):
         lineas = lineas.exclude(pedido__estado__in=CANCELADOS)
     filas, pedidos, piezas, importe, sin_precio = [], set(), 0, Decimal(0), 0
     for l in lineas:
-        if l.reposicion_de_id:
-            continue  # reposición de producto (2026-09-28): no es venta
+        # Reposición de producto (2026-10-05): no agrega líneas; lo repuesto
+        # vive en cantidad_repuesta y la venta sigue siendo `cantidad`.
         p = l.pedido
         cancelado = p.estado in CANCELADOS
         producto = l.sku.descripcion + (" (componente de kit)" if l.parte_de_kit_id else "")

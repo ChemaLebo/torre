@@ -1068,7 +1068,7 @@ def pedido_detalle(request, pk):
 
     pedido = get_object_or_404(
         Pedido.objects.select_related("cliente", "tienda", "asignado_a")
-        .prefetch_related("lineas__sku", "paquetes__guias", "paquetes__lineas__linea_pedido__sku"),
+        .prefetch_related("lineas__sku", "paquetes__guias", "paquetes__lineas__linea_pedido__sku", "paquetes__lineas__repone_a"),
         pk=pk,
     )
     if request.method == "POST":

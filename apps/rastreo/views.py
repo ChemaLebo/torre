@@ -124,15 +124,18 @@ def _contexto(pedido):
             alcanzado = False
 
     paquetes = []
-    for paquete in pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "guias"):
+    for paquete in pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "lineas__repone_a", "guias"):
         guia = paquete.guia_activa
         contenido = []
         for pl in paquete.lineas.all():
             nombre = pl.linea_pedido.sku.descripcion or pl.linea_pedido.sku.codigo
             if pl.fraccion_de > 1:
-                contenido.append(f"{pl.cantidad}/{pl.fraccion_de} de {nombre}")
+                texto = f"{pl.cantidad}/{pl.fraccion_de} de {nombre}"
             else:
-                contenido.append(f"{pl.cantidad}× {nombre}")
+                texto = f"{pl.cantidad}× {nombre}"
+            if pl.repone_a_id:  # reposición (2026-10-05): repone piezas que viajaron en otro paquete
+                texto += f" (reposición del paquete {pl.repone_a.numero})"
+            contenido.append(texto)
         paquetes.append({
             "numero": paquete.numero,
             "total": None,  # se llena abajo

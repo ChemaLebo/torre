@@ -217,12 +217,11 @@ class ResumenCorteTests(TestCase):
 
         pedido = crear_pedido(self.cliente, "PED-F0010")
         sku = SKU.objects.create(cliente=self.cliente, codigo="SIX", descripcion="Six")
-        original = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1)
-        repuesta = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, reposicion_de=original)
+        original = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, cantidad_repuesta=1)
         p1 = paquete(pedido, 1, "5.00")
         PaqueteLinea.objects.create(paquete=p1, linea_pedido=original, cantidad=1)
         p2 = paquete(pedido, 2, "5.00")
-        PaqueteLinea.objects.create(paquete=p2, linea_pedido=repuesta, cantidad=1)
+        PaqueteLinea.objects.create(paquete=p2, linea_pedido=original, cantidad=1, repone_a=p1)  # misma línea, repone a la caja 1
         cancelada = guia(pedido, "estafeta", "150", p1)
         Guia.objects.filter(pk=cancelada.pk).update(estado=Guia.CANCELADA)
         Guia.objects.create(pedido=pedido, paquete=p1, carrier="local", numero="L-1", costo_preferencial=Decimal("100"))

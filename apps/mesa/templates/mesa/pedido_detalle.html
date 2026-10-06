@@ -95,7 +95,7 @@
         {% for caja in cajas %}
         <tr>
           <td class="mono">{{ caja.numero }}<div class="small muted">{{ caja.get_estado_display }}</div></td>
-          <td class="small">{% for pl in caja.lineas.all %}{{ pl.texto_para_piso }}<br>{% empty %}<span class="muted">sin contenido registrado</span>{% endfor %}</td>
+          <td class="small">{% for pl in caja.lineas.all %}{{ pl.texto_para_piso }}{% if pl.repone_a_id %} <span class="pill accent" title="Repone piezas que viajaron en esa caja">reposición de la caja {{ pl.repone_a.numero }}</span>{% endif %}<br>{% empty %}<span class="muted">sin contenido registrado</span>{% endfor %}</td>
           <td class="mono small">{{ caja.peso_kg }} kg{% if caja.peso_real_gr %}<div class="muted">báscula {{ caja.peso_real_gr }} g</div>{% endif %}</td>
           <td class="small">{{ caja.carrier }}{% if caja.carrier_forzado %} <span class="pill warn" title="Paquetería forzada desde Mesa para esta caja">forzada</span>{% endif %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}{% if caja.estimado_entrega %} · {{ caja.estimado_entrega }}{% endif %}</div></td>
           <td class="small">
@@ -208,7 +208,7 @@
             <td class="mono">{{ linea.cantidad }}</td>
             <td class="mono">{{ linea.cantidad_pickeada }}</td>
             <td class="mono">{{ linea.cantidad_despachada }}</td>
-            <td>{% if linea.reposicion_de_id %}<span class="pill accent">Reposición</span>{% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span>{% elif not linea.reservada and not linea.cantidad_despachada %}<span class="pill warn">sin reservar</span>{% endif %}{% if linea.parte_de_kit_id %}<span class="pill">componente de kit</span>{% endif %}</td>
+            <td>{% if linea.cantidad_repuesta %}<span class="pill accent" title="Piezas repuestas de este producto ({{ linea.cantidad_repuesta_reservada }} con stock); viajan en otra caja">repuestas: {{ linea.cantidad_repuesta }}</span>{% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span>{% elif not linea.reservada and not linea.cantidad_despachada %}<span class="pill warn">sin reservar</span>{% endif %}{% if linea.parte_de_kit_id %}<span class="pill">componente de kit</span>{% endif %}</td>
           </tr>
           {% empty %}
           <tr><td colspan="5" class="muted">Sin renglones.</td></tr>

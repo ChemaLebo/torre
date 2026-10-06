@@ -181,9 +181,8 @@ class TrackingReposicionTests(Base):
         self.c1.save(update_fields=["estado", "shopify_fulfillment_id"])
         self.g1.estado = Guia.ENTREGADO
         self.g1.save(update_fields=["estado"])
-        repuesta = LineaPedido.objects.create(pedido=self.pedido, sku=self.linea.sku, cantidad=1, reposicion_de=self.linea)
         self.c2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal(2), carrier="imile", estado="EMPACADO")
-        PaqueteLinea.objects.create(paquete=self.c2, linea_pedido=repuesta, cantidad=1)
+        PaqueteLinea.objects.create(paquete=self.c2, linea_pedido=self.linea, cantidad=1, repone_a=self.c1)  # misma línea
         self.g2 = Guia.objects.create(pedido=self.pedido, paquete=self.c2, carrier="imile", numero="IM-2", proveedor="envia")
 
     def test_actualiza_el_rastreo_del_fulfillment_sustituido_y_avisa(self):

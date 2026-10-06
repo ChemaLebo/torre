@@ -471,7 +471,7 @@ def pedido_detalle(request, pk):
         ))
     direccion = pedido.direccion or {}
     paquetes = list(
-        pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "guias").order_by("numero")
+        pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "lineas__repone_a", "guias").order_by("numero")
     )
     # Visibilidad por paquete (Chema 2026-10-01): guía viva, rastreo público,
     # sustituida y la línea de tiempo por caja (la misma de Mesa).

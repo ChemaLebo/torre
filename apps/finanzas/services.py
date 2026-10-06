@@ -245,13 +245,14 @@ def facturar_guias(cliente, inicio, fin):
     planes = defaultdict(list)
     for p in Paquete.objects.filter(pedido_id__in=pedidos_ids).order_by("numero"):
         planes[p.pedido_id].append(p)
-    # Cajas de reposición (todas sus líneas reponen otra): se cobran igual, se etiquetan.
+    # Cajas de reposición (todos sus renglones reponen piezas de otra caja,
+    # PaqueteLinea.repone_a): se cobran igual, se etiquetan.
     con_lineas, con_originales = set(), set()
-    for paquete_id, reposicion in PaqueteLinea.objects.filter(paquete__pedido_id__in=pedidos_ids).values_list(
-        "paquete_id", "linea_pedido__reposicion_de_id",
+    for paquete_id, repone_a in PaqueteLinea.objects.filter(paquete__pedido_id__in=pedidos_ids).values_list(
+        "paquete_id", "repone_a_id",
     ):
         con_lineas.add(paquete_id)
-        if reposicion is None:
+        if repone_a is None:
             con_originales.add(paquete_id)
     reposiciones = con_lineas - con_originales
     # Evidencia por pedido de lo que sí se hizo en piso.

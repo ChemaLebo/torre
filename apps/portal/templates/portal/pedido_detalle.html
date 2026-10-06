@@ -87,7 +87,7 @@
         <tbody>
           {% for linea in pedido.lineas.all %}
             <tr>
-              <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div>{% if linea.reposicion_de_id %}<span class="pill accent">Reposición</span> {% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span> <span class="small muted">sale después, con el mismo folio</span>{% endif %}</td>
+              <td><span class="mono">{{ linea.sku.codigo }}</span><div class="small">{{ linea.sku.descripcion }}</div>{% if linea.cantidad_repuesta %}<span class="pill accent" title="Piezas repuestas de este producto; viajan en otro paquete">repuestas: {{ linea.cantidad_repuesta }}</span> {% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span> <span class="small muted">sale después, con el mismo folio</span>{% endif %}</td>
               <td class="mono">{{ linea.cantidad }}</td>
             </tr>
           {% empty %}
@@ -128,7 +128,7 @@
         {% for paq in paquetes %}
         <tr>
           <td class="mono">{{ paq.numero }} de {{ paquetes|length }}<div class="small muted">{{ paq.get_estado_display }}</div></td>
-          <td class="small">{% for pl in paq.lineas.all %}{{ pl.texto_para_piso }}<br>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+          <td class="small">{% for pl in paq.lineas.all %}{{ pl.texto_para_piso }}{% if pl.repone_a_id %} <span class="pill accent" title="Repone piezas que viajaron en ese paquete">reposición del paquete {{ pl.repone_a.numero }}</span>{% endif %}<br>{% empty %}<span class="muted">—</span>{% endfor %}</td>
           <td class="mono small">{{ paq.peso_kg }} kg</td>
           <td class="small">{{ paq.carrier|title }}</td>
           <td class="small">{% if paq.guia %}{% if paq.url_rastreo %}<a class="mono" href="{{ paq.url_rastreo }}" target="_blank" rel="noopener" title="Rastreo público de la paquetería">{{ paq.guia.numero }} ↗</a>{% else %}<span class="mono">{{ paq.guia.numero }}</span>{% endif %}{% else %}<span class="muted">en preparación</span>{% endif %}</td>

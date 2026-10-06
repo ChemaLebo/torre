@@ -428,11 +428,12 @@ def reembolsar_en_shopify(pedido, lineas=(), reembolsar_envio=False, monto=None,
 
 
 def _caja_es_reposicion(caja):
-    """True si TODO el contenido de la caja son líneas de reposición: la
-    orden ya está fulfilled en Shopify y no hay line items que fulfillear;
-    en su lugar, el fulfillment sustituido cambia de guía (_tracking_reposicion)."""
-    lineas = list(caja.lineas.select_related("linea_pedido"))
-    return bool(lineas) and all(pl.linea_pedido.reposicion_de_id for pl in lineas)
+    """True si TODO el contenido de la caja repone piezas de otras cajas
+    (PaqueteLinea.repone_a): la orden ya está fulfilled en Shopify y no hay
+    line items que fulfillear; en su lugar, el fulfillment sustituido cambia
+    de guía (_tracking_reposicion)."""
+    lineas = list(caja.lineas.all())
+    return bool(lineas) and all(pl.repone_a_id for pl in lineas)
 
 
 # ── Fulfillment (write-back al firmar el manifiesto) ─────────────────────────
@@ -790,19 +791,16 @@ def _fulfillment_por_caja(pedido, tienda, cajas, url_rastreo, evento_inicial, no
 
 
 def _fulfillments_sustituidos(pedido, caja):
-    """gids de los fulfillments de las cajas cuyo contenido repone `caja`
-    (PaqueteLinea → LineaPedido.reposicion_de → caja original →
-    Paquete.shopify_fulfillment_id), en orden de caja; sin caja original con
-    id, el fulfillment del pedido entero; [] si Torre no guardó ninguno."""
+    """gids de los fulfillments de las cajas cuyas piezas repone `caja`
+    (PaqueteLinea.repone_a → caja original → Paquete.shopify_fulfillment_id),
+    en orden de caja; sin caja original con id, el fulfillment del pedido
+    entero; [] si Torre no guardó ninguno."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
-    originales = [
-        pl.linea_pedido.reposicion_de_id
-        for pl in caja.lineas.select_related("linea_pedido") if pl.linea_pedido.reposicion_de_id
-    ]
+    originales = [pl.repone_a_id for pl in caja.lineas.all() if pl.repone_a_id]
     fids = []
     for fid in (
-        Paquete.objects.filter(pedido=pedido, lineas__linea_pedido_id__in=originales)
+        Paquete.objects.filter(pedido=pedido, pk__in=originales)
         .exclude(shopify_fulfillment_id="").order_by("numero")
         .values_list("shopify_fulfillment_id", flat=True)
     ):

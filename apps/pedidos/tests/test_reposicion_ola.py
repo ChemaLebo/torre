@@ -159,3 +159,46 @@ class OlaDeReposicionTests(PisoTestCase):
         self.assertIn("Reposición · 2 pzas", html)
         self.assertIn("4 de 6", html)
         self.assertIn('data-cantidad="6"', html)
+
+
+@override_settings(ENVIA_API_KEY="")
+class PantallasReposicionTests(PisoTestCase):
+    """Portal, Mesa y la página pública de rastreo muestran solo los line items
+    (con "repuestas: N") y en los paquetes "reposición del paquete N"."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=10)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+
+    def test_articulos_sin_renglones_extra_y_paquete_de_reposicion_senalado(self):
+        from apps.rastreo.services import obtener_o_crear_token
+
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))
+        linea = pedido.lineas.get()
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
+        Guia.objects.create(pedido=pedido, paquete=c1, carrier="estafeta", numero="EST-1", estado=Guia.ENTREGADO, proveedor="mock")
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.ENTREGADO)
+        pedido.refresh_from_db()
+        with self.captureOnCommitCallbacks(execute=True):
+            services.reponer_lineas(pedido, [(linea, 1, c1)], self.mesa)
+        # Portal: un solo artículo con "repuestas: 1"; el paquete 2 dice de qué paquete repone.
+        self.client.force_login(self.usuario_portal)
+        html = self.client.get(reverse("portal:pedido_detalle", args=[pedido.pk])).content.decode()
+        self.assertIn("COLIMITA-SIX", html)
+        self.assertIn("repuestas: 1", html)
+        self.assertNotIn(">Reposición<", html)
+        self.assertIn("reposición del paquete 1", html)
+        lista = self.client.get(reverse("portal:pedidos"), {"ver": "todos"}).content.decode()
+        self.assertIn(pedido.folio, lista)
+        # Mesa: lo mismo en el detalle, con las piezas con stock.
+        self.client.force_login(self.mesa)
+        html = self.client.get(reverse("mesa:pedido_detalle", args=[pedido.pk])).content.decode()
+        self.assertIn("repuestas: 1", html)
+        self.assertIn("reposición de la caja 1", html)
+        # Rastreo público: el contenido del paquete nuevo lleva la nota.
+        self.client.logout()
+        html = self.client.get(f"/r/{obtener_o_crear_token(pedido)}/").content.decode()
+        self.assertIn("reposición del paquete 1", html)
