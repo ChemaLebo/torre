@@ -6,11 +6,6 @@
     <div class="eyebrow">Piso · Salida</div>
     <h1>Staging por corral</h1>
   </div>
-  {% if flota_propia or entregas_propias %}
-  <div class="fila">
-    <a class="btn chico" href="{% url 'piso:entrega_local' %}">Entregas locales (POD)</a>
-  </div>
-  {% endif %}
 </div>
 
 <div class="banner warn"><span class="foco"></span>
@@ -133,8 +128,7 @@
 
   {% if corral.codigo == corral_local and flota_propia %}
   <hr class="sep">
-  <p class="small">Ruta local: al firmar salen a reparto. Cierra cada entrega con su POD en
-    <a href="{% url 'piso:entrega_local' %}">Entregas locales</a>.</p>
+  <p class="small">Ruta local: al firmar salen a reparto. Mesa de Control cierra cada caja con su POD (foto y quién recibió) en Entregas locales.</p>
   {% endif %}
 </div>
 {% endif %}

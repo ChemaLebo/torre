@@ -13,7 +13,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -478,10 +478,6 @@ def home(request):
     for pedido in por_completar:
         pedido.falta = _que_falta_empaque(pedido)
     flota = _flota_propia()
-    entregas_locales = list(
-        _pedidos_entrega_propia().filter(estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO])
-        .select_related("cliente")
-    )
     restocks = list(
         Pedido.objects.filter(estado=Pedido.CANCELACION_PENDIENTE)
         .select_related("cliente").prefetch_related("lineas__sku")
@@ -526,7 +522,6 @@ def home(request):
         "por_completar": por_completar,
         "staging": staging,
         "conteos_pendientes": conteos_pendientes,
-        "entregas_locales": entregas_locales,
         "restocks": restocks,
         "flota_propia": flota,
         "corte_hora": corte_hora,
@@ -2608,7 +2603,6 @@ def salida(request):
         "hoy_iso": hoy.isoformat(),
         "corrales": [grupos[codigo] for codigo, _ in orden_corrales],
         "corral_local": CORRAL_LOCAL,
-        "entregas_propias": _pedidos_entrega_propia().filter(estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO]).exists(),
         "flota_propia": _flota_propia(),
     }
     return render(request, "piso/salida.html", contexto)
@@ -3212,128 +3206,3 @@ def _cuarentena_ubicar(request):
     if aviso:
         messages.warning(request, aviso)
     return destino
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entrega local (POD): foto + receptor + mayoría de edad — el producto es alcohol
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _pedidos_entrega_propia():
-    """Pedidos que entrega alguien propio: con flota, los locales; siempre, los
-    que llevan guía interna "local" (salida sin guía forzada desde Mesa, 2026-09-28)."""
-    con_guia_local = Q(pk__in=Guia.objects.filter(carrier="local").values("pedido_id"))
-    if _flota_propia():
-        return Pedido.objects.filter(con_guia_local | Q(es_local=True))
-    return Pedido.objects.filter(con_guia_local)
-
-
-def _sin_flota_404(request):
-    """404 amable: la flota propia no existe (TORRE["FLOTA_PROPIA"]=False)."""
-    return render(request, "piso/sin_flota.html", {"seccion": "salida"}, status=404)
-
-
-@rol_requerido("piso", "mesa")
-def entrega_local(request):
-    propios = _pedidos_entrega_propia()
-    if not _flota_propia() and not propios.exists():
-        return _sin_flota_404(request)
-    hoy = timezone.localdate()
-    en_reparto = list(
-        propios.filter(estado__in=[Pedido.RECOLECTADO, Pedido.EN_TRANSITO]).select_related("cliente")
-    )
-    por_salir = list(
-        propios.filter(estado__in=[Pedido.EMPACADO, Pedido.GUIA_GENERADA]).select_related("cliente")
-    )
-    entregados_hoy = list(
-        propios.filter(estado=Pedido.ENTREGADO, ts_entregado__date=hoy).select_related("cliente")
-    )
-    contexto = {
-        "seccion": "salida",
-        "en_reparto": en_reparto,
-        "por_salir": por_salir,
-        "entregados_hoy": entregados_hoy,
-    }
-    return render(request, "piso/entrega_local.html", contexto)
-
-
-@rol_requerido("piso", "mesa")
-def entrega_local_pedido(request, pk):
-    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
-    propio = _pedidos_entrega_propia().filter(pk=pedido.pk).exists()
-    if not _flota_propia() and not propio:
-        return _sin_flota_404(request)
-    if not propio:
-        messages.error(request, f"El pedido {pedido.folio} no es de entrega propia.")
-        return redirect("piso:entrega_local")
-    if pedido.estado not in (Pedido.RECOLECTADO, Pedido.EN_TRANSITO):
-        messages.error(
-            request,
-            f"El pedido {pedido.folio} no está en reparto (está {pedido.get_estado_display()}).",
-        )
-        return redirect("piso:entrega_local")
-
-    if request.method == "POST":
-        return _registrar_pod(request, pedido)
-
-    contexto = {"seccion": "salida", "pedido": pedido}
-    return render(request, "piso/entrega_local_pedido.html", contexto)
-
-
-def _registrar_pod(request, pedido):
-    """POD de entrega local: foto + nombre del receptor + mayoría de edad verificada."""
-    destino = redirect("piso:entrega_local_pedido", pk=pedido.pk)
-    receptor = (request.POST.get("receptor") or "").strip()
-    foto = request.FILES.get("foto_pod")
-    mayoria = request.POST.get("mayoria_edad") == "si"
-
-    faltas = []
-    if not foto:
-        faltas.append("la foto de entrega")
-    if not receptor:
-        faltas.append("el nombre de quien recibe")
-    if not mayoria:
-        faltas.append("la verificación de mayoría de edad")
-    if faltas:
-        messages.error(
-            request,
-            "No puedes cerrar la entrega sin " + ", ".join(faltas) + ". "
-            "El producto es alcohol: sin verificación de edad NO se entrega.",
-        )
-        return destino
-
-    evidencia = EvidenciaFoto.objects.create(
-        entidad="entrega_local", entidad_id=str(pedido.pk), tipo="pod",
-        archivo=foto, tomada_por=request.user.username,
-    )
-    registrar_evento(
-        "pedido", pedido.pk, "pod_entrega_local", actor=request.user, cliente=pedido.cliente,
-        delta={
-            "receptor": receptor,
-            "mayoria_edad_verificada": True,
-            "evidencia_id": evidencia.pk,
-        },
-        motivo=f"Entrega local: recibió {receptor}; mayoría de edad verificada en persona.",
-    )
-    try:
-        pedido.transicionar(
-            Pedido.ENTREGADO, actor=request.user,
-            motivo=f"POD de entrega local: recibió {receptor}, mayoría de edad verificada.",
-        )
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return redirect("piso:entrega_local")
-
-    guia = _guia_activa(pedido)
-    if guia is not None and guia.estado not in Guia.ESTADOS_TERMINALES:
-        try:
-            guia.transicionar(
-                Guia.ENTREGADO, actor=request.user, motivo=f"POD local: recibió {receptor}"
-            )
-        except ValueError:
-            pass  # el pedido ya quedó entregado; la guía la concilia el poller
-    messages.success(
-        request,
-        f"{pedido.folio} entregado a {receptor}. POD guardado con foto y verificación de edad.",
-    )
-    return redirect("piso:entrega_local")

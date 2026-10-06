@@ -38,8 +38,7 @@ class AccesoPisoTests(PisoTestCase):
         self.assertEqual(respuesta.status_code, 200)
 
     def test_todas_las_listas_cargan(self):
-        # entrega_local queda fuera: sin flota propia (TORRE["FLOTA_PROPIA"]
-        # default False) responde 404 amable — ver test_entrega_local.
+        # Entregas locales (POD) ya no viven en Piso: Mesa → Entregas locales (2026-10-05).
         self.login_piso()
         for nombre in ("recepciones", "picking", "empaque", "salida", "conteos", "cuarentena"):
             respuesta = self.client.get(reverse(f"piso:{nombre}"))

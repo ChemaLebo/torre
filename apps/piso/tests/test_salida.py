@@ -327,13 +327,12 @@ class SalidaOcultaSalLocalTests(PisoTestCase):
     def test_sin_flota_sal_local_vacio_se_oculta(self):
         respuesta = self.client.get(self.url)
         self.assertNotContains(respuesta, "SAL-LOCAL")
-        self.assertNotContains(respuesta, "Entregas locales (POD)")
 
     @override_settings(TORRE=TORRE_CON_FLOTA)
     def test_con_flota_sal_local_es_visible(self):
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "SAL-LOCAL")
-        self.assertContains(respuesta, "Entregas locales (POD)")
+        self.assertNotContains(respuesta, "piso:entrega_local")  # el POD vive en Mesa (2026-10-05)
 
     def test_guia_local_legacy_mantiene_la_card_visible_sin_flota(self):
         # El carril legado con contenido NO se esconde: esos paquetes existen

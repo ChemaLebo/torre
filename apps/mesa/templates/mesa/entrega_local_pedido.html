@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}POD {{ pedido.folio }} · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control · Entregas locales · POD</div>
+    <h1 class="mono">{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · {{ pedido.comprador_nombre|default:"sin nombre" }}
+      {% if pedido.comprador_tel %}· <span class="mono">{{ pedido.comprador_tel }}</span>{% endif %}
+      · <span class="pill">{{ pedido.get_estado_display }}</span>
+    </div>
+  </div>
+  <div class="fila">
+    <a class="btn chico" href="{{ url_detalle }}">Detalle del pedido</a>
+    <a class="btn chico" href="{% url 'mesa:entregas_locales' %}">Volver</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Dirección de entrega</h2></div>
+  <p>
+    {{ pedido.direccion.address1|default:"Sin calle registrada" }}
+    {% if pedido.direccion.address2 %}, {{ pedido.direccion.address2 }}{% endif %}
+    {% if pedido.direccion.city %}· {{ pedido.direccion.city }}{% endif %}
+    · CP <span class="mono">{{ pedido.cp|default:"—" }}</span>
+  </p>
+  {% if pedido.nota_regalo %}<p class="small">Nota de regalo incluida: no se menciona el precio al entregar.</p>{% endif %}
+</div>
+
+{% for f in pendientes %}
+<div class="card mt" id="caja-{{ f.guia.pk }}">
+  <div class="titulo">
+    <h2>{% if f.caja %}Caja {{ f.caja.numero }}{% else %}Pedido entero{% endif %} · POD</h2>
+    <span class="small mono">{{ f.guia.numero }}</span>
+  </div>
+  {% if f.caja %}<p class="small">{% for pl in f.caja.lineas.all %}{{ pl.texto_para_piso }}{% if not forloop.last %} · {% endif %}{% empty %}<span class="muted">sin contenido registrado</span>{% endfor %}</p>{% endif %}
+  <form method="post" enctype="multipart/form-data" class="form-pod">{% csrf_token %}
+    <input type="hidden" name="guia" value="{{ f.guia.pk }}">
+    <label for="foto-{{ f.guia.pk }}">Foto de entrega (paquete en manos de quien recibe o en la puerta)</label>
+    <input type="file" name="foto_pod" id="foto-{{ f.guia.pk }}" accept="image/*" capture="environment" required>
+    {% if ultima_foto %}
+    <label class="fila mt" for="misma-{{ f.guia.pk }}">
+      <input type="checkbox" name="misma_foto" id="misma-{{ f.guia.pk }}" value="si" data-foto="foto-{{ f.guia.pk }}">
+      Usar la misma foto del POD anterior ({{ ultima_foto.ts|date:"H:i" }}, <a href="{% url 'core:evidencia' ultima_foto.pk %}" target="_blank" rel="noopener">verla</a>): salieron juntas y la misma imagen las ampara.
+    </label>
+    <input type="hidden" name="reusar" value="{{ ultima_foto.pk }}">
+    {% endif %}
+    <label for="recibio-{{ f.guia.pk }}">Quién recibió</label>
+    <input type="text" name="recibio" id="recibio-{{ f.guia.pk }}" placeholder="Nombre y apellido" autocomplete="off" required>
+    <div class="mt"><button class="btn primario" type="submit">{% if f.caja %}Caja {{ f.caja.numero }} entregada{% else %}Entregado{% endif %} — guardar POD</button></div>
+  </form>
+</div>
+{% empty %}
+<div class="card mt"><p class="muted">Ninguna caja en reparto: {% if pedido.estado == 'ENTREGADO' %}todas entregadas.{% else %}las que faltan salen al firmar el manifiesto <span class="mono">SAL-LOCAL</span>.{% endif %}</p></div>
+{% endfor %}
+
+<div class="card mt">
+  <div class="titulo"><h3>Cajas de entrega propia</h3><span class="small">{{ filas|length }} guía{{ filas|length|pluralize }} interna{{ filas|length|pluralize }}</span></div>
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Caja</th><th>Guía</th><th>Estatus</th><th>Entrega</th><th>POD</th></tr></thead>
+      <tbody>
+        {% for f in filas %}
+        <tr>
+          <td class="mono">{% if f.caja %}{{ f.caja.numero }}<div class="small muted">{{ f.caja.get_estado_display }}</div>{% else %}—{% endif %}</td>
+          <td class="mono small">{{ f.guia.numero }}</td>
+          <td><span class="pill {% if f.entregada %}ok{% elif not f.motivo %}accent{% endif %}">{{ f.guia.get_estado_display }}</span></td>
+          <td class="small">{% if f.pod %}{{ f.pod.ts|date:"d/M H:i" }} · recibió {{ f.pod.receptor }}{% elif f.motivo %}<span class="muted">{{ f.motivo }}</span>{% else %}<a href="#caja-{{ f.guia.pk }}">registrar arriba</a>{% endif %}</td>
+          <td class="small">{% if f.pod and f.pod.evidencia %}<a href="{% url 'core:evidencia' f.pod.evidencia %}" target="_blank" rel="noopener">foto ↗</a>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// "Usar la misma foto": la foto nueva deja de ser obligatoria (el servidor valida igual).
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll('input[name="misma_foto"]').forEach(function (caja) {
+    var foto = document.getElementById(caja.dataset.foto);
+    caja.addEventListener("change", function () {
+      foto.required = !caja.checked;
+      foto.disabled = caja.checked;
+    });
+  });
+});
+</script>
+{% endblock %}

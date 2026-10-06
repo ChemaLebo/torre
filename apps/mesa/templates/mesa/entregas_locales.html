@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Entregas locales · Mesa{% endblock %}
+{% block content %}
+
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control · Operación</div>
+    <h1>Entregas locales</h1>
+  </div>
+  <div class="quien small">Cajas de entrega propia: salen al firmar el manifiesto del corral <span class="mono">SAL-LOCAL</span> y cada caja cierra con su POD (foto y quién recibió).</div>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>En reparto — cerrar con POD</h2><span class="pill accent">{{ en_reparto|length }}</span></div>
+  {% if en_reparto %}
+  <div class="tabla-wrap">
+    <table data-sin-tabla-js>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Comprador</th><th>Dirección</th><th>Cajas en reparto</th><th></th></tr></thead>
+      <tbody>
+        {% for g in en_reparto %}
+        <tr>
+          <td class="mono"><a href="{% url 'mesa:pedido_detalle' g.pedido.pk %}">{{ g.pedido.folio }}</a></td>
+          <td>{{ g.pedido.cliente.nombre }}</td>
+          <td>{{ g.pedido.comprador_nombre|default:"sin nombre" }}<div class="small mono">{{ g.pedido.comprador_tel|default:"" }}</div></td>
+          <td class="small">{{ g.pedido.direccion.address1|default:"—" }}{% if g.pedido.direccion.city %}, {{ g.pedido.direccion.city }}{% endif %} <span class="mono">{{ g.pedido.cp }}</span></td>
+          <td class="small">{% for guia in g.cajas %}{% if guia.paquete %}caja {{ guia.paquete.numero }}{% else %}pedido entero{% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+          <td><a class="btn chico primario" href="{% url 'mesa:entrega_local_pedido' g.pedido.pk %}">Registrar entrega</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Nada en reparto ahorita.</p>
+  {% endif %}
+</div>
+
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h2>Por salir a reparto</h2><span class="pill">{{ por_salir|length }}</span></div>
+    {% if por_salir %}
+    <div class="tabla-wrap">
+      <table data-sin-tabla-js>
+        <thead><tr><th>Pedido</th><th>Comprador</th><th>Estado</th><th>Cajas</th></tr></thead>
+        <tbody>
+          {% for g in por_salir %}
+          <tr>
+            <td class="mono"><a href="{% url 'mesa:pedido_detalle' g.pedido.pk %}">{{ g.pedido.folio }}</a></td>
+            <td class="small">{{ g.pedido.comprador_nombre|default:"sin nombre" }}</td>
+            <td><span class="pill">{{ g.pedido.get_estado_display }}</span></td>
+            <td class="small">{% if g.cajas %}caja {{ g.cajas|join:", " }}{% else %}sin plan de cajas{% endif %}{% if g.sin_guia %} <span class="pill warn" title="El piso le compra la guía interna desde Completar empaquetado">sin guía: caja {{ g.sin_guia|join:", " }}</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="small mt">Salen a reparto cuando el piso firma el manifiesto del corral <span class="mono">SAL-LOCAL</span> en Salida.</p>
+    {% else %}
+    <p class="muted">Sin cajas de entrega propia en bodega.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="titulo"><h2>Entregadas hoy</h2><span class="pill ok">{{ entregadas_hoy|length }}</span></div>
+    {% if entregadas_hoy %}
+    <div class="tabla-wrap">
+      <table data-sin-tabla-js>
+        <thead><tr><th>Pedido</th><th>Caja</th><th>Hora</th><th>Recibió</th></tr></thead>
+        <tbody>
+          {% for g in entregadas_hoy %}
+          <tr>
+            <td class="mono"><a href="{% url 'mesa:entrega_local_pedido' g.pedido.pk %}">{{ g.pedido.folio }}</a></td>
+            <td class="small">{% if g.paquete %}{{ g.paquete.numero }}{% else %}—{% endif %}</td>
+            <td class="mono small">{{ g.ts_ultimo_movimiento|date:"H:i" }}</td>
+            <td class="small">{{ g.receptor|default:"—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted">Todavía nada entregado hoy.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -2834,6 +2834,114 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
     return pedido
 
 
+# ── Entrega propia (POD por caja) ──
+
+CARRIER_LOCAL = "local"
+TIPO_FOTO_POD = "pod"
+
+
+def guias_entrega_propia(pedido):
+    """Guías internas "local" del pedido (una por caja; sin plan de cajas, una
+    del pedido), vivas o entregadas, en orden de caja. Lee `guias.all()` para
+    respetar el prefetch de las vistas."""
+    return sorted(
+        (g for g in pedido.guias.all() if g.carrier == CARRIER_LOCAL and g.es_activa),
+        key=lambda g: (g.paquete.numero if g.paquete_id else 0, g.pk),
+    )
+
+
+def motivo_sin_pod(guia):
+    """Por qué una guía NO admite POD todavía; "" si la caja está en reparto:
+    guía interna "local" viva y sin entregar, con su caja ya fuera
+    (DESPACHADO) o, sin plan de cajas, el pedido en la calle."""
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+
+    pedido = guia.pedido
+    if guia.carrier != CARRIER_LOCAL:
+        return f"La guía {guia.numero} es de {guia.carrier}, no de entrega propia: la cierra el rastreo del carrier."
+    if guia.estado == Guia.ENTREGADO:
+        return f"La guía {guia.numero} ya está entregada."
+    if not guia.es_activa:
+        return f"La guía {guia.numero} está {guia.get_estado_display().lower()}: no se entrega."
+    if guia.paquete_id:
+        if guia.paquete.estado != Paquete.DESPACHADO:
+            return f"La caja {guia.paquete.numero} de {pedido.folio} aún no sale a reparto (falta su manifiesto)."
+    elif pedido.estado not in (Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.PARCIALMENTE_DESPACHADO):
+        return f"{pedido.folio} no está en reparto (está {pedido.get_estado_display().lower()})."
+    return ""
+
+
+def registrar_pod_caja(guia, actor, foto=None, recibio="", reusar=None):
+    """POD de entrega propia POR CAJA (Chema 2026-10-05: "un POD por paquete,
+    aunque sea la misma imagen; sin verificación de edad, solo quién recibió
+    y la foto"; es administrativo y vive en Mesa). `guia` = la guía interna
+    "local" de la caja (sin plan de cajas, la del pedido); solo con
+    motivo_sin_pod en blanco. Exige el nombre de quien recibió y una foto:
+    archivo nuevo, o `reusar` = una EvidenciaFoto POD de otra caja del MISMO
+    pedido (salieron juntas y la misma imagen las ampara) — cada caja queda
+    con su propio registro, mismo archivo y misma huella. La guía pasa a
+    ENTREGADO; el pedido a ENTREGADO solo cuando TODAS sus guías activas lo
+    están (envios._estado_por_guias): una caja entregada no entrega el
+    pedido. Evento pod_entrega_local (caja, guía, receptor, evidencia).
+    Shopify best-effort en on_commit: evento DELIVERED del fulfillment de
+    esa caja. Regresa la EvidenciaFoto."""
+    from apps.envios.models import Guia  # lazy: modelo de otra app
+    from apps.envios.services import _estado_por_guias  # lazy por contrato
+
+    razon = motivo_sin_pod(guia)
+    if razon:
+        raise ValueError(razon)
+    recibio = (recibio or "").strip()
+    if not recibio:
+        raise ValueError("Falta el nombre de quien recibió: sin él no se cierra la entrega.")
+    pedido = guia.pedido
+    if reusar is not None and (
+        reusar.entidad != "entrega_local" or reusar.entidad_id != str(pedido.pk) or reusar.tipo != TIPO_FOTO_POD
+    ):
+        raise ValueError("La foto a reutilizar no es un POD de este pedido.")
+    if foto is None and reusar is None:
+        raise ValueError("Falta la foto de entrega: toma una nueva o reutiliza la de la caja anterior.")
+    caja = guia.paquete
+    quien = getattr(actor, "username", str(actor)) if actor is not None else ""
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        if reusar is not None:
+            evidencia = EvidenciaFoto.objects.create(
+                entidad="entrega_local", entidad_id=str(fresco.pk), tipo=TIPO_FOTO_POD,
+                archivo=reusar.archivo.name, hash_sha256=reusar.hash_sha256, tomada_por=quien,
+            )
+        else:
+            evidencia = EvidenciaFoto.objects.create(
+                entidad="entrega_local", entidad_id=str(fresco.pk), tipo=TIPO_FOTO_POD, archivo=foto, tomada_por=quien,
+            )
+        donde = f"caja {caja.numero}" if caja is not None else "pedido"
+        guia.transicionar(Guia.ENTREGADO, actor=actor, motivo=f"POD de entrega propia ({donde}): recibió {recibio}.")
+        registrar_evento(
+            "pedido", fresco.pk, "pod_entrega_local", actor=actor, cliente=fresco.cliente,
+            delta={
+                "caja": caja.numero if caja is not None else None, "guia": guia.numero,
+                "receptor": recibio, "evidencia_id": evidencia.pk, "foto_reutilizada": reusar is not None,
+            },
+            motivo=f"Entrega propia, {donde}: recibió {recibio}.",
+        )
+        if _estado_por_guias(fresco) == "ENTREGADO" and fresco.estado != Pedido.ENTREGADO:
+            fresco.transicionar(
+                Pedido.ENTREGADO, actor=actor,
+                motivo=f"POD de entrega propia: todas las cajas entregadas (la última la recibió {recibio}).",
+            )
+        ahora = timezone.now()
+
+        def _shopify():
+            try:
+                from apps.integraciones.services import registrar_evento_fulfillment  # lazy
+                registrar_evento_fulfillment(fresco, guia, Guia.ENTREGADO, descripcion=f"Entregado: recibió {recibio}", ts=ahora)
+            except Exception:  # noqa: BLE001, S110 — best-effort: Shopify jamás frena una entrega
+                pass
+        transaction.on_commit(_shopify)
+    pedido.estado = fresco.estado
+    return evidencia
+
+
 # ── Cancelación ──
 
 def cancelar(pedido, actor, motivo=""):

@@ -1064,7 +1064,7 @@ def pedido_detalle(request, pk):
     from apps.pedidos.linea_tiempo import construir
     from apps.pedidos.models import Pedido
     from apps.pedidos.reportes import url_orden_shopify
-    from apps.pedidos.services import direccion_en_una_linea, motivo_no_quitable_de_salida
+    from apps.pedidos.services import direccion_en_una_linea, motivo_no_quitable_de_salida, motivo_sin_pod
 
     pedido = get_object_or_404(
         Pedido.objects.select_related("cliente", "tienda", "asignado_a")
@@ -1103,6 +1103,8 @@ def pedido_detalle(request, pk):
         caja.puede_reimprimir = caja.guia is not None and caja.estado != "DESPACHADO"
         # Firmó manifiesto pero nunca se fue (guía cancelada, sin recolección del carrier): vuelve a bodega.
         caja.puede_quitar_de_salida = not motivo_no_quitable_de_salida(pedido, caja)
+        # Entrega propia en reparto: su POD (foto + quién recibió) se registra en Entregas locales.
+        caja.puede_pod = caja.guia is not None and caja.guia.carrier == "local" and not motivo_sin_pod(caja.guia)
     guias_sueltas = [
         (g, url_rastreo_carrier(g.carrier, g.numero))
         for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.paquete_id is None
@@ -1311,6 +1313,128 @@ def manifiestos(request):
         "total": qs.count(),
         "carriers": sorted(set(Manifiesto.objects.values_list("carrier", flat=True))),
         "filtro": {"carrier": carrier, "fecha": fecha},
+    })
+
+
+def _pods_del_pedido(pedido):
+    """{número de guía: {receptor, ts, evidencia}} de los POD registrados
+    (eventos pod_entrega_local) para pintar lo ya entregado."""
+    pods = {}
+    for e in EventoAuditoria.objects.filter(
+        entidad="pedido", entidad_id=str(pedido.pk), accion="pod_entrega_local",
+    ).order_by("ts"):
+        pods[e.delta.get("guia") or ""] = {
+            "receptor": e.delta.get("receptor", ""), "ts": e.ts, "evidencia": e.delta.get("evidencia_id"),
+        }
+    return pods
+
+
+@rol_requerido("mesa")
+def entregas_locales(request):
+    """Mesa → Operación → Entregas locales (Chema 2026-10-05: el POD es
+    administrativo y vive aquí; Piso ya no lo tiene). Cajas de entrega propia
+    (guía interna "local") en reparto, por salir y entregadas hoy; cada caja
+    cierra con su propio POD en entrega_local_pedido."""
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import motivo_sin_pod
+
+    hoy = timezone.localdate()
+    guias = list(
+        Guia.objects.filter(carrier="local").exclude(estado__in=list(Guia.ESTADOS_INACTIVOS))
+        .select_related("pedido__cliente", "paquete").order_by("pedido_id", "paquete__numero", "pk")
+    )
+    en_reparto, entregadas_hoy = {}, []
+    for g in guias:
+        if g.estado == Guia.ENTREGADO:
+            if g.ts_ultimo_movimiento and timezone.localtime(g.ts_ultimo_movimiento).date() == hoy:
+                entregadas_hoy.append(g)
+            continue
+        if not motivo_sin_pod(g):
+            en_reparto.setdefault(g.pedido_id, {"pedido": g.pedido, "cajas": []})["cajas"].append(g)
+    # Por salir: cajas de entrega propia aún en bodega (con o sin guía) y
+    # pedidos sin plan con guía local sin salir. Salen al firmar SAL-LOCAL.
+    en_bodega = (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO)
+    por_salir = {}
+    for caja in (
+        Paquete.objects.filter(carrier="local", pedido__estado__in=en_bodega).exclude(estado=Paquete.DESPACHADO)
+        .select_related("pedido__cliente").prefetch_related("guias").order_by("pedido_id", "numero")
+    ):
+        grupo = por_salir.setdefault(caja.pedido_id, {"pedido": caja.pedido, "cajas": [], "sin_guia": []})
+        grupo["cajas"].append(caja.numero)
+        if caja.guia_activa is None:
+            grupo["sin_guia"].append(caja.numero)
+    for g in guias:
+        if g.estado == Guia.GUIA_CREADA and g.paquete_id is None and g.pedido.estado in en_bodega:
+            por_salir.setdefault(g.pedido_id, {"pedido": g.pedido, "cajas": [], "sin_guia": []})
+    receptores = {}
+    for e in EventoAuditoria.objects.filter(accion="pod_entrega_local", ts__date=hoy):
+        receptores[(e.entidad_id, e.delta.get("guia") or "")] = e.delta.get("receptor", "")
+    for g in entregadas_hoy:
+        g.receptor = receptores.get((str(g.pedido_id), g.numero), "")
+    return render(request, "mesa/entregas_locales.html", {
+        "seccion": "entregas_locales",
+        "en_reparto": list(en_reparto.values()),
+        "por_salir": list(por_salir.values()),
+        "entregadas_hoy": entregadas_hoy,
+    })
+
+
+@rol_requerido("mesa")
+def entrega_local_pedido(request, pk):
+    """POD por caja de un pedido de entrega propia (Chema 2026-10-05): cada
+    caja en reparto cierra con su foto y quién recibió (sin verificación de
+    edad); la foto del POD anterior se puede reutilizar para la siguiente
+    caja. POST guia + recibio + foto_pod (o misma_foto + reusar) →
+    pedidos.registrar_pod_caja."""
+    from apps.envios.models import Guia  # lazy: modelo de otra app
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import guias_entrega_propia, motivo_sin_pod, registrar_pod_caja
+
+    pedido = get_object_or_404(
+        Pedido.objects.select_related("cliente").prefetch_related("guias__paquete__lineas__linea_pedido__sku"), pk=pk,
+    )
+    guias = guias_entrega_propia(pedido)
+    if not guias:
+        messages.error(request, f"{pedido.folio} no tiene cajas de entrega propia.")
+        return redirect("mesa:entregas_locales")
+    fotos_pod = EvidenciaFoto.objects.filter(entidad="entrega_local", entidad_id=str(pedido.pk), tipo="pod")
+    if request.method == "POST":
+        guia = get_object_or_404(Guia.objects.select_related("pedido__cliente", "paquete"), pk=request.POST.get("guia"), pedido=pedido)
+        reusar = None
+        if request.POST.get("misma_foto") == "si":
+            reusar = get_object_or_404(fotos_pod, pk=request.POST.get("reusar"))
+        try:
+            registrar_pod_caja(
+                guia, request.user, foto=request.FILES.get("foto_pod"),
+                recibio=request.POST.get("recibio"), reusar=reusar,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("mesa:entrega_local_pedido", pk=pedido.pk)
+        pedido.refresh_from_db()
+        donde = f"Caja {guia.paquete.numero}" if guia.paquete_id else "Pedido"
+        recibio = (request.POST.get("recibio") or "").strip()
+        if pedido.estado == Pedido.ENTREGADO:
+            messages.success(request, f"{donde} de {pedido.folio} entregada a {recibio}. Todas las cajas entregadas: el pedido queda entregado.")
+            return redirect("mesa:entregas_locales")
+        messages.success(request, f"{donde} de {pedido.folio} entregada a {recibio}; faltan cajas por entregar.")
+        return redirect("mesa:entrega_local_pedido", pk=pedido.pk)
+
+    pods = _pods_del_pedido(pedido)
+    filas = []
+    for g in guias:
+        filas.append({
+            "guia": g, "caja": g.paquete, "motivo": motivo_sin_pod(g),
+            "entregada": g.estado == Guia.ENTREGADO, "pod": pods.get(g.numero),
+        })
+    return render(request, "mesa/entrega_local_pedido.html", {
+        "seccion": "entregas_locales",
+        "pedido": pedido,
+        "filas": filas,
+        "pendientes": [f for f in filas if not f["motivo"]],
+        "ultima_foto": fotos_pod.first(),  # la más reciente (ordering -ts)
+        "url_detalle": reverse("mesa:pedido_detalle", args=[pedido.pk]),
     })
 
 

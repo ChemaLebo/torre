@@ -21,6 +21,4 @@ urlpatterns = [
     path("etiqueta/<int:guia_pk>/", views.etiqueta, name="etiqueta"),
     path("conteos/", views.conteos, name="conteos"),
     path("cuarentena/", views.cuarentena, name="cuarentena"),
-    path("entrega-local/", views.entrega_local, name="entrega_local"),
-    path("entrega-local/<int:pk>/", views.entrega_local_pedido, name="entrega_local_pedido"),
 ]

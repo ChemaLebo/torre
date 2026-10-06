@@ -334,6 +334,19 @@ con cajas en bodega. Sin migración.
 con Chema si un pedido con una caja regresada y otra entregada debe cerrar
 como ENTREGADO (hoy sí, con la incidencia RF abierta) o quedarse abierto.
 
+## Entrega propia: POD por caja en Mesa — hecho 2026-10-05
+
+El POD se movió de Piso a Mesa (Operación → Entregas locales) y es por
+caja: foto + quién recibió, sin verificación de edad, con la foto del POD
+anterior reutilizable (CONVENTIONS "Entrega propia y POD por caja en
+Mesa"). Pedido entregado solo con todas sus guías activas entregadas.
+
+**Queda:**
+- El chofer no tiene acceso de Mesa: hoy manda la foto y el nombre a Mesa y
+  ella captura. Si el reparto crece, un rol "chofer" con solo esa pantalla.
+- La página pública de rastreo muestra UNA foto de POD por pedido (la más
+  reciente); con varias cajas podría listar una por caja.
+
 ## Quitar de salida — hecho 2026-10-05
 
 PED-00319: cuatro cajas firmaron manifiesto, 99minutos nunca las recogió,

@@ -133,12 +133,6 @@
   </div>
   {% endif %}
 
-  {% if flota_propia and entregas_locales %}
-  <div class="card">
-    <div class="titulo"><h2>Entregas locales en reparto</h2><a class="btn chico" href="{% url 'piso:entrega_local' %}">Ver POD</a></div>
-    <p class="small">{{ entregas_locales|length }} pedido{{ entregas_locales|length|pluralize }} por cerrar con POD.</p>
-  </div>
-  {% endif %}
 </div>
 
 {# Opt-in de push: push.js muestra la zona solo con soporte Web Push y sin suscripción previa. #}

@@ -136,7 +136,8 @@
                 <button class="btn chico peligro" type="submit" title="La caja firmó manifiesto pero nunca se fue: vuelve a bodega para salir por otra paquetería o con la flota propia">Quitar de salida</button>
               </form>
               {% endif %}
-              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida %}<span class="muted small">—</span>{% endif %}
+              {% if caja.puede_pod %}<a class="btn chico primario" href="{% url 'mesa:entrega_local_pedido' pedido.pk %}#caja-{{ caja.guia.pk }}" title="Entrega propia en reparto: foto y quién recibió, por caja">Registrar entrega (POD)</a>{% endif %}
+              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida and not caja.puede_pod %}<span class="muted small">—</span>{% endif %}
             </div>
           </td>
         </tr>
