@@ -14,7 +14,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.core.models import EvidenciaFoto
+from apps.core.models import EventoAuditoria, EvidenciaFoto
 from apps.core.services import registrar_evento
 
 from .models import Compensacion, Incidencia, MensajeIncidencia
@@ -98,6 +98,14 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
             getattr(pedido, "folio", None) or getattr(orden, "folio", None)
             or getattr(sku, "codigo", None) or cliente.slug
         )
+        # Sin repetir (Chema 2026-10-06): el poller vuelve a intentar la misma
+        # incidencia cada corrida; con la pausa activa dejaba un auto_omitida
+        # cada 15 min (cientos por guía, PED-00067). Un evento por referencia y
+        # texto idénticos basta.
+        if EventoAuditoria.objects.filter(
+            entidad="incidencia", entidad_id=str(referencia), accion="auto_omitida", motivo=texto[:300],
+        ).exists():
+            return None
         registrar_evento(
             "incidencia", referencia, "auto_omitida", cliente=cliente,
             delta={

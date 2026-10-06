@@ -3261,15 +3261,45 @@ ESTADOS_CON_MERCANCIA_FUERA = (
 )
 
 
+def cajas_por_reingresar(pedido):
+    """Cajas del pedido cuya mercancía puede volver y Mesa no ha decidido
+    (Chema 2026-10-06, PED-00067: el reingreso es POR CAJA): despachadas, sin
+    decisión, que el carrier regresó (guía en RETORNO) o, con cancelación
+    tardía, todas las que salieron. [] si ninguna caja salió por caja (sin
+    plan, o plan sin empacar por caja: salió entero y se decide por pedido).
+    Lee `paquetes.all()` y `guias.all()` para respetar los prefetch de las
+    vistas."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    cajas = []
+    for caja in sorted(pedido.paquetes.all(), key=lambda c: c.numero):
+        if caja.estado != Paquete.DESPACHADO or caja.reingreso_estado != Paquete.REINGRESO_PENDIENTE:
+            continue
+        if pedido.cancelacion_tardia or caja.regresada:
+            cajas.append(caja)
+    return cajas
+
+
 def reingresos_por_decidir():
-    """Pedidos que ya salieron y cuya mercancía puede volver, sin decisión de Mesa:
-    RETORNADO por el carrier, o cancelación tardía (aunque la CAN ya se haya
-    resuelto y el pedido esté CANCELADO: la mercancía sigue por decidir)."""
+    """Pedidos con mercancía que puede volver y sin decisión de Mesa. Por CAJA
+    (2026-10-06): alguna caja despachada sin decidir que el carrier regresó
+    (guía en RETORNO) —aunque las demás se hayan entregado y el pedido esté
+    ENTREGADO— o, con cancelación tardía, cualquiera que salió. Pedidos sin
+    cajas despachadas (salió entero): RETORNADO por el carrier o cancelación
+    tardía, decididos por pedido (aunque la CAN ya se haya resuelto y el
+    pedido esté CANCELADO: la mercancía sigue por decidir)."""
+    por_caja = Q(paquetes__estado="DESPACHADO", paquetes__reingreso_estado="") & (
+        Q(paquetes__guias__estado="RETORNO") | Q(cancelacion_tardia=True)
+    )
+    # Sin cajas despachadas (salió entero: sin plan, o plan sin empacar por
+    # caja): por pedido, como siempre.
+    por_pedido = ~Q(paquetes__estado="DESPACHADO") & Q(reingreso_estado=Pedido.REINGRESO_PENDIENTE) & (
+        Q(estado=Pedido.RETORNADO) | Q(cancelacion_tardia=True)
+    )
     return (
-        Pedido.objects.filter(reingreso_estado=Pedido.REINGRESO_PENDIENTE)
-        .filter(Q(estado=Pedido.RETORNADO) | Q(cancelacion_tardia=True))
+        Pedido.objects.filter(por_caja | por_pedido)
         .filter(estado__in=ESTADOS_CON_MERCANCIA_FUERA + (Pedido.CANCELADO,))
-        .select_related("cliente").order_by("actualizado")
+        .select_related("cliente").order_by("actualizado").distinct()
     )
 
 
@@ -3287,6 +3317,9 @@ def cerrar_cancelacion_tardia(pedido, actor, motivo=""):
 
 
 def _validar_decision_reingreso(pedido):
+    """(cajas por decidir) o ValueError. Con plan de cajas la decisión es por
+    caja (las que el carrier regresó o, con cancelación tardía, las que
+    salieron, sin decisión aún); sin plan, por pedido como siempre."""
     fuera = pedido.estado in ESTADOS_CON_MERCANCIA_FUERA or (
         pedido.estado == Pedido.CANCELADO and pedido.cancelacion_tardia
     )
@@ -3295,32 +3328,77 @@ def _validar_decision_reingreso(pedido):
             f"El pedido {pedido.folio} no ha salido de bodega ({pedido.get_estado_display()}): "
             "no hay reingreso que decidir."
         )
+    if pedido.paquetes.filter(estado="DESPACHADO").exists():
+        cajas = cajas_por_reingresar(pedido)
+        if not cajas:
+            raise ValueError(f"El pedido {pedido.folio} no tiene cajas regresadas por decidir (o ya tienen decisión).")
+        return cajas
     if pedido.reingreso_estado != Pedido.REINGRESO_PENDIENTE:
         raise ValueError(
             f"El pedido {pedido.folio} ya tiene decisión: {pedido.get_reingreso_estado_display()}."
         )
+    return []
+
+
+def _contenido_de_cajas(cajas):
+    """[(sku, piezas)] de lo que viaja en esas cajas, en unidades de venta
+    enteras (una media caja reempacada cuenta entera), sin kits virtuales."""
+    import math
+    from fractions import Fraction
+
+    por_sku = {}
+    for caja in cajas:
+        for pl in caja.lineas.select_related("linea_pedido__sku"):
+            sku = pl.linea_pedido.sku
+            if sku.es_kit:
+                continue
+            por_sku[sku] = por_sku.get(sku, Fraction(0)) + Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+    return [(sku, math.ceil(u)) for sku, u in por_sku.items() if u > 0]
+
+
+def _cerrar_decision(pedido, cajas, decision, actor, motivo_cierre):
+    """Estampa la decisión en las cajas (o en el pedido si no tiene plan) y,
+    cuando ya no queda ninguna caja por decidir, en el pedido; una
+    cancelación tardía pasa entonces a CANCELADO."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    for caja in cajas:
+        Paquete.objects.filter(pk=caja.pk).update(reingreso_estado=decision)
+        caja.reingreso_estado = decision
+    quedan = cajas_por_reingresar(pedido) if cajas else []
+    if not quedan:
+        pedido.reingreso_estado = decision
+        pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        cerrar_cancelacion_tardia(pedido, actor, motivo_cierre)
+    return quedan
 
 
 def registrar_reingreso(pedido, actor, motivo=""):
-    """Mesa: la mercancía de un pedido que salió está de vuelta físicamente.
-    Crea la OrdenEntrada tipo reingreso ANUNCIADA con lo despachado por línea;
-    el piso la recibe (ok → put-away, dañado → cuarentena) y la ubica. Una
-    cancelación tardía pasa a CANCELADO; un RETORNADO se queda así."""
+    """Mesa: la mercancía que salió está de vuelta físicamente. Crea la
+    OrdenEntrada tipo reingreso ANUNCIADA con el contenido de las CAJAS por
+    decidir (regresadas por el carrier o, con cancelación tardía, las que
+    salieron); sin plan de cajas, con lo despachado por línea. El piso la
+    recibe (ok → put-away, dañado → cuarentena) y la ubica. Una cancelación
+    tardía pasa a CANCELADO cuando ya no queda caja por decidir; un RETORNADO
+    se queda así. Otra caja que regrese después vuelve a aparecer por decidir."""
     from apps.inventario.models import LineaASN, OrdenEntrada  # lazy: modelo de otra app
 
     with transaction.atomic():
         pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
-        _validar_decision_reingreso(pedido)
-        # Vuelve lo que salió: cantidad_despachada cuando el manifiesto la
-        # estampó (desde 2026-09-22; en una cancelación mixta lo de bodega ya
-        # regresó por su cuenta); en pedidos anteriores, lo pickeado o, sin
-        # pick registrado, lo pedido.
-        con_despacho = pedido.tiene_despachadas
-        lineas = [
-            (l.sku, l.cantidad_despachada if con_despacho else (l.cantidad_pickeada or l.cantidad))
-            for l in pedido.lineas.select_related("sku") if not l.sku.es_kit
-        ]
-        lineas = [(sku, n) for sku, n in lineas if n > 0]
+        cajas = _validar_decision_reingreso(pedido)
+        if cajas:
+            lineas = _contenido_de_cajas(cajas)
+        else:
+            # Vuelve lo que salió: cantidad_despachada cuando el manifiesto la
+            # estampó (desde 2026-09-22; en una cancelación mixta lo de bodega ya
+            # regresó por su cuenta); en pedidos anteriores, lo pickeado o, sin
+            # pick registrado, lo pedido.
+            con_despacho = pedido.tiene_despachadas
+            lineas = [
+                (l.sku, l.cantidad_despachada if con_despacho else (l.cantidad_pickeada or l.cantidad))
+                for l in pedido.lineas.select_related("sku") if not l.sku.es_kit
+            ]
+            lineas = [(sku, n) for sku, n in lineas if n > 0]
         if not lineas:
             raise ValueError(f"El pedido {pedido.folio} no tiene mercancía que reingresar.")
         orden = OrdenEntrada.objects.create(
@@ -3329,12 +3407,10 @@ def registrar_reingreso(pedido, actor, motivo=""):
         )
         for sku, piezas in lineas:
             LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=piezas)
-        pedido.reingreso_estado = Pedido.REINGRESADO
-        pedido.save(update_fields=["reingreso_estado", "actualizado"])
-        cerrar_cancelacion_tardia(pedido, actor, "Cancelación tardía: la mercancía regresa como reingreso.")
+        _cerrar_decision(pedido, cajas, Pedido.REINGRESADO, actor, "Cancelación tardía: la mercancía regresa como reingreso.")
         registrar_evento(
             "asn", orden.folio, "reingreso_creado", actor=actor, cliente=pedido.cliente,
-            delta={"pedido": pedido.folio, "desde": "retorno",
+            delta={"pedido": pedido.folio, "desde": "retorno", "cajas": [c.numero for c in cajas],
                    "lineas": [{"sku": s.codigo, "cantidad": n} for s, n in lineas]},
             motivo=motivo or f"Mercancía de {pedido.folio} de vuelta; el piso la recibe y ubica.",
         )
@@ -3342,20 +3418,22 @@ def registrar_reingreso(pedido, actor, motivo=""):
 
 
 def marcar_no_recuperado(pedido, actor, motivo=""):
-    """Mesa: la mercancía de un pedido que salió no volverá. Sin movimiento de
-    stock (ya salió del kardex en el manifiesto); queda el evento, se
-    resuelven las incidencias CAN/RF abiertas y una cancelación tardía pasa
-    a CANCELADO."""
+    """Mesa: la mercancía que salió no volverá (las cajas por decidir, o el
+    pedido entero sin plan). Sin movimiento de stock (ya salió del kardex en
+    el manifiesto); queda el evento y, cuando ya no hay caja por decidir, se
+    resuelven las incidencias CAN/RF abiertas y una cancelación tardía pasa a
+    CANCELADO."""
     with transaction.atomic():
         pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
-        _validar_decision_reingreso(pedido)
-        pedido.reingreso_estado = Pedido.NO_RECUPERADO
-        pedido.save(update_fields=["reingreso_estado", "actualizado"])
+        cajas = _validar_decision_reingreso(pedido)
+        quedan = _cerrar_decision(pedido, cajas, Pedido.NO_RECUPERADO, actor, "Cancelación tardía: inventario no recuperado.")
         registrar_evento(
             "pedido", pedido.pk, "inventario_no_recuperado", actor=actor, cliente=pedido.cliente,
+            delta={"cajas": [c.numero for c in cajas]},
             motivo=motivo or "Mesa dio por perdida la mercancía del pedido.",
         )
-        cerrar_cancelacion_tardia(pedido, actor, "Cancelación tardía: inventario no recuperado.")
+        if quedan:
+            return pedido
         try:
             from apps.incidencias.models import Incidencia
             from apps.incidencias.services import resolver  # lazy por contrato

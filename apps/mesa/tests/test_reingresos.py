@@ -82,3 +82,39 @@ class ReingresosMesaTests(TestCase):
     def test_piso_no_decide(self):
         self.client.force_login(self.piso)
         self.assertEqual(self.client.post(self.url, {"accion": "reingreso", "pedido_id": self.pedido.pk}).status_code, 403)
+
+
+class ReingresoPorCajaMesaTests(ReingresosMesaTests):
+    """PED-00067 (2026-10-06): la caja regresada aparece por decidir con su
+    número aunque el pedido esté entregado; el reingreso lleva solo esa caja."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Guia, Paquete, PaqueteLinea
+
+        super().setUp()
+        self.pedido.delete()  # el retornado entero del fixture base; aquí el caso es por caja
+        self.pedido = Pedido.objects.create(
+            cliente=self.colima, tienda=None, origen="manual", comprador_nombre="Ana", estado=Pedido.ENTREGADO,
+        )
+        linea = LineaPedido.objects.create(pedido=self.pedido, sku=self.sku, cantidad=4, cantidad_pickeada=4, cantidad_despachada=4, reservada=True)
+        c1 = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("5"), carrier="imile", estado=Paquete.DESPACHADO)
+        c2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal("5"), carrier="imile", estado=Paquete.DESPACHADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=2)
+        Guia.objects.create(pedido=self.pedido, paquete=c1, carrier="imile", numero="IM-1", estado=Guia.ENTREGADO)
+        Guia.objects.create(pedido=self.pedido, paquete=c2, carrier="imile", numero="IM-2", estado=Guia.RETORNO)
+
+    def test_la_caja_regresada_aparece_y_su_reingreso_lleva_solo_esa_caja(self):
+        from apps.inventario.models import OrdenEntrada
+
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, self.pedido.folio)
+        self.assertContains(respuesta, "caja 2 de 2")
+        self.assertContains(respuesta, "regresada por el carrier")
+        respuesta = self.client.post(self.url, {"pedido_id": self.pedido.pk, "accion": "reingreso"}, follow=True)
+        self.assertContains(respuesta, "creado para " + self.pedido.folio)
+        orden = OrdenEntrada.objects.get(pedido=self.pedido, tipo=OrdenEntrada.TIPO_REINGRESO)
+        self.assertEqual(orden.lineas.get().cantidad_anunciada, 2)
+        self.assertNotContains(respuesta, "Reingresos por decidir")

@@ -224,6 +224,10 @@ class PausaAutomaticasTests(TestCase):
         evento = EventoAuditoria.objects.get(entidad="incidencia", accion="auto_omitida")
         self.assertEqual((evento.entidad_id, evento.delta["tipo"], evento.delta["pedido"]), (pedido.folio, "FAL", pedido.folio))
         self.assertEqual(evento.motivo, "Sin stock")
+        # El poller lo reintenta cada corrida: el mismo texto no se vuelve a registrar; uno distinto sí.
+        self.assertIsNone(abrir_incidencia(self.cliente, "FAL", "auto", pedido=pedido, texto="Sin stock"))
+        self.assertIsNone(abrir_incidencia(self.cliente, "RF", "auto", pedido=pedido, texto="Retorno"))
+        self.assertEqual(EventoAuditoria.objects.filter(entidad="incidencia", accion="auto_omitida").count(), 2)
 
     def test_manual_y_comprador_siguen_y_la_pausa_vence(self):
         self.assertIsNotNone(abrir_incidencia(self.cliente, "RET", "manual", texto="a mano"))

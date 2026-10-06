@@ -2057,11 +2057,11 @@ def recepciones(request):
     )
 
     from apps.incidencias.models import Incidencia  # lazy por contrato
-    from apps.pedidos.services import reingresos_por_decidir  # lazy por contrato
+    from apps.pedidos.services import cajas_por_reingresar, reingresos_por_decidir  # lazy por contrato
 
     # Cada reingreso por decidir enlaza a su incidencia abierta (CAN de la
     # cancelación tardía, RET/RF del retorno) para revisar el caso sin salir.
-    reingresos = list(reingresos_por_decidir())
+    reingresos = list(reingresos_por_decidir().prefetch_related("paquetes__guias"))
     incidencias = {}
     for inc in Incidencia.objects.filter(
         pedido__in=reingresos, tipo__in=["CAN", "RET", "RF"], estado__in=Incidencia.ESTADOS_ABIERTOS,
@@ -2069,6 +2069,9 @@ def recepciones(request):
         incidencias[inc.pedido_id] = inc
     for p in reingresos:
         p.incidencia = incidencias.get(p.pk)
+        # Reingreso por caja (2026-10-06): qué cajas regresaron y siguen por decidir.
+        p.cajas_reingreso = [c.numero for c in cajas_por_reingresar(p)]
+        p.total_cajas = len(p.paquetes.all())
 
     return render(request, "mesa/recepciones.html", {
         "seccion": "recepciones",

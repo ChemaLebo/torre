@@ -263,6 +263,20 @@ class Paquete(models.Model):
     # la del pedido y sobre reglas y config al cotizar y comprar su guía;
     # "local" = sale sin guía de carrier. Vacío = la caja sigue al pedido.
     carrier_forzado = models.CharField(max_length=40, blank=True, default="")
+    # Reingreso POR CAJA (Chema 2026-10-06, PED-00067): una caja que el
+    # carrier regresó (guía en RETORNO) o que salió y el pedido se canceló
+    # tarde se decide en Mesa → Recepciones aunque las demás se hayan
+    # entregado: "" = por decidir, "reingresado" = nació su orden de reingreso
+    # con el contenido de ESTA caja, "no_recuperado" = no volverá.
+    REINGRESO_PENDIENTE = ""
+    REINGRESADO = "reingresado"
+    NO_RECUPERADO = "no_recuperado"
+    REINGRESO_ESTADOS = [
+        (REINGRESO_PENDIENTE, "Sin decidir"),
+        (REINGRESADO, "Reingresado"),
+        (NO_RECUPERADO, "Inventario no recuperado"),
+    ]
+    reingreso_estado = models.CharField(max_length=15, choices=REINGRESO_ESTADOS, default=REINGRESO_PENDIENTE, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -276,6 +290,11 @@ class Paquete(models.Model):
     @property
     def guia_activa(self):
         return next((g for g in self.guias.all() if g.es_activa), None)
+
+    @property
+    def regresada(self):
+        """True si el carrier devolvió esta caja (alguna guía suya en RETORNO)."""
+        return any(g.estado == Guia.RETORNO for g in self.guias.all())
 
     @property
     def es_reposicion(self):
