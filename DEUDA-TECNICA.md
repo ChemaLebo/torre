@@ -334,6 +334,35 @@ con cajas en bodega. Sin migración.
 con Chema si un pedido con una caja regresada y otra entregada debe cerrar
 como ENTREGADO (hoy sí, con la incidencia RF abierta) o quedarse abierto.
 
+## Reposiciones sin modificar el pedido (opción A) — hecho 2026-10-05
+
+Chema: "los line items son propiedades de la orden y nunca se deberían de
+agregar a menos que se agreguen directo en Shopify". La reposición ya no crea
+líneas: suma `cantidad_repuesta` a la línea original (con su caja de origen)
+y el planeador arma cajas nuevas cuyos renglones apuntan a la caja que
+reponen (`PaqueteLinea.repone_a`, por producto). Contadores de la ola:
+`con_stock`, `pendiente`, `por_pickear` (CONVENTIONS "Reposición de
+producto"). Las 23 líneas de reposición de 16 pedidos se fundieron en su
+original (migración pedidos 0020). Incluye: guías solo para cajas en bodega
+(PED-00031) y "Reintentar guía" con el pedido parcial; el diff contra
+Shopify ya no ve piezas de más (los conflictos falsos de PED-00036/00039
+no se repiten).
+
+**Queda:**
+- Quitar la columna `LineaPedido.reposicion_de` (vacía) y la prueba de la
+  migración de datos después del deploy del 2026-10-06.
+- El formulario de compensación elige UNA caja de origen por producto; si
+  las piezas malas de un mismo producto vienen de dos cajas, son dos
+  reposiciones. Si estorba, pasar a un renglón por (producto, caja).
+- Mezcla rara: segunda ola de fulfillment parcial + reposición en la misma
+  línea; el planeador marca como reposición los renglones de las últimas
+  cajas (aproximación documentada en `_marcar_reposiciones`).
+- Reingreso sigue siendo por pedido (`registrar_reingreso` usa despachadas
+  acumuladas: con reposición devolvería original + repuesta); item 33.
+- PED-00039: Shopify dice 0 piezas (reembolso hecho en Shopify) y Torre
+  entregó 1 con una reposición en camino: conflicto real, lo decide Chema
+  con Colima.
+
 ## Entrega propia: POD por caja en Mesa — hecho 2026-10-05
 
 El POD se movió de Piso a Mesa (Operación → Entregas locales) y es por

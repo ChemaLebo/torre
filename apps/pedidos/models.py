@@ -434,8 +434,9 @@ class LineaPedido(models.Model):
     # estampar PaqueteLinea.repone_a en las cajas nuevas, también al replanear.
     origen_reposicion = models.JSONField(default=list, blank=True)
     # Reposición de producto (modelo viejo, 2026-09-28 → 2026-10-05): línea
-    # nueva ligada a la original. Ya no se crea; la migración 0020 fundió las
-    # existentes en su original y la 0021 quita la columna.
+    # nueva ligada a la original. Ya no se crea ni se lee; la migración 0020
+    # fundió las existentes en su original. La columna se quita después del
+    # deploy del 2026-10-06 (su prueba de migración la necesita hasta entonces).
     reposicion_de = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="reposiciones",
         help_text="Línea original que esta línea repone",
@@ -461,10 +462,6 @@ class LineaPedido(models.Model):
 
     def __str__(self):
         return f"{self.pedido.folio} · {self.sku} × {self.cantidad}"
-
-    @property
-    def es_reposicion(self):
-        return self.reposicion_de_id is not None
 
     @property
     def por_surtir(self):
