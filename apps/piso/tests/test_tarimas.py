@@ -1,7 +1,9 @@
-"""Tarimas al ubicar en recepción (Chema 2026-09-24): el piso abre TAR-nn
-desde Ubicar, mete piezas ahí (vendibles) y en la siguiente pieza puede usar
-la misma tarima o abrir otra. Y el plan de acomodo nombra la zona de
-reservas para lo que no cabe, en vez de cuarentena."""
+"""Tarimas al acomodar en recepción (Chema 2026-09-24): el piso abre TAR-nn
+desde Acomodar, mete piezas ahí (vendibles) y en la siguiente pieza puede usar
+la misma tarima o abrir otra. El plan de acomodo nombra la zona de reservas
+para lo que no cabe, en vez de cuarentena. Y cualquier acomodo fuera del plan
+(tarima, otra posición, más de lo planeado) rehace el plan de lo que falta
+(Chema 2026-10-05 tarimas; 2026-10-06 todo desvío)."""
 from django.urls import reverse
 
 from apps.catalogo.models import Ubicacion
@@ -11,7 +13,19 @@ from apps.inventario.models import LineaASN, OrdenEntrada, Saldo
 from .base import PisoTestCase
 
 
-class TarimasEnUbicarTests(PisoTestCase):
+def _post_acomodo(client, url, sku, linea, filas, contadas=0):
+    """POST de Acomodar para un producto sin lote: una fila por (ubicación, cantidad)."""
+    datos = {
+        "accion": "ubicar", "sku_id": sku.pk, "n_lotes": 1, "l_0_linea": linea.pk, "l_0_lote": "", "l_0_cad": "",
+        "l_0_contadas": contadas, "l_0_danadas": 0, "l_0_n": len(filas),
+    }
+    for j, (ubicacion, cantidad) in enumerate(filas):
+        datos[f"a_0_{j}_ubicacion"] = ubicacion
+        datos[f"a_0_{j}_cantidad"] = cantidad
+    return client.post(url, datos, follow=True)
+
+
+class TarimasEnAcomodarTests(PisoTestCase):
     def setUp(self):
         from apps.inventario.services import recibir
 
@@ -22,24 +36,21 @@ class TarimasEnUbicarTests(PisoTestCase):
         self.url_ubicar = reverse("piso:recepcion_ubicar", args=[self.orden.pk])
 
     def _ubicar(self, ubicacion, cantidad):
-        return self.client.post(
-            self.url_ubicar,
-            {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": ubicacion, "cantidad": str(cantidad)},
-            follow=True,
-        )
+        return _post_acomodo(self.client, self.url_ubicar, self.sku, self.linea, [(ubicacion, cantidad)])
 
     def test_crear_tarima_ubicar_en_ella_y_abrir_otra(self):
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
         self.assertContains(respuesta, "Nueva tarima")
         self.assertContains(respuesta, "Todavía no hay tarimas abiertas")
-        respuesta = self.client.post(self.url_ubicar, {"accion": "nueva_tarima", "sku_id": self.sku.pk})
+        self.assertContains(respuesta, "10 contadas de antes sin acomodar")
+        respuesta = self.client.post(self.url_ubicar, {"accion": "nueva_tarima", "sku_id": self.sku.pk, "query": f"sku={self.sku.pk}"})
         tarima = Ubicacion.objects.get(codigo="TAR-01")
         self.assertEqual((tarima.tipo, tarima.activo, tarima.prioridad), (Ubicacion.RESERVA, True, None))
         self.assertRedirects(respuesta, f"{self.url_ubicar}?sku={self.sku.pk}&ubicacion=TAR-01", fetch_redirect_response=False)
         self.assertTrue(EventoAuditoria.objects.filter(entidad="ubicacion", entidad_id="TAR-01", accion="tarima_creada").exists())
-        # Recién creada queda elegida en el campo de ubicación.
+        # Recién creada queda en la primera posición, con las mismas cuentas.
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk, "ubicacion": "TAR-01"})
-        self.assertContains(respuesta, 'value="TAR-01" placeholder="PIC-1-I-F-1"')
+        self.assertContains(respuesta, 'id="a_0_0_ubicacion" class="mono ubicacion" autocomplete="off" list="ubicaciones-destino" value="TAR-01"')
         respuesta = self._ubicar("TAR-01", 4)
         self.assertContains(respuesta, "4 piezas en TAR-01")
         saldo = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
@@ -70,18 +81,20 @@ class TarimasEnUbicarTests(PisoTestCase):
         plan = planear_acomodo(self.orden, self.operador)
         self.assertEqual([(p["ubicacion"], p["cantidad"]) for p in plan["pasos"]], [("RES-CUAR", 10)])
         self.assertIn("a RES-CUAR (reservas, vendible)", plan["pasos"][0]["motivo"])
-        # Ubicar sigue el paso: RES-CUAR sugerido y vendible al confirmar.
+        # Acomodar sigue el paso: RES-CUAR prellenado y vendible al confirmar.
         respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, 'id="anaquel-sugerido">RES-CUAR')
+        self.assertContains(respuesta, 'list="ubicaciones-destino" value="RES-CUAR"')
+        self.assertContains(respuesta, 'id="a_0_0_cantidad" class="cantidad" min="0" inputmode="numeric" value="10"')
         respuesta = self._ubicar("RES-CUAR", 10)
         self.assertContains(respuesta, "10 piezas en RES-CUAR")
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).ubicacion.codigo, "RES-CUAR")
         self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]["ubicadas"], 10)
 
 
-class ReplaneoPorTarimaTests(PisoTestCase):
-    """Chema 2026-10-05: lo que se queda en tarima libera el anaquel que el
-    plan le tenía apartado; se rehace el plan de lo que falta de la orden."""
+class ReplaneoPorDesvioTests(PisoTestCase):
+    """Chema 2026-10-05/06: lo que se acomoda fuera del plan (tarima, otra
+    posición, más de lo planeado) cambia el espacio libre; se rehace el plan
+    de lo que falta de la orden con lo ya acomodado como fijo."""
 
     def setUp(self):
         from apps.catalogo.models import SKU
@@ -104,32 +117,51 @@ class ReplaneoPorTarimaTests(PisoTestCase):
     def _pasos(self):
         return [(p["sku"], p["ubicacion"], p["cantidad"], p["ubicadas"]) for p in OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"]]
 
+    def _acomodar(self, sku, linea, ubicacion, cantidad, contadas=0):
+        return _post_acomodo(self.client, self.url_ubicar, sku, linea, [(ubicacion, cantidad)], contadas=contadas)
+
     def test_dejar_en_tarima_replanea_y_libera_el_anaquel(self):
         # El plan original: A toma el anaquel y B se queda sin lugar.
         self.assertEqual(self._pasos(), [("A-SIX", "PIC-1-A", 2, 0), ("B-SIX", None, 2, 0)])
-        respuesta = self.client.post(
-            self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku_a.pk, "ubicacion": self.tarima.codigo, "cantidad": "2"}, follow=True,
-        )
+        respuesta = self._acomodar(self.sku_a, self.linea_a, self.tarima.codigo, 2)
         self.assertContains(respuesta, f"2 piezas en {self.tarima.codigo}")
         # Replaneado: A ya no tiene pasos (quedó en tarima) y B hereda el anaquel.
         self.assertEqual(self._pasos(), [("B-SIX", "PIC-1-A", 2, 0)])
-        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=self.orden.folio, accion="acomodo_replaneado_por_tarima")
-        self.assertEqual((evento.delta["sku"], evento.delta["tarima"], evento.delta["cantidad"], evento.delta["pendientes_antes"]), ("A-SIX", "TAR-01", 2, 2))  # pendientes al replanear: las 2 de B
+        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=self.orden.folio, accion="acomodo_replaneado")
+        self.assertEqual(
+            (evento.delta["sku"], evento.delta["ubicacion"], evento.delta["cantidad"], evento.delta["por"], evento.delta["pendientes_antes"]),
+            ("A-SIX", "TAR-01", 2, "tarima", 2),  # pendientes al replanear: las 2 de B
+        )
         # Ubicar B en el anaquel sigue el plan nuevo y no vuelve a replanear.
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku_b.pk, "ubicacion": "PIC-1-A", "cantidad": "2"}, follow=True)
+        self._acomodar(self.sku_b, self.linea_b, "PIC-1-A", 2)
         self.assertEqual(self._pasos(), [("B-SIX", "PIC-1-A", 2, 2)])
-        self.assertEqual(EventoAuditoria.objects.filter(accion="acomodo_replaneado_por_tarima").count(), 1)
+        self.assertEqual(EventoAuditoria.objects.filter(accion="acomodo_replaneado").count(), 1)
 
-    def test_ubicar_en_anaquel_no_replanea(self):
+    def test_ubicar_en_anaquel_segun_el_plan_no_replanea(self):
         generado = self.plan["generado"]
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku_a.pk, "ubicacion": "PIC-1-A", "cantidad": "1"}, follow=True)
+        self._acomodar(self.sku_a, self.linea_a, "PIC-1-A", 1)
         self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["generado"], generado)
-        self.assertFalse(EventoAuditoria.objects.filter(accion="acomodo_replaneado_por_tarima").exists())
+        self.assertFalse(EventoAuditoria.objects.filter(accion="acomodo_replaneado").exists())
 
     def test_sin_pasos_pendientes_no_replanea(self):
         # A completo en su anaquel y B, lo último pendiente, a tarima: ya no
         # queda nada por planear, así que no se rehace el plan.
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku_a.pk, "ubicacion": "PIC-1-A", "cantidad": "2"}, follow=True)
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku_b.pk, "ubicacion": self.tarima.codigo, "cantidad": "2"}, follow=True)
+        self._acomodar(self.sku_a, self.linea_a, "PIC-1-A", 2)
+        self._acomodar(self.sku_b, self.linea_b, self.tarima.codigo, 2)
         self.assertEqual(self._pasos(), [("A-SIX", "PIC-1-A", 2, 2), ("B-SIX", None, 2, 2)])
-        self.assertFalse(EventoAuditoria.objects.filter(accion="acomodo_replaneado_por_tarima").exists())
+        self.assertFalse(EventoAuditoria.objects.filter(accion="acomodo_replaneado").exists())
+
+    def test_mas_de_lo_planeado_replanea_con_el_anaquel_ya_lleno(self):
+        # Llega una pieza más de A (3 contra 2 anunciadas) y las 3 caben en el
+        # anaquel: se registran ahí y el plan ve el anaquel lleno de verdad.
+        from apps.core.models import EvidenciaFoto
+
+        EvidenciaFoto.objects.create(entidad="asn", entidad_id=self.orden.folio, tipo="llegada", archivo=self.foto(), tomada_por="piso1")
+        respuesta = self._acomodar(self.sku_a, self.linea_a, "PIC-1-A", 3, contadas=1)
+        self.assertContains(respuesta, "3 piezas en PIC-1-A")
+        self.assertEqual(Saldo.objects.get(sku=self.sku_a, estado=Saldo.UBICADO_VENDIBLE).cantidad, 3)
+        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=self.orden.folio, accion="acomodo_replaneado")
+        self.assertEqual((evento.delta["por"], evento.delta["cantidad"], evento.delta["pendientes_antes"]), ("mas_de_lo_planeado", 3, 2))
+        plan = OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo
+        self.assertEqual(self._pasos(), [("B-SIX", None, 2, 0)])  # el anaquel ya no da para B
+        self.assertEqual([(c["sku"], c["recibidas"], c["diferencia"]) for c in plan["completas"]], [("A-SIX", 3, 1)])

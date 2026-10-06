@@ -1945,8 +1945,10 @@ def planear_acomodo(orden, actor=None):
     # Lo ya ubicado según el plan anterior, por (sku, lote): no se vuelve a
     # planear. Un plan viejo sin lote acredita sus ubicadas a las líneas del
     # SKU en orden. Y el total por SKU se limita a lo que FÍSICAMENTE falta
-    # (anunciado no llegado + en recepción): lo ubicado a mano tampoco se
-    # replanea aunque el plan no lo haya visto.
+    # (anunciado no llegado, línea por línea, + en recepción): lo ubicado a
+    # mano tampoco se replanea aunque el plan no lo haya visto. Línea por
+    # línea para que un lote que llegó de más (o no anunciado) no tape lo que
+    # falta de otro lote (2026-10-06).
     previo = orden.plan_acomodo or {}
     ubicadas_previas = dict(previo.get("ubicadas", {}))
     for p in previo.get("pasos", []):
@@ -1958,14 +1960,12 @@ def planear_acomodo(orden, actor=None):
         if not lote and n:
             sin_lote[int(sku_id)] = sin_lote.get(int(sku_id), 0) + n
             ubicadas_previas.pop(clave)
-    fisico = {}
+    por_llegar = {}
     for linea in lineas:
-        f = fisico.setdefault(linea.sku_id, {"anunciadas": 0, "recibidas": 0})
-        f["anunciadas"] += linea.cantidad_anunciada
-        f["recibidas"] += linea.cantidad_recibida
+        por_llegar[linea.sku_id] = por_llegar.get(linea.sku_id, 0) + max(linea.cantidad_anunciada - linea.cantidad_recibida, 0)
     tope = {
-        sku_id: max(f["anunciadas"] - f["recibidas"], 0) + _suma(SKU_por_id(sku_id, lineas), Saldo.EN_PUTAWAY)
-        for sku_id, f in fisico.items()
+        sku_id: faltan + _suma(SKU_por_id(sku_id, lineas), Saldo.EN_PUTAWAY)
+        for sku_id, faltan in por_llegar.items()
     }
     reservas, pasos, acreditadas, completas = {}, [], {}, []
     for linea in lineas:
@@ -2132,12 +2132,34 @@ def crear_tarima(actor=None):
     return tarima
 
 
-def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
+def _desvio_del_plan(orden, sku, codigo_lote, codigo_ubicacion, cantidad):
+    """Por qué este acomodo se sale del plan ("" si lo sigue): "tarima"
+    (el plan nunca nombra tarimas), "sin_paso" (el plan no contemplaba ese
+    producto y lote), "otra_posicion" (otro anaquel que el del paso) o
+    "mas_de_lo_planeado" (más piezas de las que el paso decía)."""
+    if codigo_ubicacion and codigo_ubicacion.startswith(PREFIJO_TARIMA):
+        return "tarima"
+    paso = siguiente_paso(orden, sku, codigo_lote)
+    if paso is None:
+        return "sin_paso"
+    if (paso["ubicacion"] or "") != (codigo_ubicacion or ""):
+        return "otra_posicion"
+    if cantidad > paso["cantidad"] - paso["ubicadas"]:
+        return "mas_de_lo_planeado"
+    return ""
+
+
+def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1, replanear=True):
     """`cantidad` piezas (default una, la recién contada): a su anaquel
     (ubicar) o, sin anaquel (ubicacion=None), a la zona de desborde si existe
     (vendible con su lote; evento a_desborde) y si no, a cuarentena por falta
     de espacio; avanza el plan, primero el paso de esa misma ubicación (la
-    zona de desborde incluida: desde 2026-09-24 el plan la nombra)."""
+    zona de desborde incluida: desde 2026-09-24 el plan la nombra). La
+    realidad manda (Chema 2026-10-06): si el acomodo se sale del plan (otra
+    posición, más piezas, tarima, sin paso) se rehace el plan de lo que falta
+    con lo acomodado como fijo (`replanear=False` lo pospone: recibir_y_ubicar
+    replanea una sola vez al final). Regresa la ubicación destino (None =
+    cuarentena)."""
     cantidad = _validar_cantidad(cantidad, "ubicar")
     codigo_lote = lote.codigo if lote is not None else None
     desborde = zona_desborde()
@@ -2147,6 +2169,7 @@ def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
         return None
     if ubicacion is None:
         ubicacion = desborde
+    desvio = _desvio_del_plan(orden, sku, codigo_lote, ubicacion.codigo, cantidad)
     ubicar(sku, cantidad, ubicacion, lote, actor)
     es_desborde = desborde is not None and ubicacion.pk == desborde.pk
     _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote, cantidad)
@@ -2157,51 +2180,92 @@ def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1):
                    "lote": codigo_lote},
             motivo="Sin anaquel con espacio en el plan: a la zona de desborde, vendible con su lote.",
         )
-    if ubicacion.tipo == Ubicacion.RESERVA and ubicacion.codigo.startswith(PREFIJO_TARIMA):
-        _replanear_por_tarima(orden, sku, ubicacion, cantidad, codigo_lote, actor)
+    if desvio and replanear:
+        _replanear_tras_desvio(orden, sku, ubicacion, cantidad, codigo_lote, actor, desvio)
     return ubicacion
 
 
-def _replanear_por_tarima(orden, sku, tarima, cantidad, codigo_lote, actor):
-    """Lo que se queda en tarima libera el anaquel que el plan le tenía
-    apartado (Chema 2026-10-05): se rehace el plan de lo que falta de la orden
-    para que ese espacio lo tomen los demás SKUs. Solo si el plan existe y
-    todavía tiene pasos pendientes; lo ya ubicado no se vuelve a planear."""
+def _replanear_tras_desvio(orden, sku, ubicacion, cantidad, codigo_lote, actor, desvio):
+    """Un acomodo fuera del plan (tarima, otra posición, más piezas, sin paso)
+    cambia qué espacio queda libre: se rehace el plan de lo que falta de la
+    orden con lo ya acomodado como fijo (Chema 2026-10-05 tarimas, 2026-10-06
+    todo desvío). Solo si el plan todavía tiene pasos pendientes."""
     pasos = (orden.plan_acomodo or {}).get("pasos", [])
     if not any(p["ubicadas"] < p["cantidad"] for p in pasos):
         return
     antes = sum(p["cantidad"] - p["ubicadas"] for p in pasos)
     plan = planear_acomodo(orden, actor)
     registrar_evento(
-        "asn", orden.folio, "acomodo_replaneado_por_tarima", actor=actor, cliente=orden.cliente,
-        delta={"sku": sku.codigo, "lote": codigo_lote, "tarima": tarima.codigo, "cantidad": cantidad,
-               "pendientes_antes": antes, "pasos": len(plan.get("pasos", []))},
-        motivo=f"{cantidad} de {sku.codigo} a {tarima.codigo}: el anaquel apartado queda libre y se replanea lo que falta.",
+        "asn", orden.folio, "acomodo_replaneado", actor=actor, cliente=orden.cliente,
+        delta={"sku": sku.codigo, "lote": codigo_lote, "ubicacion": ubicacion.codigo, "cantidad": cantidad,
+               "por": desvio, "pendientes_antes": antes, "pasos": len(plan.get("pasos", []))},
+        motivo=f"{cantidad} de {sku.codigo} a {ubicacion.codigo} ({desvio.replace('_', ' ')}): se replanea lo que falta con lo acomodado como fijo.",
     )
 
 
-def marcar_danada(linea_asn, actor):
-    """Una pieza ya contada como buena resulta dañada al ubicarla: sale de
-    recepción, entra a cuarentena y la línea la pasa de recibida a dañada."""
-    sku = linea_asn.sku
+def recibir_y_ubicar(orden, sku, renglones, actor):
+    """Contar y acomodar un producto por lote en UNA transacción (Chema
+    2026-10-06: Contar ya no registra nada; todo se confirma en Acomodar con
+    el modal). `renglones` = [{"linea": LineaASN|None, "lote_codigo", "fecha_caducidad",
+    "contadas", "danadas", "acomodos": [(Ubicacion|None, cantidad), ...]}]:
+    por lote se recibe lo contado y dañado (una línea nueva del ASN si el lote
+    no venía anunciado), se crea su Lote y se acomoda cada renglón en su
+    posición (None = desborde o cuarentena). Tope: Σ acomodar ≤ Σ contadas +
+    lo que ya estaba en recepción sin ubicar. Al final, si algún acomodo se
+    salió del plan, se replanea una sola vez. Regresa [(linea, lote, destino,
+    cantidad)] de lo acomodado."""
+    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+
+    renglones = [r for r in renglones if r["contadas"] or r["danadas"] or any(c > 0 for _, c in r["acomodos"])]
+    if not renglones:
+        raise ValueError("Captura cuántas contaste o cuántas acomodas de al menos un lote.")
+    for r in renglones:
+        if r["contadas"] < 0 or r["danadas"] < 0 or any(c < 0 for _, c in r["acomodos"]):
+            raise ValueError("Las cantidades no pueden ser negativas.")
+        if r["linea"] is None and not r["lote_codigo"] and sku.requiere_lote:
+            raise ValueError(f"{sku.codigo} requiere lote: captura el código del lote nuevo.")
     with transaction.atomic():
-        en_putaway = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
-        if sum(s.cantidad for s in en_putaway) < 1:
-            raise ValueError(f"No hay piezas de {sku.codigo} en recepción para marcar dañadas.")
-        if linea_asn.cantidad_recibida < 1:
-            raise ValueError(f"La línea de {sku.codigo} no tiene piezas recibidas que marcar.")
-        _restar(en_putaway, 1)
-        ubic = _ubicacion_tipo(Ubicacion.RECEPCION) or en_putaway[0].ubicacion
-        _incrementar(sku, ubic.pk, None, Saldo.CUARENTENA, 1)
-        _mov(sku, Movimiento.RECEPCION, 0, origen=Saldo.EN_PUTAWAY, destino=Saldo.CUARENTENA, referencia=linea_asn.orden.folio, actor=actor)
-        linea_asn.cantidad_recibida -= 1
-        linea_asn.cantidad_danada += 1
-        linea_asn.save(update_fields=["cantidad_recibida", "cantidad_danada"])
-        registrar_evento(
-            "asn", linea_asn.orden.folio, "pieza_danada", actor=actor, cliente=linea_asn.orden.cliente,
-            delta={"sku": sku.codigo}, motivo="Marcada dañada al ubicar: de recibida a dañada, va a cuarentena.",
-        )
-    return linea_asn
+        previo = _suma(sku, Saldo.EN_PUTAWAY)
+        contadas = sum(r["contadas"] for r in renglones)
+        acomodar = sum(c for r in renglones for _, c in r["acomodos"])
+        if acomodar > contadas + previo:
+            raise ValueError(
+                f"Vas a acomodar {acomodar} de {sku.codigo} pero solo hay {contadas} contada{'s' if contadas != 1 else ''} ahora"
+                + (f" y {previo} en recepción de antes" if previo else "") + "."
+            )
+        acomodado, desvio = [], ""
+        desborde = zona_desborde()
+        for r in renglones:
+            linea = r["linea"]
+            if linea is None:
+                linea = LineaASN.objects.create(
+                    orden=orden, sku=sku, cantidad_anunciada=0,
+                    lote_codigo=r["lote_codigo"] or "", fecha_caducidad=r["fecha_caducidad"],
+                )
+                registrar_evento(
+                    "asn", orden.folio, "lote_no_anunciado", actor=actor, cliente=orden.cliente,
+                    delta={"sku": sku.codigo, "lote": r["lote_codigo"]},
+                    motivo=f"Llegó {sku.codigo} con el lote {r['lote_codigo'] or '—'}, que no venía en la orden.",
+                )
+            if r["contadas"] or r["danadas"]:
+                recibir(linea, r["contadas"], r["danadas"], actor)
+            codigo = (r["lote_codigo"] or linea.lote_codigo or "").strip()
+            lote = obtener_o_crear_lote(sku, codigo, r["fecha_caducidad"] or linea.fecha_caducidad) if codigo else None
+            for ubicacion, cantidad in r["acomodos"]:
+                if cantidad <= 0:
+                    continue
+                # El desvío se mide ANTES de avanzar el plan, contra el destino real
+                # (vacío = la zona de desborde si existe; cuarentena no se replanea).
+                real = ubicacion if ubicacion is not None else desborde
+                se_sale = _desvio_del_plan(orden, sku, codigo or None, real.codigo, cantidad) if real is not None else ""
+                destino = ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad, replanear=False)
+                desvio = desvio or se_sale
+                acomodado.append((linea, lote, destino, cantidad))
+        con_destino = [a for a in acomodado if a[2] is not None]
+        if desvio and con_destino:
+            _linea, lote, destino, cantidad = con_destino[-1]
+            _replanear_tras_desvio(orden, sku, destino, cantidad, lote.codigo if lote else None, actor, desvio)
+    return acomodado
 
 
 def _cuarentena_por_orden(sku, folio):

@@ -200,9 +200,11 @@ class CerrarConTarimasTests(PisoTestCase):
         self.assertEqual(self.orden.tarimas_recibidas, 16)
 
 
-class RecepcionPiezaPorPiezaTests(PisoTestCase):
-    """Flujo nuevo: foto de llegada, un escaneo = una pieza recibida, la
-    pantalla de ubicar sigue el plan de la orden, dañada va a cuarentena."""
+class RecepcionPorLoteTests(PisoTestCase):
+    """Flujo por lote (Chema 2026-10-06): foto de llegada, el escaneo abre
+    Contar (todos los lotes del producto, sin registrar nada), las cuentas
+    viajan por GET a Acomodar (una fila por lote y posición del plan, dañadas
+    editables) y un solo POST registra cuenta y acomodo en una transacción."""
 
     def setUp(self):
         from datetime import date
@@ -231,29 +233,58 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
     def _escanear(self, codigo="7500000000017"):
         return self.client.post(self.url, {"accion": "escanear", "codigo": codigo})
 
-    def _contar(self, cantidad, lote="L-ASN", danadas=0):
-        """Cuenta `cantidad` (y dañadas) en la línea del lote, como la pantalla Contar."""
+    def _get_ubicar(self, cuentas=None, follow=False, **extra):
+        """GET de Acomodar con lo que Contar manda: {lote: (contadas, dañadas)}."""
         from apps.inventario.models import LineaASN
 
-        linea = LineaASN.objects.get(orden=self.orden, lote_codigo=lote)
-        return self.client.post(
-            self.url_contar,
-            {"sku_id": self.sku.pk, "linea_id": linea.pk, "cantidad": cantidad, "danadas": danadas},
-            follow=True,
-        )
+        params = {"sku": self.sku.pk}
+        for lote, (contadas, danadas) in (cuentas or {}).items():
+            linea = LineaASN.objects.get(orden=self.orden, lote_codigo=lote)
+            params[f"c_{linea.pk}"] = contadas
+            params[f"d_{linea.pk}"] = danadas
+        params.update(extra)
+        return self.client.get(self.url_ubicar, params, follow=follow)
+
+    def _acomodar(self, lotes, follow=True):
+        """POST de Acomodar (tras el modal): lotes = [(lote, contadas, dañadas,
+        [(ubicación, cantidad), ...][, caducidad])]; un lote sin línea en la
+        orden va como lote nuevo."""
+        from apps.inventario.models import LineaASN
+
+        datos = {"accion": "ubicar", "sku_id": self.sku.pk, "n_lotes": len(lotes)}
+        for i, entrada in enumerate(lotes):
+            lote, contadas, danadas, filas = entrada[:4]
+            linea = LineaASN.objects.filter(orden=self.orden, sku=self.sku, lote_codigo=lote).first()
+            caducidad = entrada[4] if len(entrada) > 4 else (linea.fecha_caducidad.isoformat() if linea and linea.fecha_caducidad else "")
+            datos.update({
+                f"l_{i}_linea": linea.pk if linea else "", f"l_{i}_lote": lote, f"l_{i}_cad": caducidad,
+                f"l_{i}_contadas": contadas, f"l_{i}_danadas": danadas, f"l_{i}_n": len(filas),
+            })
+            for j, (ubicacion, cantidad) in enumerate(filas):
+                datos[f"a_{i}_{j}_ubicacion"] = ubicacion
+                datos[f"a_{i}_{j}_cantidad"] = cantidad
+        return self.client.post(self.url_ubicar, datos, follow=follow)
+
+    def _pasos(self):
+        from apps.inventario.models import OrdenEntrada
+
+        return [(p["lote"], p["ubicacion"], p["cantidad"], p["ubicadas"]) for p in OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"]]
 
     def test_sin_foto_no_se_escanea_y_la_pantalla_lo_pide(self):
+        from apps.inventario.models import Saldo
+
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "Foto de llegada")
         self.assertNotContains(respuesta, 'id="form-escanear"')
         respuesta = self.client.post(self.url, {"accion": "escanear", "codigo": "7500000000017"}, follow=True)
         self.assertContains(respuesta, "Tómale foto al camión/tarimas")
-        respuesta = self.client.post(self.url_contar, {"sku_id": self.sku.pk, "linea_id": self.linea.pk, "cantidad": "2"}, follow=True)
+        respuesta = self._acomodar([("L-ASN", 2, 0, [("PIC-1-I-F-2", 2)])])
         self.assertContains(respuesta, "Tómale foto al camión/tarimas")
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 0)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku).exists())
 
-    def test_escaneo_abre_la_cuenta_y_lo_contado_manda_a_ubicar_con_el_plan(self):
+    def test_escaneo_abre_la_cuenta_y_lo_contado_va_a_acomodar_con_el_plan(self):
         from apps.inventario.models import OrdenEntrada, Saldo
 
         self._foto()
@@ -267,38 +298,42 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 0)
         respuesta = self.client.get(self.url_contar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, f'name="linea_id" value="{self.linea.pk}" required checked')
+        self.assertContains(respuesta, f'action="{self.url_ubicar}"')  # las cuentas viajan por GET a Acomodar
+        self.assertContains(respuesta, f'name="c_{self.linea.pk}"')
+        self.assertContains(respuesta, 'name="nl_codigo"')  # renglón para un lote que no venía en la orden
         self.assertContains(respuesta, "L-ASN")
         self.assertContains(respuesta, "contadas hasta ahora 0")
         self.assertNotContains(respuesta, "anunciada")  # conteo ciego: sin lo anunciado
-        # Contar 1 recibe en la línea del lote y manda a Ubicar con ese lote.
-        respuesta = self.client.post(self.url_contar, {"sku_id": self.sku.pk, "linea_id": self.linea.pk, "cantidad": "1", "danadas": "0"})
-        self.assertRedirects(respuesta, f"{self.url_ubicar}?sku={self.sku.pk}&lote=L-ASN&fecha_caducidad=2027-01-31", fetch_redirect_response=False)
+        # Contar no registra nada: Acomodar muestra la cuenta editable y la fila del plan.
+        respuesta = self._get_ubicar({"L-ASN": (1, 0)})
+        self.linea.refresh_from_db()
+        self.assertEqual(self.linea.cantidad_recibida, 0)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku).exists())
+        self.assertContains(respuesta, 'name="n_lotes" value="1"')
+        self.assertContains(respuesta, 'name="l_0_lote" value="L-ASN"')
+        self.assertContains(respuesta, 'name="l_0_cad" value="2027-01-31"')
+        self.assertContains(respuesta, 'name="l_0_contadas" id="l_0_contadas" min="0" inputmode="numeric" value="1"')
+        self.assertContains(respuesta, 'id="a_0_0_ubicacion" class="mono ubicacion" autocomplete="off" list="ubicaciones-destino" value="PIC-1-I-F-2"')
+        self.assertContains(respuesta, 'id="a_0_0_cantidad" class="cantidad" min="0" inputmode="numeric" value="1"')
+        self.assertContains(respuesta, "según el plan 5")
+        self.assertContains(respuesta, "anaquel libre para clase A")  # el motivo del paso del plan
+        self.assertContains(respuesta, 'id="modal-confirmar"')
+        self.assertContains(respuesta, "Vas a acomodar")
+        # Confirmar registra cuenta y acomodo juntos.
+        respuesta = self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 1)])])
+        self.assertContains(respuesta, "lote L-ASN: 1 contada")
+        self.assertContains(respuesta, "1 pieza (lote L-ASN) en PIC-1-I-F-2")
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 1)
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
-        # La pieza contada y sin anaquel sale en la tabla "Por ubicar" con su botón.
-        respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, "<h2>Por ubicar</h2>")
-        self.assertContains(respuesta, f'href="{self.url_ubicar}?sku={self.sku.pk}">Ubicar</a>')
-        self.assertContains(respuesta, "1 pieza(s) en recepción")
-        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk, "lote": "L-ASN"})
-        self.assertContains(respuesta, 'id="anaquel-sugerido">PIC-1-I-F-2')
-        self.assertContains(respuesta, 'id="faltan-paso">5</b>')
-        self.assertContains(respuesta, "Anaquel vacío")
-        self.assertContains(respuesta, 'name="lote" value="L-ASN"')  # lote fijo: el anunciado
-        self.assertContains(respuesta, 'id="cantidad" min="1" max="1" inputmode="numeric" value="1"')
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "fecha_caducidad": "2027-01-31"}, follow=True)
-        self.assertContains(respuesta, "1 pieza en PIC-1-I-F-2")
         saldo = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
         self.assertEqual((saldo.ubicacion.codigo, saldo.lote.codigo, saldo.cantidad), ("PIC-1-I-F-2", "L-ASN", 1))
-        orden.refresh_from_db()
-        self.assertEqual(orden.plan_acomodo["pasos"][0]["ubicadas"], 1)
-        # Reescanear y contar cero: nada se suma; sin piezas por ubicar, de vuelta al escáner.
-        respuesta = self.client.post(self.url_contar, {"sku_id": self.sku.pk, "linea_id": self.linea.pk, "cantidad": "0", "danadas": "0"}, follow=True)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 5, 1)])
+        # Reescanear y contar cero: nada que acomodar, de vuelta al escáner.
+        respuesta = self._get_ubicar({"L-ASN": (0, 0)}, follow=True)
+        self.assertContains(respuesta, "No hay piezas")
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 1)
-        self.assertContains(respuesta, "No hay piezas")
 
     def test_codigo_ajeno_y_sin_piezas_por_ubicar(self):
         self._foto()
@@ -309,78 +344,81 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         respuesta = self.client.get(self.url_contar, {"sku": 999999}, follow=True)
         self.assertContains(respuesta, "Escanea un producto de la orden para contarlo")
 
-    def test_danada_en_ubicar_va_a_cuarentena_y_ajusta_la_linea(self):
+    def test_danadas_viajan_de_contar_y_se_corrigen_en_acomodar(self):
         from apps.inventario.models import Saldo
 
         self._foto()
-        self._contar(1)
-        respuesta = self.client.post(self.url_ubicar, {"accion": "danada", "sku_id": self.sku.pk}, follow=True)
-        self.assertContains(respuesta, "marcada dañada")
+        respuesta = self._get_ubicar({"L-ASN": (1, 1)})
+        self.assertContains(respuesta, 'name="l_0_danadas" id="l_0_danadas" min="0" inputmode="numeric" value="1"')
+        respuesta = self._acomodar([("L-ASN", 1, 1, [("PIC-1-I-F-2", 1)])])
+        self.assertContains(respuesta, "lote L-ASN: 1 contada, 1 dañada a cuarentena")
+        self.assertContains(respuesta, "1 pieza (lote L-ASN) en PIC-1-I-F-2")
         self.linea.refresh_from_db()
-        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (0, 1))
-        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (1, 1))
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
-        # Dañadas también se capturan en Contar: van directo a cuarentena.
-        respuesta = self._contar(0, danadas=1)
-        self.assertContains(respuesta, "1 dañada a cuarentena")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 1)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        # Solo dañadas (corregidas en Acomodar), sin acomodar nada: la cuenta se registra sola.
+        respuesta = self._acomodar([("L-ASN", 0, 1, [("PIC-1-I-F-2", 0)])])
+        self.assertContains(respuesta, "lote L-ASN: 1 dañada a cuarentena")
         self.linea.refresh_from_db()
-        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (0, 2))
+        self.assertEqual((self.linea.cantidad_recibida, self.linea.cantidad_danada), (1, 2))
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 2)
 
-    def test_sin_espacio_manda_a_cuarentena_y_varios_lotes_piden_elegir(self):
+    def test_sin_espacio_manda_a_cuarentena_y_dos_lotes_van_en_una_pantalla(self):
         from apps.inventario.models import LineaASN, Saldo
 
         self.anaquel.lleno_manual = True
         self.anaquel.save()
-        LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=2, lote_codigo="L-OTRO")
+        otra = LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=2, lote_codigo="L-OTRO")
         self._foto()
         respuesta = self._escanear("COLIMITA-SIX")
         self.assertRedirects(respuesta, f"{self.url_contar}?sku={self.sku.pk}", fetch_redirect_response=False)
-        # Con dos lotes anunciados, Contar pide el lote (ningún radio marcado).
+        # Contar muestra los dos lotes anunciados, cada uno con su cuenta.
         respuesta = self.client.get(self.url_contar, {"sku": self.sku.pk})
         self.assertContains(respuesta, "L-OTRO")
-        self.assertNotContains(respuesta, "required checked")
-        self._contar(1, lote="L-ASN")
-        # Ubicar sin lote (desde "Por ubicar") también pregunta; el anaquel viene después.
-        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, "¿De qué lote es esta pieza?")
-        self.assertContains(respuesta, 'value="L-OTRO"')
-        self.assertNotContains(respuesta, "CUARENTENA")
-        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk, "lote": "L-ASN"})
-        self.assertContains(respuesta, "CUARENTENA")
-        self.assertContains(respuesta, 'name="lote" value="L-ASN"')
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"}, follow=True)
-        self.assertContains(respuesta, "1 pieza a cuarentena")
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
+        self.assertContains(respuesta, f'name="c_{self.linea.pk}"')
+        self.assertContains(respuesta, f'name="c_{otra.pk}"')
+        # Las dos cuentas llegan juntas a Acomodar: un bloque por lote; sin anaquel ni zona de desborde, cuarentena.
+        respuesta = self._get_ubicar({"L-ASN": (1, 0), "L-OTRO": (2, 0)})
+        self.assertContains(respuesta, 'name="n_lotes" value="2"')
+        self.assertContains(respuesta, 'name="l_0_lote" value="L-ASN"')
+        self.assertContains(respuesta, 'name="l_1_lote" value="L-OTRO"')
+        self.assertContains(respuesta, "cuarentena")
+        self.assertContains(respuesta, 'id="a_1_0_cantidad" class="cantidad" min="0" inputmode="numeric" value="2"')
+        respuesta = self._acomodar([("L-ASN", 1, 0, [("", 1)]), ("L-OTRO", 2, 0, [("", 2)])])
+        self.assertContains(respuesta, "1 pieza (lote L-ASN) a cuarentena (sin anaquel con espacio)")
+        self.assertContains(respuesta, "2 piezas (lote L-OTRO) a cuarentena (sin anaquel con espacio)")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 3)
+        self.linea.refresh_from_db()
+        otra.refresh_from_db()
+        self.assertEqual((self.linea.cantidad_recibida, otra.cantidad_recibida), (1, 2))
 
     def test_sin_espacio_con_zona_de_desborde_queda_vendible_ahi_con_su_lote(self):
         from apps.catalogo.models import Ubicacion
         from apps.core.models import EventoAuditoria
-        from apps.inventario.models import OrdenEntrada, Saldo
+        from apps.inventario.models import Saldo
 
         Ubicacion.objects.create(codigo="RES-CUAR", tipo=Ubicacion.RESERVA)
         self.anaquel.lleno_manual = True
         self.anaquel.save()
         self._foto()
-        self._contar(2)
-        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, 'id="anaquel-sugerido">RES-CUAR')
+        respuesta = self._get_ubicar({"L-ASN": (2, 0)})
+        self.assertContains(respuesta, 'value="RES-CUAR"')
         self.assertContains(respuesta, "reservas, vendible")  # el plan ya nombra la zona (2026-09-24)
         self.assertNotContains(respuesta, ">CUARENTENA<")
-        self.assertContains(respuesta, 'value="RES-CUAR" placeholder="PIC-1-I-F-1"')
         # Confirmar tal cual (prellenado) → vendible en la zona, con lote, y el plan avanza su paso "sin espacio".
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "RES-CUAR", "lote": "L-ASN", "cantidad": "2"}, follow=True)
-        self.assertContains(respuesta, "2 piezas en RES-CUAR")
+        respuesta = self._acomodar([("L-ASN", 2, 0, [("RES-CUAR", 2)])])
+        self.assertContains(respuesta, "2 piezas (lote L-ASN) en RES-CUAR")
         saldo = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
         self.assertEqual((saldo.ubicacion.codigo, saldo.lote.codigo, saldo.cantidad), ("RES-CUAR", "L-ASN", 2))
         self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.CUARENTENA).exists())
-        paso = OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]
-        self.assertEqual((paso["ubicacion"], paso["ubicadas"]), ("RES-CUAR", 2))
+        self.assertEqual(self._pasos(), [("L-ASN", "RES-CUAR", 5, 2)])
         self.assertTrue(EventoAuditoria.objects.filter(entidad="sku", entidad_id=self.sku.codigo, accion="a_desborde").exists())
-        # Vacío sigue siendo cuarentena, a mano.
-        self._contar(1)
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"}, follow=True)
-        self.assertContains(respuesta, "1 pieza en RES-CUAR (zona de desborde, vendible)")
+        # Posición vacía = la zona de desborde (vendible), no cuarentena.
+        respuesta = self._acomodar([("L-ASN", 1, 0, [("", 1)])])
+        self.assertContains(respuesta, "1 pieza (lote L-ASN) en RES-CUAR (zona de desborde, vendible)")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 3)
 
     def test_el_plan_separa_lotes_en_anaqueles_distintos(self):
         from apps.catalogo.models import Ubicacion
@@ -394,15 +432,79 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         por_lote = {p["lote"]: p["ubicacion"] for p in pasos}
         self.assertEqual(por_lote, {"L-ASN": "PIC-1-I-F-2", "L-OTRO": "PIC-1-I-B-2"})
 
+    def test_dos_lotes_y_uno_nuevo_no_anunciado_en_una_transaccion(self):
+        from apps.catalogo.models import Lote, Ubicacion
+        from apps.core.models import EventoAuditoria
+        from apps.inventario.models import LineaASN, Saldo
+
+        Ubicacion.objects.create(codigo="PIC-1-I-B-2", tipo=Ubicacion.PICKING, largo_cm=180, ancho_cm=58, alto_cm=52, prioridad=2)
+        Ubicacion.objects.create(codigo="PIC-1-I-B-3", tipo=Ubicacion.PICKING, largo_cm=180, ancho_cm=58, alto_cm=52, prioridad=3)
+        otra = LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=3, lote_codigo="L-OTRO")
+        self._foto()
+        self.client.get(self.url)
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 5, 0), ("L-OTRO", "PIC-1-I-B-2", 3, 0)])
+        # Contar: 2 de L-ASN, 3 de L-OTRO y 4 de un lote que no venía en la orden.
+        respuesta = self.client.get(self.url_ubicar, {
+            "sku": self.sku.pk, f"c_{self.linea.pk}": 2, f"c_{otra.pk}": 3,
+            "nl_codigo": "L-NUEVO", "nl_cad": "2028-06-30", "nl_c": 4, "nl_d": 0,
+        })
+        self.assertContains(respuesta, 'name="n_lotes" value="3"')
+        self.assertContains(respuesta, 'name="l_2_lote" value="L-NUEVO"')
+        self.assertContains(respuesta, 'name="l_2_cad" value="2028-06-30"')
+        self.assertContains(respuesta, "no venía en la orden")
+        self.assertContains(respuesta, 'id="a_1_0_ubicacion" class="mono ubicacion" autocomplete="off" list="ubicaciones-destino" value="PIC-1-I-B-2"')
+        self.assertContains(respuesta, "fuera del plan")  # el lote nuevo no está en el plan: sugerencia ad hoc
+        respuesta = self._acomodar([
+            ("L-ASN", 2, 0, [("PIC-1-I-F-2", 2)]),
+            ("L-OTRO", 3, 0, [("PIC-1-I-B-2", 3)]),
+            ("L-NUEVO", 4, 0, [("PIC-1-I-B-3", 4)], "2028-06-30"),
+        ])
+        self.assertContains(respuesta, "lote L-NUEVO: 4 contadas")
+        self.assertContains(respuesta, "4 piezas (lote L-NUEVO) en PIC-1-I-B-3")
+        nueva = LineaASN.objects.get(orden=self.orden, lote_codigo="L-NUEVO")
+        self.assertEqual((nueva.cantidad_anunciada, nueva.cantidad_recibida, str(nueva.fecha_caducidad)), (0, 4, "2028-06-30"))
+        self.assertEqual(str(Lote.objects.get(sku=self.sku, codigo="L-NUEVO").fecha_caducidad), "2028-06-30")
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="asn", entidad_id=self.orden.folio, accion="lote_no_anunciado").exists())
+        self.assertEqual(
+            sorted(Saldo.objects.filter(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).values_list("ubicacion__codigo", "lote__codigo", "cantidad")),
+            [("PIC-1-I-B-2", "L-OTRO", 3), ("PIC-1-I-B-3", "L-NUEVO", 4), ("PIC-1-I-F-2", "L-ASN", 2)],
+        )
+        # El lote nuevo se salió del plan → se replanea lo que falta (3 de L-ASN) con lo acomodado como fijo;
+        # lo que llegó de más del lote nuevo no tapa lo que falta de L-ASN.
+        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=self.orden.folio, accion="acomodo_replaneado")
+        self.assertEqual((evento.delta["por"], evento.delta["lote"], evento.delta["cantidad"]), ("sin_paso", "L-NUEVO", 4))
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 3, 0)])
+        # Acomodar avisa (sin bloquear) dónde ya hay otro lote de este producto.
+        respuesta = self._get_ubicar({"L-ASN": (1, 0)})
+        self.assertContains(respuesta, '"PIC-1-I-B-2": ["L-OTRO"]')
+        self.assertContains(respuesta, "Ya hay: COLIMITA-SIX ×2 (L-ASN)")
+
+    def test_acomodar_fuera_del_plan_replanea_con_lo_acomodado_como_fijo(self):
+        from apps.catalogo.models import Ubicacion
+        from apps.core.models import EventoAuditoria
+
+        Ubicacion.objects.create(codigo="PIC-1-I-B-2", tipo=Ubicacion.PICKING, largo_cm=180, ancho_cm=58, alto_cm=52, prioridad=2)
+        self._foto()
+        self.client.get(self.url)
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 5, 0)])
+        # Dos a otro anaquel: la realidad manda, el plan de lo que falta sigue a esas dos.
+        self._acomodar([("L-ASN", 2, 0, [("PIC-1-I-B-2", 2)])])
+        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=self.orden.folio, accion="acomodo_replaneado")
+        self.assertEqual(evento.delta, {"sku": "COLIMITA-SIX", "lote": "L-ASN", "ubicacion": "PIC-1-I-B-2", "cantidad": 2, "por": "otra_posicion", "pendientes_antes": 3, "pasos": 1})
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-B-2", 3, 0)])
+        # Seguir el plan nuevo no vuelve a replanear.
+        self._acomodar([("L-ASN", 3, 0, [("PIC-1-I-B-2", 3)])])
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-B-2", 3, 3)])
+        self.assertEqual(EventoAuditoria.objects.filter(accion="acomodo_replaneado").count(), 1)
+
     def test_rehacer_el_plan_respeta_lo_ya_ubicado(self):
         from apps.inventario.models import OrdenEntrada
         from apps.inventario.services import planear_acomodo
 
         self._foto()
         self.client.get(self.url)
-        for _ in range(2):  # dos piezas escaneadas y ubicadas por el plan
-            self._contar(1)
-            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        for _ in range(2):  # dos piezas contadas y acomodadas según el plan
+            self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 1)])])
         orden = OrdenEntrada.objects.get(pk=self.orden.pk)
         self.assertEqual(orden.plan_acomodo["pasos"][0]["ubicadas"], 2)
         # Un plan viejo SIN lote (versión anterior) también se acredita.
@@ -426,42 +528,55 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual(plan["pasos"], [])
         self.assertEqual(plan["completas"], [{"sku": "COLIMITA-SIX", "lote": "L-ASN", "anunciadas": 5, "recibidas": 5, "danadas": 0, "diferencia": 0}])
 
-    def test_ubicar_varias_de_una_vez_con_la_referencia_del_plan(self):
-        from apps.inventario.models import OrdenEntrada, Saldo
+    def test_acomodar_varias_de_una_vez_y_lo_contado_de_antes(self):
+        from apps.core.models import EventoAuditoria
+        from apps.inventario.models import Saldo
 
         self._foto()
         self.client.get(self.url)
-        self._contar(3)
-        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, 'id="faltan-paso">5</b>')
-        self.assertContains(respuesta, "Tienes 3 contadas sin ubicar")
-        self.assertContains(respuesta, 'id="cantidad" min="1" max="3" inputmode="numeric" value="3"')
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "3"}, follow=True)
-        self.assertContains(respuesta, "3 piezas en PIC-1-I-F-2")
+        respuesta = self._get_ubicar({"L-ASN": (3, 0)})
+        self.assertContains(respuesta, "según el plan 5")
+        self.assertContains(respuesta, 'id="a_0_0_cantidad" class="cantidad" min="0" inputmode="numeric" value="3"')
+        respuesta = self._acomodar([("L-ASN", 3, 0, [("PIC-1-I-F-2", 3)])])
+        self.assertContains(respuesta, "3 piezas (lote L-ASN) en PIC-1-I-F-2")
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 3)
-        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]["ubicadas"], 3)
-        self._contar(1)
-        respuesta = self.client.get(self.url_ubicar, {"sku": self.sku.pk})
-        self.assertContains(respuesta, 'id="faltan-paso">2</b>')
-        self.assertContains(respuesta, "Ya hay en PIC-1-I-F-2")
-        self.assertContains(respuesta, '<span class="pill">este</span>')
-        self.assertContains(respuesta, "<td class=\"derecha num\">3")
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "0"}, follow=True)
-        self.assertContains(respuesta, "mínimo 1")
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 5, 3)])
+        self.assertFalse(EventoAuditoria.objects.filter(accion="acomodo_replaneado").exists())  # siguió el plan
+        respuesta = self._get_ubicar({"L-ASN": (1, 0)})
+        self.assertContains(respuesta, "según el plan 2")
+        self.assertContains(respuesta, "Ya hay: COLIMITA-SIX ×3 (L-ASN)")
+        # Contar sin acomodar: solo se registra la cuenta y queda en recepción.
+        respuesta = self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 0)])])
+        self.assertContains(respuesta, "lote L-ASN: 1 contada")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "<h2>Por ubicar</h2>")
+        self.assertContains(respuesta, f'href="{self.url_ubicar}?sku={self.sku.pk}">Ubicar</a>')
+        self.assertContains(respuesta, "1 pieza(s) en recepción")
+        # Acomodar sin contar nada: la fila ofrece lo que ya estaba en recepción.
+        respuesta = self._get_ubicar()
+        self.assertContains(respuesta, "1 contada de antes sin acomodar")
+        self.assertContains(respuesta, 'name="l_0_contadas" id="l_0_contadas" min="0" inputmode="numeric" value="0"')
+        self.assertContains(respuesta, 'id="a_0_0_cantidad" class="cantidad" min="0" inputmode="numeric" value="1"')
+        respuesta = self._acomodar([("L-ASN", 0, 0, [("PIC-1-I-F-2", 1)])])
+        self.assertContains(respuesta, "1 pieza (lote L-ASN) en PIC-1-I-F-2")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).cantidad, 4)
+        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_PUTAWAY).exists())
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 5, 4)])
 
-    def test_ubicar_mas_de_lo_contado_se_rechaza(self):
-        from apps.inventario.models import OrdenEntrada, Saldo
+    def test_acomodar_mas_de_lo_contado_se_rechaza_sin_registrar_nada(self):
+        from apps.inventario.models import Saldo
 
         self._foto()
         self.client.get(self.url)
-        self._contar(1)
-        respuesta = self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "4"}, follow=True)
-        self.assertContains(respuesta, "Solo tienes 1 contada sin ubicar")
+        respuesta = self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 4)])])
+        self.assertContains(respuesta, "Vas a acomodar 4 de COLIMITA-SIX pero solo hay 1 contada ahora.")
         self.linea.refresh_from_db()
-        self.assertEqual(self.linea.cantidad_recibida, 1)
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
-        self.assertFalse(Saldo.objects.filter(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE).exists())
-        self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).plan_acomodo["pasos"][0]["ubicadas"], 0)
+        self.assertEqual(self.linea.cantidad_recibida, 0)  # ni la cuenta: todo o nada
+        self.assertFalse(Saldo.objects.filter(sku=self.sku).exists())
+        self.assertEqual(self._pasos(), [("L-ASN", "PIC-1-I-F-2", 5, 0)])
+        respuesta = self._acomodar([("L-ASN", 0, 0, [("PIC-1-I-F-2", 0)])])
+        self.assertContains(respuesta, "Captura cuántas contaste o cuántas acomodas")
 
     def test_reiniciar_acomodo_regresa_todo_menos_danadas_y_stock_ajeno(self):
         from apps.catalogo.models import Lote, Ubicacion
@@ -474,25 +589,17 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         Saldo.objects.create(sku=self.sku, ubicacion=otro, lote=viejo, estado=Saldo.UBICADO_VENDIBLE, cantidad=4)
         self._foto()
         self.client.get(self.url)
-
-        def escanear():
-            self._contar(1)
-
-        for _ in range(2):  # 2 al anaquel del plan
-            escanear()
-            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
-        escanear()  # 1 a mano en otro anaquel
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-B-2", "lote": "L-ASN"})
-        escanear()  # 1 a cuarentena por falta de espacio (anaquel vacío)
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"})
-        escanear()  # 1 dañada
-        self.client.post(self.url_ubicar, {"accion": "danada", "sku_id": self.sku.pk})
-        escanear()  # 1 se queda en recepción sin ubicar
+        # 2 al anaquel del plan, 1 a cuarentena por falta de espacio (vacío, sin zona), 1 dañada.
+        self._acomodar([("L-ASN", 3, 1, [("PIC-1-I-F-2", 2), ("", 1)])])
+        # 1 a mano en otro anaquel (replanea) y 1 que se queda en recepción sin acomodar.
+        self._acomodar([("L-ASN", 2, 0, [("PIC-1-I-B-2", 1)])])
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 2)
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
 
         orden = OrdenEntrada.objects.get(pk=self.orden.pk)
         r = reiniciar_acomodo(orden, self.operador)
-        self.assertEqual(r, {"regresadas": 4, "del_plan": 2, "de_cuarentena": 1, "a_mano": {"PIC-1-I-B-2": 1}, "no_encontradas": 0})
+        self.assertEqual((r["regresadas"], r["de_cuarentena"], r["no_encontradas"]), (4, 1, 0))
+        self.assertEqual(r["del_plan"] + sum(r["a_mano"].values()), 3)
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 5)
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)  # la dañada se queda
         vendible = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
@@ -513,18 +620,8 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
 
         self._foto()
         self.client.get(self.url)
-
-        def escanear():
-            self._contar(1)
-
-        for _ in range(2):  # 2 al anaquel del plan
-            escanear()
-            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
-        escanear()  # 1 a cuarentena por falta de espacio
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "", "lote": "L-ASN"})
-        escanear()  # 1 dañada
-        self.client.post(self.url_ubicar, {"accion": "danada", "sku_id": self.sku.pk})
-        escanear()  # 1 se queda en recepción: 4 recibidas + 1 dañada = línea completa
+        # 2 al anaquel del plan, 1 a cuarentena por falta de espacio, 1 dañada, 1 en recepción: línea completa.
+        self._acomodar([("L-ASN", 4, 1, [("PIC-1-I-F-2", 2), ("", 1)])])
         orden = OrdenEntrada.objects.get(pk=self.orden.pk)
         self.assertEqual(orden.estado, OrdenEntrada.RECIBIDA)
 
@@ -539,10 +636,10 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         paso = orden.plan_acomodo["pasos"][0]
         self.assertEqual((paso["ubicacion"], paso["cantidad"], paso["ubicadas"]), ("PIC-1-I-F-2", 5, 0))
         self.assertEqual(Movimiento.objects.filter(sku=self.sku, tipo=Movimiento.RECEPCION, delta__lt=0).count(), 2)
-        # Se vuelve a escanear desde cero; la foto de llegada se queda.
+        # Se vuelve a contar desde cero; la foto de llegada se queda.
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, 'id="form-escanear"')
-        escanear()
+        self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 0)])])
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 1)
         self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 1)
@@ -564,10 +661,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
 
         self._foto()
         self.client.get(self.url)
-        for _ in range(2):  # 2 ubicadas por el plan
-            self._contar(1)
-            self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
-        self._contar(1)  # 1 en recepción
+        self._acomodar([("L-ASN", 3, 0, [("PIC-1-I-F-2", 2)])])  # 2 ubicadas por el plan, 1 en recepción
         orden = OrdenEntrada.objects.get(pk=self.orden.pk)
         r = completar_recepcion_con_lo_anunciado(orden, self.operador)
         self.assertEqual(r, {"recibidas": 2, "descontadas": 0, "retiradas": {"recepcion": 0, "anaqueles": 0, "no_encontradas": 0}, "ubicadas": 3, "a_cuarentena": 0})
@@ -588,9 +682,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
 
         self._foto()
         self.client.get(self.url)
-        for _ in range(7):  # 7 escaneadas contra 5 anunciadas
-            self._contar(1)
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "4"})
+        self._acomodar([("L-ASN", 7, 0, [("PIC-1-I-F-2", 4)])])  # 7 contadas contra 5 anunciadas, 4 acomodadas
         r = completar_recepcion_con_lo_anunciado(OrdenEntrada.objects.get(pk=self.orden.pk), self.operador)
         self.assertEqual((r["recibidas"], r["descontadas"], r["retiradas"], r["ubicadas"]), (0, 2, {"recepcion": 2, "anaqueles": 0, "no_encontradas": 0}, 1))
         self.linea.refresh_from_db()
@@ -606,8 +698,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
 
         self._foto()
         self.client.get(self.url)
-        self._contar(6)
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN", "cantidad": "6"})  # 6 contadas y ubicadas
+        self._acomodar([("L-ASN", 6, 0, [("PIC-1-I-F-2", 6)])])  # 6 contadas y ubicadas
         r = completar_recepcion_con_lo_anunciado(OrdenEntrada.objects.get(pk=self.orden.pk), self.operador)
         self.assertEqual((r["descontadas"], r["retiradas"]), (1, {"recepcion": 0, "anaqueles": 1, "no_encontradas": 0}))
         self.linea.refresh_from_db()
@@ -624,8 +715,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
 
         self._foto()
         self.client.get(self.url)
-        self._contar(1)
-        self.client.post(self.url_ubicar, {"accion": "ubicar", "sku_id": self.sku.pk, "ubicacion": "PIC-1-I-F-2", "lote": "L-ASN"})
+        self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 1)])])
         self.client.logout()
         mesa = get_user_model().objects.create_user("mesa-plan-csv", password="x12345678")
         PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
@@ -643,15 +733,14 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertEqual(OrdenEntrada.objects.get(pk=self.orden.pk).estado, OrdenEntrada.CERRADA)
 
     def test_mesa_ve_el_plan_y_lo_rehace(self):
-        from apps.inventario.models import OrdenEntrada
-
-        from .base import PisoTestCase  # noqa: F401 (misma base)
-        self._foto()
-        self.client.get(self.url)
-        self.client.logout()
         from django.contrib.auth import get_user_model
 
         from apps.core.models import PerfilUsuario
+        from apps.inventario.models import OrdenEntrada
+
+        self._foto()
+        self.client.get(self.url)
+        self.client.logout()
         mesa = get_user_model().objects.create_user("mesa-plan", password="x12345678")
         PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
         self.client.force_login(mesa)
@@ -667,7 +756,7 @@ class RecepcionPiezaPorPiezaTests(PisoTestCase):
         self.assertNotContains(respuesta, 'value="reiniciar_recepcion"')  # sin nada recibido no hay qué reiniciar
         self.client.logout()
         self.login_piso()
-        self._contar(1)
+        self._acomodar([("L-ASN", 1, 0, [("PIC-1-I-F-2", 0)])])
         self.client.logout()
         self.client.force_login(mesa)
         respuesta = self.client.get(reverse("mesa:recepciones"), {"cliente": self.cliente.slug})
@@ -696,13 +785,28 @@ class ReingresoYaContadoTests(PisoTestCase):
 
     def test_contar_manda_a_ubicar_sin_recibir_otra_vez(self):
         url = reverse("piso:recepcion_contar", args=[self.reingreso.pk])
+        url_ubicar = reverse("piso:recepcion_ubicar", args=[self.reingreso.pk])
         respuesta = self.client.get(url, {"sku": self.sku.pk})
-        self.assertRedirects(respuesta, f"{reverse('piso:recepcion_ubicar', args=[self.reingreso.pk])}?sku={self.sku.pk}")
-        respuesta = self.client.post(url, {"sku_id": self.sku.pk, "linea_id": self.linea.pk, "cantidad": "1"}, follow=True)
+        self.assertRedirects(respuesta, f"{url_ubicar}?sku={self.sku.pk}")
+        # Acomodar ofrece la pieza que ya estaba en recepción, sin cuenta nueva.
+        respuesta = self.client.get(url_ubicar, {"sku": self.sku.pk})
+        self.assertContains(respuesta, "1 contada de antes sin acomodar")
+        self.assertContains(respuesta, 'id="a_0_0_cantidad" class="cantidad" min="0" inputmode="numeric" value="1"')
+        # Contarla otra vez se rechaza (y no se acomoda nada: todo o nada).
+        EvidenciaFoto.objects.create(entidad="asn", entidad_id=self.reingreso.folio, tipo="llegada", archivo=self.foto(), tomada_por="piso1")
+        datos = {"accion": "ubicar", "sku_id": self.sku.pk, "n_lotes": 1, "l_0_linea": self.linea.pk, "l_0_lote": "", "l_0_cad": "",
+                 "l_0_contadas": 1, "l_0_danadas": 0, "l_0_n": 1, "a_0_0_ubicacion": "A-01-1", "a_0_0_cantidad": 1}
+        respuesta = self.client.post(url_ubicar, datos, follow=True)
         self.assertContains(respuesta, "reingreso ya contado")
         self.linea.refresh_from_db()
         self.assertEqual(self.linea.cantidad_recibida, 1)
         self.assertEqual(_suma(self.sku, Saldo.EN_PUTAWAY), 1)  # nada se duplicó
+        # Solo acomodarla sí pasa.
+        datos["l_0_contadas"] = 0
+        respuesta = self.client.post(url_ubicar, datos, follow=True)
+        self.assertContains(respuesta, "1 pieza en A-01-1")
+        self.assertEqual(_suma(self.sku, Saldo.EN_PUTAWAY), 0)
+        self.assertEqual(_suma(self.sku, Saldo.UBICADO_VENDIBLE), 1)
 
     def test_el_servicio_tambien_lo_rechaza(self):
         from apps.inventario.services import recibir

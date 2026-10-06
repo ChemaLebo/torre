@@ -1,158 +1,196 @@
 {% extends "base.html" %}
-{% block title %}Ubicar · {{ orden.folio }}{% endblock %}
+{% block title %}Acomodar · {{ orden.folio }}{% endblock %}
 {% block content %}
-{# Ubicar las piezas contadas en Contar. Paso 1: lote (si no vino de Contar y hay que elegirlo o capturarlo). Paso 2: anaquel del plan para ese SKU y lote (o cuarentena), cuántas van ahí, qué más vive en el anaquel, cantidad (hasta lo contado sin ubicar) y salidas. #}
+{# Acomodar (Chema 2026-10-06): todos los lotes del producto en una pantalla. Por lote: contadas y dañadas (editables, vienen de Contar) y una FILA POR POSICIÓN del plan (editables; + otra posición; tarimas). Confirmar abre el modal "Lote L · Se contaron X · Vas a acomodar Y en P" y el POST registra todo en una transacción. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
-    <h1>Ubicar</h1>
-    <div class="small"><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }} · {{ por_ubicar }} en recepción por ubicar</div>
+    <h1>Acomodar</h1>
+    <div class="small"><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }}{% if previo %} · {{ previo }} contada{{ previo|pluralize }} de antes sin acomodar{% endif %}</div>
   </div>
-  <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Volver al escáner</a>
+  <div class="fila">
+    <a class="btn chico" href="{{ url_contar }}">Corregir cuentas</a>
+    <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Volver al escáner</a>
+  </div>
 </div>
 
-{% if pedir_lote %}
-<form method="get" class="card" id="form-lote">
-  <input type="hidden" name="sku" value="{{ sku.pk }}">
-  {% if modo_lote == "elegir" %}
-  <div class="eyebrow">Primero</div>
-  <h2>¿De qué lote es esta pieza?</h2>
-  {% for l in lotes %}
-  <label style="display:block" class="mt">
-    <input type="radio" name="lote" value="{{ l.codigo }}" required{% if forloop.first %} checked{% endif %}>
-    <span class="mono">{{ l.codigo }}</span>{% if l.caducidad %} · caduca {{ l.caducidad }}{% endif %}
-  </label>
-  {% endfor %}
-  {% else %}
-  <div class="eyebrow">Primero</div>
-  <h2>Lote de esta pieza</h2>
-  <p class="small">El producto lo pide y la orden no lo anunció: tecléalo (te sugiere los conocidos).</p>
-  <div class="grid g2">
-    <div>
-      <label for="lote">Lote</label>
-      <input type="text" name="lote" id="lote" class="mono" autocomplete="off" required list="lotes-sku">
-      <datalist id="lotes-sku">
-        {% for l in lotes_sugeridos %}<option value="{{ l.codigo }}" data-caducidad="{{ l.caducidad }}">{% if l.caducidad %}cad {{ l.caducidad }}{% endif %}</option>{% endfor %}
-      </datalist>
-    </div>
-    <div>
-      <label for="fecha_caducidad">Caducidad del lote</label>
-      <input type="date" name="fecha_caducidad" id="fecha_caducidad">
-    </div>
-  </div>
-  {% endif %}
-  <div class="mt"><button class="btn primario gigante bloque" type="submit">Siguiente: ver anaquel</button></div>
-</form>
-{% else %}
-<form method="post" class="card" id="form-ubicar">{% csrf_token %}
+<form method="post" class="card" id="form-acomodar" data-previo="{{ previo }}">{% csrf_token %}
   <input type="hidden" name="accion" value="ubicar">
   <input type="hidden" name="sku_id" value="{{ sku.pk }}">
-  <input type="hidden" name="lote" value="{{ lote }}">
-  <input type="hidden" name="fecha_caducidad" value="{{ caducidad }}">
+  <input type="hidden" name="query" value="{{ query }}">
+  <input type="hidden" name="n_lotes" value="{{ lotes|length }}">
 
-  {% if paso and paso.ubicacion %}
-  <div class="eyebrow">Ve a</div>
-  <div class="pick-ubicacion" id="anaquel-sugerido">{{ paso.ubicacion }}</div>
-  <div class="small muted">{{ paso.motivo }} · van <b id="faltan-paso">{{ faltan_paso }}</b> de {{ paso.cantidad }} en este anaquel según el plan</div>
-  <div class="mt" id="vecinos">
-    <div class="eyebrow">Ya hay en {{ paso.ubicacion }}{% if ocupacion_anaquel.pct != None %} · {{ ocupacion_anaquel.pct }} % ocupado{% endif %}</div>
-    {% if vecinos %}
-    <div class="tabla-wrap">
-      <table>
-        <thead><tr><th>Producto</th><th>SKU</th><th class="derecha">Piezas</th><th>Lote</th></tr></thead>
-        <tbody>
-        {% for v in vecinos %}
-        <tr>
-          <td>{{ v.sku.descripcion }}{% if v.sku.pk == sku.pk %} <span class="pill">este</span>{% endif %}</td>
-          <td class="mono">{{ v.sku.codigo }}</td>
-          <td class="derecha num">{{ v.piezas }}{% if v.capacidad %} <span class="muted">/ caben {{ v.capacidad }} solo</span>{% endif %}</td>
-          <td class="mono">{{ v.lotes|join:", " }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+  {% for l in lotes %}
+  <section class="lote-bloque{% if not forloop.first %} mt{% endif %}" data-indice="{{ l.indice }}">
+    <input type="hidden" name="l_{{ l.indice }}_linea" value="{{ l.linea_pk }}">
+    <input type="hidden" name="l_{{ l.indice }}_lote" value="{{ l.lote }}">
+    <input type="hidden" name="l_{{ l.indice }}_cad" value="{{ l.caducidad }}">
+    <input type="hidden" name="l_{{ l.indice }}_n" value="{{ l.filas|length }}" class="n-filas">
+    <div class="titulo">
+      <h2>{% if l.lote %}Lote <span class="mono">{{ l.lote }}</span>{% else %}Sin lote{% endif %}{% if l.caducidad %} <span class="small muted">· caduca {{ l.caducidad }}</span>{% endif %}{% if l.nuevo %} <span class="pill warn">no venía en la orden</span>{% endif %}</h2>
     </div>
-    {% else %}
-    <div class="small muted">Anaquel vacío.</div>
-    {% endif %}
-  </div>
-  {% elif desborde %}
-  <div class="eyebrow">Sin anaquel con espacio · ve a</div>
-  <div class="pick-ubicacion" id="anaquel-sugerido">{{ desborde.codigo }}</div>
-  <div class="small muted">{% if paso %}{{ paso.motivo }}. {% endif %}Zona de desborde: queda vendible con su lote; Mesa la reacomoda cuando haya espacio.</div>
-  {% elif paso %}
-  <div class="eyebrow">Sin anaquel con espacio</div>
-  <div class="pick-ubicacion">CUARENTENA</div>
-  <div class="small muted">{{ paso.motivo }}. Llévala a la zona de cuarentena; Mesa decide dónde acomodarla.</div>
-  {% else %}
-  <div class="banner warn"><span class="foco"></span>Sin sugerencia para este producto (¿sin medidas?). Elige un anaquel a mano o avisa a Mesa.</div>
-  {% endif %}
-  {% if lote %}<p class="small mt">Lote <span class="mono">{{ lote }}</span>{% if caducidad %} · caduca {{ caducidad }}{% endif %}{% if modo_lote == "fijo" %} (anunciado en la orden){% endif %}
-    {% if modo_lote != "fijo" %}· <a href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ sku.pk }}">cambiar lote</a>{% endif %}</p>{% endif %}
+    <div class="grid g2">
+      <div>
+        <label for="l_{{ l.indice }}_contadas">Contadas</label>
+        <input type="number" name="l_{{ l.indice }}_contadas" id="l_{{ l.indice }}_contadas" min="0" inputmode="numeric" value="{{ l.contadas }}" autocomplete="off" class="contadas">
+      </div>
+      <div>
+        <label for="l_{{ l.indice }}_danadas">Dañadas (a cuarentena)</label>
+        <input type="number" name="l_{{ l.indice }}_danadas" id="l_{{ l.indice }}_danadas" min="0" inputmode="numeric" value="{{ l.danadas }}" autocomplete="off">
+      </div>
+    </div>
+    <div class="eyebrow mt">Acomodar en</div>
+    <div class="filas-acomodo">
+      {% for f in l.filas %}
+      <div class="fila-acomodo grid g2" data-j="{{ forloop.counter0 }}">
+        <div>
+          <label class="small" for="a_{{ l.indice }}_{{ forloop.counter0 }}_ubicacion">Posición{% if f.motivo %} <span class="muted">· {{ f.motivo }}</span>{% endif %}</label>
+          <input type="text" name="a_{{ l.indice }}_{{ forloop.counter0 }}_ubicacion" id="a_{{ l.indice }}_{{ forloop.counter0 }}_ubicacion" class="mono ubicacion" autocomplete="off" list="ubicaciones-destino" value="{{ f.ubicacion }}" placeholder="vacío = desborde / cuarentena">
+          {% if f.ya_hay %}<div class="small muted ya-hay">Ya hay: {{ f.ya_hay.texto }}{% if f.ya_hay.pct != None %} · {{ f.ya_hay.pct }} % ocupado{% endif %}</div>{% endif %}
+        </div>
+        <div>
+          <label class="small" for="a_{{ l.indice }}_{{ forloop.counter0 }}_cantidad">Cuántas{% if f.plan %} <span class="muted">· según el plan {{ f.plan }}</span>{% endif %}</label>
+          <input type="number" name="a_{{ l.indice }}_{{ forloop.counter0 }}_cantidad" id="a_{{ l.indice }}_{{ forloop.counter0 }}_cantidad" class="cantidad" min="0" inputmode="numeric" value="{{ f.cantidad }}" autocomplete="off">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button class="btn chico mt" type="button" data-otra-posicion="{{ l.indice }}">+ otra posición</button>
+  </section>
+  {% endfor %}
 
-  <label for="ubicacion" class="mt">Anaquel (cámbialo si lo acomodaste en otro; vacío = cuarentena)</label>
-  <input type="text" name="ubicacion" id="ubicacion" class="mono" autocomplete="off" list="ubicaciones-destino"
-         value="{% if ubicacion_preseleccionada %}{{ ubicacion_preseleccionada }}{% elif paso and paso.ubicacion %}{{ paso.ubicacion }}{% elif desborde %}{{ desborde.codigo }}{% endif %}" placeholder="PIC-1-I-F-1">
   <datalist id="ubicaciones-destino">
     {% for u in ubicaciones_destino %}<option value="{{ u.codigo }}"></option>{% endfor %}
   </datalist>
 
-  <label for="cantidad" class="mt">¿Cuántas ubicas ahora?</label>
-  <input type="number" name="cantidad" id="cantidad" min="1" max="{{ por_ubicar }}" inputmode="numeric" value="{{ cantidad_default }}" autocomplete="off">
-  <div class="small muted">Tienes {{ por_ubicar }} contada{{ por_ubicar|pluralize }} sin ubicar (es el máximo; ubicar ya no cuenta: para sumar, <a href="{% url 'piso:recepcion_contar' orden.pk %}?sku={{ sku.pk }}">cuenta más</a>){% if paso and paso.ubicacion %}. En este anaquel van {{ faltan_paso }} según el plan; si pones más, el sobrante sigue en el siguiente anaquel del plan{% endif %}.</div>
-
-  {# Tarimas (Chema 2026-09-24): ubicar en una tarima existente o abrir otra; lo que va ahí es vendible. #}
+  {# Tarimas (Chema 2026-09-24): el botón pone la tarima en la última posición tocada; lo que va ahí es vendible. #}
   <div class="mt" id="tarimas">
     <div class="eyebrow">O en una tarima</div>
     {% if tarimas %}
     <div class="fila" style="flex-wrap:wrap;gap:6px">
-      {% for t in tarimas %}
-      <button class="btn chico{% if t.codigo == tarima_actual %} primario{% endif %}" type="button" data-tarima="{{ t.codigo }}" title="{{ t.contenido|default:'vacía' }}">{{ t.codigo }} · {{ t.piezas }} pza{{ t.piezas|pluralize }}{% if t.codigo == tarima_actual %} · última usada{% endif %}</button>
-      {% endfor %}
+      {% for t in tarimas %}<button class="btn chico{% if t.codigo == tarima_actual %} primario{% endif %}" type="button" data-tarima="{{ t.codigo }}" title="{{ t.contenido|default:'vacía' }}">{{ t.codigo }} · {{ t.piezas }} pza{{ t.piezas|pluralize }}{% if t.codigo == tarima_actual %} · última usada{% endif %}</button>{% endfor %}
     </div>
-    <div class="small muted mt">{% for t in tarimas %}{{ t.codigo }}: {{ t.contenido|default:"vacía" }}{% if not forloop.last %} · {% endif %}{% endfor %}</div>
-    {% else %}
-    <div class="small muted">Todavía no hay tarimas abiertas.</div>
-    {% endif %}
+    {% else %}<div class="small muted">Todavía no hay tarimas abiertas.</div>{% endif %}
   </div>
-  <div class="mt"><button class="btn primario gigante bloque" type="submit">UBICADAS · siguiente</button></div>
+  {# type=button: sin botón submit, el Enter del escáner no manda la página; el POST sale del modal. #}
+  <div class="mt"><button class="btn primario gigante bloque" type="button" id="btn-confirmar">Confirmar acomodo</button></div>
 </form>
 
-<form method="post" class="mt">{% csrf_token %}
+<form method="post" class="mt" id="form-tarima">{% csrf_token %}
   <input type="hidden" name="accion" value="nueva_tarima">
   <input type="hidden" name="sku_id" value="{{ sku.pk }}">
-  <input type="hidden" name="lote" value="{{ lote }}">
-  <input type="hidden" name="fecha_caducidad" value="{{ caducidad }}">
-  <button class="btn bloque" type="submit">Nueva tarima (abre TAR-siguiente y la deja elegida)</button>
+  <input type="hidden" name="query" value="{{ query }}">
+  <button class="btn bloque" type="submit">Nueva tarima (abre TAR-siguiente y la deja en la primera posición)</button>
 </form>
 
-<form method="post" class="mt">{% csrf_token %}
-  <input type="hidden" name="accion" value="danada">
-  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
-  <button class="btn bloque" type="submit">Esta pieza llega dañada → cuarentena</button>
-</form>
-{% endif %}
+<dialog class="modal" id="modal-confirmar" aria-labelledby="modal-titulo">
+  <div class="titulo"><h2 id="modal-titulo">Confirma el acomodo</h2></div>
+  <ul id="modal-lineas" style="margin:0 0 0 18px;padding:0;line-height:1.7"></ul>
+  <p id="modal-aviso" class="small" style="color:var(--warn)" hidden></p>
+  <div class="fila mt">
+    <button class="btn primario" type="button" id="modal-ok">Confirmar</button>
+    <button class="btn" type="button" id="modal-corregir">Corregir</button>
+  </div>
+</dialog>
 
+{{ lotes_del_sku|json_script:"lotes-del-sku" }}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-  // Botón de tarima: pone su código en el campo de ubicación (el envío sigue siendo UBICADAS).
-  var campoUbicacion = document.getElementById("ubicacion");
-  document.querySelectorAll("[data-tarima]").forEach(function (boton) {
-    boton.addEventListener("click", function () {
-      if (campoUbicacion) { campoUbicacion.value = boton.dataset.tarima; campoUbicacion.focus(); }
+  var form = document.getElementById("form-acomodar");
+  var modal = document.getElementById("modal-confirmar");
+  var lotesDelSku = JSON.parse(document.getElementById("lotes-del-sku").textContent);
+  var ultimaPosicion = form.querySelector(".ubicacion");
+  form.querySelectorAll(".ubicacion").forEach(function (c) { c.addEventListener("focus", function () { ultimaPosicion = c; }); });
+  form.querySelectorAll('input[type="number"]').forEach(function (c) { c.addEventListener("focus", function () { c.select(); }); });
+
+  // Tarima: va en la última posición tocada.
+  document.querySelectorAll("[data-tarima]").forEach(function (b) {
+    b.addEventListener("click", function () { if (ultimaPosicion) { ultimaPosicion.value = b.dataset.tarima; ultimaPosicion.focus(); } });
+  });
+
+  // "+ otra posición": clona la última fila del lote, vacía y con índice nuevo.
+  document.querySelectorAll("[data-otra-posicion]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var bloque = b.closest(".lote-bloque"), i = bloque.dataset.indice;
+      var filas = bloque.querySelector(".filas-acomodo"), j = filas.querySelectorAll(".fila-acomodo").length;
+      var nueva = filas.lastElementChild.cloneNode(true);
+      nueva.dataset.j = j;
+      nueva.querySelectorAll(".ya-hay, label .muted").forEach(function (x) { x.remove(); });
+      var u = nueva.querySelector(".ubicacion"), n = nueva.querySelector(".cantidad");
+      u.name = u.id = "a_" + i + "_" + j + "_ubicacion"; u.value = "";
+      n.name = n.id = "a_" + i + "_" + j + "_cantidad"; n.value = 0;
+      nueva.querySelectorAll("label").forEach(function (lb, k) { lb.htmlFor = k === 0 ? u.id : n.id; });
+      u.addEventListener("focus", function () { ultimaPosicion = u; });
+      n.addEventListener("focus", function () { n.select(); });
+      filas.appendChild(nueva);
+      bloque.querySelector(".n-filas").value = j + 1;
+      u.focus();
     });
   });
-  var inputLote = document.getElementById("lote");
-  var inputCad = document.getElementById("fecha_caducidad");
-  var lista = document.getElementById("lotes-sku");
-  if (inputLote && inputCad && lista) {
-    var rellena = function () {
-      var o = Array.prototype.slice.call(lista.options).filter(function (x) { return x.value === inputLote.value.trim(); })[0];
-      if (o && o.dataset.caducidad) inputCad.value = o.dataset.caducidad;
-    };
-    inputLote.addEventListener("change", rellena);
-    inputLote.addEventListener("input", rellena);
+
+  // Al subir una fila, las demás del lote bajan para no pasar de lo contado.
+  form.querySelectorAll(".lote-bloque").forEach(function (bloque) {
+    bloque.addEventListener("input", function (ev) {
+      if (!ev.target.classList.contains("cantidad")) return;
+      var tope = parseInt(bloque.querySelector(".contadas").value, 10) || 0;
+      tope += parseInt(form.dataset.previo, 10) || 0;
+      var filas = Array.prototype.slice.call(bloque.querySelectorAll(".cantidad"));
+      var suma = filas.reduce(function (s, c) { return s + (parseInt(c.value, 10) || 0); }, 0);
+      var exceso = suma - tope;
+      filas.filter(function (c) { return c !== ev.target; }).reverse().forEach(function (c) {
+        if (exceso <= 0) return;
+        var v = parseInt(c.value, 10) || 0, baja = Math.min(v, exceso);
+        c.value = v - baja; exceso -= baja;
+      });
+      if (exceso > 0) ev.target.value = Math.max(0, (parseInt(ev.target.value, 10) || 0) - exceso);
+    });
+  });
+
+  // Enter en una posición (el escáner lo manda) salta a "cuántas"; no manda la página.
+  form.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter" || !ev.target.classList.contains("ubicacion")) return;
+    ev.preventDefault();
+    var n = ev.target.closest(".fila-acomodo").querySelector(".cantidad");
+    if (n) n.focus();
+  });
+
+  // Confirmar: modal con un renglón por fila (lote · contadas · acomodar · posición) y el aviso de lotes mezclados.
+  function abrirModal() {
+    var lineas = [], avisos = [], algo = false, contaron = false;
+    form.querySelectorAll(".lote-bloque").forEach(function (bloque) {
+      var i = bloque.dataset.indice;
+      var lote = form.querySelector('[name="l_' + i + '_lote"]').value || "sin lote";
+      var contadas = parseInt(bloque.querySelector(".contadas").value, 10) || 0;
+      var danadas = parseInt(bloque.querySelector('[name="l_' + i + '_danadas"]').value, 10) || 0;
+      if (contadas) contaron = true;
+      if (danadas) { lineas.push("Lote " + lote + " · " + danadas + " dañada" + (danadas !== 1 ? "s" : "") + " a cuarentena"); algo = true; }
+      bloque.querySelectorAll(".fila-acomodo").forEach(function (fila) {
+        var n = parseInt(fila.querySelector(".cantidad").value, 10) || 0;
+        var pos = fila.querySelector(".ubicacion").value.trim();
+        if (n <= 0) return;
+        algo = true;
+        lineas.push("Lote " + lote + " · Se contaron " + contadas + " · Vas a acomodar " + n + " en la posición " + (pos || "desborde / cuarentena"));
+        var otros = (lotesDelSku[pos] || []).filter(function (x) { return x !== (lote === "sin lote" ? "" : lote); });
+        if (pos && otros.length) avisos.push("En " + pos + " ya hay lote " + otros.join(", ") + " de este producto.");
+      });
+    });
+    var ok = document.getElementById("modal-ok");
+    ok.hidden = false;
+    if (!algo) {
+      if (!contaron) { lineas.push("Captura cuántas contaste o cuántas acomodas de al menos un lote."); ok.hidden = true; }
+      else lineas.push("Solo se registra la cuenta; nada se acomoda todavía.");
+    }
+    var ul = document.getElementById("modal-lineas");
+    ul.innerHTML = "";
+    lineas.forEach(function (t) { var li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
+    var aviso = document.getElementById("modal-aviso");
+    aviso.hidden = !avisos.length;
+    aviso.textContent = avisos.length ? "Ojo: " + avisos.join(" ") + " El plan nunca mezcla lotes del mismo producto en un anaquel; se acomoda igual si confirmas." : "";
+    modal.showModal();
   }
+  document.getElementById("btn-confirmar").addEventListener("click", abrirModal);
+  document.getElementById("modal-ok").addEventListener("click", function () { modal.close(); if (form.requestSubmit) form.requestSubmit(); else form.submit(); });
+  document.getElementById("modal-corregir").addEventListener("click", function () { modal.close(); });
 });
 </script>
 {% endblock %}

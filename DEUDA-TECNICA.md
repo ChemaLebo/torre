@@ -661,7 +661,16 @@ anaquel, dañada → cuarentena). El plan se arma por ORDEN completa
 (`OrdenEntrada.plan_acomodo`, `inventario.planear_acomodo`), no por pieza;
 sin espacio → cuarentena; la reserva no se usa. Mesa ve y rehace el plan.
 
-**Queda:** capturar cantidad ("y N más iguales") para productos chicos en
-volumen, si escanear uno por uno resulta lento; la pantalla vieja de recibir
-con cantidades sigue en el backend por compatibilidad y se puede retirar.
+**2026-10-06 (Chema):** Contar ya no registra nada (todos los lotes del
+producto en una pantalla, cuentas por GET) y Acomodar confirma cuenta y
+acomodo de todos los lotes en una transacción (`recibir_y_ubicar`), con una
+fila por lote y posición del plan, modal de confirmación y replaneo en
+cualquier desvío del plan. La acción "dañada" de Ubicar desapareció: las
+dañadas se corrigen en el campo de Acomodar (`marcar_danada` se retiró).
+
+**Queda:** la pantalla vieja de recibir con cantidades (`accion=recibir` y
+`accion=ubicar` en el detalle de la orden) sigue en el backend por
+compatibilidad y se puede retirar; el tope de acomodo por lote en el
+navegador usa "lo de antes en recepción" del SKU completo (el servidor
+valida el total, no por lote, porque lo que está en recepción no tiene lote).
 
