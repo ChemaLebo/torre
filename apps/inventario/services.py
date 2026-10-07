@@ -1628,8 +1628,8 @@ def mover_ubicacion(codigo_origen, codigo_destino, actor=None):
 
 
 ESTADO_LEGIBLE = {
-    Saldo.UBICADO_VENDIBLE: "vendible", Saldo.RESERVADO: "apartado", Saldo.EN_PUTAWAY: "en recepción",
-    Saldo.EN_EMPAQUE: "en empaque", Saldo.CUARENTENA: "cuarentena",
+    Saldo.UBICADO_VENDIBLE: "vendible", Saldo.RESERVADO: "apartado (de las vendibles)", Saldo.EN_PUTAWAY: "en recepción",
+    Saldo.EN_EMPAQUE: "en empaque (ya salió del anaquel)", Saldo.CUARENTENA: "cuarentena",
 }
 
 
@@ -1648,15 +1648,20 @@ def buscar_en_bodega(q, cliente=None):
         return None
     ubicacion = Ubicacion.objects.filter(codigo__iexact=q).first()
     if ubicacion is not None:
-        saldos = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "lote").order_by("sku__codigo", "lote__codigo", "estado")
+        # Apartado y en empaque se listan al final, como información; lo que hay en la posición es lo demás.
+        saldos = sorted(
+            Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "lote"),
+            key=lambda x: (x.estado not in ESTADOS_EN_ANAQUEL, x.sku.codigo, x.lote.codigo if x.lote_id else "", x.estado),
+        )
         if cliente is not None:
             saldos = saldos.filter(sku__cliente=cliente)
         filas = [{
             "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
             "ubicacion": ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(x.estado, x.estado), "cantidad": x.cantidad,
+            "en_anaquel": x.estado in ESTADOS_EN_ANAQUEL,
         } for x in saldos]
         return {"modo": "posicion", "q": q, "filas": filas, "racks": {ubicacion.codigo}, "ubicacion": ubicacion,
-                "ocupacion": ocupacion(ubicacion), "skus": []}
+                "ocupacion": ocupacion(ubicacion), "skus": [], "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
     skus = SKU.objects.filter(Q(codigo__icontains=q) | Q(descripcion__icontains=q) | Q(codigo_barras__iexact=q))
     if cliente is not None:
         skus = skus.filter(cliente=cliente)
@@ -1669,9 +1674,12 @@ def buscar_en_bodega(q, cliente=None):
         filas.append({
             "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
             "ubicacion": x.ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(x.estado, x.estado), "cantidad": x.cantidad,
+            "en_anaquel": x.estado in ESTADOS_EN_ANAQUEL,
         })
-        racks.add(x.ubicacion.codigo)
-    return {"modo": "producto", "q": q, "filas": filas, "racks": racks, "ubicacion": None, "ocupacion": None, "skus": skus}
+        if x.estado in ESTADOS_EN_ANAQUEL:
+            racks.add(x.ubicacion.codigo)
+    return {"modo": "producto", "q": q, "filas": filas, "racks": racks, "ubicacion": None, "ocupacion": None, "skus": skus,
+            "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
 
 
 # ── Capacidad y ocupación de anaqueles (producto siempre parado) ──
@@ -1696,6 +1704,13 @@ def capacidad_sku_en(ubicacion, sku):
     return huella * niveles
 
 
+# Lo que FÍSICAMENTE está en un anaquel (Chema 2026-10-07): el vendible, lo que
+# espera acomodo y la cuarentena. La capa "apartado" va encima del vendible
+# (contarla era contar doble) y lo "en empaque" ya está en la mesa aunque
+# conserve la posición de origen como trazabilidad.
+ESTADOS_EN_ANAQUEL = (Saldo.UBICADO_VENDIBLE, Saldo.EN_PUTAWAY, Saldo.CUARENTENA)
+
+
 def ocupacion(ubicacion, saldos=None, extra=None):
     """Ocupación ESTIMADA del anaquel: cada SKU consume piezas / su capacidad
     sola; la suma es la fracción ocupada. `extra` = (sku, piezas) que se
@@ -1703,9 +1718,11 @@ def ocupacion(ubicacion, saldos=None, extra=None):
     (libre|medio|lleno|ilimitado|sin_medidas), "sin_medidas": [códigos de SKU],
     "no_caben": [códigos], "por_sku": [{sku, piezas, capacidad}]}."""
     if saldos is None:
-        saldos = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku")
+        saldos = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0, estado__in=ESTADOS_EN_ANAQUEL).select_related("sku")
     piezas_por_sku, lotes_por_sku = {}, {}
     for s in saldos:
+        if s.estado not in ESTADOS_EN_ANAQUEL:
+            continue  # apartado = capa sobre el vendible; en empaque = ya no está en el anaquel
         piezas_por_sku.setdefault(s.sku, 0)
         piezas_por_sku[s.sku] += s.cantidad
         if s.lote_id:
@@ -1748,7 +1765,7 @@ def ocupaciones(ubicaciones, reservas=None, ignorar_cliente=None):
     no cuentan como ocupación (reacomodo total: se planea como si la bodega
     estuviera vacía de ese cliente; lo de otros clientes sí ocupa)."""
     por_ubicacion = {u.pk: [] for u in ubicaciones}
-    saldos = Saldo.objects.filter(ubicacion__in=ubicaciones, cantidad__gt=0).select_related("sku")
+    saldos = Saldo.objects.filter(ubicacion__in=ubicaciones, cantidad__gt=0, estado__in=ESTADOS_EN_ANAQUEL).select_related("sku")
     if ignorar_cliente is not None:
         saldos = saldos.exclude(sku__cliente=ignorar_cliente)
     for s in saldos:
@@ -2166,7 +2183,7 @@ def contenido_ubicacion(ubicacion):
     [{"sku", "piezas", "lotes"}] por SKU, de mayor a menor. `ocupacion` no lo
     da para ubicaciones sin medidas (no hay capacidad que estimar)."""
     piezas, lotes = {}, {}
-    for s in Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "lote"):
+    for s in Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0, estado__in=ESTADOS_EN_ANAQUEL).select_related("sku", "lote"):
         piezas[s.sku] = piezas.get(s.sku, 0) + s.cantidad
         if s.lote_id:
             lotes.setdefault(s.sku, set()).add(s.lote.codigo)
@@ -2655,7 +2672,7 @@ def realidad_recepcion(orden):
         posiciones = []
         for s in _saldos_de_linea(sku, lote, Saldo.UBICADO_VENDIBLE).select_related("ubicacion").order_by("ubicacion__codigo"):
             otros = set(
-                Saldo.objects.filter(sku=sku, ubicacion=s.ubicacion, cantidad__gt=0).exclude(lote__codigo=lote)
+                Saldo.objects.filter(sku=sku, ubicacion=s.ubicacion, cantidad__gt=0, estado=Saldo.UBICADO_VENDIBLE).exclude(lote__codigo=lote)
                 .values_list("lote__codigo", flat=True)
             ) if lote else set()
             posiciones.append({"ubicacion": s.ubicacion, "cantidad": s.cantidad, "mezclado": sorted(x or "sin lote" for x in otros)})

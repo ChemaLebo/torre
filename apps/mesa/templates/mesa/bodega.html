@@ -21,7 +21,7 @@
 <div class="card mt" id="resultado-bodega">
   {% if busqueda.modo == "posicion" %}
   <div class="titulo"><h3>Posición <span class="mono">{{ busqueda.ubicacion.codigo }}</span></h3>
-    <span class="small">{{ busqueda.ubicacion.get_tipo_display }}{% if busqueda.ocupacion.pct != None %} · {{ busqueda.ocupacion.pct }} % ocupado (estimado){% endif %}{% if not busqueda.ubicacion.activo %} · <span class="pill crit">inactiva</span>{% endif %}</span></div>
+    <span class="small">{{ busqueda.ubicacion.get_tipo_display }} · {{ busqueda.piezas }} pieza{{ busqueda.piezas|pluralize }} en el anaquel{% if busqueda.ocupacion.pct != None %} · {{ busqueda.ocupacion.pct }} % ocupado (estimado){% endif %}{% if not busqueda.ubicacion.activo %} · <span class="pill crit">inactiva</span>{% endif %}</span></div>
   {% else %}
   <div class="titulo"><h3>Resultado de «{{ busqueda.q }}»</h3><span class="small">{{ busqueda.filas|length }} {% if busqueda.filas|length == 1 %}renglón{% else %}renglones{% endif %} · {{ busqueda.racks|length }} {% if busqueda.racks|length == 1 %}posición resaltada{% else %}posiciones resaltadas{% endif %} en el plano</span></div>
   {% endif %}
@@ -31,7 +31,7 @@
       <thead><tr><th>Posición</th><th>SKU</th><th>Producto</th><th>Lote</th><th>Caducidad</th><th>Estado</th><th class="derecha">Piezas</th></tr></thead>
       <tbody>
         {% for f in busqueda.filas %}
-        <tr>
+        <tr{% if not f.en_anaquel %} class="muted" title="Capa sobre el vendible o pieza que ya está en la mesa de empaque: no suma a la posición"{% endif %}>
           <td class="mono"><a href="{% url 'mesa:bodega' %}?q={{ f.ubicacion|urlencode }}">{{ f.ubicacion }}</a></td>
           <td class="mono"><a href="{% url 'mesa:bodega' %}?q={{ f.sku.codigo|urlencode }}">{{ f.sku.codigo }}</a></td>
           <td>{{ f.sku.descripcion }} <span class="small muted">{{ f.sku.cliente.nombre }}</span></td>

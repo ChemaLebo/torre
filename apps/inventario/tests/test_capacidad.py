@@ -51,8 +51,11 @@ class CapacidadTests(TestCase):
 
     def test_ocupacion_suma_fracciones_por_sku(self):
         Saldo.objects.create(sku=self.lata24, ubicacion=self.anaquel, estado=Saldo.UBICADO_VENDIBLE, cantidad=15)  # 50 %
-        Saldo.objects.create(sku=self.bot24, ubicacion=self.anaquel, estado=Saldo.RESERVADO, cantidad=4)          # 25 %
+        Saldo.objects.create(sku=self.bot24, ubicacion=self.anaquel, estado=Saldo.UBICADO_VENDIBLE, cantidad=4)   # 25 %
         Saldo.objects.create(sku=self.pin, ubicacion=self.anaquel, estado=Saldo.UBICADO_VENDIBLE, cantidad=9)
+        # La capa de apartado va SOBRE el vendible y lo que ya está en empaque salió del anaquel: no suman (2026-10-07).
+        Saldo.objects.create(sku=self.bot24, ubicacion=self.anaquel, estado=Saldo.RESERVADO, cantidad=4)
+        Saldo.objects.create(sku=self.lata24, ubicacion=self.anaquel, estado=Saldo.EN_EMPAQUE, cantidad=6)
         o = ocupacion(self.anaquel)
         self.assertEqual((o["pct"], o["estado"], o["sin_medidas"]), (75, "medio", ["PIN"]))
         lleno = ocupacion(self.anaquel, extra=(self.lata24, 6))  # +20 % → 95

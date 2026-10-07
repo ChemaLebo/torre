@@ -49,3 +49,28 @@ class BuscadorBodegaTests(PisoTestCase):
         self.assertNotContains(respuesta, "resaltado")
         respuesta = self.client.get(reverse("mesa:cliente_skus", args=[self.cliente.pk]))
         self.assertContains(respuesta, "?q=COLIMITA-SIX\" title=\"En qué racks está este producto\">¿dónde está?")
+
+
+class OcupacionFisicaTests(PisoTestCase):
+    """Chema 2026-10-07: la ocupación y el contenido de una posición cuentan
+    solo lo que está físicamente en el anaquel: ni la capa de apartado (iba
+    doble) ni lo que ya está en la mesa de empaque."""
+
+    def test_apartado_no_cuenta_doble_ni_lo_de_empaque_cuenta_en_el_anaquel(self):
+        from apps.inventario.services import confirmar_pick, contenido_ubicacion, ocupacion, reservar
+        from apps.pedidos.services import _reservar_linea  # noqa: F401 — misma puerta que los pedidos
+
+        self.sku.largo_cm, self.sku.ancho_cm, self.sku.alto_cm = 20, 20, 10
+        self.sku.save()
+        rack = Ubicacion.objects.create(codigo="PIC-9-A", tipo=Ubicacion.PICKING, largo_cm=100, ancho_cm=20, alto_cm=10)  # caben 5
+        Saldo.objects.create(sku=self.sku, ubicacion=rack, estado=Saldo.UBICADO_VENDIBLE, cantidad=4)
+        self.assertEqual(ocupacion(rack)["pct"], 80)
+        self.assertTrue(reservar(self.sku, 3, "PED-X"))   # capa de 3 sobre las 4: sigue habiendo 4 en el anaquel
+        self.assertEqual(ocupacion(rack)["pct"], 80)
+        self.assertEqual(contenido_ubicacion(rack)[0]["piezas"], 4)
+        confirmar_pick(self.sku, 3, "PED-X")               # 3 se fueron a la mesa (en_empaque conserva la posición)
+        self.assertEqual(ocupacion(rack)["pct"], 20)
+        self.assertEqual(contenido_ubicacion(rack)[0]["piezas"], 1)
+        r = buscar_en_bodega("PIC-9-A")
+        self.assertEqual(r["piezas"], 1)
+        self.assertEqual([(f["estado"], f["cantidad"], f["en_anaquel"]) for f in r["filas"]], [("vendible", 1, True), ("en empaque (ya salió del anaquel)", 3, False)])
