@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Bodega{% endblock %}
-{% block head %}<meta http-equiv="refresh" content="90">{% endblock %}
+{% block head %}{% if not busqueda %}<meta http-equiv="refresh" content="90">{% endif %}{% endblock %}
 {% block content %}
 
 <div class="topbar">
@@ -10,6 +10,45 @@
   </div>
   <div class="quien">Actualizado a las <b class="mono">{{ actualizado|time:"H:i" }}</b> · se refresca solo cada 90 s</div>
 </div>
+
+{# Buscador (Chema 2026-10-06): producto, lote o posición → dónde está, y los racks se resaltan en el plano. #}
+<form method="get" class="card fila mt" id="buscador-bodega">
+  <input type="search" name="q" value="{{ busqueda.q|default:'' }}" class="crece mono" placeholder="Producto (código, nombre o barras), lote o posición (PIC-2-D-B-1, TAR-03)" aria-label="Buscar en bodega" autofocus>
+  <button class="btn primario" type="submit">¿Dónde está?</button>
+  {% if busqueda %}<a class="btn" href="{% url 'mesa:bodega' %}">Limpiar</a>{% endif %}
+</form>
+{% if busqueda %}
+<div class="card mt" id="resultado-bodega">
+  {% if busqueda.modo == "posicion" %}
+  <div class="titulo"><h3>Posición <span class="mono">{{ busqueda.ubicacion.codigo }}</span></h3>
+    <span class="small">{{ busqueda.ubicacion.get_tipo_display }}{% if busqueda.ocupacion.pct != None %} · {{ busqueda.ocupacion.pct }} % ocupado (estimado){% endif %}{% if not busqueda.ubicacion.activo %} · <span class="pill crit">inactiva</span>{% endif %}</span></div>
+  {% else %}
+  <div class="titulo"><h3>Resultado de «{{ busqueda.q }}»</h3><span class="small">{{ busqueda.filas|length }} {% if busqueda.filas|length == 1 %}renglón{% else %}renglones{% endif %} · {{ busqueda.racks|length }} {% if busqueda.racks|length == 1 %}posición resaltada{% else %}posiciones resaltadas{% endif %} en el plano</span></div>
+  {% endif %}
+  {% if busqueda.filas %}
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Posición</th><th>SKU</th><th>Producto</th><th>Lote</th><th>Caducidad</th><th>Estado</th><th class="derecha">Piezas</th></tr></thead>
+      <tbody>
+        {% for f in busqueda.filas %}
+        <tr>
+          <td class="mono"><a href="{% url 'mesa:bodega' %}?q={{ f.ubicacion|urlencode }}">{{ f.ubicacion }}</a></td>
+          <td class="mono"><a href="{% url 'mesa:bodega' %}?q={{ f.sku.codigo|urlencode }}">{{ f.sku.codigo }}</a></td>
+          <td>{{ f.sku.descripcion }} <span class="small muted">{{ f.sku.cliente.nombre }}</span></td>
+          <td class="mono">{{ f.lote|default:"—" }}</td>
+          <td class="mono">{{ f.caducidad|date:"Y-m-d"|default:"—" }}</td>
+          <td><span class="pill{% if f.estado == 'cuarentena' %} crit{% elif f.estado == 'vendible' %} ok{% elif f.estado == 'apartado' %} accent{% endif %}">{{ f.estado }}</span></td>
+          <td class="derecha mono">{{ f.cantidad }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">{% if busqueda.modo == "posicion" %}Vacía.{% elif busqueda.skus %}Ese producto existe pero no tiene piezas en ninguna posición.{% else %}Nada coincide: ni producto, ni lote, ni posición con ese texto.{% endif %}</p>
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="grid bodega-grid">
   <div class="card">

@@ -291,8 +291,10 @@ def bodega(request):
     vocabulario de la Mesa (pills y relojes SLA).
     """
     from apps.incidencias.models import Incidencia
+    from apps.inventario.services import buscar_en_bodega  # lazy por contrato
     from apps.mesa.plano import racks_bodega, zonas_bodega
 
+    busqueda = buscar_en_bodega(request.GET.get("q"))  # Chema 2026-10-06: ¿dónde está X?
     zonas, badges, zona_activa = zonas_bodega()
     badges["oficina"] = Incidencia.objects.filter(
         estado__in=Incidencia.ESTADOS_ABIERTOS
@@ -308,8 +310,9 @@ def bodega(request):
         "seccion": "bodega",
         "actualizado": timezone.localtime(),
         "badges": badges,
-        "racks": racks_bodega(),
+        "racks": racks_bodega(resaltar=busqueda["racks"] if busqueda else None),
         "zona_activa": zona_activa,
+        "busqueda": busqueda,
         **zonas,
     })
 

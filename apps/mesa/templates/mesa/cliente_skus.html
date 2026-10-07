@@ -60,7 +60,7 @@
         <tbody>
           {% for sku in skus %}
           <tr>
-            <td class="mono"><b>{{ sku.codigo }}</b></td>
+            <td class="mono"><b>{{ sku.codigo }}</b> <a class="small" href="{% url 'mesa:bodega' %}?q={{ sku.codigo|urlencode }}" title="En qué racks está este producto">¿dónde está?</a></td>
             <td>{{ sku.descripcion }}{% if sku.fragil %} <span class="pill warn" title="Imprime FRÁGIL en la etiqueta">frágil</span>{% endif %}{% if sku.este_lado_arriba %} <span class="pill warn" title="Imprime ESTE LADO ARRIBA en la etiqueta">parado</span>{% endif %}</td>
             <td>{{ sku.variante|default:"—" }}</td>
             <td>

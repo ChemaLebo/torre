@@ -34,8 +34,9 @@ PATRON_RACK_PISO = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
 PATRON_RACK_LADO = re.compile(r"^([A-Z]+)-(\d+)-([ID])-([FB])-(\d+)$")
 
 
-def racks_bodega():
+def racks_bodega(resaltar=None):
     """Racks REALES agrupados desde las Ubicaciones (picking/reserva).
+    `resaltar`: códigos de ubicación a marcar (resultado del buscador).
 
     Dos formatos de código conviven:
     - PIC-3-2 = rack 3, piso 2: una fila por piso a lo ancho del rack (los 4
@@ -101,6 +102,7 @@ def racks_bodega():
                     "cx": x + w // 2, "cy": y + alto_fila // 2 + 8,
                     "codigo": codigo, "mini": columna is not None,
                     "ocupacion": ocup.get("estado", ""), "pct": ocup.get("pct"),
+                    "resaltado": codigo in (resaltar or ()),
                 })
         racks.append({"etiqueta": clave, "filas": filas})
     return racks

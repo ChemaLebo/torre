@@ -11,7 +11,7 @@ from datetime import date
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, Max, Sum
+from django.db.models import F, Max, Q, Sum
 from django.utils import timezone
 
 from apps.catalogo.models import Lote, Ubicacion
@@ -1615,6 +1615,53 @@ def mover_ubicacion(codigo_origen, codigo_destino, actor=None):
             motivo=f"Reacomodo de racks: {codigo_origen} → {codigo_destino} ({modo}, {piezas} pieza(s)).",
         )
     return {"modo": modo, "piezas": piezas, "saldos": len(saldos)}
+
+
+ESTADO_LEGIBLE = {
+    Saldo.UBICADO_VENDIBLE: "vendible", Saldo.RESERVADO: "apartado", Saldo.EN_PUTAWAY: "en recepción",
+    Saldo.EN_EMPAQUE: "en empaque", Saldo.CUARENTENA: "cuarentena",
+}
+
+
+def buscar_en_bodega(q, cliente=None):
+    """Buscador de Bodega (Chema 2026-10-06): "¿dónde está X?". `q` puede ser
+    una POSICIÓN (código exacto de ubicación: qué hay ahí, con lotes y
+    ocupación) o un PRODUCTO / LOTE (código, descripción o código de barras
+    del SKU, o código de lote): una fila por SKU · lote · posición · estado con
+    sus piezas, ordenada por posición, y los racks donde vive para resaltarlos
+    en el plano. Regresa None sin consulta; {"modo": "posicion"|"producto",
+    "q", "filas", "racks", "ubicacion", "ocupacion", "skus"}."""
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+
+    q = (q or "").strip()
+    if not q:
+        return None
+    ubicacion = Ubicacion.objects.filter(codigo__iexact=q).first()
+    if ubicacion is not None:
+        saldos = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "lote").order_by("sku__codigo", "lote__codigo", "estado")
+        if cliente is not None:
+            saldos = saldos.filter(sku__cliente=cliente)
+        filas = [{
+            "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
+            "ubicacion": ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(x.estado, x.estado), "cantidad": x.cantidad,
+        } for x in saldos]
+        return {"modo": "posicion", "q": q, "filas": filas, "racks": {ubicacion.codigo}, "ubicacion": ubicacion,
+                "ocupacion": ocupacion(ubicacion), "skus": []}
+    skus = SKU.objects.filter(Q(codigo__icontains=q) | Q(descripcion__icontains=q) | Q(codigo_barras__iexact=q))
+    if cliente is not None:
+        skus = skus.filter(cliente=cliente)
+    skus = list(skus.select_related("cliente").order_by("codigo")[:50])
+    consulta = Saldo.objects.filter(cantidad__gt=0).filter(Q(sku__in=skus) | Q(lote__codigo__iexact=q))
+    if cliente is not None:
+        consulta = consulta.filter(sku__cliente=cliente)
+    filas, racks = [], set()
+    for x in consulta.select_related("sku", "lote", "ubicacion").order_by("ubicacion__codigo", "sku__codigo", "lote__codigo", "estado"):
+        filas.append({
+            "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
+            "ubicacion": x.ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(x.estado, x.estado), "cantidad": x.cantidad,
+        })
+        racks.add(x.ubicacion.codigo)
+    return {"modo": "producto", "q": q, "filas": filas, "racks": racks, "ubicacion": None, "ocupacion": None, "skus": skus}
 
 
 # ── Capacidad y ocupación de anaqueles (producto siempre parado) ──
