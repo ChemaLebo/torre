@@ -105,6 +105,7 @@ window.addEventListener("load", function () {
         <a class="nav-link {% if seccion == 'dashboard' %}activo{% endif %}" href="{% url 'mesa:dashboard' %}">Torre de control</a>
         <a class="nav-link {% if seccion == 'pedidos' %}activo{% endif %}" href="{% url 'mesa:pedidos' %}">Pedidos</a>
         <a class="nav-link {% if seccion == 'linea_tiempo' %}activo{% endif %}" href="{% url 'mesa:linea_tiempo' %}">Línea de tiempo</a>
+        <a class="nav-link {% if seccion == 'salida' %}activo{% endif %}" href="{% url 'piso:salida' %}" title="La misma pantalla de Salida del piso (corrales y manifiestos), con tu menú">Salida</a>
         <a class="nav-link {% if seccion == 'entregas_locales' %}activo{% endif %}" href="{% url 'mesa:entregas_locales' %}">Entregas locales</a>
         <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones{% if reingresos_pendientes %} <span class="pill warn">{{ reingresos_pendientes }}</span>{% endif %}</a>
         <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'mesa:incidencias' %}">Incidencias{% if badge_incidencias %} <span class="pill warn">{{ badge_incidencias }}</span>{% endif %}</a>

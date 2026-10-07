@@ -41,3 +41,18 @@ class BadgeIncidenciasTests(TestCase):
         html = self.client.get(reverse("portal:pedidos")).content.decode()
         self.assertIn('Incidencias <span class="pill warn">1</span>', html)
         self.assertEqual(html.count('<span class="pill warn">1</span>'), 1)
+
+
+class SalidaEnMesaTests(TestCase):
+    """Chema 2026-10-07: Mesa ve la pantalla de Salida del piso desde su menú."""
+
+    def test_mesa_tiene_salida_en_el_menu_y_la_abre(self):
+        mesa = get_user_model().objects.create_user("mesa-salida", password="x12345678")
+        PerfilUsuario.objects.create(usuario=mesa, rol="mesa")
+        self.client.force_login(mesa)
+        respuesta = self.client.get(reverse("mesa:dashboard"))
+        self.assertContains(respuesta, f'href="{reverse("piso:salida")}"')
+        respuesta = self.client.get(reverse("piso:salida"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'class="nav-link activo" href="/piso/salida/"')  # su menú de Mesa, con Salida marcada
+        self.assertContains(respuesta, "Torre de control")
