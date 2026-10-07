@@ -31,6 +31,21 @@
       </tbody>
     </table>
   </div>
+  {% if orden.realidad %}
+  {# Realidad (Chema 2026-10-06): dónde quedó cada cosa, por SKU · lote · posición; en el portal solo lectura. #}
+  <div class="mt"><b>Dónde quedó</b> <span class="small muted">por producto, lote y posición</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>SKU</th><th>Lote</th><th>Posición</th><th class="derecha">Piezas</th></tr></thead>
+      <tbody>
+        {% for f in orden.realidad %}{% for p in f.posiciones %}
+        <tr><td class="mono">{{ f.sku.codigo }}</td><td class="mono">{{ f.lote|default:"—" }}</td><td class="mono">{{ p.ubicacion.codigo }}</td><td class="derecha mono">{{ p.cantidad }}</td></tr>
+        {% endfor %}{% if f.en_recepcion %}<tr><td class="mono">{{ f.sku.codigo }}</td><td class="mono">—</td><td class="muted">en recepción, sin acomodar</td><td class="derecha mono">{{ f.en_recepcion }}</td></tr>{% endif %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if es_mesa %}<a class="btn chico mt" href="{% url 'mesa:recepcion_editar' orden.pk %}">{% if orden.estado != "CERRADA" %}Editar recepción{% else %}Ver realidad{% endif %}</a>{% endif %}
   {% if es_mesa and orden.estado != "CERRADA" %}
   {# Plan de acomodo de la orden (inventario.planear_acomodo): lo sigue el piso pieza por pieza. #}
   <div class="mt titulo"><b>Plan de acomodo</b>

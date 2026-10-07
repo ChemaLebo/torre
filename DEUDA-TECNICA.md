@@ -689,3 +689,13 @@ no es visible en Mi turno más que en el contador; la tarjeta de Mesa es la
 fuente. Las variables del `.env` que son ajustes de sistema (ZONA_DESBORDE,
 TORRE_PESO_MODO, EMAIL_REPLY_TO, pausa de incidencias) migran a
 `apps/configuracion` cuando se toquen.
+
+## Editor de recepción y buscador de Bodega — hecho 2026-10-06
+
+Ver CONVENTIONS. **Queda:** la realidad de una línea SIN lote muestra todo el
+stock vendible del SKU (no se sabe qué parte entró con esta orden: el kardex
+de put-away lleva la ubicación como referencia, no el folio); por eso ese
+cuadre no se evalúa. Si estorba, guardar el folio de la orden en el kardex
+de put-away. El portal solo calcula "Dónde quedó" para las abiertas y las 5
+cerradas más recientes (costo por línea). El buscador de Bodega es de solo
+lectura; "Mover a" vive en el editor de recepción.

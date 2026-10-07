@@ -2340,6 +2340,150 @@ def recepcion_plan_csv(request, pk):
     return respuesta
 
 
+def _fecha_o_none(crudo):
+    """Fecha ISO del form (vacío = None); ValueError con copy claro."""
+    crudo = (crudo or "").strip()
+    if not crudo:
+        return None
+    try:
+        return date.fromisoformat(crudo)
+    except ValueError:
+        raise ValueError("La caducidad no es válida: usa el calendario (AAAA-MM-DD).") from None
+
+
+def _posiciones_almacen():
+    """Posiciones a las que Mesa puede acomodar o mover: picking, reserva y tarimas activas."""
+    from apps.catalogo.models import Ubicacion  # lazy: modelo de otra app
+
+    return Ubicacion.objects.filter(tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA), activo=True).order_by("codigo")
+
+
+def _posicion(codigo, obligatoria=True):
+    from apps.catalogo.models import Ubicacion  # lazy: modelo de otra app
+
+    codigo = (codigo or "").strip()
+    if not codigo:
+        if obligatoria:
+            raise ValueError("Elige una posición de la lista.")
+        return None
+    ubicacion = Ubicacion.objects.filter(codigo=codigo, activo=True, tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA)).first()
+    if ubicacion is None:
+        raise ValueError(f"{codigo} no es una posición de almacén activa.")
+    return ubicacion
+
+
+def _recepcion_editar_accion(request, orden):
+    """Despacha la acción del editor de recepción; regresa el mensaje de éxito
+    o lanza ValueError. Todas exigen `motivo` (queda en el expediente)."""
+    from apps.inventario.models import LineaASN
+    from apps.inventario.services import (  # lazy por contrato
+        acomodar_desde_editor, agregar_linea_recepcion, cerrar_recepcion, corregir_conteo, danar_acomodado,
+        editar_linea_recepcion, mover_acomodo, regresar_acomodo, regresar_cuarentena_sin_espacio, skus_recibibles,
+    )
+
+    P = request.POST
+    accion = P.get("accion", "")
+    motivo = P.get("motivo", "")
+    actor = request.user
+    if accion == "cerrar":
+        crudo = (P.get("tarimas_recibidas") or "").strip()
+        tarimas = int(crudo) if crudo.isdigit() else orden.tarimas
+        cerrar_recepcion(orden, actor, tarimas_recibidas=tarimas)
+        return f"{orden.folio} cerrada: todo el producto quedó vendible."
+    if accion == "agregar":
+        sku = skus_recibibles(orden.cliente).filter(pk=P.get("sku_id")).first()
+        if sku is None:
+            raise ValueError("Elige un producto del cliente (activo, no kit).")
+        ubicacion = _posicion(P.get("ubicacion"), obligatoria=False)
+        linea = agregar_linea_recepcion(
+            orden, sku, P.get("lote"), _fecha_o_none(P.get("caducidad")), P.get("anunciadas") or 0, actor, motivo,
+            contadas=P.get("contadas") or 0, danadas=P.get("danadas") or 0, ubicacion=ubicacion, ubicadas=P.get("ubicadas") or 0,
+        )
+        return f"{sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''} agregado a {orden.folio}."
+    linea = get_object_or_404(LineaASN.objects.select_related("sku"), pk=P.get("linea_id"), orden=orden)
+    etiqueta = f"{linea.sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''}"
+    if accion == "linea":
+        editar_linea_recepcion(orden, linea, P.get("lote"), _fecha_o_none(P.get("caducidad")), P.get("anunciadas") or 0, actor, motivo)
+        return f"Línea de {linea.sku.codigo} corregida."
+    if accion == "conteo":
+        d_c, d_d = corregir_conteo(orden, linea, P.get("contadas") or 0, P.get("danadas") or 0, actor, motivo)
+        return f"{etiqueta}: contadas {d_c:+d}, dañadas {d_d:+d}."
+    cantidad = P.get("cantidad") or 0
+    if accion == "mover":
+        origen, destino = _posicion(P.get("origen")), _posicion(P.get("destino"))
+        n = mover_acomodo(orden, linea, origen, destino, cantidad, actor, motivo)
+        return f"{n} de {etiqueta}: {origen.codigo} → {destino.codigo}."
+    if accion == "regresar":
+        origen = _posicion(P.get("origen"))
+        n = regresar_acomodo(orden, linea, origen, cantidad, actor, motivo)
+        return f"{n} de {etiqueta} regresaron de {origen.codigo} a recepción (sin acomodar)."
+    if accion == "danar":
+        origen = _posicion(P.get("origen"))
+        n = danar_acomodado(orden, linea, origen, cantidad, actor, motivo)
+        return f"{n} de {etiqueta} marcadas dañadas (de {origen.codigo} a cuarentena)."
+    if accion == "acomodar":
+        destino = _posicion(P.get("destino"), obligatoria=False)
+        real = acomodar_desde_editor(orden, linea, destino, cantidad, actor, motivo)
+        return f"{cantidad} de {etiqueta} acomodadas en {real.codigo if real else 'cuarentena (sin anaquel con espacio)'}."
+    if accion == "de_cuarentena":
+        n = regresar_cuarentena_sin_espacio(orden, linea.sku, cantidad, actor, motivo)
+        return f"{n} de {linea.sku.codigo} regresaron de cuarentena a recepción (sin acomodar)."
+    raise ValueError("No entendí la acción.")
+
+
+@rol_requerido("mesa")
+def recepcion_editar(request, pk):
+    """Editor de recepción (Chema 2026-10-06): la tabla "Realidad" de la orden
+    (por SKU · lote · posición: anunciadas, contadas, dañadas, dónde está cada
+    cosa, lo contado sin acomodar y lo que fue a cuarentena por falta de
+    espacio) con correcciones por fila: conteos, lote/caducidad/anunciadas,
+    mover, regresar a recepción, acomodar, marcar dañadas, agregar un producto
+    que no venía en la orden y cerrar. Posiciones siempre de lista. Cada
+    corrección pide motivo y queda en el historial de abajo. Orden cerrada =
+    solo lectura."""
+    from apps.inventario.models import OrdenEntrada
+    from apps.inventario.services import correcciones_recepcion, realidad_recepcion, skus_recibibles
+
+    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
+    if request.method == "POST":
+        try:
+            exito = _recepcion_editar_accion(request, orden)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(request, exito)
+        return redirect("mesa:recepcion_editar", pk=orden.pk)
+    filas = realidad_recepcion(orden)
+    pendiente = sum((f["en_recepcion"] or 0) + (f["cuarentena_sin_espacio"] or 0) for f in filas)
+    return render(request, "mesa/recepcion_editar.html", {
+        "seccion": "recepciones", "orden": orden, "filas": filas,
+        "editable": orden.estado != OrdenEntrada.CERRADA,
+        "puede_cerrar": orden.estado != OrdenEntrada.CERRADA and orden.estado != OrdenEntrada.ANUNCIADA and pendiente == 0,
+        "posiciones": _posiciones_almacen(),
+        "skus": skus_recibibles(orden.cliente),
+        "correcciones": correcciones_recepcion(orden),
+        "descuadres": sum(1 for f in filas if f["cuadra"] is False),
+    })
+
+
+@rol_requerido("mesa")
+def recepcion_realidad_csv(request, pk):
+    """La realidad de la orden en CSV (hermano del plan): sku, nombre, barras,
+    lote, caducidad, posición, estado, piezas. Para la conciliación del cliente."""
+    from apps.inventario.models import OrdenEntrada
+    from apps.inventario.services import realidad_csv_filas
+
+    orden = get_object_or_404(OrdenEntrada, pk=pk)
+    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
+    respuesta["Content-Disposition"] = f'attachment; filename="realidad-{orden.folio}.csv"'
+    respuesta.write("\ufeff")
+    escritor = csv.writer(respuesta)
+    escritor.writerow(["sku", "nombre", "codigo_barras", "lote", "caducidad", "posicion", "estado", "piezas"])
+    for fila in realidad_csv_filas(orden):
+        escritor.writerow(fila)
+    return respuesta
+
+
 def _recepciones_decidir_reingreso(request):
     """Mesa decide qué pasa con la mercancía de un pedido que ya salió y se
     canceló o retornó: registrar_reingreso (nace la orden de reingreso para el

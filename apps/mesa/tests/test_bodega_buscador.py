@@ -48,4 +48,4 @@ class BuscadorBodegaTests(PisoTestCase):
         self.assertContains(respuesta, 'http-equiv="refresh"')
         self.assertNotContains(respuesta, "resaltado")
         respuesta = self.client.get(reverse("mesa:cliente_skus", args=[self.cliente.pk]))
-        self.assertContains(respuesta, f"?q=COLIMITA-SIX\" title=\"En qué racks está este producto\">¿dónde está?")
+        self.assertContains(respuesta, "?q=COLIMITA-SIX\" title=\"En qué racks está este producto\">¿dónde está?")

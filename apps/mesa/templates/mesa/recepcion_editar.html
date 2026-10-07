@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Editar recepción {{ orden.folio }}{% endblock %}
+{% block content %}
+{# Editor de recepción (Chema 2026-10-06): la tabla "Realidad" (contraparte del plan) con correcciones por fila. Posiciones siempre de lista; cada corrección pide motivo. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control · Recepciones</div>
+    <h1>{{ orden.folio }} · {% if editable %}Editar recepción{% else %}Recepción (solo lectura){% endif %}</h1>
+    <div class="small">{{ orden.cliente.nombre }} · <span class="pill">{{ orden.get_estado_display }}</span> · cita {{ orden.fecha_compromiso|date:"d/M/Y"|default:"—" }}{% if descuadres %} · <span class="pill crit">{{ descuadres }} SKU{{ descuadres|pluralize }} sin cuadrar</span>{% endif %}</div>
+  </div>
+  <div class="fila">
+    <a class="btn chico" href="{% url 'mesa:recepciones' %}?cliente={{ orden.cliente.slug }}">Volver a recepciones</a>
+    <a class="btn chico" href="{% url 'mesa:recepcion_plan_csv' orden.pk %}">Exportar plan (CSV)</a>
+    <a class="btn chico" href="{% url 'mesa:recepcion_realidad_csv' orden.pk %}">Exportar realidad (CSV)</a>
+  </div>
+</div>
+
+<div class="card mt">
+  <div class="titulo"><h2>Realidad</h2><span class="small">por SKU · lote · posición: lo contado contra dónde está hoy</span></div>
+  <div class="tabla-wrap">
+    <table class="editor-recepcion">
+      <thead><tr><th>SKU</th><th>Lote / caducidad</th><th class="derecha">Anunciadas</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th><th>Posición</th><th class="derecha">Ubicadas</th><th>Diferencia / cuadre</th></tr></thead>
+      <tbody>
+      {% for f in filas %}
+        <tr class="fila-linea">
+          <td><span class="mono"><b>{{ f.sku.codigo }}</b></span><div class="small muted">{{ f.sku.descripcion }}</div>
+            <a class="small" href="{% url 'mesa:bodega' %}?q={{ f.sku.codigo|urlencode }}">¿dónde está?</a></td>
+          {% if editable %}
+          <td colspan="2">
+            <form method="post" class="fila" title="Lote, caducidad y anunciadas de la línea">{% csrf_token %}
+              <input type="hidden" name="accion" value="linea"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
+              <input type="text" name="lote" value="{{ f.lote }}" class="mono" style="width:120px" placeholder="lote" aria-label="Lote">
+              <input type="date" name="caducidad" value="{{ f.caducidad|date:'Y-m-d' }}" style="width:150px" aria-label="Caducidad">
+              <input type="number" name="anunciadas" value="{{ f.anunciadas }}" min="0" style="width:80px" aria-label="Anunciadas">
+              <input type="text" name="motivo" placeholder="motivo" style="width:140px" aria-label="Motivo" required>
+              <button class="btn chico" type="submit">Guardar</button>
+            </form>
+          </td>
+          <td colspan="2">
+            <form method="post" class="fila" title="Contadas y dañadas de la línea">{% csrf_token %}
+              <input type="hidden" name="accion" value="conteo"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
+              <input type="number" name="contadas" value="{{ f.contadas }}" min="0" style="width:80px" aria-label="Contadas">
+              <input type="number" name="danadas" value="{{ f.danadas }}" min="0" style="width:80px" aria-label="Dañadas">
+              <input type="text" name="motivo" placeholder="motivo" style="width:140px" aria-label="Motivo" required>
+              <button class="btn chico" type="submit">Guardar</button>
+            </form>
+          </td>
+          {% else %}
+          <td class="mono">{{ f.lote|default:"—" }}{% if f.caducidad %} <span class="small muted">cad. {{ f.caducidad|date:"Y-m-d" }}</span>{% endif %}</td>
+          <td class="derecha mono">{{ f.anunciadas }}</td>
+          <td class="derecha mono">{{ f.contadas }}</td>
+          <td class="derecha mono">{{ f.danadas }}</td>
+          {% endif %}
+          <td class="small muted">{{ f.posiciones|length }} posición{{ f.posiciones|length|pluralize:"es" }}{% if f.apartadas %} · {{ f.apartadas }} apartadas{% endif %}{% if f.sin_lote %} · <span title="Sin lote: lo que se ve puede incluir stock previo del SKU">sin lote</span>{% endif %}</td>
+          <td class="derecha mono">{{ f.acomodadas }}</td>
+          <td>
+            {% if f.diferencia %}<span class="pill {% if f.diferencia < 0 %}crit{% else %}warn{% endif %}" title="contadas + dañadas − anunciadas">{{ f.diferencia|stringformat:"+d" }}</span>{% else %}<span class="pill ok">0</span>{% endif %}
+            {% if f.cuadra is True %}<span class="pill ok" title="contadas = acomodadas + apartadas + sin acomodar + cuarentena sin espacio">cuadra</span>{% elif f.cuadra is False %}<span class="pill crit" title="contadas {{ f.contadas }} vs {{ f.donde }} localizadas">no cuadra</span>{% endif %}
+          </td>
+        </tr>
+        {% for p in f.posiciones %}
+        <tr class="fila-posicion">
+          <td></td>
+          <td colspan="4" class="small">{% if p.mezclado %}<span class="pill warn" title="En esta posición hay otro lote de este producto: {{ p.mezclado|join:', ' }}">lotes mezclados</span>{% endif %}</td>
+          <td class="mono">{{ p.ubicacion.codigo }}</td>
+          <td class="derecha mono">{{ p.cantidad }}</td>
+          <td>
+            {% if editable %}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="linea_id" value="{{ f.linea.pk }}"><input type="hidden" name="origen" value="{{ p.ubicacion.codigo }}">
+              <input type="number" name="cantidad" value="{{ p.cantidad }}" min="1" max="{{ p.cantidad }}" style="width:70px" aria-label="Cuántas">
+              <select name="destino" aria-label="Posición destino" style="width:150px"><option value="">— posición —</option>{% for u in posiciones %}{% if u.pk != p.ubicacion.pk %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endif %}{% endfor %}</select>
+              <input type="text" name="motivo" placeholder="motivo" style="width:120px" aria-label="Motivo" required>
+              <button class="btn chico" type="submit" name="accion" value="mover">Mover</button>
+              <button class="btn chico" type="submit" name="accion" value="regresar" title="Vuelven a recepción, sin acomodar">Regresar</button>
+              <button class="btn chico peligro" type="submit" name="accion" value="danar" title="Salen a cuarentena y la línea las pasa de contadas a dañadas">Dañadas</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if f.en_recepcion %}
+        <tr class="fila-posicion">
+          <td></td><td colspan="4" class="small"><span class="pill accent">sin acomodar</span> {{ f.sku.codigo }}: contadas que siguen en recepción (todo el SKU, sin lote)</td>
+          <td class="mono muted">RECEPCIÓN</td>
+          <td class="derecha mono">{{ f.en_recepcion }}</td>
+          <td>
+            {% if editable %}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="acomodar"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
+              <input type="number" name="cantidad" value="{{ f.en_recepcion }}" min="1" max="{{ f.en_recepcion }}" style="width:70px" aria-label="Cuántas">
+              <select name="destino" aria-label="Posición" style="width:150px"><option value="">— desborde / cuarentena —</option>{% for u in posiciones %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endfor %}</select>
+              <input type="text" name="motivo" placeholder="motivo" style="width:120px" aria-label="Motivo" required>
+              <button class="btn chico primario" type="submit">Acomodar con lote {{ f.lote|default:"—" }}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+        {% if f.cuarentena_sin_espacio %}
+        <tr class="fila-posicion">
+          <td></td><td colspan="4" class="small"><span class="pill crit">cuarentena sin espacio</span> {{ f.sku.codigo }}: lo que esta orden mandó a cuarentena por no tener anaquel</td>
+          <td class="mono muted">RECEPCIÓN</td>
+          <td class="derecha mono">{{ f.cuarentena_sin_espacio }}</td>
+          <td>
+            {% if editable %}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="de_cuarentena"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
+              <input type="number" name="cantidad" value="{{ f.cuarentena_sin_espacio }}" min="1" max="{{ f.cuarentena_sin_espacio }}" style="width:70px" aria-label="Cuántas">
+              <input type="text" name="motivo" placeholder="motivo" style="width:120px" aria-label="Motivo" required>
+              <button class="btn chico" type="submit">Regresar a recepción</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="8" class="muted centro">Sin líneas.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if editable %}
+<div class="grid g2 mt">
+  <div class="card">
+    <div class="titulo"><h3>Agregar producto</h3><span class="small">llegó sin venir en la orden, o un lote nuevo</span></div>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="agregar">
+      <label for="ag-sku">Producto</label>
+      <select name="sku_id" id="ag-sku" required><option value="">— elige —</option>{% for s in skus %}<option value="{{ s.pk }}">{{ s.codigo }} · {{ s.descripcion|truncatechars:50 }}</option>{% endfor %}</select>
+      <div class="grid g2">
+        <div><label for="ag-lote">Lote</label><input type="text" name="lote" id="ag-lote" class="mono" placeholder="vacío si no lleva"></div>
+        <div><label for="ag-cad">Caducidad</label><input type="date" name="caducidad" id="ag-cad"></div>
+      </div>
+      <div class="grid g3">
+        <div><label for="ag-anun">Anunciadas</label><input type="number" name="anunciadas" id="ag-anun" value="0" min="0"></div>
+        <div><label for="ag-cont">Contadas</label><input type="number" name="contadas" id="ag-cont" value="0" min="0"></div>
+        <div><label for="ag-dan">Dañadas</label><input type="number" name="danadas" id="ag-dan" value="0" min="0"></div>
+      </div>
+      <div class="grid g2">
+        <div><label for="ag-pos">Acomodar en</label><select name="ubicacion" id="ag-pos"><option value="">— después, desde el piso —</option>{% for u in posiciones %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endfor %}</select></div>
+        <div><label for="ag-ubi">Cuántas ahí</label><input type="number" name="ubicadas" id="ag-ubi" value="0" min="0"></div>
+      </div>
+      <label for="ag-motivo">Motivo</label><input type="text" name="motivo" id="ag-motivo" required placeholder="p. ej. llegó en la tarima 3 sin anunciar">
+      <button class="btn primario mt" type="submit">Agregar</button>
+    </form>
+  </div>
+  <div class="card">
+    <div class="titulo"><h3>Cerrar la orden</h3></div>
+    {% if puede_cerrar %}
+    <form method="post" onsubmit="return confirm('¿Cerrar {{ orden.folio }}? El producto queda vendible y el cliente recibe la confirmación con cifras.');">{% csrf_token %}
+      <input type="hidden" name="accion" value="cerrar">
+      <label for="ci-tarimas">Tarimas recibidas</label><input type="number" name="tarimas_recibidas" id="ci-tarimas" value="{{ orden.tarimas }}" min="0">
+      <button class="btn primario mt" type="submit">Cerrar recepción</button>
+    </form>
+    {% else %}
+    <p class="muted">{% if orden.estado == "ANUNCIADA" %}Todavía no se ha recibido nada.{% else %}Aún hay piezas sin acomodar o en cuarentena por falta de espacio: resuélvelas arriba y aquí sale el botón.{% endif %}</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card mt">
+  <div class="titulo"><h3>Historial de correcciones</h3><span class="small">{{ correcciones|length }}</span></div>
+  {% if correcciones %}
+  <ul class="timeline">
+    {% for e in correcciones %}<li><span class="mono">{{ e.ts|date:"d/M H:i" }}</span> · {{ e.actor_id|default:"—" }} · <b>{{ e.delta.tipo }}</b> {{ e.delta.sku }}{% if e.delta.lote %} lote {{ e.delta.lote }}{% endif %}{% if e.delta.cantidad %} · {{ e.delta.cantidad }} pza{% endif %}{% if e.delta.de %} de {{ e.delta.de }}{% endif %}{% if e.delta.a %} a {{ e.delta.a }}{% endif %}{% if e.delta.contadas %} · contadas {{ e.delta.contadas.0 }}→{{ e.delta.contadas.1 }}{% endif %}{% if e.delta.danadas %} · dañadas {{ e.delta.danadas.0 }}→{{ e.delta.danadas.1 }}{% endif %} — <span class="small">{{ e.motivo }}</span></li>{% endfor %}
+  </ul>
+  {% else %}<p class="muted">Sin correcciones.</p>{% endif %}
+</div>
+{% endblock %}
