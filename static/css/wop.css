@@ -679,3 +679,9 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 @keyframes cargando-barra { 0% { left: -30%; } 100% { left: 100%; } }
 @keyframes cargando-gira { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .cargando-barra { animation: none; width: 100%; left: 0; } .cargando-spinner { animation: none; } }
+
+/* Editor de recepción (Chema 2026-10-07): cada input con su etiqueta encima, para saber qué campo hace qué. */
+.campos-editor { align-items: flex-end; flex-wrap: wrap; gap: 8px 10px; }
+.campos-editor > label { display: flex; flex-direction: column; gap: 3px; margin: 0; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-50); }
+.campos-editor > label > input, .campos-editor > label > select { margin: 0; }
+.campos-editor .botones-editor { display: flex; gap: 6px; flex-wrap: wrap; }

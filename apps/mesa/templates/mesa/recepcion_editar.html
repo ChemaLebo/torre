@@ -27,22 +27,22 @@
             <a class="small" href="{% url 'mesa:bodega' %}?q={{ f.sku.codigo|urlencode }}">¿dónde está?</a></td>
           {% if editable %}
           <td colspan="2">
-            <form method="post" class="fila" title="Lote, caducidad y anunciadas de la línea">{% csrf_token %}
+            <form method="post" class="fila campos-editor" title="Lote, caducidad y anunciadas de la línea">{% csrf_token %}
               <input type="hidden" name="accion" value="linea"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
-              <input type="text" name="lote" value="{{ f.lote }}" class="mono" style="width:120px" placeholder="lote" aria-label="Lote">
-              <input type="date" name="caducidad" value="{{ f.caducidad|date:'Y-m-d' }}" style="width:150px" aria-label="Caducidad">
-              <input type="number" name="anunciadas" value="{{ f.anunciadas }}" min="0" style="width:80px" aria-label="Anunciadas">
-              <input type="text" name="motivo" placeholder="motivo" style="width:140px" aria-label="Motivo" required>
-              <button class="btn chico" type="submit">Guardar</button>
+              <label>Lote<input type="text" name="lote" value="{{ f.lote }}" class="mono" style="width:120px"></label>
+              <label>Caducidad<input type="date" name="caducidad" value="{{ f.caducidad|date:'Y-m-d' }}" style="width:150px"></label>
+              <label>Anunciadas<input type="number" name="anunciadas" value="{{ f.anunciadas }}" min="0" style="width:90px"></label>
+              <label>Motivo<input type="text" name="motivo" placeholder="por qué" style="width:150px" required></label>
+              <button class="btn chico" type="submit">Guardar línea</button>
             </form>
           </td>
           <td colspan="2">
-            <form method="post" class="fila" title="Contadas y dañadas de la línea">{% csrf_token %}
+            <form method="post" class="fila campos-editor" title="Contadas y dañadas de la línea">{% csrf_token %}
               <input type="hidden" name="accion" value="conteo"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
-              <input type="number" name="contadas" value="{{ f.contadas }}" min="0" style="width:80px" aria-label="Contadas">
-              <input type="number" name="danadas" value="{{ f.danadas }}" min="0" style="width:80px" aria-label="Dañadas">
-              <input type="text" name="motivo" placeholder="motivo" style="width:140px" aria-label="Motivo" required>
-              <button class="btn chico" type="submit">Guardar</button>
+              <label>Contadas<input type="number" name="contadas" value="{{ f.contadas }}" min="0" style="width:90px"></label>
+              <label>Dañadas<input type="number" name="danadas" value="{{ f.danadas }}" min="0" style="width:90px"></label>
+              <label>Motivo<input type="text" name="motivo" placeholder="por qué" style="width:150px" required></label>
+              <button class="btn chico" type="submit">Guardar conteo</button>
             </form>
           </td>
           {% else %}
@@ -51,7 +51,7 @@
           <td class="derecha mono">{{ f.contadas }}</td>
           <td class="derecha mono">{{ f.danadas }}</td>
           {% endif %}
-          <td class="small muted">{{ f.posiciones|length }} posición{{ f.posiciones|length|pluralize:"es" }}{% if f.apartadas %} · {{ f.apartadas }} apartadas{% endif %}{% if f.sin_lote %} · <span title="Sin lote: lo que se ve puede incluir stock previo del SKU">sin lote</span>{% endif %}</td>
+          <td class="small muted">{{ f.posiciones|length }} {% if f.posiciones|length == 1 %}posición{% else %}posiciones{% endif %}{% if f.apartadas %} · {{ f.apartadas }} apartadas{% endif %}{% if f.sin_lote %} · <span title="Sin lote: lo que se ve puede incluir stock previo del SKU">sin lote</span>{% endif %}</td>
           <td class="derecha mono">{{ f.acomodadas }}</td>
           <td>
             {% if f.diferencia %}<span class="pill {% if f.diferencia < 0 %}crit{% else %}warn{% endif %}" title="contadas + dañadas − anunciadas">{{ f.diferencia|stringformat:"+d" }}</span>{% else %}<span class="pill ok">0</span>{% endif %}
@@ -66,14 +66,16 @@
           <td class="derecha mono">{{ p.cantidad }}</td>
           <td>
             {% if editable %}
-            <form method="post" class="fila">{% csrf_token %}
+            <form method="post" class="fila campos-editor">{% csrf_token %}
               <input type="hidden" name="linea_id" value="{{ f.linea.pk }}"><input type="hidden" name="origen" value="{{ p.ubicacion.codigo }}">
-              <input type="number" name="cantidad" value="{{ p.cantidad }}" min="1" max="{{ p.cantidad }}" style="width:70px" aria-label="Cuántas">
-              <select name="destino" aria-label="Posición destino" style="width:150px"><option value="">— posición —</option>{% for u in posiciones %}{% if u.pk != p.ubicacion.pk %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endif %}{% endfor %}</select>
-              <input type="text" name="motivo" placeholder="motivo" style="width:120px" aria-label="Motivo" required>
-              <button class="btn chico" type="submit" name="accion" value="mover">Mover</button>
-              <button class="btn chico" type="submit" name="accion" value="regresar" title="Vuelven a recepción, sin acomodar">Regresar</button>
-              <button class="btn chico peligro" type="submit" name="accion" value="danar" title="Salen a cuarentena y la línea las pasa de contadas a dañadas">Dañadas</button>
+              <label>Cuántas<input type="number" name="cantidad" value="{{ p.cantidad }}" min="1" max="{{ p.cantidad }}" style="width:80px"></label>
+              <label>Mover a<select name="destino" style="width:150px"><option value="">— posición —</option>{% for u in posiciones %}{% if u.pk != p.ubicacion.pk %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endif %}{% endfor %}</select></label>
+              <label>Motivo<input type="text" name="motivo" placeholder="por qué" style="width:130px" required></label>
+              <span class="botones-editor">
+                <button class="btn chico" type="submit" name="accion" value="mover" title="Las mueve a la posición elegida">Mover</button>
+                <button class="btn chico" type="submit" name="accion" value="regresar" title="Vuelven a recepción, sin acomodar">Regresar a recepción</button>
+                <button class="btn chico peligro" type="submit" name="accion" value="danar" title="Salen a cuarentena y la línea las pasa de contadas a dañadas">Marcar dañadas</button>
+              </span>
             </form>
             {% endif %}
           </td>
@@ -86,11 +88,11 @@
           <td class="derecha mono">{{ f.en_recepcion }}</td>
           <td>
             {% if editable %}
-            <form method="post" class="fila">{% csrf_token %}
+            <form method="post" class="fila campos-editor">{% csrf_token %}
               <input type="hidden" name="accion" value="acomodar"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
-              <input type="number" name="cantidad" value="{{ f.en_recepcion }}" min="1" max="{{ f.en_recepcion }}" style="width:70px" aria-label="Cuántas">
-              <select name="destino" aria-label="Posición" style="width:150px"><option value="">— desborde / cuarentena —</option>{% for u in posiciones %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endfor %}</select>
-              <input type="text" name="motivo" placeholder="motivo" style="width:120px" aria-label="Motivo" required>
+              <label>Cuántas<input type="number" name="cantidad" value="{{ f.en_recepcion }}" min="1" max="{{ f.en_recepcion }}" style="width:80px"></label>
+              <label>Acomodar en<select name="destino" style="width:150px"><option value="">— desborde / cuarentena —</option>{% for u in posiciones %}<option value="{{ u.codigo }}">{{ u.codigo }}</option>{% endfor %}</select></label>
+              <label>Motivo<input type="text" name="motivo" placeholder="por qué" style="width:130px" required></label>
               <button class="btn chico primario" type="submit">Acomodar con lote {{ f.lote|default:"—" }}</button>
             </form>
             {% endif %}
@@ -104,10 +106,10 @@
           <td class="derecha mono">{{ f.cuarentena_sin_espacio }}</td>
           <td>
             {% if editable %}
-            <form method="post" class="fila">{% csrf_token %}
+            <form method="post" class="fila campos-editor">{% csrf_token %}
               <input type="hidden" name="accion" value="de_cuarentena"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}">
-              <input type="number" name="cantidad" value="{{ f.cuarentena_sin_espacio }}" min="1" max="{{ f.cuarentena_sin_espacio }}" style="width:70px" aria-label="Cuántas">
-              <input type="text" name="motivo" placeholder="motivo" style="width:120px" aria-label="Motivo" required>
+              <label>Cuántas<input type="number" name="cantidad" value="{{ f.cuarentena_sin_espacio }}" min="1" max="{{ f.cuarentena_sin_espacio }}" style="width:80px"></label>
+              <label>Motivo<input type="text" name="motivo" placeholder="por qué" style="width:130px" required></label>
               <button class="btn chico" type="submit">Regresar a recepción</button>
             </form>
             {% endif %}
