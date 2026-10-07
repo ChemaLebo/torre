@@ -543,10 +543,20 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
             detalle = ", ".join(f"caja {n} {c} ${p:.2f}" for n, c, p in resumen)
             resolver(incidencia, f"Replaneado con {etiqueta}: {detalle}.", actor)
             cerrar(incidencia, actor)
+    guias = []
+    if carrier == CARRIER_LOCAL and modo == "recotizadas" and cajas and all(c.estado == Paquete.EMPACADO for c in cajas):
+        # Sin guía de carrier no hay nada que comprar (Chema 2026-10-07,
+        # PED-00317/00319): la guía interna de cada caja empacada sale aquí
+        # mismo y el pedido pasa a GUIA_GENERADA → Salida, en vez de quedarse
+        # "sin guía" en la mesa hasta que alguien reintente.
+        from apps.envios.services import generar_guias  # lazy por contrato
+
+        guias = generar_guias(fresco)
+        fresco.refresh_from_db(fields=["estado"])
     pedido.carrier_forzado = fresco.carrier_forzado
     pedido.estado = fresco.estado
     pedido.asignado_a = fresco.asignado_a
-    return {"modo": modo, "cajas": cajas}
+    return {"modo": modo, "cajas": cajas, "guias": guias}
 
 
 def replanear_cajas(pedido, actor):
@@ -670,6 +680,17 @@ def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
                    "forzado": caja.carrier_forzado, "precio": float(caja.precio_cotizado or 0), "guia_cancelada": cancelada},
             motivo=f"Mesa: caja {caja.numero} de {fresco.folio} con {etiqueta} (${caja.precio_cotizado or 0})."[:300],
         )
+        if caja.carrier == CARRIER_LOCAL and caja.estado == Paquete.EMPACADO and caja.guia_activa is None:
+            # Sin guía de carrier no hay nada que comprar (Chema 2026-10-07):
+            # la guía interna de la caja sale aquí mismo; si con ella ya no
+            # falta guía en ninguna caja en bodega, el pedido pasa a
+            # GUIA_GENERADA (el cierre pendiente lo pide el wizard igual).
+            from apps.envios.services import SERVICIO_LOCAL, _crear_guia  # lazy por contrato
+
+            _crear_guia(fresco, CARRIER_LOCAL, SERVICIO_LOCAL, paquete=caja)
+            en_bodega = [c for c in fresco.paquetes.all() if c.estado != Paquete.DESPACHADO]
+            if fresco.estado == Pedido.EMPACADO and all(c.guia_activa is not None for c in en_bodega):
+                fresco.transicionar(Pedido.GUIA_GENERADA, actor=actor, motivo=f"Guía interna de la caja {caja.numero}: sin guía de carrier.")
     pedido.estado = fresco.estado
     pedido.asignado_a = fresco.asignado_a
     return caja

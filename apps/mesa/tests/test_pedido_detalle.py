@@ -117,17 +117,18 @@ class PedidoDetalleTests(PisoTestCase):
         c2.refresh_from_db()
         vieja.refresh_from_db()
         intacta.refresh_from_db()
-        self.assertEqual((pedido.estado, pedido.asignado_a), (Pedido.EMPACADO, None))
+        # La guía interna de la caja 1 sale ahí mismo (2026-10-07) y, como la 2 conserva la
+        # suya, el pedido vuelve a GUIA_GENERADA sin dueño (el cierre borrado lo pide el wizard).
+        self.assertEqual((pedido.estado, pedido.asignado_a), (Pedido.GUIA_GENERADA, None))
         self.assertEqual((c1.carrier, c1.carrier_forzado, c1.servicio), ("local", "local", "entrega_local"))
         self.assertEqual((vieja.estado, intacta.estado), (Guia.CANCELADA, Guia.GUIA_CREADA))
         self.assertEqual((c2.carrier, c2.carrier_forzado), ("estafeta", ""))
         self.assertEqual(pedido.carrier_forzado, "")  # el pedido no cambia, solo la caja
         self.assertTrue(EventoAuditoria.objects.filter(entidad="paquete", entidad_id=str(c1.pk), accion="cambio_paqueteria_caja").exists())
-        # Al recomprar, la caja 1 sale con guía interna y la 2 conserva la suya.
-        services.generar_guia(pedido)
-        c1.refresh_from_db()
         self.assertTrue(c1.guia_activa.numero.startswith("LOCAL-"))
         self.assertEqual(c2.guia_activa.pk, intacta.pk)
+        services.generar_guia(pedido)  # reintentar no duplica nada
+        self.assertEqual(pedido.guias.filter(paquete=c1).exclude(estado=Guia.CANCELADA).count(), 1)
 
     def test_cancelar_guia_de_una_caja_y_reimprimir(self):
         pedido, c1, c2 = self.pedido_con_dos_cajas_y_guias()

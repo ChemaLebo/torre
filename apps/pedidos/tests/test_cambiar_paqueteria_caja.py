@@ -26,13 +26,21 @@ class CambiarPaqueteriaCajaTests(PisoTestCase):
         PaqueteLinea.objects.create(paquete=self.c1, linea_pedido=linea, cantidad=2)
         PaqueteLinea.objects.create(paquete=self.c2, linea_pedido=linea, cantidad=2)
 
-    def test_caja_empacada_sin_guia_solo_cambia_carrier_y_precio(self):
+    def test_caja_empacada_a_local_emite_su_guia_interna_ahi_mismo(self):
+        # Chema 2026-10-07 (PED-00317/00319): sin guía de carrier no hay nada que
+        # comprar; la guía interna sale al forzar "local" y el pedido no se queda "sin guía".
         caja = services.cambiar_paqueteria_caja(self.pedido, self.c1, "local", self.mesa)
         self.pedido.refresh_from_db()
         self.assertEqual((caja.carrier, caja.carrier_forzado, caja.precio_cotizado), ("local", "local", Decimal("100.00")))
-        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)  # sin guía que cancelar: mismo estado
+        self.assertEqual(caja.guia_activa.numero, f"LOCAL-{self.pedido.folio}-1")
+        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)  # la caja 2 sigue sin guía (estafeta): aún no sale
         self.c2.refresh_from_db()
-        self.assertEqual(self.c2.carrier, "estafeta")
+        self.assertEqual((self.c2.carrier, self.c2.guia_activa), ("estafeta", None))
+        # La otra también a local: ya ninguna caja en bodega espera guía → GUIA_GENERADA.
+        services.cambiar_paqueteria_caja(self.pedido, self.c2, "local", self.mesa)
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
+        self.assertEqual(sorted(g.numero for g in self.pedido.guias.all() if g.es_activa), [f"LOCAL-{self.pedido.folio}-1", f"LOCAL-{self.pedido.folio}-2"])
 
     def test_con_guia_comprada_la_cancela_borra_el_cierre_y_regresa_a_empaque(self):
         services.generar_guia(self.pedido)
@@ -46,8 +54,12 @@ class CambiarPaqueteriaCajaTests(PisoTestCase):
         caja = services.cambiar_paqueteria_caja(self.pedido, self.c1, "local", self.mesa)
         self.pedido.refresh_from_db()
         vieja.refresh_from_db()
-        self.assertEqual((self.pedido.estado, self.pedido.asignado_a), (Pedido.EMPACADO, None))
+        # La guía de carrier se cancela y la interna sale ahí mismo; como la caja 2 conserva
+        # la suya, el pedido vuelve a GUIA_GENERADA sin dueño; el cierre borrado lo pide el wizard.
+        self.assertEqual((self.pedido.estado, self.pedido.asignado_a), (Pedido.GUIA_GENERADA, None))
         self.assertEqual((vieja.estado, caja.ts_cierre, caja.carrier), (Guia.CANCELADA, None, "local"))
+        self.assertEqual(caja.guia_activa.numero, f"LOCAL-{self.pedido.folio}-1")
+        self.assertFalse(self.pedido.empaque_completo)  # falta la foto de cierre de la caja 1
         self.assertEqual(self.c2.guia_activa.estado, Guia.GUIA_CREADA)  # la otra caja ni se entera
 
     def test_sin_carrier_cancela_y_recotiza_con_las_reglas_del_pedido(self):

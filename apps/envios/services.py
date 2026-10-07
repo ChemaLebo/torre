@@ -519,13 +519,14 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
     return guia
 
 
-def _replan_paquete(pedido, paquete, carrier_viejo):
+def _replan_paquete(pedido, paquete, carrier_viejo, aplicar=True):
     """El plan guardó un carrier que la config vigente ya no permite (lista
     recortada o cliente flipeado de integración): se re-cotiza el lane AL
     GENERAR y el paquete se reasigna a la mejor opción permitida (el carrier
     preferido del pedido si cotiza, si no el más barato). El plan se conserva
     como plan (división, corral, precio de referencia); la config manda a la
-    hora de comprar la guía."""
+    hora de comprar la guía. `aplicar=False` solo resuelve (diagnóstico):
+    no guarda el paquete ni deja evento."""
     from .cotizador import cotizar_lane, elegir_entre  # lazy: evita ciclo en carga
 
     permitidos = carriers_de_paquete(pedido, paquete)
@@ -533,6 +534,8 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
         # Sin guía de carrier (forzado desde Mesa, 2026-09-28; por caja desde
         # 2026-09-30): la caja física se queda y viaja con guía interna a la
         # tarifa local.
+        if not aplicar:
+            return CARRIER_LOCAL, SERVICIO_LOCAL
         tarifa = Decimal(str(settings.TORRE.get("TARIFA_LOCAL_MXN", 100)))
         paquete.carrier, paquete.servicio, paquete.precio_cotizado = CARRIER_LOCAL, SERVICIO_LOCAL, tarifa
         paquete.estimado_entrega = ""
@@ -556,6 +559,8 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
             "Revisar con Mesa de Control."
         )
     mejor = elegir_entre(filas, carrier_preferido(pedido))
+    if not aplicar:
+        return mejor["carrier"], mejor["servicio"]
     paquete.carrier = mejor["carrier"]
     paquete.servicio = mejor["servicio"]
     paquete.precio_cotizado = mejor["precio"]
@@ -571,13 +576,14 @@ def _replan_paquete(pedido, paquete, carrier_viejo):
     return mejor["carrier"], mejor["servicio"]
 
 
-def _carrier_de_paquete(pedido, paquete):
+def _carrier_de_paquete(pedido, paquete, aplicar=True):
     """(carrier, servicio) reales para la guía de un paquete.
 
     Un plan viejo pudo guardar carrier="local" cuando había flota propia;
     sin flota (TORRE["FLOTA_PROPIA"]=False) esa guía LOCAL-* jamás saldría
     del corral (POD escondido, poller la ignora) → se re-resuelve con
-    elegir_carrier IGNORANDO el carrier guardado.
+    elegir_carrier IGNORANDO el carrier guardado. `aplicar=False` = solo
+    resolver, sin guardar el paquete ni dejar evento (diagnóstico).
     """
     carrier = paquete.carrier or ""
     servicio = paquete.servicio or ""
@@ -586,12 +592,12 @@ def _carrier_de_paquete(pedido, paquete):
         # Mesa sacó ESTA caja sin guía de carrier (2026-09-30): guía interna.
         return CARRIER_LOCAL, SERVICIO_LOCAL
     if forzado and carrier not in carriers_de_paquete(pedido, paquete):
-        return _replan_paquete(pedido, paquete, carrier)
+        return _replan_paquete(pedido, paquete, carrier, aplicar=aplicar)
     if not carrier or (carrier == CARRIER_LOCAL and not _flota_propia()):
         carrier, servicio = elegir_carrier(pedido)
     elif carrier != CARRIER_LOCAL and carrier not in carriers_del_pedido(pedido):
         # Plan viejo vs config nueva (#10): la config vigente manda al generar.
-        carrier, servicio = _replan_paquete(pedido, paquete, carrier)
+        carrier, servicio = _replan_paquete(pedido, paquete, carrier, aplicar=aplicar)
     return carrier, servicio
 
 

@@ -200,15 +200,10 @@ class CasoMixtoTests(PisoTestCase):
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
         services.cambiar_paqueteria_caja(pedido, Paquete.objects.get(pk=c1.pk), "local", self.mesa)
-        # Mi turno la lista como "sin guía: caja 1" y el wizard ofrece Reintentar guía aunque la caja 2 siga fuera.
+        # Sin guía de carrier no hay nada que comprar (2026-10-07): la guía interna de la caja 1
+        # sale ahí mismo; Mi turno ya no la lista "sin guía" ni el piso tiene que reintentar.
         self.login_piso()
-        self.assertIn("sin guía: caja 1", self.client.get(reverse("piso:home")).content.decode())
-        html = self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk])).content.decode()
-        self.assertIn('value="generar_guia"', html)
-        self.assertFalse(pedido.empaque_completo)
-        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value=""):
-            respuesta = self.client.post(reverse("piso:empaque_pedido", args=[pedido.pk]), {"accion": "generar_guia"}, follow=True)
-        self.assertContains(respuesta, "1 guía(s) listas")
+        self.assertNotIn("sin guía: caja 1", self.client.get(reverse("piso:home")).content.decode())
         pedido.refresh_from_db()
         c1 = Paquete.objects.get(pk=c1.pk)
         c2 = Paquete.objects.get(pk=c2.pk)

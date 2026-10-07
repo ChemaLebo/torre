@@ -282,6 +282,14 @@ def _motivos_detener():
     return MOTIVOS_DETENER
 
 
+def _render_empaque(request, contexto):
+    """Todos los pasos del wizard de empaque pintan la misma plantilla y todos
+    llevan el botón Detener: aquí entra su catálogo de motivos (Chema
+    2026-10-07: el dropdown salía vacío en los pasos de cierre y revisión)."""
+    contexto.setdefault("motivos_detener", _motivos_detener())
+    return render(request, "piso/empaque_pedido.html", contexto)
+
+
 def _operadores_piso(request):
     from django.contrib.auth.models import User
     return list(
@@ -1743,7 +1751,7 @@ def _render_revisar_caja(request, pedido, caja):
         "chips": _chips_cajas(cajas, actual=caja.numero),
     }
     contexto.update(_contexto_peso(caja))
-    return render(request, "piso/empaque_pedido.html", contexto)
+    return _render_empaque(request, contexto)
 
 
 def _render_paso_empacar(request, pedido, elegida=None):
@@ -1806,7 +1814,6 @@ def _render_paso_empacar(request, pedido, elegida=None):
             })
 
     contexto["operadores"] = _operadores_piso(request)
-    contexto["motivos_detener"] = _motivos_detener()
     contexto["duenio"] = pedido.asignado_a
     if cajas and pendientes:
         caja = pendientes[0]
@@ -1830,7 +1837,7 @@ def _render_paso_empacar(request, pedido, elegida=None):
             "cajas_cliente": _cajas_cliente(pedido),
         })
         contexto.update(_contexto_peso(caja))
-        return render(request, "piso/empaque_pedido.html", contexto)
+        return _render_empaque(request, contexto)
 
     # Legacy sin plan de paquetes (o plan ya empacado por fuera): 1 caja.
     esperado = pedido.peso_esperado_gr or 0
@@ -1847,7 +1854,7 @@ def _render_paso_empacar(request, pedido, elegida=None):
             entidad="pedido", entidad_id=str(pedido.pk), tipo="contenido",
         ).count(),
     })
-    return render(request, "piso/empaque_pedido.html", contexto)
+    return _render_empaque(request, contexto)
 
 
 def _render_cierre_o_exito(request, pedido, elegida=None):
@@ -1877,7 +1884,7 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
             "corral": _corral_de_carrier(_carrier_probable(pedido)),
             "chips": _chips_cajas(cajas),
         })
-        return render(request, "piso/empaque_pedido.html", contexto)
+        return _render_empaque(request, contexto)
 
     guias = list(
         pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
@@ -1912,7 +1919,7 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
     })
     if caja_cierre is not None:
         contexto.update(_contexto_peso(caja_cierre))
-    return render(request, "piso/empaque_pedido.html", contexto)
+    return _render_empaque(request, contexto)
 
 
 def _despachar_y_avisar(request, pedido, destino):

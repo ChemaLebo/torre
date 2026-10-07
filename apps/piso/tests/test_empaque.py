@@ -299,7 +299,9 @@ class DetenerEnEmpaqueTests(PisoTestCase):
 
         pedido = self.dejar_empacado(self.crear_pedido(cantidad=1))
         url = reverse("piso:empaque_pedido", args=[pedido.pk])
-        self.assertContains(self.client.get(url), 'value="detener"')
+        respuesta = self.client.get(url)
+        self.assertContains(respuesta, 'value="detener"')
+        self.assertContains(respuesta, '<option value="No encuentro el producto">')  # el dropdown trae motivos en todos los pasos (2026-10-07)
         respuesta = self.client.post(url, {"accion": "detener", "motivo": "No cabe / falta insumo de empaque"}, follow=True)
         self.assertRedirects(respuesta, reverse("piso:home"), fetch_redirect_response=False)
         pedido.refresh_from_db()
