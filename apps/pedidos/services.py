@@ -119,6 +119,8 @@ def reintentar_reservas_sku(sku):
             motivo="Entró stock y la reserva pendiente se completó sola.",
         )
         _tras_reserva(pedido, "sistema")
+        if completo:
+            _resolver_sku_si_completo(pedido, "sistema")
         logradas.append(pedido.folio)
     return logradas
 
@@ -872,6 +874,9 @@ def _aplicar_cambios_cantidades(pedido, payload, origen):
     """
     if pedido.estado in _ESTADOS_EDICION_TERMINAL:
         return
+    desconocidos = items_no_registrados(pedido, payload)
+    if desconocidos and pedido.estado in (Pedido.PENDIENTE, Pedido.EN_PICKING) and not pedido.detenido:
+        detener_por_producto_no_registrado(pedido, desconocidos)
     objetivo = _cantidades_objetivo(payload)
     if objetivo is None:
         return
@@ -955,6 +960,52 @@ def _aumentar_linea(pedido, filas, codigo, delta, aumentadas, conflictos, faltan
     if not reservada:
         faltantes_stock.append(f"Sin stock suficiente: {codigo} × {delta}")
     return (sku.peso_gr or 0) * delta
+
+
+def items_no_registrados(pedido, payload):
+    """Line items vivos (current_quantity > 0, o quantity sin la llave) de la
+    orden cuyo producto Torre no conoce para ese cliente: sin `sku` o con un
+    código que no existe. Lo que la incidencia "Producto no registrado"
+    reporta y lo que «Volver a leer la orden» vuelve a evaluar."""
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+
+    codigos = set(SKU.objects.filter(cliente=pedido.cliente).values_list("codigo", flat=True))
+    desconocidos = []
+    for item in payload.get("line_items") or []:
+        try:
+            cantidad = int(item.get("current_quantity") if "current_quantity" in item else item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            cantidad = 0
+        if cantidad <= 0:
+            continue
+        codigo = str(item.get("sku") or "").strip()
+        if not codigo or codigo not in codigos:
+            desconocidos.append(_item_desconocido(item, cantidad))
+    return desconocidos
+
+
+def detener_por_producto_no_registrado(pedido, desconocidos, usuario=None):
+    """Un producto de la orden no existe en Torre (Chema 2026-10-07): el pedido
+    se detiene (fuera de la cola) con la incidencia interna SKU "Producto no
+    registrado" con links a Shopify; correo solo a la lista fija. Nada de SKU
+    provisional: se da de alta el producto, se recibe, y Mesa «vuelve a leer
+    la orden». Regresa la incidencia (agrupada si ya había)."""
+    from apps.incidencias.services import texto_productos_no_registrados  # lazy por contrato
+
+    texto = texto_productos_no_registrados(pedido.tienda, desconocidos)
+    motivo = "Producto no registrado en Torre: " + ", ".join(d["titulo"] for d in desconocidos)
+    return detener_pedido(pedido, usuario, motivo[:300], origen="auto" if usuario is None else "manual", tipo="SKU", texto=texto)
+
+
+def _resolver_sku_si_completo(pedido, actor):
+    """Tras una reserva o una re-lectura: si el pedido estaba detenido por
+    producto no registrado y ya todas sus líneas existen y reservaron, la
+    incidencia SKU se resuelve y el pedido vuelve a la cola."""
+    if not pedido.detenido or pedido.lineas.filter(SIN_STOCK).exists():
+        return None
+    from apps.incidencias.services import resolver_producto_no_registrado  # lazy por contrato
+
+    return resolver_producto_no_registrado(pedido, actor)
 
 
 def _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos):
@@ -1252,14 +1303,28 @@ def _agregar_linea_kit(pedido, sku, cantidad, item, cancelada, faltantes):
     return peso
 
 
-def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes):
-    """Crea la línea del item (si su SKU existe) y reserva. Regresa (peso_gr, valor)."""
+def _item_desconocido(item, cantidad):
+    """Datos del line item cuyo producto Torre no conoce (para la incidencia SKU)."""
+    return {
+        "titulo": str(item.get("title") or "?"), "cantidad": cantidad, "sku": str(item.get("sku") or "").strip(),
+        "variant_id": str(item.get("variant_id") or ""), "product_id": str(item.get("product_id") or ""),
+    }
+
+
+def _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes, desconocidos=None):
+    """Crea la línea del item (si su SKU existe) y reserva. Regresa (peso_gr, valor).
+    Un producto que Torre no conoce va a `desconocidos` (incidencia interna
+    "Producto no registrado", el pedido nace detenido; Chema 2026-10-07), no
+    a `faltantes` (FAL = sin stock de un producto conocido)."""
     from apps.catalogo.models import SKU  # lazy: modelo de otra app
 
     codigo = str(item.get("sku") or "").strip()
     sku = SKU.objects.filter(cliente=pedido.cliente, codigo=codigo).first() if codigo else None
     if sku is None:
-        faltantes.append(f"SKU desconocido: {codigo or item.get('title', '?')} × {cantidad}")
+        if desconocidos is not None:
+            desconocidos.append(_item_desconocido(item, cantidad))
+        else:
+            faltantes.append(f"SKU desconocido: {codigo or item.get('title', '?')} × {cantidad}")
         return 0, Decimal("0")
     try:
         valor = Decimal(str(item.get("price") or "0")) * cantidad
@@ -1345,14 +1410,14 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
         estado=Pedido.PENDIENTE,
     )
 
-    faltantes = []
+    faltantes, desconocidos = [], []
     peso_esperado = 0
     valor_nuestro = Decimal("0")
     for item in payload.get("line_items") or []:
         cantidad = _cantidad_de_item(item, ticket)
         if not cantidad or cantidad <= 0:
             continue  # removida por refund/edición, o línea de otro ticket
-        peso, valor = _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes)
+        peso, valor = _agregar_linea_de_item(pedido, item, cantidad, cancelada, faltantes, desconocidos)
         peso_esperado += peso
         valor_nuestro += valor
 
@@ -1373,6 +1438,7 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
             "shopify_order_id": shopify_order_id,
             "lineas": pedido.lineas.count(),
             "faltantes": faltantes,
+            "no_registrados": [d["titulo"] for d in desconocidos],
             "es_local": pedido.es_local,
             "parcial": pedido.parcial_de_orden,
             "fos": ticket["fos"] if ticket else [],
@@ -1382,6 +1448,8 @@ def _crear_pedido_nuevo(tienda, payload, origen, shopify_order_id, cancelada):
 
     if faltantes and not cancelada:
         _abrir_incidencia_faltante(pedido, faltantes)
+    if desconocidos and not cancelada:
+        detener_por_producto_no_registrado(pedido, desconocidos)
 
     if cancelada:
         cancelar(pedido, actor=origen, motivo="Orden cancelada en Shopify antes de operarse")
@@ -1607,14 +1675,16 @@ MOTIVOS_DETENER = [
 ]
 
 
-def detener_pedido(pedido, usuario, motivo, origen="manual"):
+def detener_pedido(pedido, usuario, motivo, origen="manual", tipo="DET", texto=None):
     """Detenido en piso (Chema 2026-10-06): el pedido sale de la cola de Mi
     turno (detenido=True, sin dueño, con su avance), queda la incidencia
     interna DET con el motivo (una por pedido: un segundo motivo se suma al
     caso) y Mesa se entera por push y correo. `usuario` = quien lo detiene
     (su dueño o Mesa); None cuando Torre lo detiene sola (origen "auto":
     guía fallida con el carrier). Mesa lo reanuda al resolver la incidencia.
-    Sustituye a "Soltar pedido": un bloqueo ya no es invisible para Mesa."""
+    Sustituye a "Soltar pedido": un bloqueo ya no es invisible para Mesa.
+    `tipo`/`texto`: la incidencia interna que lo detiene (DET por default;
+    "SKU" con su texto para un producto no registrado, 2026-10-07)."""
     motivo = (motivo or "").strip()
     if not motivo:
         raise ValueError("Di por qué se detiene el pedido.")
@@ -1650,9 +1720,9 @@ def detener_pedido(pedido, usuario, motivo, origen="manual"):
         else:
             quien = f" ({_nombre_usuario(usuario)})" if usuario is not None else ""
             incidencia = abrir_incidencia(
-                pedido.cliente, Incidencia.TIPO_DET,
+                pedido.cliente, tipo,
                 Incidencia.ORIGEN_AUTO if origen == "auto" else Incidencia.ORIGEN_MANUAL,
-                pedido=pedido, texto=f"Detenido en piso{quien}: {motivo}", interna=True,
+                pedido=pedido, texto=texto or f"Detenido en piso{quien}: {motivo}", interna=True,
             )
     return incidencia
 

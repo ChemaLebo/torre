@@ -638,6 +638,15 @@ class ShopifyClient:
         return str((resultado.get("createdDefinition") or {}).get("id") or "")
 
     # ── pedidos (polling de respaldo) ──
+    def obtener_orden(self, order_id):
+        """GET /orders/{id}.json: la orden fresca (para volver a leerla)."""
+        try:
+            resp = self.sesion.get(f"{self.base}/orders/{order_id}.json", timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()["order"]
+        except (requests.RequestException, KeyError, ValueError) as exc:
+            raise ShopifyError(f"HTTP orders/{order_id}.json {self.tienda.dominio}: {exc}") from exc
+
     def _paginar_pedidos(self, params):
         """GET /orders.json paginado por Link header (tope MAX_PAGINAS_PEDIDOS)."""
         url = f"{self.base}/orders.json"

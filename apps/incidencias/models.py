@@ -80,6 +80,7 @@ class Incidencia(MaquinaEstados):
     TIPO_CDR = "CDR"   # cambio de dirección con guía comprada (2026-09-23)
     TIPO_PAQ = "PAQ"   # sin paquetería que cotice el pedido (2026-09-24; interna)
     TIPO_DET = "DET"   # detenido en piso (2026-10-06; interna): sale de la cola hasta que Mesa resuelva
+    TIPO_SKU = "SKU"   # producto no registrado en Torre (2026-10-07; interna): el pedido nace detenido
     TIPOS = [
         (TIPO_DAN, "Daño / rotura"),
         (TIPO_RET, "Retraso"),
@@ -91,6 +92,7 @@ class Incidencia(MaquinaEstados):
         (TIPO_CDR, "Cambio de dirección"),
         (TIPO_PAQ, "Sin paquetería que cotice"),
         (TIPO_DET, "Detenido en piso"),
+        (TIPO_SKU, "Producto no registrado"),
     ]
 
     # ── Prioridades ──

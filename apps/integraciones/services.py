@@ -1051,6 +1051,71 @@ def _reintentar_escritura(escritura):
 
 # ── Reconciliación (polling de respaldo) ─────────────────────────────────────
 
+def releer_orden(pedido, actor=None):
+    """«Volver a leer la orden» (Chema 2026-10-07): trae la orden fresca de
+    Shopify y la vuelve a ingerir como reconciliación (mismo camino que el
+    poller: registrar_webhook + procesar_webhook, idempotente por webhook_id).
+    Después evalúa el caso "Producto no registrado": si ya todas las líneas
+    existen y reservaron, la incidencia se resuelve y el pedido se reanuda; si
+    el producto existe pero no hay existencias, el pedido sigue detenido y
+    queda la nota; si aún no existe, se dice cuál. Regresa un dict con
+    `no_registrados`, `sin_stock`, `reanudado` y `mensaje`."""
+    from apps.pedidos.services import SIN_STOCK, _resolver_sku_si_completo, items_no_registrados  # lazy por contrato
+
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        raise ValueError(f"{pedido.folio} no viene de Shopify: no hay orden que releer.")
+    orden = ShopifyClient(tienda).obtener_orden(pedido.shopify_order_id)
+    webhook_id = f"releer:{tienda.pk}:{orden.get('id')}:{timezone.now():%Y%m%d%H%M%S%f}"
+    evento, _creado = registrar_webhook(
+        tienda, webhook_id, _topic_desde_payload(orden), orden, origen=WebhookEvento.ORIGEN_MANUAL,
+    )
+    procesar_webhook(evento)
+    pedido.refresh_from_db()
+    no_registrados = items_no_registrados(pedido, orden)
+    sin_stock = [l.sku.codigo for l in pedido.lineas.select_related("sku").filter(SIN_STOCK)]
+    reanudado = False
+    if not no_registrados and not sin_stock:
+        reanudado = _resolver_sku_si_completo(pedido, actor) is not None
+    if no_registrados:
+        mensaje = "Sigue(n) sin existir en Torre: " + ", ".join(d["titulo"] for d in no_registrados) + ". Da de alta el producto y vuelve a leer."
+    elif sin_stock:
+        mensaje = "Las líneas ya existen pero sin existencias: " + ", ".join(sin_stock) + ". Recibe el ASN; al entrar stock el pedido se reanuda solo."
+    elif reanudado:
+        mensaje = f"{pedido.folio} completo y con existencias: incidencia resuelta, el pedido vuelve a la cola."
+    else:
+        mensaje = f"{pedido.folio} releído: nada cambió."
+    registrar_evento(
+        "pedido", pedido.pk, "orden_releida", actor=actor, cliente=pedido.cliente,
+        delta={"no_registrados": [d["titulo"] for d in no_registrados], "sin_stock": sin_stock, "reanudado": reanudado},
+        motivo=mensaje[:300],
+    )
+    return {"no_registrados": no_registrados, "sin_stock": sin_stock, "reanudado": reanudado, "mensaje": mensaje}
+
+
+def releer_pedidos_con_producto_no_registrado():
+    """sync_shopify (cada 15 min): vuelve a leer los pedidos detenidos con una
+    incidencia SKU abierta, por si el producto ya existe y Mesa no apretó el
+    botón. Best-effort por pedido. Regresa cuántos se reanudaron."""
+    from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+    from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+
+    pks = Incidencia.objects.filter(
+        tipo=Incidencia.TIPO_SKU, estado__in=Incidencia.ESTADOS_ABIERTOS, pedido__detenido=True,
+    ).values_list("pedido_id", flat=True).distinct()
+    reanudados = 0
+    for pedido in Pedido.objects.filter(pk__in=list(pks)).select_related("tienda", "cliente"):
+        try:
+            if releer_orden(pedido, actor="sistema")["reanudado"]:
+                reanudados += 1
+        except Exception as exc:  # noqa: BLE001 — un pedido caído no frena el sync
+            SyncLog.objects.create(
+                tienda=pedido.tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
+                detalle=f"releer {pedido.folio}: {exc}"[:500],
+            )
+    return reanudados
+
+
 def _topic_desde_payload(payload):
     """Infere el topic de un pedido traído por polling (sin header de Shopify)."""
     if payload.get("cancelled_at"):

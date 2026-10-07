@@ -339,6 +339,7 @@ class FormNuevaIncidenciaMesa(forms.Form):
         campo.label_from_instance = self.etiqueta_pedido
         # "Sin paquetería que cotice" la abre el planificador y "Detenido en
         # piso" el botón Detener del piso (o Torre sola), no una persona en Mesa.
+        # "Producto no registrado" sí se levanta a mano (2026-10-07): detiene el pedido.
         self.fields["tipo"].choices = [
             (c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c not in (Incidencia.TIPO_PAQ, Incidencia.TIPO_DET)
         ]

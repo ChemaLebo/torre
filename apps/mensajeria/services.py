@@ -65,6 +65,7 @@ TIPO_INCIDENCIA_LEGIBLE = {
     "CDR": "cambio de dirección",
     "PAQ": "sin paquetería que cotice",
     "DET": "detenido en piso",
+    "SKU": "producto no registrado",
 }
 ESTADOS_INCIDENCIA_ABIERTOS = ("ABIERTA", "EN_CURSO", "RESOLUCION_PROPUESTA")
 

@@ -48,6 +48,13 @@
         <button class="btn chico" type="submit">Tomar (en curso)</button>
       </form>
       {% endif %}
+      {% if puede_releer %}
+      {# Producto no registrado (2026-10-07): con el producto ya dado de alta (y recibido), se vuelve a leer la orden de Shopify; si todo existe y reserva, el pedido se reanuda. #}
+      <form method="post">{% csrf_token %}
+        <input type="hidden" name="accion" value="releer_orden">
+        <button class="btn chico primario" type="submit" title="Trae la orden fresca de Shopify, crea las líneas que ya existan en Torre y, si todas reservan, reanuda el pedido">Volver a leer la orden</button>
+      </form>
+      {% endif %}
       {% if puede_cerrar %}
       <form method="post">{% csrf_token %}
         <input type="hidden" name="accion" value="cerrar">

@@ -32,9 +32,10 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_CDR: Incidencia.P1,  # hay que cancelar la guía ANTES de que salga
     Incidencia.TIPO_PAQ: Incidencia.P1,  # el pedido no puede salir hasta elegir paquetería
     Incidencia.TIPO_DET: Incidencia.P1,  # el pedido está parado en el piso hasta que Mesa resuelva
+    Incidencia.TIPO_SKU: Incidencia.P1,  # el pedido no puede surtirse: falta dar de alta el producto
 }
 # Tipos que detienen el pedido en piso: al resolverlos o cerrarlos, se reanuda.
-TIPOS_QUE_DETIENEN = (Incidencia.TIPO_DET, Incidencia.TIPO_PAQ)
+TIPOS_QUE_DETIENEN = (Incidencia.TIPO_DET, Incidencia.TIPO_PAQ, Incidencia.TIPO_SKU)
 
 
 def _nombre_actor(actor):
@@ -192,10 +193,12 @@ def abrir_incidencia(cliente, tipo, origen, pedido=None, sku=None, texto="", pri
 
 
 def avisar_por_correo(incidencia, evento, titulo, detalle=""):
-    """Correo a la lista de correos de incidencias (configuracion: la fija de
-    Torre más la del cliente) con pedido, folio, tipo, prioridad y motivo
-    (Chema 2026-10-06: "vital" que los bloqueos se vean fuera de Torre). Sale
-    en transaction.on_commit y es best-effort: un SMTP caído jamás bloquea la
+    """Correo a la lista de correos de incidencias (configuracion) con pedido,
+    folio, tipo, prioridad y motivo (Chema 2026-10-06: "vital" que los
+    bloqueos se vean fuera de Torre). Una incidencia INTERNA solo avisa a la
+    lista fija de Torre (Chema 2026-10-07: hablar con el cliente lo decide una
+    persona); las demás, a la fija más la del cliente. Sale en
+    transaction.on_commit y es best-effort: un SMTP caído jamás bloquea la
     operación (queda `correo_fallido`). Uno por incidencia y evento
     (`correo_enviado` en auditoría): reintentar no duplica. Sin destinatarios
     no manda nada y deja `correo_sin_destinatarios`."""
@@ -206,7 +209,7 @@ def avisar_por_correo(incidencia, evento, titulo, detalle=""):
         clave = f"{evento}:{incidencia.folio}"
         if EventoAuditoria.objects.filter(entidad="incidencia", entidad_id=incidencia.folio, accion="correo_enviado", motivo=clave).exists():
             return
-        destinatarios = correos_incidencias(incidencia.cliente)
+        destinatarios = correos_incidencias(None if incidencia.interna else incidencia.cliente)
         if not destinatarios:
             registrar_evento("incidencia", incidencia.folio, "correo_sin_destinatarios", cliente=incidencia.cliente, motivo=clave)
             return
@@ -799,6 +802,44 @@ def abrir_sin_paqueteria(pedido, detalle):
             delta={"origen": "auto", "estado": pedido.estado, "de": None}, motivo=texto[:300],
         )
     return incidencia
+
+
+def producto_no_registrado_abierta(pedido):
+    """La incidencia interna "Producto no registrado" abierta del pedido, o None."""
+    return (
+        Incidencia.objects.filter(pedido=pedido, tipo=Incidencia.TIPO_SKU, interna=True)
+        .exclude(estado=Incidencia.CERRADA).order_by("-pk").first()
+    )
+
+
+def texto_productos_no_registrados(tienda, desconocidos):
+    """Texto del caso: un renglón por producto con título, cantidad, ids y el
+    link al producto en el admin de Shopify (para darlo de alta desde ahí)."""
+    renglones = []
+    for d in desconocidos:
+        link = ""
+        if tienda is not None and d.get("product_id"):
+            link = f"https://{tienda.dominio}/admin/products/{d['product_id']}"
+            if d.get("variant_id"):
+                link += f"/variants/{d['variant_id']}"
+        renglones.append(
+            f"{d.get('titulo') or '?'} × {d.get('cantidad') or '?'}"
+            + (f" · SKU en Shopify: {d['sku']}" if d.get("sku") else " · sin SKU en Shopify")
+            + (f" · variante {d['variant_id']}" if d.get("variant_id") else "")
+            + (f" · {link}" if link else "")
+        )
+    return "Producto(s) no registrado(s) en Torre: " + "; ".join(renglones) + ". Dar de alta el producto (y recibirlo) y luego «Volver a leer la orden»."
+
+
+def resolver_producto_no_registrado(pedido, actor, motivo=""):
+    """Todas las líneas del pedido existen y reservaron: la incidencia SKU se
+    resuelve y el pedido se reanuda (hook _reanudar_si_detenia). Regresa la
+    incidencia resuelta o None si no había."""
+    inc = producto_no_registrado_abierta(pedido)
+    if inc is None:
+        return None
+    resolver(inc, motivo or "Producto dado de alta y con existencias: el pedido vuelve a la cola.", actor)
+    return inc
 
 
 def abiertas_fuera_de_sla():

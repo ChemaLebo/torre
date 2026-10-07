@@ -68,6 +68,7 @@ class CorreoAlAbrirIncidenciaTests(TestCase):
             inc = abrir_incidencia(self.colima, Incidencia.TIPO_PAQ, Incidencia.ORIGEN_AUTO, texto="Nadie cotiza.", interna=True)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("interna (bodega)", mail.outbox[0].body)
+        self.assertEqual(mail.outbox[0].to, ["ops@torre.mx"])  # interna: solo la lista fija de Torre (Chema 2026-10-07)
         CorreoIncidencias.objects.all().delete()
         with self.captureOnCommitCallbacks(execute=True):
             inc2 = abrir_incidencia(self.colima, Incidencia.TIPO_DIR, Incidencia.ORIGEN_MANUAL, texto="Sin número.")

@@ -26,6 +26,9 @@ class Command(BaseCommand):
                     f"{tienda.dominio}: catálogo {catalogo['nuevos']} SKU(s) nuevos por completar, "
                     f"{catalogo['renombrados']} renombrados, {catalogo['recodificados']} recodificados"
                 )
+        releidos = services.releer_pedidos_con_producto_no_registrado()
+        if releidos:
+            self.stdout.write(f"Producto no registrado: {releidos} pedido(s) reanudados al releer la orden")
         replays = services.reprocesar_pendientes()
         if replays:
             self.stdout.write(f"Replay: {replays} webhooks pendientes reprocesados")

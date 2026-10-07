@@ -430,6 +430,17 @@ def incidencia_nueva(request):
     form = FormNuevaIncidenciaMesa(request.POST or None, pedido_inicial=prellenado)
     if request.method == "POST" and form.is_valid():
         datos = form.cleaned_data
+        if datos["tipo"] == Incidencia.TIPO_SKU and datos["pedido_obj"] is not None:
+            # Producto no registrado a mano (Chema 2026-10-07, para capacitar a OPS): el
+            # pedido se detiene igual que si lo hubiera detectado la ingesta.
+            from apps.pedidos.services import detener_por_producto_no_registrado  # lazy por contrato
+
+            pedido_sku = datos["pedido_obj"]
+            incidencia = detener_por_producto_no_registrado(
+                pedido_sku, [{"titulo": datos["texto"] or "producto sin registrar", "cantidad": "?"}], usuario=request.user,
+            )
+            messages.success(request, f"Incidencia {incidencia.folio} abierta: {pedido_sku.folio} queda detenido hasta que el producto exista y se vuelva a leer la orden.")
+            return redirect("mesa:incidencia_detalle", pk=incidencia.pk)
         incidencia = abrir_incidencia(
             datos["cliente_obj"], datos["tipo"], Incidencia.ORIGEN_MANUAL,
             pedido=datos["pedido_obj"], sku=datos["sku_obj"], texto=datos["texto"],
@@ -463,6 +474,16 @@ def _gestionar_incidencia(request, incidencia):
             raise ValueError("Escribe la respuesta antes de enviarla.")
         responder(incidencia, autor=usuario, rol_autor="mesa", texto=texto)
         return "Respuesta publicada en el timeline (visible para el cliente)."
+
+    if accion == "releer_orden":
+        from apps.integraciones.services import releer_orden  # lazy por contrato
+
+        if incidencia.pedido is None:
+            raise ValueError("Esta incidencia no tiene pedido.")
+        try:
+            return releer_orden(incidencia.pedido, actor=request.user)["mensaje"]
+        except Exception as exc:  # noqa: BLE001 — Shopify caído: aviso, no traceback
+            raise ValueError(f"No se pudo leer la orden en Shopify: {exc}") from exc
 
     if accion == "nota_interna":
         if not texto:
@@ -679,6 +700,7 @@ def incidencia_detalle(request, pk):
         "fotos": fotos,
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,
+        "puede_releer": incidencia.tipo == Incidencia.TIPO_SKU and incidencia.abierta and incidencia.pedido_id is not None,
         **_contexto_cambio_direccion(incidencia),
         **_contexto_sin_paqueteria(incidencia),
         "url_shopify": url_orden_shopify(incidencia.pedido) if incidencia.pedido else "",
