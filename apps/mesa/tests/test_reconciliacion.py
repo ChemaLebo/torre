@@ -28,6 +28,7 @@ class BaseReconciliacionMesa(TestCase):
         cls.ubic_picking = Ubicacion.objects.create(codigo="A-01-1", tipo=Ubicacion.PICKING)
         cls.sku = SKU.objects.create(
             cliente=cls.colima, codigo="COLIMITA-SIX", descripcion="Colimita six pack", requiere_lote=False,
+            codigo_barras="7501234567890",
         )
         cls.url = reverse("mesa:inventario_reconciliar") + "?cliente=colima"
         cls.url_export = reverse("mesa:inventario_exportar_conteo") + "?cliente=colima"
@@ -73,8 +74,8 @@ class ExportarTests(BaseReconciliacionMesa):
         self.assertEqual(respuesta.status_code, 200)
         self.assertIn("conteo-colima-", respuesta["Content-Disposition"])
         cuerpo = respuesta.content.decode("utf-8")
-        self.assertTrue(cuerpo.startswith("﻿codigo,descripcion,lote,caducidad,ubicacion,vendible_actual,contado"))
-        self.assertIn("COLIMITA-SIX,Colimita six pack,,,A-01-1,20,20", cuerpo)
+        self.assertTrue(cuerpo.startswith("﻿codigo,descripcion,codigo_barras,lote,caducidad,ubicacion,vendible_actual,contado"))
+        self.assertIn("COLIMITA-SIX,Colimita six pack,7501234567890,,,A-01-1,20,20", cuerpo)
 
 
 class PreviaYAplicarTests(BaseReconciliacionMesa):

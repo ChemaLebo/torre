@@ -67,8 +67,14 @@ class ExportarConteoTests(BaseReconciliacion):
     def test_columnas_del_contrato(self):
         self.assertEqual(
             COLUMNAS_CSV_CONTEO,
-            ("codigo", "descripcion", "lote", "caducidad", "ubicacion", "vendible_actual", "contado"),
+            ("codigo", "descripcion", "codigo_barras", "lote", "caducidad", "ubicacion", "vendible_actual", "contado"),
         )
+
+    def test_lleva_el_codigo_de_barras_para_contar_con_escaner(self):
+        self.sku_lote.codigo_barras = "7501234567890"
+        self.sku_lote.save(update_fields=["codigo_barras"])
+        por = {(f["codigo"], f["lote"]): f for f in exportar_conteo(self.cliente)}
+        self.assertEqual(por[("PARAMO-SIX", "L-A")]["codigo_barras"], "7501234567890")
 
 
 class LeerCsvTests(TestCase):

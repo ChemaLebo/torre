@@ -1216,7 +1216,7 @@ def generar_conteo_ciclico(fecha=None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 COLUMNAS_CSV_CONTEO = (
-    "codigo", "descripcion", "lote", "caducidad", "ubicacion", "vendible_actual", "contado",
+    "codigo", "descripcion", "codigo_barras", "lote", "caducidad", "ubicacion", "vendible_actual", "contado",
 )
 _COLUMNAS_CSV_CONTEO_MINIMAS = ("codigo", "contado")
 
@@ -1228,7 +1228,8 @@ def exportar_conteo(cliente):
     una fila vacía para poder capturarlos; kits excluidos (jamás tienen stock).
 
     La importación lee SOLO codigo, lote, caducidad, ubicacion y contado; las
-    demás columnas viajan para que el archivo sea legible (descripcion) y para
+    demás columnas viajan para que el archivo sea legible (descripcion), para
+    contar con el escáner en mano (codigo_barras; Chema 2026-10-07) y para
     avisar si el stock se movió desde la exportación (vendible_actual).
     """
     from apps.catalogo.models import SKU
@@ -1251,6 +1252,7 @@ def exportar_conteo(cliente):
             filas.append({
                 "codigo": sku.codigo,
                 "descripcion": sku.descripcion,
+                "codigo_barras": sku.codigo_barras,
                 "lote": saldo.lote.codigo if saldo.lote else "",
                 "caducidad": cad.isoformat() if cad else "",
                 "ubicacion": saldo.ubicacion.codigo,
@@ -1259,7 +1261,7 @@ def exportar_conteo(cliente):
             })
         if not por_sku.get(sku.pk):
             filas.append({
-                "codigo": sku.codigo, "descripcion": sku.descripcion,
+                "codigo": sku.codigo, "descripcion": sku.descripcion, "codigo_barras": sku.codigo_barras,
                 "lote": "", "caducidad": "", "ubicacion": "",
                 "vendible_actual": 0, "contado": 0,
             })
@@ -1269,7 +1271,7 @@ def exportar_conteo(cliente):
 def leer_csv_conteo(texto):
     """Parsea el CSV de conteo. Regresa (filas, errores_de_archivo).
 
-    Cada fila: dict con codigo, descripcion, lote, caducidad, ubicacion,
+    Cada fila: dict con codigo, descripcion, codigo_barras, lote, caducidad, ubicacion,
     vendible_actual (str), contado (str crudo) y `numero` (renglón en Excel).
     Renglones totalmente vacíos se ignoran. Un CSV sin las columnas mínimas es
     un error de archivo (no de fila).
