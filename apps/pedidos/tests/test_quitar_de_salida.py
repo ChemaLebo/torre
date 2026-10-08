@@ -90,7 +90,7 @@ class QuitarDeSalidaTests(PisoTestCase):
         c1 = Paquete.objects.get(pk=c1.pk)
         with patch("apps.integraciones.services.cancelar_fulfillment_caja") as shopify, self.captureOnCommitCallbacks(execute=True):
             services.quitar_de_salida(pedido, c1, self.mesa, motivo="sale con la flota propia")
-        shopify.assert_called_once()
+        shopify.assert_not_called()  # fulfillment al llegar a Salida (2026-10-08): la caja lo conserva
         pedido.refresh_from_db()
         c1.refresh_from_db()
         c2.refresh_from_db()

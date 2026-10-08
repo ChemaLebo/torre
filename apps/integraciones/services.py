@@ -567,10 +567,12 @@ def _evento_inicial(api, tienda, pedido, fid, status, donde, ts=None):
 def marcar_fulfillment(pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", notificar=None):
     """Escribe en Shopify el fulfillment del pedido (o de sus cajas), con tracking.
 
-    Hermano del "va en camino" de mensajería (mismo momento canónico:
-    marcar_recolectado, vía on_commit) — con esto Shopify manda SU correo
-    nativo de envío (link a NUESTRA página brandeada) y el admin del cliente
-    muestra Fulfilled en vez de quedarse Unfulfilled para siempre.
+    Momento canónico desde 2026-10-08 (Chema): cuando la caja llega a Salida,
+    es decir, cuando nace su guía viva (fulfillment_en_salida); Shopify mide el
+    tiempo de surtido desde ahí y manda SU correo nativo de envío (link a
+    NUESTRA página brandeada). El manifiesto solo manda el evento "recogido"
+    (evento_recoleccion) y queda como respaldo para cajas que llegaron sin
+    fulfillment (empacadas antes del cambio, Shopify caído entonces).
 
     Con `cajas` (las que subieron a ESTE manifiesto) hay UN fulfillment POR
     CAJA: sus líneas (PaqueteLinea → line items de nuestras fulfillment
@@ -898,30 +900,142 @@ def cancelar_fulfillment_caja(pedido, caja, actor=None):
 
 
 def _cancelar_fulfillment(tienda, pedido, caja, fid, actor=None):
-    """fulfillmentCancel de UN fulfillment (ver cancelar_fulfillment_caja);
+    """fulfillmentCancel de UN fulfillment (ver cancelar_fulfillment_caja y
+    cancelar_fulfillments_en_bodega; `caja` None = el del pedido entero);
     también lo reproduce la cola de reintentos con el id guardado."""
+    donde = f"la caja {caja.numero} de {pedido.folio}" if caja is not None else f"el pedido {pedido.folio}"
     if not tienda.token:
         if not settings.DEBUG:
-            _log_push(tienda, False, f"quitar de salida: fulfillment {fid} de la caja {caja.numero} de {pedido.folio} NO se canceló (tienda sin token)")
+            _log_push(tienda, False, f"cancelar fulfillment: {fid} de {donde} NO se canceló (tienda sin token)")
             return False
-        _log_push(tienda, True, f"ok (mock): fulfillment {fid} de la caja {caja.numero} de {pedido.folio} cancelado")
+        _log_push(tienda, True, f"ok (mock): fulfillment {fid} de {donde} cancelado")
         return True
     try:
         ShopifyClient(tienda).cancelar_fulfillment(fid)
-    except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no frena el regreso de la caja
-        _log_push(tienda, False, f"quitar de salida: fulfillment {fid} de la caja {caja.numero} de {pedido.folio}: {exc}")
+    except Exception as exc:  # noqa: BLE001 — best-effort: Shopify caído no frena la operación
+        _log_push(tienda, False, f"cancelar fulfillment: {fid} de {donde}: {exc}")
         _encolar_escritura(
-            tienda, pedido, EscrituraShopifyPendiente.ACCION_CANCELAR, f"cancelar:{pedido.pk}:{caja.pk}:{fid}",
-            {"fid": fid, "caja": caja.pk}, exc,
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_CANCELAR,
+            f"cancelar:{pedido.pk}:{caja.pk if caja is not None else 'pedido'}:{fid}",
+            {"fid": fid, "caja": caja.pk if caja is not None else None}, exc,
         )
         return False
-    _log_push(tienda, True, f"quitar de salida: fulfillment {fid} de la caja {caja.numero} de {pedido.folio} cancelado en Shopify")
+    _log_push(tienda, True, f"cancelar fulfillment: {fid} de {donde} cancelado en Shopify")
     registrar_evento(
-        "paquete", caja.pk, "fulfillment_cancelado_shopify", actor=actor, cliente=pedido.cliente,
-        delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero, "fulfillment": fid},
-        motivo=f"La caja {caja.numero} de {pedido.folio} no salió: su fulfillment se canceló en Shopify.",
+        "paquete" if caja is not None else "pedido", caja.pk if caja is not None else pedido.pk,
+        "fulfillment_cancelado_shopify", actor=actor, cliente=pedido.cliente,
+        delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero if caja is not None else None, "fulfillment": fid},
+        motivo=f"{donde[0].upper() + donde[1:]} no salió: su fulfillment se canceló en Shopify.",
     )
     return True
+
+
+def fulfillment_en_salida(pedido, caja=None, guia=None):
+    """La caja llega a Salida: nace su guía viva (empaque, cambio de
+    paquetería, replaneo, reintento tras error del carrier) y con ella su
+    fulfillment en Shopify (Chema 2026-10-08: Shopify mide el tiempo de
+    surtido desde aquí; la guía y el link a nuestra página van desde el
+    principio). Caja sin fulfillment: marcar_fulfillment de ESA caja (el
+    primer fulfillment del pedido lleva el correo de envío de Shopify). Caja
+    que ya lo tiene (guía sustituida antes de salir: cambio de dirección o de
+    paquetería, reintento): fulfillmentTrackingInfoUpdate a la guía nueva,
+    sin correo. Sin caja (pedido sin plan): el pedido entero, mismas reglas.
+    Best-effort: jamás levanta; Shopify caído → cola de reintentos."""
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return False
+    fid = caja.shopify_fulfillment_id if caja is not None else pedido.shopify_fulfillment_id
+    if not fid:
+        return marcar_fulfillment(pedido, cajas=[caja] if caja is not None else None, evento_inicial=None)
+    return _retracking(pedido, tienda, caja, guia, fid)
+
+
+def _retracking(pedido, tienda, caja, guia, fid, notificar=False):
+    """El fulfillment ya escrito (de la caja o del pedido entero) apunta a la
+    guía viva nueva: fulfillmentTrackingInfoUpdate con carrier, número y
+    nuestra página (entrega propia: "WOP" sin número). Sin correo por default:
+    la caja sigue en bodega. Shopify caído → cola (ACCION_TRACKING con `fid`)."""
+    if guia is None:
+        guia = caja.guia_activa if caja is not None else next((g for g in pedido.guias.all() if g.es_activa), None)
+    if guia is None:
+        return True
+    carrier, numero = ("WOP", "") if guia.carrier == "local" else (guia.carrier, guia.numero)
+    donde = f"caja {caja.numero}" if caja is not None else "pedido entero"
+    if not tienda.token:
+        if not settings.DEBUG:
+            _log_push(tienda, False, f"rastreo nuevo de {pedido.folio} ({donde}) NO se escribió (tienda sin token)")
+            return False
+        _log_push(tienda, True, f"ok (mock): rastreo de {pedido.folio} ({donde}) → {numero or carrier}")
+        return True
+    try:
+        from apps.rastreo.services import url_publica  # lazy por contrato
+        ShopifyClient(tienda).actualizar_tracking_fulfillment(fid, carrier, numero, url_publica(pedido), notificar=notificar)
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        _log_push(tienda, False, f"rastreo nuevo de {pedido.folio} ({donde}): {exc}")
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_TRACKING,
+            f"retracking:{pedido.pk}:{caja.pk if caja is not None else 'pedido'}:{fid}",
+            {"caja": caja.pk if caja is not None else None, "fid": fid, "guia": guia.pk, "notificar": notificar}, exc,
+        )
+        return False
+    _log_push(tienda, True, f"rastreo de {pedido.folio} ({donde}) actualizado a {numero or 'entrega propia'} ({carrier})")
+    registrar_evento(
+        "paquete" if caja is not None else "pedido", caja.pk if caja is not None else pedido.pk,
+        "tracking_shopify_actualizado", cliente=pedido.cliente,
+        delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero if caja is not None else None,
+               "guia": numero, "carrier": carrier, "fulfillment": fid},
+        motivo="Guía sustituida antes de salir: el fulfillment de Shopify apunta a la guía nueva.",
+    )
+    return True
+
+
+def evento_recoleccion(pedido, cajas=None):
+    """Manifiesto firmado con el fulfillment ya escrito desde Salida: manda el
+    evento CARRIER_PICKED_UP a cada fulfillment (uno por id aunque dos cajas
+    lo compartan); sin `cajas`, al del pedido entero. Best-effort; requiere
+    el scope write_fulfillments (sin él queda en SyncLog como hoy)."""
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return False
+    fids = []
+    for caja in cajas or []:
+        if caja.shopify_fulfillment_id and caja.shopify_fulfillment_id not in fids:
+            fids.append(caja.shopify_fulfillment_id)
+    if cajas is None and pedido.shopify_fulfillment_id:
+        fids.append(pedido.shopify_fulfillment_id)
+    if not fids:
+        return True
+    if not tienda.token:
+        _log_push(tienda, settings.DEBUG, f"evento recogido de {pedido.folio}: tienda sin token" + (" (mock)" if settings.DEBUG else ""))
+        return settings.DEBUG
+    api = ShopifyClient(tienda)
+    todo_ok = True
+    for fid in fids:
+        donde = ", ".join(f"caja {c.numero}" for c in cajas or [] if c.shopify_fulfillment_id == fid) or "pedido entero"
+        todo_ok = _evento_inicial(api, tienda, pedido, fid, "CARRIER_PICKED_UP", donde) and todo_ok
+    return todo_ok
+
+
+def cancelar_fulfillments_en_bodega(pedido, actor=None):
+    """Cancelación con cajas ya en Salida (fulfillment al llegar a Salida,
+    Chema 2026-10-08): cada caja NO despachada con fulfillment lo cancela en
+    Shopify y se desliga (cancelar_fulfillment_caja: los compartidos solo se
+    desligan); un pedido sin plan con fulfillment propio y nada en la calle lo
+    cancela también. Las cajas despachadas siguen el camino de la CAN."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return True
+    todo_ok = True
+    for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).exclude(shopify_fulfillment_id="").order_by("numero"):
+        todo_ok = cancelar_fulfillment_caja(pedido, caja, actor) and todo_ok
+    fid = pedido.shopify_fulfillment_id
+    if fid and not pedido.paquetes.filter(estado=Paquete.DESPACHADO).exists():
+        type(pedido).objects.filter(pk=pedido.pk).update(shopify_fulfillment_id="")
+        pedido.shopify_fulfillment_id = ""
+        todo_ok = _cancelar_fulfillment(tienda, pedido, None, fid, actor) and todo_ok
+    return todo_ok
 
 
 def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=None):
@@ -1028,13 +1142,22 @@ def _reintentar_escritura(escritura):
             pedido, cajas=cajas or None, evento_inicial=datos.get("evento_inicial"), notificar=datos.get("notificar"),
         )
     if escritura.accion == EscrituraShopifyPendiente.ACCION_TRACKING:
-        caja = Paquete.objects.filter(pedido=pedido, pk=datos.get("caja")).first()
+        caja = Paquete.objects.filter(pedido=pedido, pk=datos.get("caja")).first() if datos.get("caja") else None
+        if datos.get("fid"):
+            # Guía sustituida antes de salir (fulfillment_en_salida): si la guía
+            # volvió a cambiar, su propio reintento la cubre.
+            guia = Guia.objects.filter(pedido=pedido, pk=datos.get("guia")).first()
+            if guia is None or not guia.es_activa:
+                return True
+            return _retracking(pedido, escritura.tienda, caja, guia, datos["fid"], bool(datos.get("notificar")))
         if caja is None or caja.shopify_fulfillment_id:
             return True  # ya no existe o ya quedó
         return _tracking_reposicion(pedido, escritura.tienda, [caja], datos.get("notificar"), datos.get("evento_inicial"))
     if escritura.accion == EscrituraShopifyPendiente.ACCION_CANCELAR:
-        caja = Paquete.objects.filter(pedido=pedido, pk=datos.get("caja")).first()
-        if caja is None or not datos.get("fid"):
+        if not datos.get("fid"):
+            return True
+        caja = Paquete.objects.filter(pedido=pedido, pk=datos.get("caja")).first() if datos.get("caja") else None
+        if datos.get("caja") and caja is None:
             return True  # la caja ya no existe: nada que cancelar
         return _cancelar_fulfillment(escritura.tienda, pedido, caja, datos["fid"])
     ts = parse_datetime(datos["ts"]) if datos.get("ts") else None

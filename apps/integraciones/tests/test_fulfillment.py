@@ -1,12 +1,15 @@
-"""Write-back de fulfillment a Shopify al firmar el manifiesto.
+"""Write-back de fulfillment a Shopify: al llegar la caja a Salida (nace su
+guía; Chema 2026-10-08) y, como respaldo, al firmar el manifiesto.
 
 Hermano del "va en camino" (mismo momento canónico, módulos separados):
 Shopify manda SU correo nativo de envío con el link a NUESTRA página brandeada
 y el admin del cliente muestra Fulfilled. Best-effort total: jamás bloquea.
 """
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from apps.envios.models import Guia
 from apps.envios.tests.base import crear_cliente, crear_pedido, crear_tienda
@@ -427,3 +430,112 @@ class BackfillEventosTests(BaseFulfillment):
             call_command("shopify_eventos_backfill", "--folio", self.pedido.folio, "--aplicar", stdout=salida)
         self.assertIn("ya tiene id", salida.getvalue())
         servicio_cls.return_value.crear_evento_fulfillment.assert_not_called()
+
+
+class DisparadorEnSalidaTests(BaseFulfillment):
+    """Fulfillment al llegar a Salida (Chema 2026-10-08): nace la guía viva de
+    la caja → fulfillment de esa caja; guía sustituida antes de salir →
+    rastreo nuevo sin correo; manifiesto → evento "recogido", sin crear otro;
+    cancelación en bodega → el fulfillment de la caja se cancela."""
+
+    def _caja(self, numero=1, fid=""):
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete
+
+        return Paquete.objects.create(
+            pedido=self.pedido, numero=numero, peso_kg=Decimal("4"), carrier="estafeta",
+            estado="EMPACADO", shopify_fulfillment_id=fid,
+        )
+
+    def test_nace_la_guia_y_sale_el_fulfillment_de_esa_caja_tras_el_commit(self):
+        from apps.envios.services import _crear_guia
+
+        caja = self._caja()
+        with patch("apps.integraciones.services.marcar_fulfillment") as marcar, \
+             self.captureOnCommitCallbacks(execute=True):
+            _crear_guia(self.pedido, "estafeta", "ground", paquete=caja)
+            marcar.assert_not_called()  # dentro de la transacción: nada
+        marcar.assert_called_once_with(self.pedido, cajas=[caja], evento_inicial=None)
+
+    def test_guia_sustituida_antes_de_salir_actualiza_el_rastreo_sin_correo(self):
+        from apps.envios.services import _crear_guia
+
+        caja = self._caja(fid="gid://shopify/Fulfillment/A")
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls, \
+             self.captureOnCommitCallbacks(execute=True):
+            api = cliente_cls.return_value
+            guia = _crear_guia(self.pedido, "estafeta", "ground", paquete=caja)
+        api.crear_fulfillment.assert_not_called()
+        api.actualizar_tracking_fulfillment.assert_called_once()
+        fid, carrier, numero, url = api.actualizar_tracking_fulfillment.call_args.args
+        self.assertEqual((fid, carrier, numero), ("gid://shopify/Fulfillment/A", "estafeta", guia.numero))
+        self.assertIn("/r/", url)
+        self.assertFalse(api.actualizar_tracking_fulfillment.call_args.kwargs["notificar"])
+
+    def test_pedido_manual_no_escribe_nada(self):
+        from apps.integraciones.services import fulfillment_en_salida
+
+        self.pedido.shopify_order_id = ""
+        self.pedido.save(update_fields=["shopify_order_id"])
+        with patch("apps.integraciones.services.marcar_fulfillment") as marcar:
+            self.assertFalse(fulfillment_en_salida(self.pedido, self._caja()))
+        marcar.assert_not_called()
+
+    def test_evento_recoleccion_uno_por_fulfillment(self):
+        from apps.integraciones.services import evento_recoleccion
+
+        c1 = self._caja(1, fid="gid://shopify/Fulfillment/A")
+        c2 = self._caja(2, fid="gid://shopify/Fulfillment/A")  # media caja: comparte el id
+        c3 = self._caja(3)
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            self.assertTrue(evento_recoleccion(self.pedido, [c1, c2, c3]))
+        api.crear_evento_fulfillment.assert_called_once()
+        self.assertEqual(api.crear_evento_fulfillment.call_args.args[:2], ("gid://shopify/Fulfillment/A", "CARRIER_PICKED_UP"))
+
+    def test_manifiesto_con_fulfillment_previo_manda_recogido_y_no_crea_otro(self):
+        from apps.pedidos.services import marcar_recolectado
+
+        self.pedido.estado = "GUIA_GENERADA"
+        self.pedido.shopify_fulfillment_id = "gid://shopify/Fulfillment/Z"
+        self.pedido.save(update_fields=["estado", "shopify_fulfillment_id"])
+        crear_guia(self.pedido)
+        with patch("apps.integraciones.services.marcar_fulfillment") as marcar, \
+             patch("apps.integraciones.services.evento_recoleccion") as evento, \
+             patch("apps.mensajeria.services.enviar_en_camino"):
+            with self.captureOnCommitCallbacks(execute=True):
+                marcar_recolectado(self.pedido, None)
+        marcar.assert_not_called()
+        evento.assert_called_once_with(self.pedido)
+
+    def test_cancelacion_en_bodega_cancela_el_fulfillment_de_la_caja(self):
+        from apps.pedidos.services import cancelar
+
+        self.pedido.estado = "GUIA_GENERADA"
+        self.pedido.save(update_fields=["estado"])
+        caja = self._caja(fid="gid://shopify/Fulfillment/A")
+        with patch("apps.integraciones.services.cancelar_fulfillment_caja") as cancelar_caja:
+            cancelar(self.pedido, None, "ya no lo quiere")
+        cancelar_caja.assert_called_once()
+        self.assertEqual(cancelar_caja.call_args.args[1], caja)
+
+    def test_cola_reproduce_el_rastreo_nuevo_con_el_id_guardado(self):
+        from apps.envios.models import Guia
+        from apps.integraciones.models import EscrituraShopifyPendiente
+        from apps.integraciones.services import reintentar_escrituras_shopify
+
+        caja = self._caja(fid="gid://shopify/Fulfillment/A")
+        guia = Guia.objects.create(pedido=self.pedido, paquete=caja, carrier="estafeta", numero="ETQ-9")
+        EscrituraShopifyPendiente.objects.create(
+            tienda=self.tienda, pedido=self.pedido, accion=EscrituraShopifyPendiente.ACCION_TRACKING,
+            clave=f"retracking:{self.pedido.pk}:{caja.pk}:gid://shopify/Fulfillment/A",
+            datos={"caja": caja.pk, "fid": "gid://shopify/Fulfillment/A", "guia": guia.pk, "notificar": False},
+            ultimo_error="caída", vence=timezone.now() + timedelta(hours=1),
+        )
+        with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
+            api = cliente_cls.return_value
+            resumen = reintentar_escrituras_shopify()
+        self.assertEqual((resumen["ok"], resumen["error"]), (1, 0))
+        self.assertEqual(api.actualizar_tracking_fulfillment.call_args.args[2], "ETQ-9")
+        self.assertFalse(EscrituraShopifyPendiente.objects.exists())

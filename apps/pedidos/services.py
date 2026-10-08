@@ -2797,21 +2797,34 @@ def marcar_recolectado(pedido, actor, paquetes=None):
             pass
         else:
             enviar_en_camino(pedido)
-    # Hermano del "va en camino": el fulfillment en Shopify sale del MISMO
-    # momento canónico (correo nativo de envío + Fulfilled en el admin del
-    # cliente). Con cajas, UN fulfillment por caja que sube a ESTE camión
-    # (Shopify muestra Partially fulfilled hasta la última); sin cajas, el
-    # pedido entero. Best-effort total en on_commit: Shopify jamás bloquea
-    # un manifiesto.
+    # Fulfillment al llegar a Salida (Chema 2026-10-08): normalmente ya existe
+    # desde que nació la guía (integraciones.fulfillment_en_salida); aquí solo
+    # va el evento "recogido por la paquetería". Las cajas que llegan sin
+    # fulfillment (empacadas antes del cambio, o Shopify caído entonces) lo
+    # reciben ahora, como respaldo: UN fulfillment por caja que sube a ESTE
+    # camión; sin cajas, el pedido entero. Best-effort total en on_commit:
+    # Shopify jamás bloquea un manifiesto.
     cajas_fuera = list(salen)
 
     def _fulfillment():
         try:
-            from apps.integraciones.services import marcar_fulfillment  # lazy
+            from apps.envios.models import Paquete  # lazy: modelo de otra app
+            from apps.integraciones.services import evento_recoleccion, marcar_fulfillment  # lazy
             if cajas_fuera:
-                marcar_fulfillment(pedido, cajas=cajas_fuera, notificar=primer_manifiesto)
+                fids = dict(Paquete.objects.filter(pk__in=[c.pk for c in cajas_fuera]).values_list("pk", "shopify_fulfillment_id"))
+                for caja in cajas_fuera:
+                    caja.shopify_fulfillment_id = fids.get(caja.pk, caja.shopify_fulfillment_id)
+                sin_fulfillment = [c for c in cajas_fuera if not c.shopify_fulfillment_id]
+                if sin_fulfillment:
+                    marcar_fulfillment(pedido, cajas=sin_fulfillment, notificar=primer_manifiesto)
+                evento_recoleccion(pedido, [c for c in cajas_fuera if c.shopify_fulfillment_id])
             else:
-                marcar_fulfillment(pedido, notificar=primer_manifiesto)
+                fid = Pedido.objects.filter(pk=pedido.pk).values_list("shopify_fulfillment_id", flat=True).first()
+                if fid:
+                    pedido.shopify_fulfillment_id = fid
+                    evento_recoleccion(pedido)
+                else:
+                    marcar_fulfillment(pedido, notificar=primer_manifiesto)
         except Exception:
             pass
     transaction.on_commit(_fulfillment)
@@ -2909,10 +2922,10 @@ def quitar_de_salida(pedido, caja, actor, motivo=""):
     PARCIALMENTE_DESPACHADO; si era la última, vuelve a EMPACADO sin dueño y
     sin ts_recolectado (la siguiente salida lo vuelve a estampar). Después,
     desde el detalle, Mesa le cambia la paquetería a la caja (incluida la
-    salida sin guía) y el piso recompra la guía. 5) Shopify, best-effort en
-    on_commit: el fulfillment de ESA caja se cancela y se desliga
-    (integraciones.cancelar_fulfillment_caja) para que la siguiente salida
-    escriba uno nuevo; sin correo al comprador. Auditado como
+    salida sin guía) y el piso recompra la guía. 5) Shopify (fulfillment al
+    llegar a Salida, 2026-10-08): el fulfillment de la caja se queda tal
+    cual, la caja sigue en bodega; la guía nueva le actualiza el rastreo
+    (integraciones.fulfillment_en_salida). Auditado como
     caja_quitada_de_salida (manifiesto, chofer, lo devuelto). Regresa la caja."""
     from apps.catalogo.models import Ubicacion  # lazy: modelo de otra app
     from apps.envios.models import LineaManifiesto, Paquete  # lazy: modelos de otra app
@@ -2968,14 +2981,6 @@ def quitar_de_salida(pedido, caja, actor, motivo=""):
             },
             motivo=(motivo or f"Caja {caja.numero} quitada de salida: guía cancelada y el carrier no la recogió.")[:300],
         )
-
-        def _shopify():
-            try:
-                from apps.integraciones.services import cancelar_fulfillment_caja  # lazy
-                cancelar_fulfillment_caja(fresco, caja, actor)
-            except Exception:  # noqa: BLE001, S110 — best-effort: Shopify jamás frena el regreso de la caja
-                pass
-        transaction.on_commit(_shopify)
     pedido.estado = fresco.estado
     return caja
 
@@ -3392,7 +3397,20 @@ def _devolver_stock_y_cancelar(pedido, actor, motivo, tardia=False):
             f"({', '.join(en_calle)}); lo de bodega ya se liberó o reingresó. {motivo}".strip(),
         )
     _cancelar_guias_best_effort(pedido, actor)
+    _cancelar_fulfillments_en_bodega(pedido, actor)
     return pedido
+
+
+def _cancelar_fulfillments_en_bodega(pedido, actor):
+    """Fulfillment al llegar a Salida (Chema 2026-10-08): una caja cancelada en
+    bodega puede tener ya su fulfillment en Shopify; se cancela para que sus
+    líneas vuelvan a "por surtir" (integraciones.cancelar_fulfillments_en_bodega;
+    las despachadas siguen el camino de la CAN). Best-effort, lazy."""
+    try:
+        from apps.integraciones.services import cancelar_fulfillments_en_bodega  # lazy
+        cancelar_fulfillments_en_bodega(pedido, actor)
+    except Exception:  # noqa: BLE001, S110 — best-effort: Shopify jamás frena una cancelación
+        pass
 
 
 def _cancelar_guias_best_effort(pedido, actor):

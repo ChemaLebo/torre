@@ -516,6 +516,17 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
             "costo_preferencial": str(guia.costo_preferencial),
         },
     )
+
+    def _salida():
+        # Fulfillment al llegar a Salida (Chema 2026-10-08): la guía viva de una
+        # caja en bodega escribe su fulfillment en Shopify (o le actualiza el
+        # rastreo si la caja ya lo tenía). Best-effort y tras el commit.
+        try:
+            from apps.integraciones.services import fulfillment_en_salida  # lazy por contrato
+            fulfillment_en_salida(pedido, paquete, guia)
+        except Exception:  # noqa: BLE001, S110 — Shopify jamás frena una guía
+            pass
+    transaction.on_commit(_salida)
     return guia
 
 

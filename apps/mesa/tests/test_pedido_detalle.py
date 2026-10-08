@@ -292,7 +292,7 @@ class QuitarDeSalidaTests(PisoTestCase):
         self.assertIn("Quitar de salida", html)
         with patch("apps.integraciones.services.cancelar_fulfillment_caja") as shopify, self.captureOnCommitCallbacks(execute=True):
             respuesta = self.client.post(url, {"accion": "quitar_de_salida_caja", "folio": pedido.folio, "caja": c1.pk}, follow=True)
-        shopify.assert_called_once()
+        shopify.assert_not_called()  # fulfillment al llegar a Salida (2026-10-08): la caja lo conserva
         self.assertContains(respuesta, "Caja 1 de " + pedido.folio + " quitada de salida")
         self.assertContains(respuesta, "parcialmente despachado")
         pedido.refresh_from_db()
