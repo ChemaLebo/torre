@@ -63,7 +63,17 @@
           <td></td>
           <td colspan="4" class="small">{% if p.mezclado %}<span class="pill warn" title="En esta posición hay otro lote de este producto: {{ p.mezclado|join:', ' }}">lotes mezclados</span>{% endif %}</td>
           <td class="mono">{{ p.ubicacion.codigo }}</td>
-          <td class="derecha mono">{{ p.cantidad }}</td>
+          <td class="derecha mono">
+            {% if editable %}
+            {# Ubicadas en esta posición, editable (Chema 2026-10-07): subir toma de "sin acomodar"; bajar regresa la diferencia a recepción. #}
+            <form method="post" class="fila campos-editor" style="justify-content:flex-end">{% csrf_token %}
+              <input type="hidden" name="accion" value="ubicadas"><input type="hidden" name="linea_id" value="{{ f.linea.pk }}"><input type="hidden" name="origen" value="{{ p.ubicacion.codigo }}">
+              <label>Ubicadas<input type="number" name="ubicadas" value="{{ p.cantidad }}" min="0" style="width:80px"></label>
+              <label>Motivo<input type="text" name="motivo" placeholder="por qué" style="width:120px" required></label>
+              <button class="btn chico" type="submit">Guardar ubicadas</button>
+            </form>
+            {% else %}{{ p.cantidad }}{% endif %}
+          </td>
           <td>
             {% if editable %}
             <form method="post" class="fila campos-editor">{% csrf_token %}

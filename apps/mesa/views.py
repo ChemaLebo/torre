@@ -2430,6 +2430,25 @@ def _recepcion_editar_accion(request, orden):
     if accion == "conteo":
         d_c, d_d = corregir_conteo(orden, linea, P.get("contadas") or 0, P.get("danadas") or 0, actor, motivo)
         return f"{etiqueta}: contadas {d_c:+d}, dañadas {d_d:+d}."
+    if accion == "ubicadas":
+        # Editar el número de ubicadas de una posición (Chema 2026-10-07): subir
+        # toma de "sin acomodar" (recepción); bajar regresa la diferencia ahí.
+        from apps.inventario.services import ubicadas_en  # lazy por contrato
+
+        origen = _posicion(P.get("origen"))
+        nuevo = int(P.get("ubicadas") or 0)
+        actual = ubicadas_en(linea, origen)
+        delta = nuevo - actual
+        if delta == 0:
+            return f"{etiqueta} en {origen.codigo}: sigue en {actual}."
+        if delta > 0:
+            try:
+                acomodar_desde_editor(orden, linea, origen, delta, actor, motivo)
+            except ValueError as exc:
+                raise ValueError(f"{exc} Para poner {nuevo} en {origen.codigo} primero sube las contadas de la línea (las piezas nuevas entran a recepción).") from exc
+            return f"{etiqueta} en {origen.codigo}: {actual} → {nuevo} (+{delta} desde recepción)."
+        regresar_acomodo(orden, linea, origen, -delta, actor, motivo)
+        return f"{etiqueta} en {origen.codigo}: {actual} → {nuevo} ({-delta} de vuelta a recepción, sin acomodar)."
     cantidad = P.get("cantidad") or 0
     if accion == "mover":
         origen, destino = _posicion(P.get("origen")), _posicion(P.get("destino"))

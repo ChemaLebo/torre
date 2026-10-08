@@ -159,3 +159,20 @@ class EditorRecepcionTests(PisoTestCase):
         self.assertContains(respuesta, "Dónde quedó")
         self.assertContains(respuesta, "TAR-04")
         self.assertNotContains(respuesta, "Editar recepción")
+
+    def test_editar_ubicadas_de_una_posicion(self):
+        # Subir sin piezas en recepción: aviso claro, nada cambia.
+        respuesta = self._post(accion="ubicadas", linea_id=self.linea.pk, origen="PIC-3-I-F-2", ubicadas=50, motivo="había más")
+        self.assertContains(respuesta, "primero sube las contadas")
+        self.assertEqual(self._vendible(), [("PIC-2-D-B-1", 38), ("PIC-3-I-F-2", 30), ("PIC-4-I-F-1", 38)])
+        # Con piezas en recepción (contadas +20) sí sube; bajar regresa la diferencia a recepción.
+        self._post(accion="conteo", linea_id=self.linea.pk, contadas=164, danadas=0, motivo="faltaban 20 por contar")
+        respuesta = self._post(accion="ubicadas", linea_id=self.linea.pk, origen="PIC-3-I-F-2", ubicadas=50, motivo="caben")
+        self.assertContains(respuesta, "PIC-3-I-F-2: 30 → 50 (+20 desde recepción)")
+        self.assertEqual(self._vendible(), [("PIC-2-D-B-1", 38), ("PIC-3-I-F-2", 50), ("PIC-4-I-F-1", 38)])
+        self.assertEqual(realidad_recepcion(self.orden)[0]["en_recepcion"], 0)
+        respuesta = self._post(accion="ubicadas", linea_id=self.linea.pk, origen="PIC-3-I-F-2", ubicadas=45, motivo="eran menos")
+        self.assertContains(respuesta, "PIC-3-I-F-2: 50 → 45 (5 de vuelta a recepción")
+        self.assertEqual(realidad_recepcion(self.orden)[0]["en_recepcion"], 5)
+        respuesta = self._post(accion="ubicadas", linea_id=self.linea.pk, origen="PIC-3-I-F-2", ubicadas=45, motivo="x")
+        self.assertContains(respuesta, "sigue en 45")

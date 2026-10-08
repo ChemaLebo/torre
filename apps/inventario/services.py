@@ -2657,6 +2657,11 @@ def _saldos_de_linea(sku, codigo_lote, estado):
     return consulta.filter(lote__codigo=codigo_lote) if codigo_lote else consulta.filter(lote__isnull=True)
 
 
+def ubicadas_en(linea, ubicacion):
+    """Piezas vendibles del lote de la línea en esa posición (lo que el editor muestra como "ubicadas")."""
+    return sum(s.cantidad for s in _saldos_de_linea(linea.sku, (linea.lote_codigo or "").strip(), Saldo.UBICADO_VENDIBLE).filter(ubicacion=ubicacion))
+
+
 def realidad_recepcion(orden):
     """Tabla "Realidad" de la orden: por línea (SKU · lote) lo anunciado,
     contado y dañado, y por posición cuántas hay vendibles con ese lote (más
