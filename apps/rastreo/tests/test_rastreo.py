@@ -191,3 +191,133 @@ class TestBrandingPorCliente(BaseRastreo):
     def test_dominio_con_esquema_se_respeta(self):
         cuerpo = self._pagina(dominio_tienda="http://tienda.local:8080")
         self.assertIn('href="http://tienda.local:8080"', cuerpo)
+
+
+class TestPaquetes(BaseRastreo):
+    """Chema 2026-10-08: estado, línea de tiempo y fechas POR PAQUETE; la guía
+    es un link al rastreo del carrier; sin línea de tiempo del pedido."""
+
+    def _caja(self, carrier="estafeta", estado="EMPACADO", numero=1):
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete, PaqueteLinea
+
+        caja = Paquete.objects.create(
+            pedido=self.pedido, numero=numero, peso_kg=Decimal("4"), carrier=carrier, estado=estado,
+        )
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=self.pedido.lineas.first(), cantidad=1)
+        return caja
+
+    def _guia(self, caja, carrier="estafeta", numero="EST-77", dias=3, **extra):
+        from apps.envios.models import Guia
+
+        return Guia.objects.create(
+            pedido=self.pedido, paquete=caja, carrier=carrier, numero=numero, proveedor="mock",
+            dias_promesa=dias, **extra,
+        )
+
+    def _salida(self, caja, guia, no_salio=False):
+        from apps.envios.models import LineaManifiesto, Manifiesto
+
+        hoja = Manifiesto.objects.create(carrier=guia.carrier)
+        return LineaManifiesto.objects.create(
+            manifiesto=hoja, pedido=self.pedido, paquete=caja, guia=guia, numero_guia=guia.numero,
+            caja=caja.numero, no_salio=no_salio,
+        )
+
+    def _html(self):
+        return self.client.get(f"/r/{self.token}/").content.decode()
+
+    def test_listo_para_salir_con_link_y_promesa_en_dias(self):
+        caja = self._caja()
+        self._guia(caja)
+        html = self._html()
+        self.assertIn("Listo para salir", html)
+        self.assertIn('href="https://cs.estafeta.com/es/Tracking/searchByGet?wayBill=EST-77"', html)
+        self.assertIn("Rastrea tu guía", html)
+        self.assertIn("Tu paquete está programado para llegar 3 días después de que salga, sin contar domingos.", html)
+        self.assertNotIn("Llega a más tardar", html)
+        self.assertNotIn('class="linea-tiempo"', html)
+        self.assertIn("Empacado con cuidado", html)   # paso de la caja
+        self.assertIn("Recolectado por la paquetería", html)
+
+    def test_ya_salio_fecha_programada_y_paso_con_hora(self):
+        from datetime import date
+
+        caja = self._caja()
+        guia = self._guia(caja, fecha_compromiso=date(2099, 10, 10))
+        self._salida(caja, guia)
+        html = self._html()
+        self.assertIn("Salió de nuestra bodega", html)
+        self.assertIn("Fecha programada de entrega: <b>10 de Octubre</b>", html)
+        self.assertNotIn("después de que salga", html)
+
+    def test_vencida_sin_entrega_dice_retraso(self):
+        from datetime import date
+
+        caja = self._caja()
+        guia = self._guia(caja, fecha_compromiso=date(2020, 1, 1), estado="EN_TRANSITO")
+        self._salida(caja, guia)
+        html = self._html()
+        self.assertIn("La paquetería va con retraso; ya estamos encima.", html)
+        self.assertIn("En camino", html)
+
+    def test_entregado_sin_fecha(self):
+        from datetime import date
+
+        caja = self._caja()
+        guia = self._guia(caja, fecha_compromiso=date(2099, 10, 10), estado="ENTREGADO")
+        self._salida(caja, guia)
+        html = self._html()
+        self.assertIn('class="chip entregado">Entregado<', html)
+        self.assertNotIn("Fecha programada", html)
+        self.assertNotIn("después de que salga", html)
+
+    def test_entrega_local_sin_numero_ni_pasos_de_paqueteria(self):
+        caja = self._caja(carrier="local")
+        self._guia(caja, carrier="local", numero="LOCAL-0001", dias=1)
+        html = self._html()
+        self.assertIn("Entrega local", html)
+        self.assertNotIn("LOCAL-0001", html)
+        self.assertNotIn("Rastrea tu guía", html)
+        self.assertIn("Tu paquete llega al día siguiente de que salga.", html)
+        self.assertNotIn("Recolectado por la paquetería", html)
+
+    def test_dos_cajas_cada_una_con_su_estado(self):
+        from datetime import date
+
+        caja1 = self._caja(numero=1)
+        caja2 = self._caja(numero=2)
+        guia1 = self._guia(caja1, numero="EST-1", fecha_compromiso=date(2099, 10, 10))
+        self._guia(caja2, numero="EST-2")
+        self._salida(caja1, guia1)
+        html = self._html()
+        self.assertIn("Paquete 1 de 2", html)
+        self.assertIn("Paquete 2 de 2", html)
+        self.assertIn("Salió de nuestra bodega", html)
+        self.assertIn("Listo para salir", html)
+
+    def test_quitada_de_salida_se_quedo_en_bodega(self):
+        caja = self._caja()
+        guia = self._guia(caja)
+        self._salida(caja, guia, no_salio=True)
+        html = self._html()
+        self.assertIn("Se quedó en bodega; sale en la siguiente salida", html)
+
+    def test_guia_cancelada_y_nueva_avisa_el_cambio(self):
+        caja = self._caja()
+        self._guia(caja, numero="EST-VIEJA", estado="CANCELADA")
+        self._guia(caja, numero="EST-NUEVA")
+        html = self._html()
+        self.assertIn("EST-NUEVA", html)
+        self.assertNotIn("EST-VIEJA", html)
+        self.assertIn("Cambiamos la guía de este paquete", html)
+
+    def test_detenido_se_dice_en_revision(self):
+        self.pedido.estado = "EN_PICKING"
+        self.pedido.detenido = True
+        self.pedido.save(update_fields=["estado", "detenido"])
+        self._caja(estado="PLANEADO")
+        html = self._html()
+        self.assertIn("Estamos revisando tu pedido antes de que salga", html)
+        self.assertIn("Preparando tu pedido", html)

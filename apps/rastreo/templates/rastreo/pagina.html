@@ -40,23 +40,17 @@
   .estado-hero p { color: var(--tenue); margin-top: 6px; }
   .folio { font-size: 13px; color: var(--tenue); margin-top: 10px; letter-spacing: .06em; }
 
-  .linea-tiempo { display: flex; margin: 10px 0 28px; }
-  .lt-paso { flex: 1; text-align: center; position: relative; }
-  .lt-paso::before {
-    content: ""; position: absolute; top: 10px; left: -50%; width: 100%;
-    height: 3px; background: var(--suave);
-  }
-  .lt-paso:first-child::before { display: none; }
-  .lt-paso.hecho::before { background: var(--primario); }
-  .lt-punto {
-    width: 22px; height: 22px; border-radius: 50%;
-    background: var(--tarjeta); border: 3px solid var(--suave);
-    margin: 0 auto 8px; position: relative; z-index: 1;
-  }
-  .lt-paso.hecho .lt-punto { background: var(--primario); border-color: var(--primario); }
-  .lt-nombre { font-size: 12px; }
-  .lt-paso.hecho .lt-nombre { font-weight: 700; }
-  .lt-fecha { font-size: 10.5px; color: var(--tenue); }
+  /* Pasos por paquete (Chema 2026-10-08): lista vertical, cada paso con su hora. */
+  .pasos { list-style: none; padding: 0; margin: 12px 0 4px; }
+  .pasos li { position: relative; padding: 0 0 12px 28px; font-size: 13.5px; color: var(--tenue); }
+  .pasos li::before { content: ""; position: absolute; left: 7px; top: 16px; bottom: -2px; width: 2px; background: var(--suave); }
+  .pasos li:last-child::before { display: none; }
+  .pasos .punto { position: absolute; left: 0; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--tarjeta); border: 3px solid var(--suave); }
+  .pasos li.hecho { color: var(--texto); }
+  .pasos li.hecho .punto { background: var(--primario); border-color: var(--primario); }
+  .pasos li.hecho:not(.actual)::before { background: var(--primario); }
+  .pasos li.actual .nombre { font-weight: 700; }
+  .pasos .hora { display: block; font-size: 11.5px; color: var(--tenue); }
 
   .tarjeta {
     background: var(--tarjeta); border-radius: 12px;
@@ -72,6 +66,8 @@
     padding: 3px 12px; border-radius: 999px;
   }
   .chip.entregado { background: var(--primario); color: #fff; }
+  .chip.alerta { color: #8A5A00; border-color: #C98A00; }
+  .guia.alerta { color: #8A5A00; font-weight: 700; }
   .contenido { margin: 10px 0 4px; padding-left: 18px; color: var(--texto); font-size: 14.5px; }
   .guia { font-size: 13px; color: var(--tenue); margin-top: 8px; }
   .guia code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--fondo); padding: 2px 7px; border-radius: 5px; }
@@ -129,34 +125,42 @@
     <div class="folio">PEDIDO {{ pedido.folio }}{% if pedido.shopify_order_name %} · ORDEN {{ pedido.shopify_order_name }}{% endif %}</div>
   </div>
 
-  <div class="linea-tiempo">
-    {% for paso in timeline %}
-    <div class="lt-paso {% if paso.hecho %}hecho{% endif %}">
-      <div class="lt-punto"></div>
-      <div class="lt-nombre">{{ paso.paso }}</div>
-      {% if paso.ts %}<div class="lt-fecha">{{ paso.ts|date:"j M, G:i" }}</div>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-
   {% for p in paquetes %}
   <div class="tarjeta">
     <div class="paquete-cab">
       <b>{% if p.total > 1 %}Paquete {{ p.numero }} de {{ p.total }}{% else %}Tu envío{% endif %}</b>
-      <span class="chip {% if p.entregado %}entregado{% endif %}">{{ p.estado }}</span>
+      <span class="chip {{ p.tono }}">{{ p.estado }}</span>
     </div>
     {% if p.total > 1 and forloop.first %}
     <p style="font-size:13px;color:var(--tenue);margin-top:6px">
-      Tu pedido viaja en {{ p.total }} paquetes para que cada botella llegue perfecta. Pueden llegar en momentos distintos del día.
+      Tu pedido viaja en {{ p.total }} paquetes para que cada botella llegue perfecta. Cada uno lleva su propio seguimiento y pueden llegar en momentos distintos.
     </p>
     {% endif %}
+    {# Línea de tiempo del paquete (Chema 2026-10-08): nuestros pasos y los del carrier, con hora. #}
+    <ol class="pasos">
+      {% for paso in p.pasos %}
+      <li class="{% if paso.hecho %}hecho{% endif %}{% if paso.actual %} actual{% endif %}">
+        <span class="punto"></span><span class="nombre">{{ paso.nombre }}</span>
+        {% if paso.ts %}<span class="hora">{{ paso.ts|date:"j M, G:i" }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
     <ul class="contenido">
       {% for item in p.contenido %}<li>{{ item }}</li>{% endfor %}
     </ul>
     {% if p.guia %}
-    <div class="guia">{{ p.carrier }} · Guía <code>{{ p.guia }}</code></div>
+    <div class="guia">{{ p.carrier }} · Guía <code>{{ p.guia }}</code>{% if p.url_rastreo %} · <a href="{{ p.url_rastreo }}" target="_blank" rel="noopener">Rastrea tu guía</a>{% endif %}</div>
+    {% elif p.carrier %}
+    <div class="guia">{{ p.carrier }}</div>
     {% endif %}
-    {% if p.compromiso %}<div class="guia">Llega a más tardar el {{ p.compromiso|date:"j \d\e F" }}</div>{% endif %}
+    {% if p.retraso %}
+    <div class="guia alerta">La paquetería va con retraso; ya estamos encima.</div>
+    {% elif p.fecha_programada %}
+    <div class="guia">Fecha programada de entrega: <b>{{ p.fecha_programada|date:"j \d\e F" }}</b></div>
+    {% elif p.promesa %}
+    <div class="guia">{{ p.promesa }}</div>
+    {% endif %}
+    {% for nota in p.notas %}<div class="guia">{{ nota }}</div>{% endfor %}
   </div>
   {% endfor %}
 

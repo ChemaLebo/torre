@@ -12,6 +12,10 @@ from django.views.decorators.http import require_POST
 
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
+from apps.envios.models import Guia, LineaManifiesto, Paquete
+from apps.envios.services import calendario_todos_los_dias, dias_promesa_de
+from apps.pedidos.linea_tiempo import construir
+from apps.pedidos.models import Pedido
 
 from .models import AccesoEtiqueta, AccesoRastreo
 from .services import referencias_direccion, url_maps
@@ -69,12 +73,26 @@ ESTADO_GUIA_HUMANO = {
     "EXCEPCION": "En revisión con la paquetería",
 }
 
-PASOS_TIMELINE = [
-    ("Recibido", None),
-    ("Preparado", "ts_empacado"),
-    ("En camino", "ts_recolectado"),
-    ("Entregado", "ts_entregado"),
+# Línea de tiempo POR PAQUETE (Chema 2026-10-08): nuestros pasos y los del
+# carrier, cada uno con su hora, de la misma construcción que usa Mesa
+# (pedidos.linea_tiempo). Los tres de la paquetería no aplican a la entrega local.
+PASOS_PAQUETE = [
+    ("recibido", "Recibimos tu pedido"),
+    ("picking", "Preparando tu pedido"),
+    ("empacado", "Empacado con cuidado"),
+    ("guia", "Listo para salir"),
+    ("salida", "Salió de nuestra bodega"),
+    ("recolectado_carrier", "Recolectado por la paquetería"),
+    ("en_transito", "En camino"),
+    ("en_ruta", "En reparto"),
+    ("entregado", "Entregado"),
 ]
+PASOS_SOLO_PAQUETERIA = {"recolectado_carrier", "en_transito", "en_ruta"}
+
+CARRIER_HUMANO = {
+    "puntopost": "PuntoPost", "estafeta": "Estafeta", "paquetexpress": "Paquetexpress", "fedex": "FedEx",
+    "dhl": "DHL", "noventa9Minutos": "99minutos", "imile": "iMile", "amPm": "amPm", "local": "Entrega local",
+}
 
 TIPOS_REPORTE = [
     ("DAN", "Llegó dañado"),
@@ -102,69 +120,143 @@ def _throttle(request):
     cache.set(llave, cuenta + 1, 60)
 
 
+def _carrier_humano(codigo):
+    return CARRIER_HUMANO.get(codigo or "", (codigo or "").title())
+
+
+def _contenido(caja, pedido):
+    """Qué va en la caja (o en el pedido entero, sin plan de cajas), sin precios."""
+    if caja is None:
+        return [f"{l.cantidad}× {l.sku.descripcion or l.sku.codigo}" for l in pedido.lineas.select_related("sku")]
+    contenido = []
+    for pl in caja.lineas.all():
+        nombre = pl.linea_pedido.sku.descripcion or pl.linea_pedido.sku.codigo
+        texto = f"{pl.cantidad}/{pl.fraccion_de} de {nombre}" if pl.fraccion_de > 1 else f"{pl.cantidad}× {nombre}"
+        if pl.repone_a_id:  # reposición (2026-10-05): repone piezas que viajaron en otro paquete
+            texto += f" (reposición del paquete {pl.repone_a.numero})"
+        contenido.append(texto)
+    return contenido
+
+
+def _pasos(ts, local):
+    """Pasos del paquete con su hora. Un paso sin hora cuenta como hecho si
+    uno posterior ya la tiene (el carrier no siempre reporta todos); el último
+    hecho es el actual. "Recibido" siempre está hecho: el pedido existe."""
+    pasos = [
+        {"clave": clave, "nombre": nombre, "ts": ts.get(clave), "hecho": False, "actual": False}
+        for clave, nombre in PASOS_PAQUETE if not (local and clave in PASOS_SOLO_PAQUETERIA)
+    ]
+    visto = False
+    for paso in reversed(pasos):
+        visto = visto or paso["ts"] is not None
+        paso["hecho"] = visto
+    pasos[0]["hecho"] = True
+    actual = next(p for p in reversed(pasos) if p["hecho"])
+    actual["actual"] = True
+    return pasos
+
+
+def _estado_paquete(fila, caja, guia, quitada):
+    """Chip del paquete en palabras del comprador. Cubre nuestros estados
+    (preparación, empaque, listo, salió, se quedó en bodega, reingreso) y los
+    del carrier. Regresa (texto, tono): tono "entregado", "alerta" o ""."""
+    ts = fila["ts"]
+    if guia is not None:
+        if guia.estado == Guia.ENTREGADO:
+            return "Entregado", "entregado"
+        if guia.estado in (Guia.INTENTO_FALLIDO, Guia.RETENIDO, Guia.RETORNO, Guia.EXCEPCION):
+            return ESTADO_GUIA_HUMANO[guia.estado], "alerta"
+    if caja is not None and caja.reingreso_estado == Paquete.REINGRESADO:
+        return "Lo recibimos de vuelta", "alerta"
+    if quitada and ts["salida"] is None:
+        return "Se quedó en bodega; sale en la siguiente salida", "alerta"
+    if guia is not None and guia.estado in (Guia.RECOLECTADO, Guia.EN_TRANSITO, Guia.EN_RUTA):
+        return ESTADO_GUIA_HUMANO[guia.estado], ""
+    if ts["salida"] is not None:
+        return "Salió de nuestra bodega", ""
+    if guia is not None:
+        return "Listo para salir", ""
+    if caja is not None and caja.estado == Paquete.EMPACADO:
+        return "Empacado", ""
+    if caja is not None and caja.estado == Paquete.EN_EMPAQUE:
+        return "Empacando", ""
+    if fila["pedido"].estado == Pedido.EN_PICKING:
+        return "Preparando tu pedido", ""
+    return "En preparación", ""
+
+
+def _promesa(fila, caja, guia, pedido):
+    """(fecha programada, retraso, texto antes de salir). Regla de Chema
+    2026-10-08: antes de salir, "N días después de que salga" (los días
+    prometidos de la guía o los que se prometerían); ya que salió, la fecha
+    programada (salida + promesa, estampada en la guía); vencida sin entrega,
+    retraso; entregado, nada."""
+    if guia is not None and guia.estado == Guia.ENTREGADO:
+        return None, False, ""
+    if fila["ts"]["salida"] is not None and fila["compromiso"] is not None:
+        return fila["compromiso"], fila["vencido"], ""
+    carrier = guia.carrier if guia is not None else (caja.carrier if caja is not None else "")
+    if not carrier:
+        return None, False, ""
+    dias = guia.dias_promesa if guia is not None and guia.dias_promesa is not None else dias_promesa_de(pedido, carrier, caja)
+    if dias <= 0:
+        return None, False, ""
+    if dias == 1:
+        return None, False, "Tu paquete llega al día siguiente de que salga."
+    domingos = "" if calendario_todos_los_dias(carrier) else ", sin contar domingos"
+    return None, False, f"Tu paquete está programado para llegar {dias} días después de que salga{domingos}."
+
+
+def _paquetes(pedido):
+    """Una tarjeta por caja (o por guía, en pedidos sin plan): contenido,
+    estado, pasos con hora, link de rastreo del carrier, fecha programada y
+    notas. Las horas salen de pedidos.linea_tiempo, como en Mesa."""
+    cajas = {
+        c.numero: c
+        for c in pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "lineas__repone_a", "guias")
+    }
+    quitadas = set(LineaManifiesto.objects.filter(pedido=pedido, no_salio=True).values_list("paquete_id", flat=True))
+    sueltas = [g for g in pedido.guias.all() if g.paquete_id is None]
+    paquetes = []
+    for fila in construir(Pedido.objects.filter(pk=pedido.pk)):
+        caja = cajas.get(fila["caja"]) if fila["caja"] is not None else None
+        guia = fila["guia"]
+        if caja is None and guia is None and pedido.estado == Pedido.CANCELADO:
+            continue
+        guias_caja = list(caja.guias.all()) if caja is not None else sueltas
+        cambiada = any(
+            (g.estado == Guia.CANCELADA or g.sustituida) and (guia is None or g.pk != guia.pk) for g in guias_caja
+        )
+        if guia is not None and guia.estado == Guia.CANCELADA:
+            guia = None  # cancelada en bodega: la caja espera guía nueva
+        carrier = guia.carrier if guia is not None else (caja.carrier if caja is not None else "")
+        estado, tono = _estado_paquete(fila, caja, guia, caja is not None and caja.pk in quitadas)
+        fecha, retraso, promesa = _promesa(fila, caja, guia, pedido)
+        numero_guia = guia.numero if guia is not None and not guia.numero.startswith("LOCAL-") else ""
+        paquetes.append({
+            "numero": fila["caja"] or 1, "total": fila["total_cajas"],
+            "contenido": _contenido(caja, pedido),
+            "carrier": _carrier_humano(carrier),
+            "guia": numero_guia,
+            "url_rastreo": fila["url_rastreo"] if numero_guia else "",
+            "estado": estado, "tono": tono, "entregado": tono == "entregado",
+            "pasos": _pasos(fila["ts"], carrier == "local"),
+            "fecha_programada": fecha, "retraso": retraso, "promesa": promesa,
+            "notas": ["Cambiamos la guía de este paquete; la anterior ya no vale."] if cambiada and guia is not None else [],
+        })
+    return paquetes
+
+
 def _contexto(pedido):
     branding = _branding(pedido.cliente)
 
     titulo, descripcion = ESTADOS_HUMANOS.get(
         pedido.estado, ("Tu pedido", "Estamos trabajando en tu pedido.")
     )
+    if pedido.detenido and pedido.estado in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
+        descripcion = "Estamos revisando tu pedido antes de que salga; en cuanto esté listo sigue su camino."
 
-    hechos = {
-        "Recibido": pedido.creado if hasattr(pedido, "creado") else None,
-        "Preparado": pedido.ts_empacado,
-        "En camino": pedido.ts_recolectado,
-        "Entregado": pedido.ts_entregado,
-    }
-    timeline, alcanzado = [], True
-    for paso, _ in PASOS_TIMELINE:
-        ts = hechos.get(paso)
-        hecho = ts is not None or (paso == "Recibido")
-        timeline.append({"paso": paso, "hecho": hecho and alcanzado, "ts": ts})
-        if not hecho:
-            alcanzado = False
-
-    paquetes = []
-    for paquete in pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "lineas__repone_a", "guias"):
-        guia = paquete.guia_activa
-        contenido = []
-        for pl in paquete.lineas.all():
-            nombre = pl.linea_pedido.sku.descripcion or pl.linea_pedido.sku.codigo
-            if pl.fraccion_de > 1:
-                texto = f"{pl.cantidad}/{pl.fraccion_de} de {nombre}"
-            else:
-                texto = f"{pl.cantidad}× {nombre}"
-            if pl.repone_a_id:  # reposición (2026-10-05): repone piezas que viajaron en otro paquete
-                texto += f" (reposición del paquete {pl.repone_a.numero})"
-            contenido.append(texto)
-        paquetes.append({
-            "numero": paquete.numero,
-            "total": None,  # se llena abajo
-            "contenido": contenido,
-            "guia": guia.numero if guia else "",
-            "carrier": (guia.carrier if guia else paquete.carrier).replace("puntopost", "PuntoPost")
-                        .replace("estafeta", "Estafeta").replace("paquetexpress", "Paquetexpress")
-                        .replace("fedex", "FedEx").replace("local", "Entrega local"),
-            "estado": ESTADO_GUIA_HUMANO.get(guia.estado, "En proceso") if guia
-                       else ("Empacado" if paquete.estado == "EMPACADO" else "En preparación"),
-            "entregado": bool(guia and guia.estado == "ENTREGADO"),
-            "compromiso": guia.fecha_compromiso if guia and guia.estado != "ENTREGADO" else None,
-        })
-    if not paquetes:  # pedido sin plan: se muestra como un solo envío (legacy)
-        guia = next((g for g in pedido.guias.all() if g.es_activa), None)
-        if guia or pedido.estado not in ("CANCELADO",):
-            paquetes.append({
-                "numero": 1, "total": 1,
-                "contenido": [
-                    f"{l.cantidad}× {l.sku.descripcion or l.sku.codigo}" for l in pedido.lineas.select_related("sku")
-                ],
-                "guia": guia.numero if guia else "",
-                "carrier": guia.carrier.title() if guia else "",
-                "estado": ESTADO_GUIA_HUMANO.get(guia.estado, "En proceso") if guia else "En preparación",
-                "entregado": bool(guia and guia.estado == "ENTREGADO"),
-            })
-    total = len(paquetes)
-    for p in paquetes:
-        p["total"] = total
+    paquetes = _paquetes(pedido)
 
     pod = None
     if pedido.estado in ("ENTREGADO", "ENTREGA_PRESUNTA"):
@@ -182,7 +274,6 @@ def _contexto(pedido):
         "nombre_pila": nombre_pila,
         "estado_titulo": titulo,
         "estado_descripcion": descripcion,
-        "timeline": timeline,
         "paquetes": paquetes,
         "pod": pod,
         "tipos_reporte": TIPOS_REPORTE,
