@@ -219,6 +219,18 @@ class ReingresoPorCajaTests(BaseReingreso):
         self.assertEqual(c1.reingreso_estado, Paquete.NO_RECUPERADO)
         self.assertNotIn(pedido, list(services.reingresos_por_decidir()))
 
+    def test_la_caja_regresada_se_decide_aunque_el_pedido_se_haya_reiniciado(self):
+        """PED-00119 (Chema 2026-10-09): una reposición regresó el pedido a
+        PENDIENTE; sus cajas regresadas siguen por decidir y se registran."""
+        pedido, (c1, c2) = self.pedido_dos_cajas(estado=Pedido.PENDIENTE)
+        self.assertEqual([c.numero for c in services.cajas_por_reingresar(pedido)], [2])
+        self.assertIn(pedido, list(services.reingresos_por_decidir()))
+        orden = services.registrar_reingreso(pedido, self.operador)
+        self.assertEqual(orden.lineas.get().cantidad_anunciada, 2)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+        self.assertNotIn(pedido, list(services.reingresos_por_decidir()))
+
     def test_cancelacion_tardia_decide_todas_las_cajas_que_salieron(self):
         from apps.envios.models import Paquete
 

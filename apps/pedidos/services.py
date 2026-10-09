@@ -3480,9 +3480,12 @@ def reingresos_por_decidir():
     por_pedido = ~Q(paquetes__estado="DESPACHADO") & Q(reingreso_estado=Pedido.REINGRESO_PENDIENTE) & (
         Q(estado=Pedido.RETORNADO) | Q(cancelacion_tardia=True)
     )
+    # Por caja no se mira el estado del pedido (Chema 2026-10-09, PED-00119):
+    # una caja despachada y regresada sigue por decidir aunque el pedido se
+    # haya reiniciado por una reposición y ande en PENDIENTE o en picking.
+    por_pedido = por_pedido & Q(estado__in=ESTADOS_CON_MERCANCIA_FUERA + (Pedido.CANCELADO,))
     return (
         Pedido.objects.filter(por_caja | por_pedido)
-        .filter(estado__in=ESTADOS_CON_MERCANCIA_FUERA + (Pedido.CANCELADO,))
         .select_related("cliente").order_by("actualizado").distinct()
     )
 
@@ -3503,7 +3506,14 @@ def cerrar_cancelacion_tardia(pedido, actor, motivo=""):
 def _validar_decision_reingreso(pedido):
     """(cajas por decidir) o ValueError. Con plan de cajas la decisión es por
     caja (las que el carrier regresó o, con cancelación tardía, las que
-    salieron, sin decisión aún); sin plan, por pedido como siempre."""
+    salieron, sin decisión aún) y no depende del estado del pedido (Chema
+    2026-10-09, PED-00119: reiniciado por reposición y en PENDIENTE, sus
+    cajas regresadas se deciden igual); sin plan, por pedido como siempre."""
+    if pedido.paquetes.filter(estado="DESPACHADO").exists():
+        cajas = cajas_por_reingresar(pedido)
+        if not cajas:
+            raise ValueError(f"El pedido {pedido.folio} no tiene cajas regresadas por decidir (o ya tienen decisión).")
+        return cajas
     fuera = pedido.estado in ESTADOS_CON_MERCANCIA_FUERA or (
         pedido.estado == Pedido.CANCELADO and pedido.cancelacion_tardia
     )
@@ -3512,11 +3522,6 @@ def _validar_decision_reingreso(pedido):
             f"El pedido {pedido.folio} no ha salido de bodega ({pedido.get_estado_display()}): "
             "no hay reingreso que decidir."
         )
-    if pedido.paquetes.filter(estado="DESPACHADO").exists():
-        cajas = cajas_por_reingresar(pedido)
-        if not cajas:
-            raise ValueError(f"El pedido {pedido.folio} no tiene cajas regresadas por decidir (o ya tienen decisión).")
-        return cajas
     if pedido.reingreso_estado != Pedido.REINGRESO_PENDIENTE:
         raise ValueError(
             f"El pedido {pedido.folio} ya tiene decisión: {pedido.get_reingreso_estado_display()}."
