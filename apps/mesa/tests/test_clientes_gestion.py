@@ -159,6 +159,21 @@ class EdicionClienteTests(BaseGestionClientes):
         self.assertEqual(evento.delta["buffer_stock"], [0, 5])
         self.assertEqual(evento.delta["contacto_nombre"], ["", "Karina Fuentes"])
 
+    def test_edicion_guarda_la_paqueteria_de_respaldo_y_el_detalle_la_muestra(self):
+        url = reverse("mesa:cliente_editar", args=[self.colima.pk])
+        self.client.post(url, datos_form_cliente(nombre="Cervecería Colima", carrier_respaldo="estafeta"))
+        self.colima.refresh_from_db()
+        self.assertEqual(self.colima.carrier_respaldo, "estafeta")
+        evento = EventoAuditoria.objects.get(entidad="cliente", entidad_id="colima", accion="edicion")
+        self.assertEqual(evento.delta["carrier_respaldo"], ["", "estafeta"])
+        detalle = self.client.get(reverse("mesa:cliente_detalle", args=[self.colima.pk]))
+        self.assertContains(detalle, "Paquetería de respaldo: estafeta")
+        # Vaciarlo = sin respaldo (y así lo dice la ficha).
+        self.client.post(url, datos_form_cliente(nombre="Cervecería Colima", carrier_respaldo=""))
+        self.colima.refresh_from_db()
+        self.assertEqual(self.colima.carrier_respaldo, "")
+        self.assertContains(self.client.get(reverse("mesa:cliente_detalle", args=[self.colima.pk])), "Paquetería de respaldo: sin respaldo")
+
     def test_edicion_pausa_incidencias_automaticas_hasta_una_fecha(self):
         from datetime import timedelta
 

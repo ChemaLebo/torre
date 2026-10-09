@@ -54,6 +54,27 @@ def _carrier_forzado(pedido):
     return (getattr(pedido, "carrier_forzado", "") or "").strip()
 
 
+def carrier_respaldo(pedido, intentados=()):
+    """Paquetería de respaldo del cliente para PLANEAR (Chema 2026-10-09): la
+    de `Cliente.carrier_respaldo` cuando la config vigente no cotiza el
+    pedido. "" (sin respaldo) si el cliente no la tiene, si es la entrega
+    local, si Mesa forzó la paquetería del pedido (sale con esa o no sale) o
+    si ya estaba entre las que se intentaron (`intentados`)."""
+    respaldo = (getattr(pedido.cliente, "carrier_respaldo", "") or "").strip()
+    if not respaldo or respaldo == CARRIER_LOCAL or _carrier_forzado(pedido):
+        return ""
+    return "" if respaldo in intentados else respaldo
+
+
+def _carriers_vigentes(pedido):
+    """Lo que la config permite comprar hoy: carriers_del_pedido más la
+    paquetería de respaldo del cliente (un plan hecho con el respaldo no es
+    un plan viejo: su guía se compra tal cual)."""
+    vigentes = carriers_del_pedido(pedido)
+    respaldo = carrier_respaldo(pedido)
+    return [*vigentes, respaldo] if respaldo and respaldo not in vigentes else vigentes
+
+
 def opciones_paqueteria():
     """[(código, etiqueta)] para el selector de Mesa: 99minutos directo, iMile,
     la lista de envia por precio y cada carrier de esa lista por separado."""
@@ -606,7 +627,7 @@ def _carrier_de_paquete(pedido, paquete, aplicar=True):
         return _replan_paquete(pedido, paquete, carrier, aplicar=aplicar)
     if not carrier or (carrier == CARRIER_LOCAL and not _flota_propia()):
         carrier, servicio = elegir_carrier(pedido)
-    elif carrier != CARRIER_LOCAL and carrier not in carriers_del_pedido(pedido):
+    elif carrier != CARRIER_LOCAL and carrier not in _carriers_vigentes(pedido):
         # Plan viejo vs config nueva (#10): la config vigente manda al generar.
         carrier, servicio = _replan_paquete(pedido, paquete, carrier, aplicar=aplicar)
     return carrier, servicio

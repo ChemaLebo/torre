@@ -390,6 +390,10 @@ def _costo_particion(cp_destino, bins, cliente=None, carriers=None, preferido=No
     return total, [filas[carrier] for filas in cotizaciones]
 
 
+class SinCotizacion(ValueError):
+    """Ninguna paquetería de las intentadas cotiza el pedido (ver _planificar)."""
+
+
 def planificar_envio(pedido, force=False):
     """Divide el pedido en paquetes cotizando particiones reales. Idempotente.
 
@@ -398,12 +402,40 @@ def planificar_envio(pedido, force=False):
     blanca) y la ReglaEnvio del pedido PREFIERE sin acotar
     (services.carrier_preferido: gana si cotiza todas las cajas, si no manda
     el precio). La carta se saca FUERA del atomic del plan: si nadie cotiza,
-    la carta se queda con el pedido (dato del fallo) en vez de revertirse."""
-    from .services import carrier_preferido, carriers_del_pedido  # lazy: evita ciclo
+    la carta se queda con el pedido (dato del fallo) en vez de revertirse.
+
+    Paquetería de respaldo (Chema 2026-10-09): si nadie cotiza y el cliente
+    tiene `carrier_respaldo` (services.carrier_respaldo: no con paquetería
+    forzada ni si ya se intentó), se planea COMPLETO con ella, con su propia
+    división de cajas y sus precios; evento `plan_respaldo`. Si tampoco
+    cotiza, SinCotizacion con las dos nombradas. Solo al planear: un fallo al
+    comprar la guía sigue su camino de siempre (DET)."""
+    from .services import carrier_preferido, carrier_respaldo, carriers_del_pedido  # lazy: evita ciclo
 
     carriers = carriers_del_pedido(pedido)
     preferido = carrier_preferido(pedido)
-    return _planificar(pedido, force, carriers, preferido)
+    try:
+        return _planificar(pedido, force, carriers, preferido)
+    except SinCotizacion as exc:
+        respaldo = carrier_respaldo(pedido, intentados=carriers)
+        if not respaldo:
+            raise
+        try:
+            paquetes = _planificar(pedido, force, [respaldo], respaldo)
+        except SinCotizacion as exc2:
+            registrar_evento(
+                "pedido", pedido.pk, "plan_respaldo", cliente=pedido.cliente,
+                delta={"de": list(carriers), "a": respaldo, "ok": False},
+                motivo=f"Tampoco cotiza la paquetería de respaldo ({respaldo}): {str(exc2)[:200]}",
+            )
+            raise SinCotizacion(f"{exc} Tampoco cotiza la paquetería de respaldo ({respaldo}).") from exc2
+        registrar_evento(
+            "pedido", pedido.pk, "plan_respaldo", cliente=pedido.cliente,
+            delta={"de": list(carriers), "a": respaldo, "ok": True, "paquetes": len(paquetes)},
+            motivo=f"{', '.join(carriers) or 'La paquetería del cliente'} no cotiza el pedido; "
+                   f"se planeó con la paquetería de respaldo {respaldo}.",
+        )
+        return paquetes
 
 
 @transaction.atomic
@@ -477,7 +509,7 @@ def _planificar(pedido, force, carriers, preferido=None):
         # Con quién se intentó (Chema 2026-09-24): la incidencia "Sin
         # paquetería" y la nota del replaneo lo muestran tal cual.
         intentados = ", ".join(carriers) if carriers else "ninguno configurado"
-        raise ValueError(
+        raise SinCotizacion(
             f"Ningún carrier cotiza el pedido {pedido.folio} a CP {pedido.cp} "
             f"con paquetes ≤{max_kg} kg (se intentó con: {intentados}). Revisar con Mesa de Control."
         )

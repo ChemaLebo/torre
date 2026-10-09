@@ -14,6 +14,12 @@ class Cliente(models.Model):
     # Config por tenant
     buffer_stock = models.PositiveIntegerField(default=0, help_text="Buffer restado del disponible publicado")
     carrier_preferente = models.CharField(max_length=40, default="paquetexpress")
+    # Paquetería de respaldo (Chema 2026-10-09): si la paquetería vigente del
+    # cliente (carta del reparto, 99minutos directo, regla o lista blanca) no
+    # cotiza un pedido AL PLANEAR, se planea completo con esta; vacío = sin
+    # respaldo. Solo al planear: un fallo al COMPRAR sigue en DET; con
+    # paquetería forzada por Mesa no hay respaldo (sale con esa o no sale).
+    carrier_respaldo = models.CharField(max_length=40, blank=True, default="")
     # Integración de envíos: por dónde viajan las guías de ESTE cliente.
     # "envia" = el planner cotiza CARRIERS_COTIZAR vía envia.com;
     # "99minutos" = directo (Adapter99Minutos, pickUpAfter) — el flip de

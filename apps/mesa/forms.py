@@ -102,6 +102,13 @@ class FormCliente(forms.Form):
         ),
         error_messages={"required": "Elige la integración de envíos."},
     )
+    carrier_respaldo = forms.ChoiceField(
+        label="Paquetería de respaldo", required=False,
+        help_text=(
+            "Si la paquetería del cliente no cotiza un pedido al planear, se planea completo con esta. "
+            "Solo al planear: un fallo al comprar la guía sigue avisando a Mesa; con paquetería forzada no hay respaldo."
+        ),
+    )
     naked_packing_local = forms.BooleanField(
         label="Naked packing en entrega local", required=False, initial=True,
     )
@@ -176,6 +183,7 @@ class FormCliente(forms.Form):
         self.cliente = cliente
         carriers = list(settings.TORRE["CARRIERS_COTIZAR"]) + ["local"]
         self.fields["carrier_preferente"].choices = [(c, c) for c in carriers]
+        self.fields["carrier_respaldo"].choices = [("", "Sin respaldo"), *[(c, c) for c in settings.TORRE["CARRIERS_COTIZAR"]]]
         # Pesos del reparto por porcentajes: un campo por carrier elegible
         # (peso_<carrier>); solo se validan y guardan con integración "reparto".
         from apps.envios.reparto import carriers_elegibles  # lazy por contrato
@@ -275,6 +283,7 @@ class FormCliente(forms.Form):
             "buffer_stock": d["buffer_stock"],
             "carrier_preferente": d["carrier_preferente"],
             "integracion_envios": d["integracion_envios"],
+            "carrier_respaldo": (d.get("carrier_respaldo") or "").strip(),
             "naked_packing_local": d.get("naked_packing_local", False),
             "avisos_comprador": d.get("avisos_comprador", False),
             "umbral_visto_bueno_mxn": d["umbral_visto_bueno_mxn"],
