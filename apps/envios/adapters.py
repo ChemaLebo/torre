@@ -18,12 +18,49 @@ from decimal import Decimal, InvalidOperation
 
 import requests
 from django.conf import settings
+from urllib3.exceptions import MaxRetryError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 
 class ErrorCarrier(Exception):
     """Falla de comunicación o respuesta inválida del carrier/agregador."""
+
+
+# ─── Reintento por conexión (Chema 2026-10-09) ────────────────────────────────
+# UNA repetición de la misma petición, tras una pausa corta, cuando falla la
+# red. Cotizar, consultar y autenticar se repiten ante cualquier fallo (no
+# crean nada). Comprar, cancelar y agendar solo cuando la petición NUNCA llegó
+# al carrier (_nunca_llego): si salió y fue la respuesta la que se perdió, el
+# carrier pudo haber creado la guía y repetirla la cobraría doble; ese caso
+# sube como ErrorCarrier y Mesa lo revisa con "Reintentar guía".
+PAUSA_REINTENTO_S = 1.0
+
+
+def _nunca_llego(exc):
+    """True si la petición no alcanzó al carrier: DNS, puerto cerrado, TLS o
+    timeout AL CONECTAR (requests los envuelve en ConnectionError con un
+    MaxRetryError de urllib3, o en ConnectTimeout). Un timeout esperando la
+    respuesta (ReadTimeout) o una conexión cortada a medias (ProtocolError)
+    no cuentan: el carrier ya pudo haberla procesado."""
+    if isinstance(exc, requests.ConnectTimeout):
+        return True
+    if isinstance(exc, requests.ConnectionError):
+        causa = exc.args[0] if exc.args else None
+        return isinstance(causa, MaxRetryError)
+    return False
+
+
+def _con_reintento(peticion, crea=False):
+    """Ejecuta `peticion()` (una llamada de requests) y la repite UNA vez si
+    falla la red; con `crea=True` solo si nunca llegó (ver arriba)."""
+    try:
+        return peticion()
+    except requests.RequestException as exc:
+        if crea and not _nunca_llego(exc):
+            raise
+        time.sleep(PAUSA_REINTENTO_S)
+        return peticion()
 
 
 # Origen por defecto: bodega Local 380 E. Sobrescribible con settings.ENVIA_ORIGEN.
@@ -215,14 +252,16 @@ class EnviaAdapter(CarrierAdapter):
     def _headers(self):
         return {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
 
-    def _post(self, ruta, payload):
+    def _post(self, ruta, payload, crea=False):
+        """POST a envia.com con reintento por conexión; `crea=True` (guía,
+        cancelación, recolección) solo repite si la petición nunca llegó."""
         try:
-            resp = requests.post(
+            resp = _con_reintento(lambda: requests.post(
                 f"{self.api_base}{ruta}",
                 json=payload,
                 headers=self._headers(),
                 timeout=25,
-            )
+            ), crea=crea)
         except requests.RequestException as exc:
             raise ErrorCarrier(
                 f"No se pudo contactar a envia.com ({ruta}): {exc}"
@@ -518,7 +557,7 @@ class EnviaAdapter(CarrierAdapter):
                 },
             },
         })
-        cuerpo = self._post("/ship/pickup/", payload)
+        cuerpo = self._post("/ship/pickup/", payload, crea=True)
         data = cuerpo.get("data") if isinstance(cuerpo, dict) else None
         if isinstance(data, list):
             data = data[0] if data else {}
@@ -565,12 +604,12 @@ class EnviaAdapter(CarrierAdapter):
             "settings": {"currency": "MXN"},
         }
         try:
-            resp = requests.post(
+            resp = _con_reintento(lambda: requests.post(
                 f"{self.api_base}/ship/rate/",
                 json=payload,
                 headers=self._headers(),
                 timeout=30,
-            )
+            ))
             datos = resp.json()
         except (requests.RequestException, ValueError):
             return {
@@ -620,7 +659,8 @@ class EnviaAdapter(CarrierAdapter):
 
     def generar(self, pedido, carrier, servicio, paquete=None, ciudad=None):
         cuerpo = self._post(
-            "/ship/generate/", self._payload(pedido, carrier, servicio, paquete=paquete, ciudad=ciudad)
+            "/ship/generate/", self._payload(pedido, carrier, servicio, paquete=paquete, ciudad=ciudad),
+            crea=True,
         )
         datos = cuerpo.get("data") or []
         if isinstance(datos, dict):
@@ -641,17 +681,17 @@ class EnviaAdapter(CarrierAdapter):
 
     def cancelar(self, guia):
         self._post(
-            "/ship/cancel/", {"carrier": guia.carrier, "trackingNumber": guia.numero}
+            "/ship/cancel/", {"carrier": guia.carrier, "trackingNumber": guia.numero}, crea=True,
         )
         return True
 
     def rastrear(self, numero):
         try:
-            resp = requests.get(
+            resp = _con_reintento(lambda: requests.get(
                 f"{self.queries_base}/guide/{numero}",
                 headers=self._headers(),
                 timeout=25,
-            )
+            ))
         except requests.RequestException as exc:
             raise ErrorCarrier(f"No se pudo rastrear la guía {numero}: {exc}") from exc
         cuerpo = self._json(resp)
@@ -790,11 +830,11 @@ class Adapter99Minutos(CarrierAdapter):
         if cache["token"] and cache["expira"] > time.time():
             return cache["token"]
         try:
-            resp = requests.post(
+            resp = _con_reintento(lambda: requests.post(
                 f"{self.base}/api/v3/oauth/token",
                 json={"client_id": self.client_id, "client_secret": self.client_secret},
                 timeout=25,
-            )
+            ))
         except requests.RequestException as exc:
             raise ErrorCarrier(f"No se pudo autenticar con 99minutos: {exc}") from exc
         if resp.status_code >= 400:
@@ -812,8 +852,11 @@ class Adapter99Minutos(CarrierAdapter):
         return token
 
     def _request(self, metodo, ruta, params=None, json_body=None, reintento=True):
+        """Petición autenticada con reintento por conexión: un GET se repite
+        ante cualquier fallo de red; POST/DELETE (orden, cancelación,
+        documentos) solo si la petición nunca llegó."""
         try:
-            resp = requests.request(
+            resp = _con_reintento(lambda: requests.request(
                 metodo,
                 f"{self.base}{ruta}",
                 params=params,
@@ -823,7 +866,7 @@ class Adapter99Minutos(CarrierAdapter):
                     "Accept": "application/json",
                 },
                 timeout=30,
-            )
+            ), crea=metodo.upper() != "GET")
         except requests.RequestException as exc:
             raise ErrorCarrier(
                 f"No se pudo contactar a 99minutos ({ruta}): {exc}"
@@ -1313,6 +1356,9 @@ _ESTADOS_IMILE_CONTIENEN = [
     ("submit", "GUIA_CREADA"), ("created", "GUIA_CREADA"),
 ]
 _TOKEN_IMILE_INVALIDO = {"402", "407", "408"}
+# Rutas de iMile que crean o borran algo en su lado: el reintento por
+# conexión solo si la petición nunca llegó (ver _con_reintento).
+_RUTAS_IMILE_QUE_CREAN = frozenset({"/client/order/v2/createOrder", "/client/order/deleteOrder", "/order/pick/notify"})
 VALOR_DECLARADO_COTIZACION = 500.0  # MXN: valor de referencia para cotizar un lane sin pedido
 
 
@@ -1437,11 +1483,11 @@ class AdapterImile(CarrierAdapter):
         cuerpo["param"] = param
         datos = json.dumps(cuerpo, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         try:
-            resp = requests.post(
+            resp = _con_reintento(lambda: requests.post(
                 f"{self.base}{ruta}", data=datos,
                 headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
                 timeout=30,
-            )
+            ), crea=ruta in _RUTAS_IMILE_QUE_CREAN)
         except requests.RequestException as exc:
             raise ErrorCarrier(f"No se pudo contactar a iMile ({ruta}): {exc}") from exc
         if resp.status_code != 200:
