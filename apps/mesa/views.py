@@ -1214,7 +1214,7 @@ def pedido_detalle(request, pk):
     from apps.incidencias.models import Incidencia
     from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
-    from apps.pedidos.services import ESTADOS_REPOSICION, piezas_reponibles
+    from apps.pedidos.services import ESTADOS_OLA_OCUPADA, piezas_reponibles
     from apps.pedidos.models import Pedido
     from apps.pedidos.reportes import url_orden_shopify
     from apps.pedidos.services import direccion_en_una_linea, motivo_no_quitable_de_salida, motivo_sin_pod
@@ -1304,8 +1304,10 @@ def pedido_detalle(request, pk):
         "hoy": timezone.localdate().isoformat(),
         "lineas": list(pedido.lineas.all()),
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
-        # "Rehacer entrega" (2026-10-10): producto erróneo sobre lo que ya salió o se entregó.
-        "puede_rehacer": pedido.estado in ESTADOS_REPOSICION and bool(piezas_reponibles(pedido)),
+        # "Rehacer entrega" (2026-10-10): misma regla que reponer_lineas: hay piezas que ya
+        # salieron en una caja y ninguna ola en manos del piso (un PENDIENTE que espera
+        # inventario para otra reposición también cuenta).
+        "puede_rehacer": pedido.estado not in ESTADOS_OLA_OCUPADA and bool(piezas_reponibles(pedido)),
         "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
         "es_mesa": True,
         "sin_pedido": True,

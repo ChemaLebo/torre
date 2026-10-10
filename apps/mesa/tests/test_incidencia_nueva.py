@@ -68,6 +68,11 @@ class IncidenciaNuevaMesaTests(TestCase):
         Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.ENTREGADO)
         html = self.client.get(detalle).content.decode()
         self.assertIn(f"{self.url}?pedido={self.pedido.pk}&amp;reponer=1", html)
+        # Misma regla que reponer_lineas: PENDIENTE esperando inventario de otra reposición sí; en picking no.
+        Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.PENDIENTE)
+        self.assertContains(self.client.get(detalle), "Rehacer entrega")
+        Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.EN_PICKING)
+        self.assertNotContains(self.client.get(detalle), "Rehacer entrega")
         # El tipo lo elige Mesa (daño, producto erróneo…); la reposición llega marcada.
         html = self.client.get(f"{self.url}?pedido={self.pedido.pk}&reponer=1").content.decode()
         self.assertNotIn('<option value="ERR" selected>', html)
