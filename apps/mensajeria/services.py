@@ -66,6 +66,7 @@ TIPO_INCIDENCIA_LEGIBLE = {
     "PAQ": "sin paquetería que cotice",
     "DET": "detenido en piso",
     "SKU": "producto no registrado",
+    "ERR": "producto erróneo",
 }
 ESTADOS_INCIDENCIA_ABIERTOS = ("ABIERTA", "EN_CURSO", "RESOLUCION_PROPUESTA")
 

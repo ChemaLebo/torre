@@ -33,6 +33,7 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_PAQ: Incidencia.P1,  # el pedido no puede salir hasta elegir paquetería
     Incidencia.TIPO_DET: Incidencia.P1,  # el pedido está parado en el piso hasta que Mesa resuelva
     Incidencia.TIPO_SKU: Incidencia.P1,  # el pedido no puede surtirse: falta dar de alta el producto
+    Incidencia.TIPO_ERR: Incidencia.P1,  # el comprador tiene otro producto en la mano: error nuestro, se rehace la entrega
 }
 # Tipos que detienen el pedido en piso: al resolverlos o cerrarlos, se reanuda.
 TIPOS_QUE_DETIENEN = (Incidencia.TIPO_DET, Incidencia.TIPO_PAQ, Incidencia.TIPO_SKU)

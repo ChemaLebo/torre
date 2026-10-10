@@ -100,7 +100,7 @@ class Guia(models.Model):
     # la incidencia y un retorno entra a reingreso.
     MOTIVOS_SUSTITUCION = [
         ("danada", "Paquete dañado"), ("extraviada", "Extraviado"), ("no_entregada", "No entregado"),
-        ("devolucion", "Devolución del carrier"), ("otro", "Otro"),
+        ("devolucion", "Devolución del carrier"), ("producto_erroneo", "Producto erróneo"), ("otro", "Otro"),
     ]
     sustituida_motivo = models.CharField(max_length=20, blank=True, choices=MOTIVOS_SUSTITUCION)
     ts_sustituida = models.DateTimeField(null=True, blank=True)

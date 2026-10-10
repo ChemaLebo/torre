@@ -9,7 +9,7 @@ from apps.catalogo.models import SKU
 from apps.core.models import PerfilUsuario
 from apps.envios.tests.base import crear_cliente, crear_pedido, crear_tienda
 from apps.incidencias.models import Incidencia, MensajeIncidencia
-from apps.pedidos.models import Pedido
+from apps.pedidos.models import LineaPedido, Pedido
 
 
 class IncidenciaNuevaMesaTests(TestCase):
@@ -52,6 +52,36 @@ class IncidenciaNuevaMesaTests(TestCase):
         self.assertEqual(inc.mensajes.get().rol_autor, MensajeIncidencia.ROL_MESA)
         avisar.assert_called_once()
         self.assertContains(respuesta, f"Incidencia {inc.folio} abierta")
+
+    def test_rehacer_entrega_llega_con_la_reposicion_puesta_y_el_tipo_se_elige(self):
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete, PaqueteLinea
+
+        # Sin nada en la calle, el detalle del pedido no ofrece rehacer la entrega.
+        detalle = reverse("mesa:pedido_detalle", args=[self.pedido.pk])
+        self.assertNotContains(self.client.get(detalle), "Rehacer entrega")
+        sku = SKU.objects.create(cliente=self.cliente, codigo="SIX", descripcion="Six")
+        linea = LineaPedido.objects.create(pedido=self.pedido, sku=sku, cantidad=2, reservada=True, cantidad_despachada=2)
+        caja = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=2)
+        Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.ENTREGADO)
+        html = self.client.get(detalle).content.decode()
+        self.assertIn(f"{self.url}?pedido={self.pedido.pk}&amp;reponer=1", html)
+        # El tipo lo elige Mesa (daño, producto erróneo…); la reposición llega marcada.
+        html = self.client.get(f"{self.url}?pedido={self.pedido.pk}&reponer=1").content.decode()
+        self.assertNotIn('<option value="ERR" selected>', html)
+        self.assertIn('name="reponer" id="id_reponer" checked', html)
+        html = self.client.get(f"{self.url}?pedido={self.pedido.pk}&tipo=ERR&reponer=1").content.decode()
+        self.assertIn('<option value="ERR" selected>ERR · Producto erróneo</option>', html)
+        self.assertIn("el producto que llegó en su lugar", html)
+        otro = SKU.objects.create(cliente=self.cliente, codigo="C12", descripcion="Caja 12")
+        respuesta = self._abrir(tipo=Incidencia.TIPO_ERR, sku="c12", texto="Le llegó la caja 12 en lugar del six.", reponer="on")
+        inc = Incidencia.objects.get(pedido=self.pedido)
+        self.assertEqual((inc.tipo, inc.prioridad, inc.sku, inc.interna), ("ERR", "P1", otro, False))
+        self.assertRedirects(respuesta, f"{reverse('mesa:incidencia_detalle', args=[inc.pk])}?reponer=1#compensaciones")
+        self.assertContains(respuesta, "Llegó en su lugar: C12")
+        self.assertContains(respuesta, "Rehacer la entrega de la caja 1")
 
     def test_por_numero_de_orden_con_sku_prioridad_e_interna(self):
         sku = SKU.objects.create(cliente=self.cliente, codigo="SIX-COL", descripcion="Six")

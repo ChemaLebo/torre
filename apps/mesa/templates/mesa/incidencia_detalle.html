@@ -23,7 +23,7 @@
       {% if incidencia.pedido %}Pedido: {{ incidencia.pedido.folio }} ({{ incidencia.pedido.get_estado_display }}){% if incidencia.pedido.detenido %} <span class="pill crit">detenido en piso</span>{% endif %}<br>{% endif %}
       {# Todas las guías (una por caja si el envío va dividido), con el rastreo del carrier. #}
       {% for g in guias %}Guía{% if g.caja %} caja {{ g.caja }}{% endif %}: {{ g.carrier }} {% if g.url %}<a href="{{ g.url }}" target="_blank" rel="noopener">{{ g.numero }}</a>{% else %}{{ g.numero }}{% endif %}{% if not g.activa %} <span class="muted">({{ g.estado|lower }})</span>{% endif %}{% if g.sustituida %} <span class="pill warn">{{ g.sustituida }}</span>{% endif %}<br>{% endfor %}
-      {% if incidencia.sku %}SKU: {{ incidencia.sku.codigo }}<br>{% endif %}
+      {% if incidencia.sku %}{% if incidencia.tipo == "ERR" %}Llegó en su lugar: {{ incidencia.sku.codigo }} <span class="small muted">(el kardex dice que salió lo pedido: ajusta el inventario en Bodega al cerrar)</span>{% else %}SKU: {{ incidencia.sku.codigo }}{% endif %}<br>{% endif %}
       Origen: {{ incidencia.get_origen_display }}<br>
       Dueño: {{ incidencia.dueno|default:"sin dueño" }}
     </p>
@@ -171,7 +171,13 @@
   <div>
     <div class="card mb" id="compensaciones">
       <div class="titulo"><h3>Compensaciones</h3><span class="small">reposición y reembolso se ejecutan al aprobarse</span></div>
-      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan como sustituidas.</div>{% endif %}
+      {% if cajas_rehacer %}
+      {# Rehacer la entrega por caja (Chema 2026-10-10): precarga la reposición con todo lo que llevó esa caja. #}
+      <div class="fila mb" style="flex-wrap:wrap;gap:6px">
+        {% for c in cajas_rehacer %}<a class="btn chico{% if c.pk == caja_prefill %} primario{% endif %}" href="?reponer=1&amp;caja={{ c.pk }}#compensaciones" title="Precarga la reposición con todo lo que llevó la caja {{ c.numero }}">Rehacer la entrega de la caja {{ c.numero }} <span class="muted">· {{ c.contenido|join:", " }}</span></a>{% endfor %}
+      </div>
+      {% endif %}
+      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>{% if caja_prefill %}Reposición precargada con el contenido de la caja: quita lo que sí llegó bien, revisa el motivo y aprueba. {% endif %}Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan como sustituidas.</div>{% endif %}
       {% for comp in compensaciones %}
       <div style="padding:8px 0;border-bottom:1px solid var(--hair)">
         <div class="fila entre">
@@ -226,7 +232,7 @@
           <div style="flex:1">
             <label for="comp-motivo">Motivo (reposición)</label>
             <select id="comp-motivo" name="motivo">
-              {% for clave, nombre in motivos_sustitucion %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}
+              {% for clave, nombre in motivos_sustitucion %}<option value="{{ clave }}"{% if clave == motivo_inicial %} selected{% endif %}>{{ nombre }}</option>{% endfor %}
             </select>
           </div>
           <div style="flex:1">
@@ -241,12 +247,12 @@
           <tbody>
             {% for linea in lineas_pedido %}
             <tr class="comp-linea" data-pedidas="{{ linea.cantidad }}" data-salieron="{{ linea.salieron }}">
-              <td><input type="checkbox" name="linea_{{ linea.pk }}" value="1" aria-label="Incluir {{ linea.sku.codigo }}"></td>
+              <td><input type="checkbox" name="linea_{{ linea.pk }}" value="1"{% if linea.prefill %} checked{% endif %} aria-label="Incluir {{ linea.sku.codigo }}"></td>
               <td><span class="mono">{{ linea.sku.codigo }}</span> <span class="small">{{ linea.sku.descripcion }}</span></td>
               <td class="mono">{{ linea.cantidad }}</td>
               <td class="mono">{{ linea.salieron }}</td>
-              <td class="small">{% if linea.cajas_origen|length > 1 %}<select name="caja_{{ linea.pk }}" aria-label="Caja de la que salieron las piezas de {{ linea.sku.codigo }}" title="Reposición: de qué caja salieron las piezas que llegaron mal (una reposición por caja)">{% for pk, texto in linea.cajas_origen %}<option value="{{ pk }}">{{ texto }}</option>{% endfor %}</select>{% elif linea.cajas_salida %}{{ linea.cajas_salida }}{% elif linea.salieron %}—{% else %}<span class="muted">en bodega</span>{% endif %}</td>
-              <td><input type="number" name="cantidad_{{ linea.pk }}" min="1" max="{{ linea.cantidad }}" value="{{ linea.cantidad }}" style="width:90px" aria-label="Piezas de {{ linea.sku.codigo }}"></td>
+              <td class="small">{% if linea.cajas_origen|length > 1 %}<select name="caja_{{ linea.pk }}" aria-label="Caja de la que salieron las piezas de {{ linea.sku.codigo }}" title="Reposición: de qué caja salieron las piezas que llegaron mal (una reposición por caja)">{% for pk, texto in linea.cajas_origen %}<option value="{{ pk }}"{% if pk == caja_prefill %} selected{% endif %}>{{ texto }}</option>{% endfor %}</select>{% elif linea.cajas_salida %}{{ linea.cajas_salida }}{% elif linea.salieron %}—{% else %}<span class="muted">en bodega</span>{% endif %}</td>
+              <td><input type="number" name="cantidad_{{ linea.pk }}" min="1" max="{{ linea.cantidad }}" value="{% if linea.prefill %}{{ linea.prefill }}{% else %}{{ linea.cantidad }}{% endif %}"{% if linea.prefill %} data-tocado="1"{% endif %} style="width:90px" aria-label="Piezas de {{ linea.sku.codigo }}"></td>
             </tr>
             {% endfor %}
           </tbody>

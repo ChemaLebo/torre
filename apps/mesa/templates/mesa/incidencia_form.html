@@ -36,6 +36,7 @@
           <label for="{{ form.sku.id_for_label }}">{{ form.sku.label }}</label>
           {{ form.sku }}
           {{ form.sku.errors }}
+          <p class="small muted">{{ form.sku.help_text }}</p>
         </div>
       </div>
       <label class="mt" for="{{ form.texto.id_for_label }}">{{ form.texto.label }}</label>
@@ -53,7 +54,7 @@
     <div class="titulo"><h3>Cómo se comporta</h3></div>
     <ul class="timeline">
       <li class="hito"><span class="cuando">Un caso por tipo y pedido</span>Si el pedido ya tiene abierta una del mismo tipo, lo que escribas se suma a ese folio.</li>
-      <li><span class="cuando">Prioridad</span>Vacía toma la del tipo: daño, retorno, cancelación y cambio de dirección nacen P1.</li>
+      <li><span class="cuando">Prioridad</span>Vacía toma la del tipo: daño, retorno, cancelación, cambio de dirección y producto erróneo nacen P1.</li>
       <li><span class="cuando">Cliente</span>Siempre el del pedido; por eso el pedido es obligatorio.</li>
       <li><span class="cuando">Interna</span>Queda solo en Mesa: sin aviso al cliente, sin marcar el pedido y fuera del portal.</li>
     </ul>

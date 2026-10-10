@@ -12,6 +12,7 @@
     {% if url_anterior %}<a class="btn chico" href="{{ url_anterior }}" title="Pedido más reciente con estos filtros">← Anterior</a>{% endif %}
     {% if url_siguiente %}<a class="btn chico" href="{{ url_siguiente }}" title="Pedido más antiguo con estos filtros">Siguiente →</a>{% endif %}
     {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener">Orden en Shopify ↗</a>{% endif %}
+    {% if puede_rehacer %}<a class="btn" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}&amp;reponer=1" title="Reponer producto que ya salió: eliges el tipo de incidencia (daño, producto erróneo…) y te deja en la reposición por producto y caja">Rehacer entrega</a>{% endif %}
     <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}">Levantar incidencia</a>
   </div>
 </div>

@@ -54,6 +54,53 @@ class CompensacionesMesaTests(TestCase):
         self.assertEqual(comp.estado, Compensacion.APROBADA)
         self.assertContains(respuesta, "Reposición aprobada")
 
+    def _dos_cajas_despachadas(self):
+        from apps.envios.models import Paquete, PaqueteLinea
+        c12 = SKU.objects.create(cliente=self.cliente, codigo="C12", descripcion="Caja 12", precio_declarado=Decimal("600"))
+        self.linea2 = LineaPedido.objects.create(pedido=self.pedido, sku=c12, cantidad=1)
+        cajas = []
+        for n, contenido in ((1, [(self.linea, 1)]), (2, [(self.linea, 1), (self.linea2, 1)])):
+            caja = Paquete.objects.create(pedido=self.pedido, numero=n, peso_kg=Decimal("4"), carrier="imile", estado=Paquete.DESPACHADO)
+            for linea, piezas in contenido:
+                PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=piezas)
+            cajas.append(caja)
+        return cajas
+
+    def test_rehacer_la_entrega_de_una_caja_precarga_la_reposicion(self):
+        c1, c2 = self._dos_cajas_despachadas()
+        html = self.client.get(self.url).content.decode()
+        self.assertIn(f'href="?reponer=1&amp;caja={c1.pk}#compensaciones"', html)
+        self.assertIn("Rehacer la entrega de la caja 1 <span class=\"muted\">· 1× SIX</span>", html)
+        self.assertIn("Rehacer la entrega de la caja 2 <span class=\"muted\">· 1× SIX, 1× C12</span>", html)
+        html = self.client.get(f"{self.url}?reponer=1&caja={c2.pk}").content.decode()
+        self.assertIn("Reposición precargada con el contenido de la caja", html)
+        self.assertIn(f'name="linea_{self.linea.pk}" value="1" checked', html)
+        self.assertIn(f'name="linea_{self.linea2.pk}" value="1" checked', html)
+        self.assertIn(f'name="cantidad_{self.linea.pk}" min="1" max="2" value="1" data-tocado="1"', html)
+        self.assertIn(f'<option value="{c2.pk}" selected>caja 2 · 1 pza</option>', html)  # SIX salió en dos cajas: la 2 elegida
+        self.assertIn('<option value="danada">', html)  # DAN: el motivo no se preselecciona
+        self.assertNotIn('<option value="producto_erroneo" selected>', html)
+        # Una caja que no es del pedido no precarga nada.
+        html = self.client.get(f"{self.url}?reponer=1&caja=999999").content.decode()
+        self.assertNotIn("data-tocado", html)
+
+    def test_producto_erroneo_preselecciona_su_motivo_y_marca_la_guia(self):
+        from apps.envios.models import Guia
+        c1, c2 = self._dos_cajas_despachadas()
+        guia2 = Guia.objects.create(pedido=self.pedido, paquete=c2, carrier="imile", numero="IM-2", proveedor="envia", estado=Guia.ENTREGADO)
+        err = abrir_incidencia(self.cliente, Incidencia.TIPO_ERR, Incidencia.ORIGEN_CLIENTE, pedido=self.pedido, texto="Otro producto")
+        url = reverse("mesa:incidencia_detalle", args=[err.pk])
+        html = self.client.get(f"{url}?reponer=1&caja={c2.pk}").content.decode()
+        self.assertIn('<option value="producto_erroneo" selected>Producto erróneo</option>', html)
+        with patch("apps.pedidos.services.reponer_lineas", return_value=[MagicMock(cantidad=1)]):
+            self.client.post(url, {
+                "accion": "compensacion_crear", "tipo": "reposicion", f"linea_{self.linea2.pk}": "1", f"cantidad_{self.linea2.pk}": "1",
+                "motivo": "producto_erroneo", "aprobar": "1",
+            }, follow=True)
+        guia2.refresh_from_db()
+        self.assertEqual(guia2.sustituida_motivo, "producto_erroneo")
+        self.assertIn("sustituida · producto erróneo", self.client.get(url).content.decode())
+
     def test_reposicion_con_motivo_marca_la_guia_original_como_sustituida(self):
         from apps.envios.models import Guia, PaqueteLinea, Paquete as Caja
 

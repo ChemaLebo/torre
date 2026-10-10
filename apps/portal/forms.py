@@ -20,6 +20,7 @@ TIPOS_INCIDENCIA_PORTAL = [
     (Incidencia.TIPO_RET, "Va retrasado"),
     (Incidencia.TIPO_RF, "Dicen que lo entregaron y no llegó"),
     (Incidencia.TIPO_FAL, "Llegó incompleto"),
+    (Incidencia.TIPO_ERR, "Le llegó un producto distinto al comprador"),
     (Incidencia.TIPO_DIR, "Hay un problema con la dirección"),
     (Incidencia.TIPO_CDR, "Cambié la dirección de entrega (corrígela también en Shopify)"),
     (Incidencia.TIPO_CAN, "Necesito cancelar un pedido"),

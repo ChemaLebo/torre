@@ -316,6 +316,7 @@ class FormNuevaIncidenciaMesa(forms.Form):
     sku = forms.CharField(
         required=False, label="SKU (opcional)", max_length=60,
         widget=forms.TextInput(attrs={"placeholder": "Código del producto", "autocomplete": "off"}),
+        help_text="En Producto erróneo: el producto que llegó en su lugar (para ajustar el inventario después).",
     )
     tipo = forms.ChoiceField(label="Tipo")
     prioridad = forms.ChoiceField(
@@ -333,7 +334,7 @@ class FormNuevaIncidenciaMesa(forms.Form):
         error_messages={"required": "Escribe qué pasó: sin texto no hay incidencia."},
     )
 
-    def __init__(self, *args, pedido_inicial=None, **kwargs):
+    def __init__(self, *args, pedido_inicial=None, tipo_inicial="", reponer_inicial=False, **kwargs):
         super().__init__(*args, **kwargs)
         from apps.incidencias.models import Incidencia  # lazy por contrato
         from apps.pedidos.models import Pedido  # lazy por contrato
@@ -352,6 +353,11 @@ class FormNuevaIncidenciaMesa(forms.Form):
         self.fields["tipo"].choices = [
             (c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c not in (Incidencia.TIPO_PAQ, Incidencia.TIPO_DET)
         ]
+        # "Rehacer entrega" desde el pedido (2026-10-10): llega con el tipo y la reposición puestos.
+        if tipo_inicial in dict(self.fields["tipo"].choices):
+            self.fields["tipo"].initial = tipo_inicial
+        if reponer_inicial:
+            self.fields["reponer"].initial = True
 
     @staticmethod
     def etiqueta_pedido(p):

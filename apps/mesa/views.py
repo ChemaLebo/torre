@@ -427,7 +427,11 @@ def incidencia_nueva(request):
 
     pedido_id = request.GET.get("pedido", "")
     prellenado = Pedido.objects.filter(pk=int(pedido_id)).first() if pedido_id.isdigit() else None
-    form = FormNuevaIncidenciaMesa(request.POST or None, pedido_inicial=prellenado)
+    # "Rehacer entrega" desde el pedido (2026-10-10): ?tipo=ERR&reponer=1 llega con todo puesto.
+    form = FormNuevaIncidenciaMesa(
+        request.POST or None, pedido_inicial=prellenado,
+        tipo_inicial=request.GET.get("tipo", ""), reponer_inicial=request.GET.get("reponer") == "1",
+    )
     if request.method == "POST" and form.is_valid():
         datos = form.cleaned_data
         if datos["tipo"] == Incidencia.TIPO_SKU and datos["pedido_obj"] is not None:
@@ -458,6 +462,32 @@ def incidencia_nueva(request):
             return redirect(f"{reverse('mesa:incidencia_detalle', args=[incidencia.pk])}?reponer=1#compensaciones")
         return redirect("mesa:incidencia_detalle", pk=incidencia.pk)
     return render(request, "mesa/incidencia_form.html", {"seccion": "incidencias", "form": form})
+
+
+def _rehacer_entrega(incidencia, lineas, caja_param):
+    """"Rehacer la entrega de la caja N" (Chema 2026-10-10): las cajas del
+    pedido que ya salieron, con su contenido, para los botones del expediente;
+    y, cuando viene ?caja=<pk>, el precargado de la reposición: cada línea
+    que viajó en esa caja queda marcada con las piezas que llevó
+    (`linea.prefill`). Regresa (cajas, caja_pk | None)."""
+    if incidencia.pedido_id is None or not lineas:
+        return [], None
+    from apps.pedidos.services import piezas_reponibles  # lazy por contrato
+
+    reponibles = piezas_reponibles(incidencia.pedido)
+    cajas = {}
+    for linea in lineas:
+        info = reponibles.get(linea.pk)
+        for pk, c in (info["por_caja"].items() if info else []):
+            caja = cajas.setdefault(pk, {"pk": pk, "numero": c["numero"], "contenido": []})
+            caja["contenido"].append(f"{c['piezas']}× {linea.sku.codigo}")
+    caja_pk = int(caja_param) if str(caja_param).isdigit() and int(caja_param) in cajas else None
+    if caja_pk is not None:
+        for linea in lineas:
+            info = reponibles.get(linea.pk)
+            en_caja = info["por_caja"].get(caja_pk) if info else None
+            linea.prefill = en_caja["piezas"] if en_caja else 0
+    return sorted(cajas.values(), key=lambda c: c["numero"]), caja_pk
 
 
 def _gestionar_incidencia(request, incidencia):
@@ -676,6 +706,9 @@ def incidencia_detalle(request, pk):
             for estado in sorted(ReclamacionCarrier.TRANSICIONES.get(rec.estado, set()))
         ]
 
+    lineas_pedido = lineas_para_compensar(incidencia)
+    cajas_rehacer, caja_prefill = _rehacer_entrega(incidencia, lineas_pedido, request.GET.get("caja", ""))
+
     fotos_ids = set()
     if incidencia.pedido is not None:
         fotos_ids = {str(incidencia.pedido.pk), incidencia.pedido.folio}
@@ -694,9 +727,12 @@ def incidencia_detalle(request, pk):
         "reclamaciones": reclamaciones,
         "tipos_compensacion": Compensacion.TIPOS,
         "opciones_compensacion": opciones_compensacion(incidencia),
-        "lineas_pedido": lineas_para_compensar(incidencia),
+        "lineas_pedido": lineas_pedido,
         "motivos_sustitucion": Guia.MOTIVOS_SUSTITUCION,
-        "reponer": request.GET.get("reponer") == "1",
+        "reponer": request.GET.get("reponer") == "1" or caja_prefill is not None,
+        "cajas_rehacer": cajas_rehacer,
+        "caja_prefill": caja_prefill,
+        "motivo_inicial": "producto_erroneo" if incidencia.tipo == Incidencia.TIPO_ERR else "",
         "fotos": fotos,
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
         "puede_resolver": incidencia.estado in Incidencia.ESTADOS_ABIERTOS,
@@ -1122,6 +1158,7 @@ def pedido_detalle(request, pk):
     from apps.incidencias.models import Incidencia
     from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
+    from apps.pedidos.services import ESTADOS_REPOSICION, piezas_reponibles
     from apps.pedidos.models import Pedido
     from apps.pedidos.reportes import url_orden_shopify
     from apps.pedidos.services import direccion_en_una_linea, motivo_no_quitable_de_salida, motivo_sin_pod
@@ -1211,6 +1248,8 @@ def pedido_detalle(request, pk):
         "hoy": timezone.localdate().isoformat(),
         "lineas": list(pedido.lineas.all()),
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
+        # "Rehacer entrega" (2026-10-10): producto erróneo sobre lo que ya salió o se entregó.
+        "puede_rehacer": pedido.estado in ESTADOS_REPOSICION and bool(piezas_reponibles(pedido)),
         "filas": construir(Pedido.objects.filter(pk=pedido.pk)),
         "es_mesa": True,
         "sin_pedido": True,
