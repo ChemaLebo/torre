@@ -277,6 +277,10 @@ class Paquete(models.Model):
         (NO_RECUPERADO, "Inventario no recuperado"),
     ]
     reingreso_estado = models.CharField(max_length=15, choices=REINGRESO_ESTADOS, default=REINGRESO_PENDIENTE, blank=True)
+    # Producto erróneo (Chema 2026-10-10): algún renglón viajó con otro
+    # producto (PaqueteLinea.sku_real); la caja entra a "Reingresos por
+    # decidir" con su contenido REAL (lo pedido no salió y no va a regresar).
+    contenido_erroneo = models.BooleanField(default=False)
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -380,6 +384,13 @@ class PaqueteLinea(models.Model):
         Paquete, null=True, blank=True, on_delete=models.SET_NULL, related_name="repuesta_en",
         help_text="Caja original cuyas piezas de este producto repone este renglón",
     )
+    # Lo que DE VERDAD viajó en este renglón cuando el piso surtió otro
+    # producto (incidencia ERR, 2026-10-10). Los line items del pedido no se
+    # tocan: `linea_pedido` sigue siendo lo que el comprador pidió.
+    sku_real = models.ForeignKey(
+        "catalogo.SKU", null=True, blank=True, on_delete=models.PROTECT, related_name="viajo_en_lugar_de",
+        help_text="Producto que salió en lugar del pedido (producto erróneo)",
+    )
 
     @property
     def texto_para_piso(self):
@@ -388,6 +399,9 @@ class PaqueteLinea(models.Model):
         nombre = sku.descripcion or sku.codigo
         if self.fraccion_de > 1:
             return f"{self.cantidad}/{self.fraccion_de} de {nombre} (REEMPACADA en caja del cliente)"
+        if self.sku_real_id:
+            real = self.sku_real.descripcion or self.sku_real.codigo
+            return f"{self.cantidad} × {real} (salió en lugar de {nombre})"
         return f"{self.cantidad} × {nombre}"
 
     class Meta:

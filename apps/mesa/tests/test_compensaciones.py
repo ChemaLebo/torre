@@ -101,6 +101,37 @@ class CompensacionesMesaTests(TestCase):
         self.assertEqual(guia2.sustituida_motivo, "producto_erroneo")
         self.assertIn("sustituida · producto erróneo", self.client.get(url).content.decode())
 
+    def test_contenido_de_las_cajas_solo_en_producto_erroneo_y_corrige_sin_ajuste(self):
+        from apps.envios.models import PaqueteLinea
+        c1, c2 = self._dos_cajas_despachadas()
+        self.assertNotContains(self.client.get(self.url), "Contenido de las cajas")  # DAN: no aplica
+        err = abrir_incidencia(self.cliente, Incidencia.TIPO_ERR, Incidencia.ORIGEN_CLIENTE, pedido=self.pedido, sku=self.linea2.sku, texto="Otro producto")
+        url = reverse("mesa:incidencia_detalle", args=[err.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn("Contenido de las cajas", html)
+        self.assertIn('name="sku_real" value="C12"', html)  # el SKU de la incidencia, precargado
+        self.assertIn(f'<option value="{self.linea.pk}">SIX · 1 pza</option>', html)
+        respuesta = self.client.post(url, {
+            "accion": "corregir_caja", "caja_id": c1.pk, "linea_id": self.linea.pk, "piezas": "1", "sku_real": "c12",
+        }, follow=True)
+        self.assertContains(respuesta, "Caja 1 corregida: salió C12 en lugar de SIX (1 pza). Sin ajuste de inventario.")
+        c1.refresh_from_db()
+        self.assertTrue(c1.contenido_erroneo)
+        self.assertEqual(PaqueteLinea.objects.get(paquete=c1).sku_real, self.linea2.sku)
+        html = self.client.get(url).content.decode()
+        self.assertIn("contenido erróneo · por decidir", html)
+        self.assertIn("1 × Caja 12 (salió en lugar de Six)", html)
+        self.assertIn("1 × Caja 12 (salió en lugar de Six)", self.client.get(reverse("mesa:pedido_detalle", args=[self.pedido.pk])).content.decode())
+        self.assertContains(self.client.get(reverse("mesa:recepciones")), "producto erróneo: salió otro producto")
+        # Ajustar sin firmas se niega y no cambia nada más.
+        respuesta = self.client.post(url, {
+            "accion": "corregir_caja", "caja_id": c2.pk, "linea_id": self.linea.pk, "piezas": "1", "sku_real": "C12", "ajustar": "1",
+        }, follow=True)
+        from apps.inventario.services import FIRMA_INVALIDA
+        self.assertContains(respuesta, FIRMA_INVALIDA)
+        c2.refresh_from_db()
+        self.assertFalse(c2.contenido_erroneo)
+
     def test_reposicion_con_motivo_marca_la_guia_original_como_sustituida(self):
         from apps.envios.models import Guia, PaqueteLinea, Paquete as Caja
 

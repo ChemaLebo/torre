@@ -293,6 +293,7 @@ class Ajuste(models.Model):
     # "reconciliación con cliente", que es el acuerdo formal con el cliente
     # sobre SUS números (SOP-09 paso 10).
     MOTIVO_RECONCILIACION_INV = "reconciliacion_inv"
+    MOTIVO_PRODUCTO_ERRONEO = "producto_erroneo"  # el piso surtió otro producto (incidencia ERR, 2026-10-10)
     MOTIVOS = [
         (MOTIVO_CONTEO, "Diferencia detectada en conteo"),
         (MOTIVO_DANO, "Daño en bodega"),
@@ -302,6 +303,7 @@ class Ajuste(models.Model):
         (MOTIVO_ROBO, "Robo o extravío"),
         (MOTIVO_RECONCILIACION, "Reconciliación con cliente"),
         (MOTIVO_RECONCILIACION_INV, "Reconciliación de inventario"),
+        (MOTIVO_PRODUCTO_ERRONEO, "Producto erróneo surtido"),
     ]
 
     folio = models.CharField(max_length=20, unique=True, blank=True)

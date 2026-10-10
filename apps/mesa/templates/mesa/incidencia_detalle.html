@@ -169,6 +169,46 @@
   </div>
 
   <div>
+    {% if cajas_contenido %}
+    {# Producto erróneo (Chema 2026-10-10): qué salió de verdad en cada caja; corrige el renglón, ajusta inventario (opcional, doble firma) y deja la caja por decidir en Reingresos. #}
+    <div class="card mb" id="contenido-cajas">
+      <div class="titulo"><h3>Contenido de las cajas</h3><span class="small">producto erróneo: qué salió de verdad</span></div>
+      {% for c in cajas_contenido %}
+      <div style="padding:8px 0;border-bottom:1px solid var(--hair)">
+        <b>Caja {{ c.caja.numero }}</b>{% if c.caja.contenido_erroneo %} <span class="pill warn" title="Entra a Reingresos por decidir con su contenido real">contenido erróneo · por decidir</span>{% endif %}
+        <div class="small">{% for pl in c.renglones %}{{ pl.texto_para_piso }}<br>{% endfor %}</div>
+        {% if c.corregibles %}
+        <form method="post" class="mt corregir-caja">{% csrf_token %}
+          <input type="hidden" name="accion" value="corregir_caja">
+          <input type="hidden" name="caja_id" value="{{ c.caja.pk }}">
+          <div class="fila" style="flex-wrap:wrap;gap:8px;align-items:flex-end">
+            <div><label for="linea-{{ c.caja.pk }}">Debía ir</label>
+              <select id="linea-{{ c.caja.pk }}" name="linea_id">{% for pl in c.corregibles %}<option value="{{ pl.linea_pedido_id }}">{{ pl.linea_pedido.sku.codigo }} · {{ pl.cantidad }} pza{{ pl.cantidad|pluralize }}</option>{% endfor %}</select></div>
+            <div><label for="piezas-{{ c.caja.pk }}">Piezas</label><input id="piezas-{{ c.caja.pk }}" type="number" name="piezas" min="1" value="1" style="width:80px"></div>
+            <div><label for="real-{{ c.caja.pk }}">Salió en su lugar (SKU)</label><input id="real-{{ c.caja.pk }}" type="text" name="sku_real" value="{% if incidencia.sku %}{{ incidencia.sku.codigo }}{% endif %}" placeholder="Código del producto" autocomplete="off"></div>
+          </div>
+          <label class="mt" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="ajustar" value="1" checked data-ajustar> Ajustar inventario: entra lo pedido (nunca salió) y sale lo que se fue. Apágalo si un conteo posterior ya lo cuadró.</label>
+          <div class="fila firmas" style="flex-wrap:wrap;gap:8px;align-items:flex-end">
+            <div><label>Firma 1 (usuario)</label><input type="text" name="autorizo_1" value="{{ request.user.username }}" autocomplete="off"></div>
+            <div><label>PIN 1</label><input type="password" name="pin_1" inputmode="numeric" autocomplete="off"></div>
+            <div><label>Firma 2 (usuario)</label><input type="text" name="autorizo_2" autocomplete="off"></div>
+            <div><label>PIN 2</label><input type="password" name="pin_2" inputmode="numeric" autocomplete="off"></div>
+          </div>
+          <button class="btn chico primario mt" type="submit" onclick="return confirm('¿Corregir el contenido de la caja {{ c.caja.numero }}? Los line items del pedido no cambian; la caja queda por decidir en Reingresos.');">Corregir caja</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+      <script>
+      // Las firmas solo hacen falta cuando se ajusta inventario.
+      document.querySelectorAll(".corregir-caja").forEach(function (form) {
+        var casilla = form.querySelector("[data-ajustar]"), firmas = form.querySelector(".firmas");
+        function pintar() { firmas.style.display = casilla.checked ? "" : "none"; }
+        casilla.addEventListener("change", pintar); pintar();
+      });
+      </script>
+    </div>
+    {% endif %}
     <div class="card mb" id="compensaciones">
       <div class="titulo"><h3>Compensaciones</h3><span class="small">reposición y reembolso se ejecutan al aprobarse</span></div>
       {% if cajas_rehacer %}

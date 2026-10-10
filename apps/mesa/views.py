@@ -490,6 +490,28 @@ def _rehacer_entrega(incidencia, lineas, caja_param):
     return sorted(cajas.values(), key=lambda c: c["numero"]), caja_pk
 
 
+def _contenido_cajas_err(incidencia):
+    """Tarjeta "Contenido de las cajas" (Chema 2026-10-10), solo en incidencias
+    de producto erróneo con pedido: cada caja que ya salió con sus renglones y
+    cuáles se pueden corregir (sin corregir aún, sin fracción, sin kit)."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.incidencias.models import Incidencia  # lazy por contrato
+
+    if incidencia.tipo != Incidencia.TIPO_ERR or incidencia.pedido_id is None:
+        return []
+    cajas = []
+    for caja in (
+        incidencia.pedido.paquetes.filter(estado=Paquete.DESPACHADO).order_by("numero")
+        .prefetch_related("lineas__linea_pedido__sku", "lineas__sku_real")
+    ):
+        renglones = list(caja.lineas.all())
+        cajas.append({
+            "caja": caja, "renglones": renglones,
+            "corregibles": [pl for pl in renglones if pl.sku_real_id is None and pl.fraccion_de <= 1 and not pl.linea_pedido.sku.es_kit],
+        })
+    return cajas
+
+
 def _gestionar_incidencia(request, incidencia):
     """Despacha la acción POST del detalle. Regresa mensaje de éxito o lanza ValueError."""
     from apps.incidencias.models import Compensacion, ReclamacionCarrier
@@ -498,6 +520,38 @@ def _gestionar_incidencia(request, incidencia):
     accion = request.POST.get("accion", "")
     usuario = request.user.username
     texto = (request.POST.get("texto") or "").strip()
+
+    if accion == "corregir_caja":
+        # Producto erróneo (2026-10-10): la caja llevaba otro producto.
+        from apps.catalogo.models import SKU
+        from apps.envios.models import Paquete
+        from apps.incidencias.services import corregir_contenido_caja
+        from apps.pedidos.models import LineaPedido
+
+        caja = Paquete.objects.filter(pk=request.POST.get("caja_id") or 0, pedido=incidencia.pedido).first()
+        linea = LineaPedido.objects.filter(pk=request.POST.get("linea_id") or 0, pedido=incidencia.pedido).select_related("sku").first()
+        if caja is None or linea is None:
+            raise ValueError("Elige la caja y el producto que debía ir.")
+        codigo = (request.POST.get("sku_real") or "").strip()
+        sku_real = SKU.objects.filter(cliente=incidencia.cliente, codigo__iexact=codigo).first()
+        if sku_real is None:
+            raise ValueError(f"{incidencia.cliente.nombre} no tiene el SKU {codigo or '(vacío)'}: captura el producto que salió en su lugar.")
+        try:
+            piezas = int((request.POST.get("piezas") or "").strip())
+        except ValueError:
+            raise ValueError("Captura las piezas como número entero.") from None
+        ajustar = bool(request.POST.get("ajustar"))
+        firmas = (
+            (request.POST.get("autorizo_1") or "").strip(), request.POST.get("pin_1") or "",
+            (request.POST.get("autorizo_2") or "").strip(), request.POST.get("pin_2") or "",
+        ) if ajustar else None
+        _, ajustes = corregir_contenido_caja(incidencia, caja, linea, piezas, sku_real, request.user, ajustar=ajustar, firmas=firmas)
+        folios = ", ".join(a.folio for a in ajustes)
+        return (
+            f"Caja {caja.numero} corregida: salió {sku_real.codigo} en lugar de {linea.sku.codigo} ({piezas} pza). "
+            + (f"Ajustes {folios}." if ajustes else "Sin ajuste de inventario.")
+            + " La caja queda en Reingresos por decidir."
+        )
 
     if accion == "responder":
         if not texto:
@@ -708,6 +762,7 @@ def incidencia_detalle(request, pk):
 
     lineas_pedido = lineas_para_compensar(incidencia)
     cajas_rehacer, caja_prefill = _rehacer_entrega(incidencia, lineas_pedido, request.GET.get("caja", ""))
+    cajas_contenido = _contenido_cajas_err(incidencia)
 
     fotos_ids = set()
     if incidencia.pedido is not None:
@@ -732,6 +787,7 @@ def incidencia_detalle(request, pk):
         "reponer": request.GET.get("reponer") == "1" or caja_prefill is not None,
         "cajas_rehacer": cajas_rehacer,
         "caja_prefill": caja_prefill,
+        "cajas_contenido": cajas_contenido,
         "motivo_inicial": "producto_erroneo" if incidencia.tipo == Incidencia.TIPO_ERR else "",
         "fotos": fotos,
         "puede_tomar": incidencia.estado == Incidencia.ABIERTA,
@@ -2150,7 +2206,9 @@ def recepciones(request):
     for p in reingresos:
         p.incidencia = incidencias.get(p.pk)
         # Reingreso por caja (2026-10-06): qué cajas regresaron y siguen por decidir.
-        p.cajas_reingreso = [c.numero for c in cajas_por_reingresar(p)]
+        cajas_p = cajas_por_reingresar(p)
+        p.cajas_reingreso = [c.numero for c in cajas_p]
+        p.cajas_erroneas = [c.numero for c in cajas_p if c.contenido_erroneo and not c.regresada]
         p.total_cajas = len(p.paquetes.all())
 
     return render(request, "mesa/recepciones.html", {

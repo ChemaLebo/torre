@@ -23,7 +23,7 @@
           <td class="mono"><a href="{% url 'mesa:pedido_detalle' p.pk %}">{{ p.folio }}</a></td>
           <td>{{ p.cliente.nombre }}</td>
           <td><span class="pill {% if p.estado == 'RETORNADO' %}crit{% else %}warn{% endif %}">{{ p.get_estado_display }}</span></td>
-          <td class="small">{% if p.cajas_reingreso %}caja {{ p.cajas_reingreso|join:", " }} de {{ p.total_cajas }}{% if p.cancelacion_tardia %} <span class="muted">(cancelación tardía)</span>{% else %} <span class="muted">(regresada por el carrier)</span>{% endif %}{% else %}<span class="muted">pedido entero</span>{% endif %}</td>
+          <td class="small">{% if p.cajas_reingreso %}caja {{ p.cajas_reingreso|join:", " }} de {{ p.total_cajas }}{% if p.cancelacion_tardia %} <span class="muted">(cancelación tardía)</span>{% elif p.cajas_erroneas %} <span class="muted">(producto erróneo: salió otro producto)</span>{% else %} <span class="muted">(regresada por el carrier)</span>{% endif %}{% else %}<span class="muted">pedido entero</span>{% endif %}</td>
           <td>{% if p.incidencia %}<a class="mono" href="{% url 'mesa:incidencia_detalle' p.incidencia.pk %}">{{ p.incidencia.folio }}</a> <span class="small muted">{{ p.incidencia.get_tipo_display }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
           <td class="small muted">{{ p.actualizado|date:"d/M H:i" }}</td>
           <td class="derecha">

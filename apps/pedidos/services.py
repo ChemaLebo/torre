@@ -3459,7 +3459,9 @@ def cajas_por_reingresar(pedido):
     for caja in sorted(pedido.paquetes.all(), key=lambda c: c.numero):
         if caja.estado != Paquete.DESPACHADO or caja.reingreso_estado != Paquete.REINGRESO_PENDIENTE:
             continue
-        if pedido.cancelacion_tardia or caja.regresada:
+        # Contenido erróneo (2026-10-10): salió otro producto; la caja se
+        # decide con su contenido real aunque el carrier no la haya regresado.
+        if pedido.cancelacion_tardia or caja.regresada or caja.contenido_erroneo:
             cajas.append(caja)
     return cajas
 
@@ -3473,7 +3475,7 @@ def reingresos_por_decidir():
     tardía, decididos por pedido (aunque la CAN ya se haya resuelto y el
     pedido esté CANCELADO: la mercancía sigue por decidir)."""
     por_caja = Q(paquetes__estado="DESPACHADO", paquetes__reingreso_estado="") & (
-        Q(paquetes__guias__estado="RETORNO") | Q(cancelacion_tardia=True)
+        Q(paquetes__guias__estado="RETORNO") | Q(cancelacion_tardia=True) | Q(paquetes__contenido_erroneo=True)
     )
     # Sin cajas despachadas (salió entero: sin plan, o plan sin empacar por
     # caja): por pedido, como siempre.
@@ -3537,8 +3539,9 @@ def _contenido_de_cajas(cajas):
 
     por_sku = {}
     for caja in cajas:
-        for pl in caja.lineas.select_related("linea_pedido__sku"):
-            sku = pl.linea_pedido.sku
+        for pl in caja.lineas.select_related("linea_pedido__sku", "sku_real"):
+            # Producto erróneo (2026-10-10): regresa lo que de verdad viajó.
+            sku = pl.sku_real or pl.linea_pedido.sku
             if sku.es_kit:
                 continue
             por_sku[sku] = por_sku.get(sku, Fraction(0)) + Fraction(pl.cantidad, max(pl.fraccion_de, 1))

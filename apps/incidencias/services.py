@@ -413,6 +413,84 @@ def cerrar(incidencia, actor):
 # (sin pedido) solo cupón.
 
 
+def corregir_contenido_caja(incidencia, caja, linea, piezas, sku_real, actor, ajustar=True, firmas=None):
+    """Producto erróneo (Chema 2026-10-10): la caja despachada llevaba
+    `sku_real` en lugar de `piezas` del producto de `linea`. Los line items
+    del pedido NO se tocan (son inmutables): se corrige el renglón de la
+    CAJA (se parte si solo fue una parte), la caja entra a "Reingresos por
+    decidir" con su contenido real (lo pedido no salió y no va a regresar;
+    lo que sí salió puede volver) y, con `ajustar`, el inventario se cuadra
+    con dos ajustes firmados (`firmas` = (autorizo_1, pin_1, autorizo_2,
+    pin_2), como en Bodega): ENTRA lo pedido (nunca dejó el anaquel) y SALE
+    lo que sí se fue. Sin `ajustar` (un conteo posterior ya lo cuadró) solo
+    cambia la caja. Si lo que salió no tiene existencias en el sistema, el
+    ajuste se niega y nada cambia: hace falta conteo, no se inventa. Todo en
+    una transacción. Regresa (renglón corregido, [ajustes])."""
+    from apps.envios.models import Paquete, PaqueteLinea  # lazy: modelos de otra app
+    from apps.inventario.models import Ajuste  # lazy: modelo de otra app
+    from apps.inventario.services import aplicar_ajuste  # lazy por contrato
+
+    if incidencia.tipo != Incidencia.TIPO_ERR or incidencia.pedido_id is None:
+        raise ValueError("El contenido de una caja se corrige desde una incidencia de producto erróneo con pedido.")
+    pedido = incidencia.pedido
+    if caja.pedido_id != pedido.pk or caja.estado != Paquete.DESPACHADO:
+        raise ValueError(f"La caja {caja.numero} no es de {pedido.folio} o no ha salido de bodega.")
+    if linea.pedido_id != pedido.pk:
+        raise ValueError(f"La línea {linea.pk} no es de {pedido.folio}.")
+    piezas = int(piezas or 0)
+    if piezas <= 0:
+        raise ValueError("Captura cuántas piezas salieron con otro producto (1 o más).")
+    if sku_real is None or sku_real.cliente_id != incidencia.cliente_id:
+        raise ValueError("Elige el producto que salió en su lugar (del mismo cliente).")
+    if sku_real.es_kit or getattr(linea.sku, "es_kit", False):
+        raise ValueError("Los kits no se corrigen por aquí: elige el producto, no el kit.")
+    if sku_real.pk == linea.sku_id:
+        raise ValueError(f"{sku_real.codigo} es el mismo producto que se pidió: no hay nada que corregir.")
+    renglon = caja.lineas.filter(linea_pedido=linea, sku_real__isnull=True).order_by("pk").first()
+    if renglon is None:
+        raise ValueError(f"La caja {caja.numero} no llevaba {linea.sku.codigo} (o ese renglón ya se corrigió).")
+    if renglon.fraccion_de > 1:
+        raise ValueError("Una caja reempacada en fracción no se corrige por aquí.")
+    if piezas > renglon.cantidad:
+        raise ValueError(f"En la caja {caja.numero} viajaron {renglon.cantidad} pieza(s) de {linea.sku.codigo}; no {piezas}.")
+    if ajustar and not firmas:
+        raise ValueError("El ajuste de inventario necesita las dos firmas con PIN.")
+    autor = getattr(actor, "username", None) or str(actor or "Mesa")
+    with transaction.atomic():
+        if piezas < renglon.cantidad:
+            renglon.cantidad -= piezas
+            renglon.save(update_fields=["cantidad"])
+            corregido = PaqueteLinea.objects.create(
+                paquete=caja, linea_pedido=linea, cantidad=piezas, fraccion_de=renglon.fraccion_de,
+                repone_a=renglon.repone_a, sku_real=sku_real,
+            )
+        else:
+            renglon.sku_real = sku_real
+            renglon.save(update_fields=["sku_real"])
+            corregido = renglon
+        Paquete.objects.filter(pk=caja.pk).update(contenido_erroneo=True)
+        caja.contenido_erroneo = True
+        ajustes = []
+        if ajustar:
+            a1, p1, a2, p2 = firmas
+            ajustes.append(aplicar_ajuste(linea.sku, piezas, Ajuste.MOTIVO_PRODUCTO_ERRONEO, a1, p1, a2, p2, incidencia_ref=incidencia.folio))
+            ajustes.append(aplicar_ajuste(sku_real, -piezas, Ajuste.MOTIVO_PRODUCTO_ERRONEO, a1, p1, a2, p2, incidencia_ref=incidencia.folio))
+        folios = ", ".join(a.folio for a in ajustes)
+        texto = (
+            f"Caja {caja.numero}: salió {sku_real.codigo} en lugar de {linea.sku.codigo} ({piezas} pza{'s' if piezas != 1 else ''}). "
+            + (f"Inventario ajustado: {folios}." if ajustes else "Sin ajuste de inventario (el conteo ya lo cuadró).")
+            + " La caja queda por decidir en Reingresos."
+        )
+        registrar_evento(
+            "pedido", pedido.pk, "caja_corregida", actor=actor, cliente=pedido.cliente,
+            delta={"caja": caja.numero, "pedido_sku": linea.sku.codigo, "real_sku": sku_real.codigo, "piezas": piezas,
+                   "ajustes": [a.folio for a in ajustes], "incidencia": incidencia.folio},
+            motivo=texto[:300],
+        )
+        responder(incidencia, autor, MensajeIncidencia.ROL_MESA, texto)
+    return corregido, ajustes
+
+
 def opciones_compensacion(incidencia):
     """[(tipo, nombre)] de compensación que aplican a esta incidencia."""
     nombres = dict(Compensacion.TIPOS)
