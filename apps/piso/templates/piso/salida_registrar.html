@@ -13,83 +13,12 @@
 
 <div class="banner accent"><span class="foco"></span>Escanea la etiqueta interna de Torre de CADA caja que sube al camión de {{ carrier }}. Si no se lee, teclea el folio del pedido o el número de guía.</div>
 
-{# El orden es del pedido más antiguo al más reciente: lo viejo sale primero. #}
-{% if siguiente %}
-<div class="card">
-  <div class="eyebrow">Siguiente en orden</div>
-  <h2 class="mono">{{ siguiente.pedido.folio }}{% if siguiente.caja %} · caja {{ siguiente.caja.numero }}{% endif %}</h2>
-  <div class="small">{{ siguiente.pedido.cliente.nombre }} · {{ siguiente.pedido.destino }} · guía <span class="mono">{{ siguiente.guia|default:"—" }}</span> · entró {{ siguiente.pedido.creado|date:"d/M H:i" }}</div>
-</div>
-{% endif %}
-
-<div class="card">
-  <div class="titulo"><h2>Escaneadas</h2><span class="pill accent">{{ escaneadas|length }}</span></div>
-  {% for u in escaneadas %}
-  <div class="corral-fila" data-tipo="{{ u.tipo }}" data-id="{{ u.id }}">
-    <div class="crece">
-      <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span>
-      <div class="small muted">{{ u.pedido.cliente.nombre }} · {{ u.pedido.destino }}</div>
-    </div>
-    <form method="post">{% csrf_token %}
-      <input type="hidden" name="accion" value="quitar">
-      <input type="hidden" name="corral" value="{{ corral }}">
-      <input type="hidden" name="carrier" value="{{ carrier }}">
-      <input type="hidden" name="tipo" value="{{ u.tipo }}">
-      <input type="hidden" name="id" value="{{ u.id }}">
-      <button class="btn chico" type="submit">Quitar</button>
-    </form>
-  </div>
-  {% empty %}
-  <p class="muted small">Todavía nada. Escanea la primera caja.</p>
-  {% endfor %}
-</div>
-
-{% if se_quedan %}
-<details class="colapsable mt" open>
-  <summary>{{ se_quedan|length }} sin escanear, del más antiguo al más reciente · se quedan si cierras ahora</summary>
-  <div class="colapsable-cuerpo small">
-    {% for u in se_quedan %}
-    <div class="corral-fila">
-      <div class="crece">{{ forloop.counter }}. <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }} · {{ u.pedido.creado|date:"d/M" }}</div>
-      <form method="post">{% csrf_token %}
-        <input type="hidden" name="accion" value="no_esta">
-        <input type="hidden" name="corral" value="{{ corral }}">
-        <input type="hidden" name="carrier" value="{{ carrier }}">
-        <input type="hidden" name="tipo" value="{{ u.tipo }}">
-        <input type="hidden" name="id" value="{{ u.id }}">
-        <button class="btn chico" type="submit">No está en salida</button>
-      </form>
-    </div>
-    {% endfor %}
-  </div>
-</details>
-{% endif %}
-
-{# Marcadas "No está en salida": la caja no está en el corral; en el resumen se decide si ya había salido. #}
-{% if faltan %}
-<div class="card mt">
-  <div class="titulo"><h2>No están en salida</h2><span class="pill warn">{{ faltan|length }}</span></div>
-  <p class="small muted">Al cerrar la salida decides, una por una, si ya había salido antes sin registro.</p>
-  {% for u in faltan %}
-  <div class="corral-fila">
-    <div class="crece"><span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }}</div>
-    <form method="post">{% csrf_token %}
-      <input type="hidden" name="accion" value="si_esta">
-      <input type="hidden" name="corral" value="{{ corral }}">
-      <input type="hidden" name="carrier" value="{{ carrier }}">
-      <input type="hidden" name="tipo" value="{{ u.tipo }}">
-      <input type="hidden" name="id" value="{{ u.id }}">
-      <button class="btn chico" type="submit">Sí está</button>
-    </form>
-  </div>
-  {% endfor %}
-</div>
-{% endif %}
-
-<div class="accion-fija mt">
-  <div class="card">
+{# Chema 2026-10-12: en móvil el escáner fijo tapaba las listas. El escáner es la primera tarjeta, nada queda fijo y cada tarjeta se colapsa desde su renglón; la tablet recuerda abierta/cerrada (localStorage). Al colapsar el escáner se apaga la cámara. El piso solo escanea: lo que no se escanea se queda; "No está en salida" ya no se decide aquí. #}
+<details class="colapsable mt" id="tarjeta-escaner" data-recordar="salida-escaner" open>
+  <summary>Escanear · <span class="mono">{{ escaneadas|length }}</span> de {{ total_listas }} listas</summary>
+  <div class="colapsable-cuerpo">
     <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
-    <form method="post" id="form-salida">{% csrf_token %}
+    <form method="post" id="form-salida" class="mt">{% csrf_token %}
       <input type="hidden" name="accion" value="escanear">
       <input type="hidden" name="corral" value="{{ corral }}">
       <input type="hidden" name="carrier" value="{{ carrier }}">
@@ -99,19 +28,60 @@
         <button class="btn" type="submit">Agregar</button>
       </div>
     </form>
-    <form method="post" class="mt">{% csrf_token %}
-      <input type="hidden" name="accion" value="cerrar">
-      <input type="hidden" name="corral" value="{{ corral }}">
-      <input type="hidden" name="carrier" value="{{ carrier }}">
-      <button class="btn primario gigante" type="submit" {% if not escaneadas and not faltan %}disabled{% endif %}>Cerrar salida</button>
-    </form>
-    <form method="post" class="mt" onsubmit="return confirm('¿Descartar lo escaneado? Nada se registra.');">{% csrf_token %}
-      <input type="hidden" name="accion" value="cancelar">
-      <input type="hidden" name="corral" value="{{ corral }}">
-      <input type="hidden" name="carrier" value="{{ carrier }}">
-      <button class="btn chico" type="submit">Descartar y volver</button>
-    </form>
   </div>
+</details>
+
+{# Del pedido más antiguo al más reciente: lo viejo sale primero. #}
+{% if se_quedan %}
+<details class="colapsable mt" data-recordar="salida-sin-escanear" open>
+  <summary>{{ se_quedan|length }} sin escanear, del más antiguo al más reciente · se quedan si cierras ahora</summary>
+  <div class="colapsable-cuerpo small">
+    {% for u in se_quedan %}
+    <div class="corral-fila">
+      <div class="crece">{{ forloop.counter }}. <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · {{ u.guia|default:"—" }} · {{ u.pedido.cliente.nombre }} · {{ u.pedido.creado|date:"d/M" }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+<details class="colapsable mt" data-recordar="salida-escaneadas">
+  <summary>Escaneadas · <span class="pill accent">{{ escaneadas|length }}</span></summary>
+  <div class="colapsable-cuerpo">
+    {% for u in escaneadas %}
+    <div class="corral-fila" data-tipo="{{ u.tipo }}" data-id="{{ u.id }}">
+      <div class="crece">
+        <span class="mono">{{ u.pedido.folio }}</span>{% if u.caja %} · caja {{ u.caja.numero }}{% endif %} · <span class="mono small">{{ u.guia|default:"—" }}</span>
+        <div class="small muted">{{ u.pedido.cliente.nombre }} · {{ u.pedido.destino }}</div>
+      </div>
+      <form method="post">{% csrf_token %}
+        <input type="hidden" name="accion" value="quitar">
+        <input type="hidden" name="corral" value="{{ corral }}">
+        <input type="hidden" name="carrier" value="{{ carrier }}">
+        <input type="hidden" name="tipo" value="{{ u.tipo }}">
+        <input type="hidden" name="id" value="{{ u.id }}">
+        <button class="btn chico" type="submit">Quitar</button>
+      </form>
+    </div>
+    {% empty %}
+    <p class="muted small">Todavía nada. Escanea la primera caja.</p>
+    {% endfor %}
+  </div>
+</details>
+
+<div class="card mt">
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="cerrar">
+    <input type="hidden" name="corral" value="{{ corral }}">
+    <input type="hidden" name="carrier" value="{{ carrier }}">
+    <button class="btn primario gigante" type="submit" {% if not escaneadas and not faltan %}disabled{% endif %}>Cerrar salida</button>
+  </form>
+  <form method="post" class="mt" onsubmit="return confirm('¿Descartar lo escaneado? Nada se registra.');">{% csrf_token %}
+    <input type="hidden" name="accion" value="cancelar">
+    <input type="hidden" name="corral" value="{{ corral }}">
+    <input type="hidden" name="carrier" value="{{ carrier }}">
+    <button class="btn chico" type="submit">Descartar y volver</button>
+  </form>
 </div>
 
 <script>
@@ -155,7 +125,21 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  Escaner.montar(document.getElementById("visor-escaner"), function (valor) { agregar(valor); });
+  // Tarjetas colapsables: la tablet recuerda cada una (torre-<clave>); el
+  // escáner solo tiene la cámara prendida mientras su tarjeta está abierta.
+  var visor = document.getElementById("visor-escaner");
+  function montarEscaner() { Escaner.montar(visor, function (valor) { agregar(valor); }); }
+  document.querySelectorAll("details[data-recordar]").forEach(function (tarjeta) {
+    var clave = "torre-" + tarjeta.dataset.recordar, guardado = null;
+    try { guardado = localStorage.getItem(clave); } catch (e) {}
+    if (guardado === "1") tarjeta.open = true;
+    if (guardado === "0") tarjeta.open = false;
+    tarjeta.addEventListener("toggle", function () {
+      try { localStorage.setItem(clave, tarjeta.open ? "1" : "0"); } catch (e) {}
+      if (tarjeta.id === "tarjeta-escaner") { if (tarjeta.open) { montarEscaner(); } else { Escaner.detener(); } }
+    });
+  });
+  if (document.getElementById("tarjeta-escaner").open) montarEscaner();
   form.addEventListener("submit", function (ev) {
     if (!window.fetch) return;
     ev.preventDefault();

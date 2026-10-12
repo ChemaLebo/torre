@@ -148,7 +148,9 @@ class RegistrarSalidaTests(PisoTestCase):
         _pedido, c1, c2 = self._pedido_dos_cajas()
         pantalla = self.client.get(self.url)
         self.assertEqual(pantalla.context["siguiente"]["pedido"].pk, viejo.pk)
-        self.assertContains(pantalla, "Siguiente en orden")
+        self.assertNotContains(pantalla, "Siguiente en orden")  # 2026-10-12: la lista "sin escanear" ya va en orden
+        self.assertNotContains(pantalla, "No está en salida")  # el piso solo escanea
+        self.assertContains(pantalla, 'id="tarjeta-escaner"')
         self.assertEqual(
             [(u["pedido"].pk, u["id"]) for u in pantalla.context["se_quedan"]],
             [(viejo.pk, viejo.pk), (c1.pedido_id, c1.pk), (c2.pedido_id, c2.pk)],
@@ -170,7 +172,7 @@ class RegistrarSalidaTests(PisoTestCase):
         pantalla = self.client.get(self.url)
         self.assertEqual([u["id"] for u in pantalla.context["faltan"]], [c2.pk])
         self.assertEqual(pantalla.context["se_quedan"], [])
-        self.assertContains(pantalla, "No están en salida")
+        self.assertNotContains(pantalla, "No están en salida")  # 2026-10-12: la decisión ya no vive en el piso; el POST y el resumen siguen
         resumen = self.client.get(reverse("piso:salida_resumen") + PARAMS)
         self.assertContains(resumen, f'name="ya_salio_paquete_id" value="{c2.pk}"')
         self.assertNotContains(resumen, f'name="ya_salio_paquete_id" value="{c2.pk}" checked')
