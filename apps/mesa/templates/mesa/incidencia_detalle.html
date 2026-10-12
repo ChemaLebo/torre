@@ -75,6 +75,27 @@
     <div class="banner warn mt"><span class="foco"></span>Ya salió{% if guias_fuera %} con {{ guias_fuera|join:", " }}{% endif %}{% if cajas_fuera %} (caja {{ cajas_fuera|join:", " }} fuera{% if cajas_dentro %}; en bodega la caja {{ cajas_dentro|join:", " }}{% endif %}){% endif %}: no se regresa a empaque. Se resuelve con el carrier o con el comprador.</div>
     <p class="small mt">Viajó a: <strong>{{ direccion_guia|default:"—" }}</strong>{% if direccion_pendiente %}<br>Shopify ahora dice: <strong>{{ direccion_pendiente }}</strong>. El pedido conserva la dirección a la que viajó.{% endif %}</p>
     {% endif %}
+    {# Caja sin salida (2026-10-12): lista en Salida, su camión ya pasó y el carrier no la reporta; si se la llevaron sin escanear, Mesa la da por salida. #}
+    {% if css_motivo %}<p class="small muted mt">{{ css_motivo }}</p>{% endif %}
+    {% if css_cajas or css_entero %}
+    <div class="mt">
+      <p class="small muted">Sigue listo en Salida. Si ya se lo llevaron sin escanear, dalo por salido: sale igual que con el manifiesto (kardex, compromiso y aviso). Si no aparece en el corral, es paquete extraviado.</p>
+      {% for caja in css_cajas %}
+      <form method="post" class="fila entre mt" onsubmit="return confirm('¿Dar por salida la caja {{ caja.numero }} de {{ incidencia.pedido.folio }} sin escaneo?');">{% csrf_token %}
+        <input type="hidden" name="accion" value="salida_sin_registro">
+        <input type="hidden" name="caja_id" value="{{ caja.pk }}">
+        <div>Caja {{ caja.numero }} · <span class="mono">{% if caja.guia %}{{ caja.guia.numero }}{% else %}sin guía{% endif %}</span>{% if caja.guia %} · {{ caja.guia.carrier }}{% endif %}</div>
+        <button class="btn chico" type="submit">Salió sin registro</button>
+      </form>
+      {% endfor %}
+      {% if css_entero %}
+      <form method="post" class="mt" onsubmit="return confirm('¿Dar por salido el pedido {{ incidencia.pedido.folio }} entero sin escaneo?');">{% csrf_token %}
+        <input type="hidden" name="accion" value="salida_sin_registro">
+        <button class="btn chico" type="submit">Salió sin registro (pedido entero)</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
     {# Sin paquetería que cotice (2026-09-24; por caja desde 2026-10-01): cada caja en bodega con su selector, y el del pedido entero. #}
     {% if paq_motivo %}<p class="small muted mt">{{ paq_motivo }}</p>{% endif %}
     {% if paq_cajas %}

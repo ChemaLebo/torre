@@ -351,7 +351,8 @@ class FormNuevaIncidenciaMesa(forms.Form):
         # piso" el botón Detener del piso (o Torre sola), no una persona en Mesa.
         # "Producto no registrado" sí se levanta a mano (2026-10-07): detiene el pedido.
         self.fields["tipo"].choices = [
-            (c, f"{c} · {n}") for c, n in Incidencia.TIPOS if c not in (Incidencia.TIPO_PAQ, Incidencia.TIPO_DET)
+            (c, f"{c} · {n}") for c, n in Incidencia.TIPOS
+            if c not in (Incidencia.TIPO_PAQ, Incidencia.TIPO_DET, Incidencia.TIPO_CSS)  # CSS la abre el revisor de Salida
         ]
         # "Rehacer entrega" desde el pedido (2026-10-10): llega con el tipo y la reposición puestos.
         if tipo_inicial in dict(self.fields["tipo"].choices):

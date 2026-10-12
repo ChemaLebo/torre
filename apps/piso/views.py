@@ -2688,6 +2688,11 @@ def salida(request):
         "corral_local": CORRAL_LOCAL,
         "flota_propia": _flota_propia(),
     }
+    if _es_mesa(request):
+        # Cajas sin salida (Chema 2026-10-12): el camión pasó, no se escanearon y el carrier no las reporta.
+        from apps.pedidos.services import cajas_sin_salida  # lazy por contrato
+
+        contexto["sin_salida"] = cajas_sin_salida()
     return render(request, "piso/salida.html", contexto)
 
 

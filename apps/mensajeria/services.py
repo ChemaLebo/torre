@@ -67,6 +67,7 @@ TIPO_INCIDENCIA_LEGIBLE = {
     "DET": "detenido en piso",
     "SKU": "producto no registrado",
     "ERR": "producto erróneo",
+    "CSS": "caja sin salida",
 }
 ESTADOS_INCIDENCIA_ABIERTOS = ("ABIERTA", "EN_CURSO", "RESOLUCION_PROPUESTA")
 

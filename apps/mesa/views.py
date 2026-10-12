@@ -521,6 +521,22 @@ def _gestionar_incidencia(request, incidencia):
     usuario = request.user.username
     texto = (request.POST.get("texto") or "").strip()
 
+    if accion == "salida_sin_registro":
+        # Caja sin salida (2026-10-12): Mesa la da por salida; sale como con el manifiesto.
+        from apps.envios.models import Paquete
+        from apps.pedidos.services import salida_sin_registro
+
+        if incidencia.pedido is None:
+            raise ValueError("La incidencia no tiene pedido.")
+        caja = None
+        if request.POST.get("caja_id"):
+            caja = Paquete.objects.filter(pk=request.POST.get("caja_id"), pedido=incidencia.pedido).first()
+            if caja is None:
+                raise ValueError("Esa caja no es de este pedido.")
+        salida_sin_registro(incidencia.pedido, caja, request.user)
+        que = f"La caja {caja.numero}" if caja is not None else f"El pedido {incidencia.pedido.folio}"
+        return f"{que} quedó como salida sin registro: despachada, con kardex y aviso, igual que con el manifiesto."
+
     if accion == "corregir_caja":
         # Producto erróneo (2026-10-10): la caja llevaba otro producto.
         from apps.catalogo.models import SKU
@@ -795,6 +811,7 @@ def incidencia_detalle(request, pk):
         "puede_releer": incidencia.tipo == Incidencia.TIPO_SKU and incidencia.abierta and incidencia.pedido_id is not None,
         **_contexto_cambio_direccion(incidencia),
         **_contexto_sin_paqueteria(incidencia),
+        **_contexto_caja_sin_salida(incidencia),
         "url_shopify": url_orden_shopify(incidencia.pedido) if incidencia.pedido else "",
         "guias": guias_del_pedido(incidencia.pedido) if incidencia.pedido else [],
         "puede_cerrar": incidencia.estado == Incidencia.RESUELTA,
@@ -1247,6 +1264,8 @@ def pedido_detalle(request, pk):
         for g in caja.historial:
             g.url_rastreo = url_rastreo_carrier(g.carrier, g.numero)
         caja.url_rastreo = url_rastreo_carrier(caja.guia.carrier, caja.guia.numero) if caja.guia else ""
+        # Salió sin escaneo de Salida (2026-10-12): despachada sin línea de manifiesto.
+        caja.sin_escaneo = caja.estado == "DESPACHADO" and not caja.lineas_manifiesto.exists()
         caja.puede_cambiar = puede_cambiar_caja and caja.estado != "DESPACHADO" and (
             caja.guia is None or caja.guia.estado == "GUIA_CREADA"
         )
@@ -1331,6 +1350,23 @@ def pedido_detalle(request, pk):
         "url_anterior": reverse("mesa:pedido_detalle", args=[anterior.pk]) + sufijo if anterior else "",
         "url_siguiente": reverse("mesa:pedido_detalle", args=[siguiente.pk]) + sufijo if siguiente else "",
     })
+
+
+def _contexto_caja_sin_salida(incidencia):
+    """Incidencia interna "Caja sin salida" (Chema 2026-10-12): las cajas del
+    pedido que siguen listas en Salida, cada una con "Salió sin registro"
+    (la caja ya no está en el corral: se la llevaron sin escanear)."""
+    from apps.incidencias.models import Incidencia
+    from apps.pedidos.services import cajas_por_salir  # lazy por contrato
+    pedido = incidencia.pedido
+    if incidencia.tipo != Incidencia.TIPO_CSS or pedido is None or not incidencia.abierta:
+        return {}
+    if pedido.estado not in ("GUIA_GENERADA", "PARCIALMENTE_DESPACHADO"):
+        return {"css_motivo": f"{pedido.folio} está {pedido.get_estado_display().lower()}: ya no tiene cajas listas en Salida."}
+    cajas = cajas_por_salir(pedido)
+    for caja in cajas:
+        caja.guia = caja.guia_activa
+    return {"css_cajas": cajas, "css_entero": not cajas}
 
 
 def _contexto_sin_paqueteria(incidencia):

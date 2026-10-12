@@ -1098,11 +1098,25 @@ def _registrar_recoleccion_carrier(guia, ts, descripcion=""):
         motivo=(descripcion or "El carrier reportó la recolección")[:300],
     )
     if en_bodega:
+        # Salida automática sin escaneo (Chema 2026-10-12): si el carrier ya la
+        # tiene, la caja sale como con el manifiesto (kardex, fulfillment y
+        # aviso incluidos). Si no aplica o falla, el aviso de siempre.
+        salio = False
         try:
-            from apps.pedidos.services import avisar_recoleccion_carrier  # lazy por contrato
-            avisar_recoleccion_carrier(pedido, guia, notificar=primera)
-        except Exception:  # noqa: BLE001 — el aviso jamás detiene el rastreo
-            pass
+            from apps.pedidos.services import salida_por_carrier  # lazy por contrato
+            salio = salida_por_carrier(pedido, guia, ts, descripcion)
+        except Exception as exc:  # noqa: BLE001 — la salida automática jamás detiene el rastreo
+            registrar_evento(
+                "pedido", pedido.pk, "salida_sin_escaneo_fallida", cliente=pedido.cliente,
+                delta={"guia": guia.numero, "caja": guia.paquete.numero if guia.paquete_id else None},
+                motivo=str(exc)[:300],
+            )
+        if not salio:
+            try:
+                from apps.pedidos.services import avisar_recoleccion_carrier  # lazy por contrato
+                avisar_recoleccion_carrier(pedido, guia, notificar=primera)
+            except Exception:  # noqa: BLE001 — el aviso jamás detiene el rastreo
+                pass
 
 
 def _estado_por_guias(pedido):

@@ -82,6 +82,7 @@ class Incidencia(MaquinaEstados):
     TIPO_DET = "DET"   # detenido en piso (2026-10-06; interna): sale de la cola hasta que Mesa resuelva
     TIPO_SKU = "SKU"   # producto no registrado en Torre (2026-10-07; interna): el pedido nace detenido
     TIPO_ERR = "ERR"   # producto erróneo: el comprador recibió otro producto (2026-10-10); se rehace la entrega
+    TIPO_CSS = "CSS"   # caja sin salida (2026-10-12; interna): lista en Salida, el camión pasó y nadie la tiene
     TIPOS = [
         (TIPO_DAN, "Daño / rotura"),
         (TIPO_RET, "Retraso"),
@@ -95,6 +96,7 @@ class Incidencia(MaquinaEstados):
         (TIPO_DET, "Detenido en piso"),
         (TIPO_SKU, "Producto no registrado"),
         (TIPO_ERR, "Producto erróneo"),
+        (TIPO_CSS, "Caja sin salida"),
     ]
 
     # ── Prioridades ──

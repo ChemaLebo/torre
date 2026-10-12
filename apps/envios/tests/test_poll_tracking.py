@@ -185,7 +185,10 @@ class PollTrackingTests(TestCase):
         guia.refresh_from_db()
         pedido.refresh_from_db()
         self.assertEqual((guia.estado, guia.ts_recolectado_carrier, pedido.ts_recolectado_carrier), ("RECOLECTADO", ts, ts))
-        self.assertEqual(pedido.estado, "GUIA_GENERADA")  # la salida física sigue siendo el manifiesto
+        # Chema 2026-10-12: si el carrier ya la tiene, la salida se registra sola (sin escaneo).
+        self.assertEqual(pedido.estado, "RECOLECTADO")
+        salida = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo")
+        self.assertEqual((salida.delta["origen"], salida.delta["guia"]), ("carrier", guia.numero))
         self.assertEqual(guia.fecha_compromiso, ts.date() + timedelta(days=1))  # local: día siguiente desde la recolección
         en_camino.assert_called_once_with(pedido)
         fulfillment.assert_called_once()
@@ -195,10 +198,61 @@ class PollTrackingTests(TestCase):
              self.captureOnCommitCallbacks(execute=True):
             services._procesar_rastreo(guia, {"estado": "EN_TRANSITO", "descripcion": "In transit", "ts_evento": ts + timedelta(hours=5), "raw": {}}, timezone.now())
         guia.refresh_from_db()
+        pedido.refresh_from_db()
         self.assertEqual(guia.ts_recolectado_carrier, ts)  # segundo evento: no se vuelve a estampar ni a avisar
+        self.assertEqual(pedido.estado, "EN_TRANSITO")  # ya salió: el tránsito sí lo mueve
         en_camino2.assert_not_called()
         fulfillment2.assert_not_called()
         self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="recolectado_por_carrier").exists())
+        self.assertEqual(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo").count(), 1)
+
+    def test_el_carrier_reporta_una_caja_y_solo_esa_sale(self):
+        """Chema 2026-10-12: pedido en dos cajas; el carrier reporta la caja 2 → sale
+        sola (DESPACHADO, kardex), la 1 sigue en Salida y el pedido queda parcial."""
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete, PaqueteLinea
+        from apps.inventario.models import Movimiento
+
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO", es_local=False)
+        from apps.catalogo.models import SKU
+        from apps.pedidos.models import LineaPedido
+        sku = SKU.objects.create(cliente=self.cliente, codigo="SIX-C", descripcion="Six", peso_gr=4000)
+        linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=2, reservada=True, cantidad_pickeada=2)
+        cajas = [Paquete.objects.create(pedido=pedido, numero=n, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO) for n in (1, 2)]
+        for caja in cajas:
+            PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=1)
+        services.generar_guias(pedido)
+        pedido.refresh_from_db()
+        c1, c2 = cajas
+        c2.refresh_from_db()
+        with patch("apps.integraciones.services.marcar_fulfillment"), patch("apps.mensajeria.services.enviar_en_camino"), \
+             patch("apps.inventario.services.despachar") as despachar, self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(c2.guia_activa, {"estado": "EN_TRANSITO", "descripcion": "In transit", "ts_evento": timezone.now(), "raw": {}}, timezone.now())
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.EMPACADO, Paquete.DESPACHADO, "PARCIALMENTE_DESPACHADO"))
+        despachar.assert_called_once_with(sku, 2, pedido.folio)  # la unidad de venta sale del kardex con la primera caja
+        salida = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo")
+        self.assertEqual((salida.delta["origen"], salida.delta["caja"]), ("carrier", 2))
+        self.assertFalse(Movimiento.objects.filter(tipo=Movimiento.SALIDA).exists())  # despachar está parchado: solo se verifica la llamada
+
+    def test_sin_guia_lista_el_carrier_solo_avisa(self):
+        """Pedido todavía EMPACADO (sin todas las guías): no hay salida automática; el aviso de siempre."""
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO", es_local=True)
+        guia = services.generar_guia(pedido)
+        from apps.pedidos.models import Pedido
+        Pedido.objects.filter(pk=pedido.pk).update(estado="EMPACADO")
+        pedido.refresh_from_db()
+        with patch("apps.integraciones.services.marcar_fulfillment") as fulfillment, patch("apps.mensajeria.services.enviar_en_camino") as en_camino, \
+             self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(guia, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": timezone.now(), "raw": {}}, timezone.now())
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "EMPACADO")
+        en_camino.assert_called_once_with(pedido)
+        fulfillment.assert_called_once()
+        self.assertFalse(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo").exists())
 
     def test_pedido_rezagado_con_guia_ya_entregada_se_cierra_en_el_siguiente_poll(self):
         """2026-09-25 (PED-00053): salió sin manifiesto, el carrier la entregó y

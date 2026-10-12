@@ -2659,6 +2659,168 @@ def cajas_por_salir(pedido):
     return [c for c in cajas if c.estado == Paquete.EMPACADO]
 
 
+def salida_por_carrier(pedido, guia, ts, descripcion=""):
+    """Salida automática "sin escaneo" (Chema 2026-10-12): el carrier reportó
+    que ya tiene una caja que Torre todavía veía lista en el corral
+    (recolección o tránsito sin manifiesto). La caja sale igual que con el
+    manifiesto (marcar_recolectado: DESPACHADO, kardex, compromiso, aviso al
+    comprador y fulfillment, una sola vez) y queda el evento
+    `salida_sin_escaneo` con origen "carrier": el pedido no se queda colgado
+    en Salida ni su inventario "en empaque" (las piezas fantasma de PED-00166
+    y PED-00205). Solo con el pedido con guía lista y la caja aún por salir;
+    si no aplica regresa False y el rastreo avisa como antes. Si el carrier se
+    equivocó, Mesa lo revierte con "Quitar de salida"."""
+    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+        return False
+    pendientes = cajas_por_salir(pedido)
+    if guia.paquete_id:
+        cajas = [c for c in pendientes if c.pk == guia.paquete_id]
+        if not cajas:
+            return False
+    elif pendientes:
+        return False  # guía del pedido entero con cajas por caja: no se adivina cuál salió
+    else:
+        cajas = None
+    marcar_recolectado(pedido, None, paquetes=cajas)
+    registrar_evento(
+        "pedido", pedido.pk, "salida_sin_escaneo", cliente=pedido.cliente,
+        delta={"origen": "carrier", "caja": guia.paquete.numero if guia.paquete_id else None,
+               "guia": guia.numero, "carrier": guia.carrier, "ts_carrier": ts.isoformat() if ts else None},
+        motivo=f"El carrier reportó la caja antes de registrar su salida ({descripcion or 'recolección'}): salió sin escaneo."[:300],
+    )
+    return True
+
+
+def salida_sin_registro(pedido, caja, actor, motivo=""):
+    """Mesa da por salida una caja que sigue listada en Salida pero no está
+    en el corral (Chema 2026-10-12, desde la incidencia "Caja sin salida"):
+    misma salida que el manifiesto, evento `salida_sin_escaneo` origen "mesa".
+    `caja` None = el pedido salió entero. Resuelve la incidencia CSS si ya no
+    queda nada por salir."""
+    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+        raise ValueError(f"{pedido.folio} está {pedido.get_estado_display()}: no tiene cajas listas en Salida.")
+    pendientes = cajas_por_salir(pedido)
+    if caja is not None and caja.pk not in {c.pk for c in pendientes}:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} ya no está por salir.")
+    with transaction.atomic():
+        marcar_recolectado(pedido, actor, paquetes=[caja] if caja is not None else None)
+        registrar_evento(
+            "pedido", pedido.pk, "salida_sin_escaneo", actor=actor, cliente=pedido.cliente,
+            delta={"origen": "mesa", "caja": caja.numero if caja is not None else None},
+            motivo=(motivo or "Mesa dio la caja por salida sin escaneo (no estaba en el corral).")[:300],
+        )
+        _cerrar_css_si_nada_por_salir(pedido, actor)
+    return pedido
+
+
+HORAS_SIN_SALIDA = 24
+
+
+def _domingos_entre(desde, hasta):
+    """Cuántos domingos (fecha local) hay en [desde, hasta]."""
+    d, fin = timezone.localtime(desde).date(), timezone.localtime(hasta).date()
+    cuenta = 0
+    while d <= fin:
+        if d.weekday() == 6:
+            cuenta += 1
+        d += timedelta(days=1)
+    return cuenta
+
+
+def cajas_sin_salida(ahora=None):
+    """Cajas listas en Salida que ya debieron irse (Chema 2026-10-12): la guía
+    nació hace más de HORAS_SIN_SALIDA horas sin contar domingos, el carrier
+    no ha reportado la caja, y desde que llegó ya cerró al menos una salida
+    de su paquetería sin ella (el camión pasó y no se subió). Pedido con guía
+    lista (GUIA_GENERADA / PARCIALMENTE_DESPACHADO) y caja EMPACADO con guía
+    viva; sin cajas por caja, la guía del pedido. Regresa [{pedido, caja,
+    guia, manifiesto, horas}] del más viejo al más nuevo."""
+    from apps.envios.models import Guia, Manifiesto, Paquete  # lazy: modelos de otra app
+    from apps.envios.services import CARRIER_LOCAL  # lazy por contrato
+
+    ahora = ahora or timezone.now()
+    guias = (
+        Guia.objects.filter(
+            estado=Guia.GUIA_CREADA, ts_recolectado_carrier__isnull=True,
+            pedido__estado__in=[Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO],
+        )
+        .exclude(carrier=CARRIER_LOCAL)
+        .select_related("pedido__cliente", "paquete").order_by("creado")
+    )
+    filas = []
+    for guia in guias:
+        if guia.paquete_id and guia.paquete.estado != Paquete.EMPACADO:
+            continue
+        if not guia.paquete_id and cajas_por_salir(guia.pedido):
+            continue
+        plazo = timedelta(hours=HORAS_SIN_SALIDA * (1 + _domingos_entre(guia.creado, ahora)))
+        if ahora - guia.creado < plazo:
+            continue
+        manifiesto = Manifiesto.objects.filter(carrier=guia.carrier, ts__gt=guia.creado).order_by("ts").first()
+        if manifiesto is None:
+            continue
+        filas.append({
+            "pedido": guia.pedido, "caja": guia.paquete if guia.paquete_id else None, "guia": guia,
+            "manifiesto": manifiesto, "horas": int((ahora - guia.creado).total_seconds() // 3600),
+        })
+    return filas
+
+
+def revisar_cajas_sin_salida(ahora=None):
+    """Job (lo corre poll_tracking): abre UNA incidencia interna "Caja sin
+    salida" (P1) por pedido con cajas que ya debieron irse, y resuelve las
+    abiertas cuyas cajas ya salieron. Regresa {"abiertas", "resueltas"}."""
+    from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+    from apps.incidencias.services import abrir_incidencia, caja_sin_salida_abierta, resolver  # lazy por contrato
+
+    resumen = {"abiertas": 0, "resueltas": 0}
+    por_pedido = {}
+    for fila in cajas_sin_salida(ahora):
+        por_pedido.setdefault(fila["pedido"].pk, (fila["pedido"], []))[1].append(fila)
+    for pedido, filas in por_pedido.values():
+        if caja_sin_salida_abierta(pedido) is not None:
+            continue
+        partes = []
+        for f in filas:
+            donde = f"caja {f['caja'].numero}" if f["caja"] else "el pedido entero"
+            partes.append(
+                f"{donde} (guía {f['guia'].numero}, {f['guia'].carrier}): {f['horas']} h lista en Salida; "
+                f"la salida {f['manifiesto'].folio} de {f['guia'].carrier} cerró sin ella y el carrier no la ha reportado"
+            )
+        texto = (
+            "Caja sin salida: " + "; ".join(partes)
+            + ". Búscala en el corral: si aparece, escanéala en la siguiente salida; si ya se la llevaron, "
+            "márcala aquí como salida sin registro; si no aparece, es paquete extraviado."
+        )
+        abrir_incidencia(pedido.cliente, Incidencia.TIPO_CSS, Incidencia.ORIGEN_AUTO, pedido=pedido, texto=texto, interna=True, pese_a_pausa=True)
+        resumen["abiertas"] += 1
+    abiertas = Incidencia.objects.filter(tipo=Incidencia.TIPO_CSS, interna=True, estado__in=Incidencia.ESTADOS_ABIERTOS).select_related("pedido")
+    for inc in abiertas:
+        if inc.pedido_id and inc.pedido.pk not in por_pedido and not _por_salir(inc.pedido):
+            resolver(inc, "Las cajas ya salieron (escaneadas, reportadas por el carrier o dadas por salidas desde Mesa).", "sistema")
+            resumen["resueltas"] += 1
+    return resumen
+
+
+def _por_salir(pedido):
+    """True si al pedido le queda algo listo en Salida (cajas EMPACADO, o el pedido entero con guía lista)."""
+    pedido.refresh_from_db(fields=["estado"])
+    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+        return False
+    return bool(cajas_por_salir(pedido)) or pedido.estado == Pedido.GUIA_GENERADA
+
+
+def _cerrar_css_si_nada_por_salir(pedido, actor):
+    """Resuelve la incidencia "Caja sin salida" del pedido cuando ya nada queda en Salida."""
+    try:
+        from apps.incidencias.services import caja_sin_salida_abierta, resolver  # lazy por contrato
+    except ImportError:
+        return
+    inc = caja_sin_salida_abierta(pedido)
+    if inc is not None and not _por_salir(pedido):
+        resolver(inc, "Ya no queda nada por salir de este pedido.", actor)
+
+
 def avisar_recoleccion_carrier(pedido, guia, notificar=True):
     """El carrier recogió una caja que Torre aún no registró en Salida (Chema
     2026-09-25): el comprador y Shopify se enteran ya (plantilla B y

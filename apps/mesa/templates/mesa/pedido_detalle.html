@@ -106,6 +106,7 @@
           <td>
             {% if caja.guia %}<span class="pill {% if caja.guia.estado == 'ENTREGADO' %}ok{% elif caja.guia.estado == 'RETORNO' or caja.guia.estado == 'INTENTO_FALLIDO' or caja.guia.estado == 'EXCEPCION' %}crit{% elif caja.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ caja.guia.ultimo_evento }}">{{ caja.guia.get_estado_display }}</span>
             {% if caja.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repuso en otra caja; se sigue rastreando aparte">sustituida · {{ caja.guia.get_sustituida_motivo_display|lower }}{% for n in caja.guia.cajas_reposicion %} · por caja {{ n }}{% endfor %}</span></div>{% endif %}
+            {% if caja.sin_escaneo %}<div><span class="pill warn" title="Salió sin pasar por Registrar salida: el carrier la reportó o Mesa la dio por salida">sin escaneo de salida</span></div>{% endif %}
             {% if caja.guia.ultimo_evento %}<div class="small muted">{{ caja.guia.ultimo_evento|truncatechars:70 }}</div>{% endif %}
             {% else %}<span class="muted small">—</span>{% endif %}
           </td>

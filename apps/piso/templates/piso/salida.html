@@ -11,6 +11,14 @@
 <div class="banner warn"><span class="foco"></span>
   El “va en camino” al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino.
 </div>
+{% if sin_salida %}
+{# Mesa (2026-10-12): cajas que ya debieron irse: más de 24 h listas, su camión pasó sin ellas y el carrier no las reporta. #}
+<div class="banner crit"><span class="foco"></span>
+  <b>{{ sin_salida|length }} caja{{ sin_salida|length|pluralize }} sin salida</b> de más de 24 h:
+  {% for f in sin_salida %}<a class="mono" href="{% url 'mesa:pedido_detalle' f.pedido.pk %}">{{ f.pedido.folio }}{% if f.caja %} caja {{ f.caja.numero }}{% endif %}</a> ({{ f.guia.carrier }}, {{ f.horas }} h){% if not forloop.last %} · {% endif %}{% endfor %}.
+  La incidencia "Caja sin salida" de cada pedido tiene el botón para darla por salida.
+</div>
+{% endif %}
 
 {# Una tabla por carrier dentro de su corral (Chema 2026-09-22): misma información de antes, en renglones; el contenido del pedido va en acordeón. #}
 {% for corral in corrales %}

@@ -34,6 +34,7 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_DET: Incidencia.P1,  # el pedido está parado en el piso hasta que Mesa resuelva
     Incidencia.TIPO_SKU: Incidencia.P1,  # el pedido no puede surtirse: falta dar de alta el producto
     Incidencia.TIPO_ERR: Incidencia.P1,  # el comprador tiene otro producto en la mano: error nuestro, se rehace la entrega
+    Incidencia.TIPO_CSS: Incidencia.P1,  # una caja con guía que ningún camión se llevó: puede estar extraviada
 }
 # Tipos que detienen el pedido en piso: al resolverlos o cerrarlos, se reanuda.
 TIPOS_QUE_DETIENEN = (Incidencia.TIPO_DET, Incidencia.TIPO_PAQ, Incidencia.TIPO_SKU)
@@ -841,6 +842,14 @@ def agrupar_por_pedido(incidencias):
     ordenados = sorted(grupos.values(), key=lambda g: (not g["abiertas"], g["prioridad"] or "P9", -g["ultima_actividad"].timestamp()))
     sueltas.sort(key=orden_incidencia)
     return ordenados, sueltas
+
+
+def caja_sin_salida_abierta(pedido):
+    """La incidencia interna "Caja sin salida" abierta del pedido, o None."""
+    return (
+        Incidencia.objects.filter(pedido=pedido, tipo=Incidencia.TIPO_CSS, interna=True)
+        .exclude(estado=Incidencia.CERRADA).order_by("-pk").first()
+    )
 
 
 def sin_paqueteria_abierta(pedido):

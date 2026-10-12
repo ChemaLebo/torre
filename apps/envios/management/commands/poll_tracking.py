@@ -16,3 +16,10 @@ class Command(BaseCommand):
             "Tracking: {rastreadas} guías rastreadas · {actualizadas} actualizadas · "
             "{incidencias} incidencias abiertas · {errores} errores de rastreo".format(**resumen)
         ))
+        # Cajas sin salida (Chema 2026-10-12): listas en Salida, el camión pasó y nadie las tiene.
+        from apps.pedidos.services import revisar_cajas_sin_salida  # lazy por contrato
+
+        cajas = revisar_cajas_sin_salida()
+        self.stdout.write(self.style.SUCCESS(
+            "Cajas sin salida: {abiertas} incidencia(s) abierta(s) · {resueltas} resuelta(s)".format(**cajas)
+        ))
