@@ -1,4 +1,4 @@
-{# Cuerpo del acordeón de una recepción (portal y Mesa): detalle por SKU, fotos de llegada e incidencias. #}
+{# Cuerpo del acordeón de una recepción (portal y Mesa): detalle por SKU, dónde quedó cada caja, fotos de llegada e incidencias. #}
 {# Espera: orden (decorada por inventario.services.detalle_recepciones), url_incidencia (nombre de url), es_mesa. #}
 <div class="colapsable-cuerpo">
   <div class="tabla-wrap">
@@ -32,85 +32,35 @@
     </table>
   </div>
   {% if orden.realidad %}
-  {# Realidad (Chema 2026-10-06): dónde quedó cada cosa, por SKU · lote · posición; en el portal solo lectura. #}
-  <div class="mt"><b>Dónde quedó</b> <span class="small muted">por producto, lote y posición</span></div>
+  {# Dónde quedó (por escaneo, 2026-10-13): por producto · lote · tarima, cajas recibidas y las contadas que siguen sin confirmar; en el portal solo lectura. #}
+  <div class="mt"><b>Dónde quedó</b> <span class="small muted">por producto, lote y tarima</span></div>
   <div class="tabla-wrap">
     <table>
-      <thead><tr><th>SKU</th><th>Lote</th><th>Posición</th><th class="derecha">Piezas</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Lote</th><th>Tarima</th><th class="derecha">Cajas</th><th></th></tr></thead>
       <tbody>
-        {% for f in orden.realidad %}{% for p in f.posiciones %}
-        <tr><td class="mono">{{ f.sku.codigo }}</td><td class="mono">{{ f.lote|default:"—" }}</td><td class="mono">{{ p.ubicacion.codigo }}</td><td class="derecha mono">{{ p.cantidad }}</td></tr>
-        {% endfor %}{% if f.en_recepcion %}<tr><td class="mono">{{ f.sku.codigo }}</td><td class="mono">—</td><td class="muted">en recepción, sin acomodar</td><td class="derecha mono">{{ f.en_recepcion }}</td></tr>{% endif %}{% endfor %}
+        {% for f in orden.realidad %}{% for t in f.tarimas %}
+        <tr>
+          <td class="mono">{{ f.sku.codigo }}</td><td class="mono">{{ f.lote|default:"—" }}</td><td class="mono">{{ t.tarima.codigo }}</td>
+          <td class="derecha mono">{{ t.recibidas }}</td>
+          <td class="small">{% if t.por_confirmar %}<span class="pill warn">{{ t.por_confirmar }} contada{{ t.por_confirmar|pluralize }} sin confirmar</span>{% endif %}{% if t.danadas %} <span class="pill crit">{{ t.danadas }} dañada{{ t.danadas|pluralize }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}{% endfor %}
       </tbody>
     </table>
   </div>
   {% endif %}
-  {% if es_mesa %}<a class="btn chico mt" href="{% url 'mesa:recepcion_editar' orden.pk %}">{% if orden.estado != "CERRADA" %}Editar recepción{% else %}Ver realidad{% endif %}</a>{% endif %}
-  {% if es_mesa and orden.estado != "CERRADA" %}
-  {# Plan de acomodo de la orden (inventario.planear_acomodo): lo sigue el piso pieza por pieza. #}
-  <div class="mt titulo"><b>Plan de acomodo</b>
-    <form method="post" action="{% url 'mesa:recepciones' %}">{% csrf_token %}
-      <input type="hidden" name="accion" value="replanear">
-      <input type="hidden" name="orden_id" value="{{ orden.pk }}">
-      <button class="btn chico" type="submit">{% if orden.plan_acomodo.pasos %}Rehacer plan{% else %}Planear acomodo{% endif %}</button>
-    </form>
-    {% if orden.plan_acomodo.pasos %}
-    {# La hoja del piso: el plan tal cual (sin descontar ubicadas), SKU, nombre, código de barras, lote, rack y cantidad. #}
-    <a class="btn chico" href="{% url 'mesa:recepcion_plan_csv' orden.pk %}">Exportar plan (CSV)</a>
-    {# Reinicio del acomodo: todo lo que la orden ya acomodó (plan, a mano y cuarentena por falta de espacio) vuelve a recepción; los conteos se quedan. #}
-    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar el acomodo de {{ orden.folio }}? Todo lo que esta orden ya acomodó regresa a recepción (anaqueles del plan, acomodado a mano y cuarentena por falta de espacio) y el piso lo vuelve a acomodar desde Por ubicar, SIN volver a escanear: los conteos se quedan. Las dañadas se quedan en cuarentena.');">{% csrf_token %}
-      <input type="hidden" name="accion" value="reiniciar_acomodo">
-      <input type="hidden" name="orden_id" value="{{ orden.pk }}">
-      <button class="btn chico" type="submit">Reiniciar acomodo</button>
-    </form>
-    {% endif %}
-    {% if orden.estado != 'ANUNCIADA' %}
-    {# Reinicio total: además los conteos vuelven a cero (recibidas y dañadas) para volver a escanear todas las piezas. #}
-    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar la recepción de {{ orden.folio }} COMPLETA? Todo lo acomodado regresa a recepción y los conteos vuelven a cero (recibidas y dañadas): el piso vuelve a escanear TODAS las piezas desde cero. La foto de llegada se queda.');">{% csrf_token %}
+  {% if es_mesa %}
+  <div class="fila mt">
+    <a class="btn chico" href="{% url 'mesa:recepcion_editar' orden.pk %}">{% if orden.estado != "CERRADA" %}Editar recepción{% else %}Ver realidad{% endif %}</a>
+    {% if orden.estado != "CERRADA" and orden.estado != "ANUNCIADA" %}
+    {# Reinicio total: las cajas contadas se anulan y el stock recibido se revierte; el piso vuelve a escanear todo. #}
+    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Reiniciar la recepción de {{ orden.folio }} COMPLETA? Todas las cajas contadas se anulan y el stock recibido regresa a cero: el piso vuelve a escanear TODAS las cajas desde cero. La foto de llegada se queda.');">{% csrf_token %}
       <input type="hidden" name="accion" value="reiniciar_recepcion">
       <input type="hidden" name="orden_id" value="{{ orden.pk }}">
-      <button class="btn chico" type="submit">Reiniciar recepción (conteos a cero)</button>
-    </form>
-    {% endif %}
-    {% if orden.plan_acomodo.pasos %}
-    {# Cierre exprés: cada línea se completa a lo anunciado, todo se ubica según el plan y la orden se cierra; el piso acomoda después con el plan exportado. #}
-    <form method="post" action="{% url 'mesa:recepciones' %}" onsubmit="return confirm('¿Completar la recepción de {{ orden.folio }} con lo anunciado? Cada línea queda recibida como se anunció, todo se ubica en el sistema según el plan vigente (exporta el plan antes) y la orden se cierra: el producto queda vendible ya. El piso acomoda físicamente después con el plan exportado.');">{% csrf_token %}
-      <input type="hidden" name="accion" value="completar_anunciado">
-      <input type="hidden" name="orden_id" value="{{ orden.pk }}">
-      <button class="btn chico primario" type="submit">Completar recepción con lo anunciado</button>
+      <button class="btn chico peligro" type="submit">Reiniciar recepción (conteos a cero)</button>
     </form>
     {% endif %}
   </div>
-  {% if orden.plan_acomodo.pasos %}
-  <div class="tabla-wrap">
-    <table>
-      <thead><tr><th>SKU</th><th>Lote</th><th>Anaquel</th><th class="derecha">Piezas</th><th class="derecha">Ubicadas</th><th>Motivo</th></tr></thead>
-      <tbody>
-        {% for p in orden.plan_acomodo.pasos %}
-        <tr>
-          <td class="mono">{{ p.sku }}</td>
-          <td class="mono">{{ p.lote|default:"—" }}</td>
-          <td class="mono">{{ p.ubicacion|default:"CUARENTENA" }}</td>
-          <td class="derecha mono">{{ p.cantidad }}</td>
-          <td class="derecha mono">{{ p.ubicadas }}</td>
-          <td class="small">{{ p.motivo }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% if orden.plan_acomodo.completas %}
-  <div class="small mt"><b>Sin pendientes</b> (recibido y acomodado; anunciado / recibido / dañado):</div>
-  <div class="small">
-    {% for c in orden.plan_acomodo.completas %}
-    <span class="mono">{{ c.sku }}</span>{% if c.lote %} lote {{ c.lote }}{% endif %}
-    {{ c.anunciadas }} / {{ c.recibidas }} / {{ c.danadas }}
-    {% if c.diferencia %}<span class="pill {% if c.diferencia < 0 %}crit{% else %}warn{% endif %}">{{ c.diferencia|stringformat:"+d" }}</span>{% else %}<span class="pill ok">cuadra</span>{% endif %}{% if not forloop.last %} · {% endif %}
-    {% endfor %}
-  </div>
-  {% endif %}
-  {% if orden.plan_acomodo.ubicadas %}<p class="small muted">Ya ubicadas antes de este plan: {% for clave, n in orden.plan_acomodo.ubicadas.items %}{{ n }} de {{ clave }}{% if not forloop.last %} · {% endif %}{% endfor %} (SKU|lote). Rehacer el plan no mueve inventario.</p>{% endif %}
-  {% else %}<p class="small muted">Sin plan todavía: se arma al abrir la recepción en piso, o aquí con el botón.</p>{% endif %}
   {% endif %}
   <div class="mt"><b>Evidencias de llegada</b></div>
   {% if orden.fotos_llegada %}

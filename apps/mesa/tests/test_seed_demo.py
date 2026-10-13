@@ -93,7 +93,8 @@ class SeedDemoTests(TestCase):
         reingreso = OrdenEntrada.objects.get(tipo=OrdenEntrada.TIPO_REINGRESO)
         self.assertEqual(reingreso.pedido.estado, Pedido.CANCELADO)
         self.assertEqual(reingreso.pedido.reingreso_estado, Pedido.REINGRESADO)
-        self.assertEqual(reingreso.lineas.get().cantidad_recibida, 1)
+        # Nace sin recibir: el piso escanea la caja a una tarima (2026-10-13).
+        self.assertEqual((reingreso.estado, reingreso.lineas.get().cantidad_anunciada, reingreso.lineas.get().cantidad_recibida), (OrdenEntrada.EN_RECEPCION, 1, 0))
 
     def test_reporte_del_dia_tiene_casos_de_hoy_y_de_ayer(self):
         from django.utils import timezone

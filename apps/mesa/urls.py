@@ -21,7 +21,6 @@ urlpatterns = [
     path("inventario/reacomodo.csv", views.inventario_reacomodo_csv, name="inventario_reacomodo_csv"),
     path("recepciones/", views.recepciones, name="recepciones"),
     path("recepciones/plantilla.csv", views.recepciones_plantilla, name="recepciones_plantilla"),
-    path("recepciones/<int:pk>/plan.csv", views.recepcion_plan_csv, name="recepcion_plan_csv"),
     path("recepciones/<int:pk>/editar/", views.recepcion_editar, name="recepcion_editar"),
     path("recepciones/<int:pk>/realidad.csv", views.recepcion_realidad_csv, name="recepcion_realidad_csv"),
     path("reportes/dia/", views.reporte_dia, name="reporte_dia"),

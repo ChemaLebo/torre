@@ -2185,8 +2185,8 @@ def recepciones(request):
 
     if request.method == "POST" and request.POST.get("accion") in ("reingreso", "no_recuperado"):
         return _recepciones_decidir_reingreso(request)
-    if request.method == "POST" and request.POST.get("accion") in ("replanear", "reiniciar_acomodo", "reiniciar_recepcion", "completar_anunciado"):
-        return _recepciones_replanear(request)
+    if request.method == "POST" and request.POST.get("accion") == "reiniciar_recepcion":
+        return _recepciones_reiniciar(request)
 
     slug = (request.POST.get("cliente") or request.GET.get("cliente") or "").strip()
     cliente = None
@@ -2400,101 +2400,27 @@ def recepciones_plantilla(request):
     return respuesta
 
 
-def _recepciones_replanear(request):
-    """Rehace el plan de acomodo de una orden abierta (planear_acomodo), o lo
-    reinicia: reiniciar_acomodo (lo acomodado vuelve a recepción, conteos se
-    quedan) o reiniciar_recepcion (además los conteos a cero: se escanea todo
-    otra vez)."""
+def _recepciones_reiniciar(request):
+    """Reinicia una recepción abierta (inventario.reiniciar_recepcion): las
+    cajas contadas se anulan, el stock recibido se revierte y el piso vuelve
+    a escanear todo desde cero; la foto de llegada se queda."""
     from apps.inventario.models import OrdenEntrada
-    from apps.inventario.services import planear_acomodo
+    from apps.inventario.services import reiniciar_recepcion
 
     orden = get_object_or_404(OrdenEntrada, pk=request.POST.get("orden_id"))
-    if orden.estado == OrdenEntrada.CERRADA:
-        messages.error(request, f"{orden.folio} ya está cerrada; no hay nada que planear.")
-    elif request.POST.get("accion") == "reiniciar_acomodo":
-        from apps.inventario.services import reiniciar_acomodo
-        try:
-            r = reiniciar_acomodo(orden, request.user)
-        except ValueError as exc:
-            messages.error(request, str(exc))
-        else:
-            desglose = []
-            if r["del_plan"]:
-                desglose.append(f"{r['del_plan']} de anaqueles del plan")
-            if r["de_cuarentena"]:
-                desglose.append(f"{r['de_cuarentena']} de cuarentena")
-            if r["a_mano"]:
-                anaqueles = ", ".join(f"{codigo}: {n}" for codigo, n in sorted(r["a_mano"].items()))
-                desglose.append(f"{sum(r['a_mano'].values())} acomodadas a mano ({anaqueles})")
-            messages.warning(
-                request,
-                f"{orden.folio}: {r['regresadas']} pieza(s) regresaron a recepción para reacomodarse"
-                + (" (" + "; ".join(desglose) + ")" if desglose else "")
-                + (f"; {r['no_encontradas']} no se encontraron (apartadas, vendidas o ya no estaban)" if r["no_encontradas"] else "")
-                + ". El plan se rehizo: el piso vuelve a ubicar desde 'Por ubicar'.",
-            )
-    elif request.POST.get("accion") == "completar_anunciado":
-        from apps.inventario.services import completar_recepcion_con_lo_anunciado
-        try:
-            r = completar_recepcion_con_lo_anunciado(orden, request.user)
-        except ValueError as exc:
-            messages.error(request, str(exc))
-        else:
-            retiradas = r["retiradas"]
-            messages.success(
-                request,
-                f"{orden.folio} cerrada exactamente con lo anunciado: {r['recibidas']} pieza(s) recibidas para completar las líneas, "
-                f"{r['descontadas']} descontadas por conteo de más"
-                + (f" ({retiradas['recepcion']} retiradas de recepción, {retiradas['anaqueles']} de anaqueles"
-                   + (f", {retiradas['no_encontradas']} sin stock que retirar" if retiradas["no_encontradas"] else "") + ")" if r["descontadas"] else "")
-                + f", {r['ubicadas']} ubicadas según el plan"
-                + (f" y {r['a_cuarentena']} a cuarentena (sin anaquel en el plan)" if r["a_cuarentena"] else "")
-                + ". Todo el producto quedó vendible; el piso acomoda físicamente con el plan exportado.",
-            )
-    elif request.POST.get("accion") == "reiniciar_recepcion":
-        from apps.inventario.services import reiniciar_recepcion
-        try:
-            r = reiniciar_recepcion(orden, request.user)
-        except ValueError as exc:
-            messages.error(request, str(exc))
-        else:
-            quedan = r["siguen_contadas"]
-            messages.warning(
-                request,
-                f"{orden.folio}: recepción reiniciada. {r['acomodo']['regresadas']} pieza(s) acomodadas regresaron a recepción "
-                f"y los conteos bajaron {r['recibidas']} recibida(s) y {r['danadas']} dañada(s): el piso vuelve a escanear TODO desde cero"
-                + (f"; siguen contadas {quedan['recibidas']} recibida(s) y {quedan['danadas']} dañada(s) que no se encontraron (apartadas, vendidas o dictaminadas)" if quedan["recibidas"] or quedan["danadas"] else "")
-                + ". El plan se rehizo con toda la orden.",
-            )
+    try:
+        r = reiniciar_recepcion(orden, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
     else:
-        plan = planear_acomodo(orden, request.user)
-        messages.success(request, f"Plan de acomodo de {orden.folio} rehecho: {len(plan['pasos'])} paso(s).")
+        messages.warning(
+            request,
+            f"{orden.folio}: recepción reiniciada. {r['anuladas']} caja(s) anuladas, "
+            f"{r['recibidas_revertidas']} regresaron de su tarima"
+            + (f"; {r['no_encontradas']} ya no estaban donde se recibieron (apartadas, movidas o dictaminadas)" if r["no_encontradas"] else "")
+            + ". El piso vuelve a escanear TODO desde cero.",
+        )
     return redirect(reverse("mesa:recepciones") + f"?cliente={orden.cliente.slug}")
-
-
-@rol_requerido("mesa")
-def recepcion_plan_csv(request, pk):
-    """El plan de acomodo de la orden tal cual está guardado, sin descontar
-    ubicadas: SKU, nombre, código de barras, lote, rack y cantidad por paso.
-    Es la hoja con la que el piso acomoda físicamente (Chema 2026-09-20)."""
-    from apps.catalogo.models import SKU
-    from apps.inventario.models import OrdenEntrada
-
-    orden = get_object_or_404(OrdenEntrada, pk=pk)
-    pasos = (orden.plan_acomodo or {}).get("pasos", [])
-    skus = {s.pk: s for s in SKU.objects.filter(pk__in={p["sku_id"] for p in pasos})}
-    respuesta = HttpResponse(content_type="text/csv; charset=utf-8")
-    respuesta["Content-Disposition"] = f'attachment; filename="plan-acomodo-{orden.folio}.csv"'
-    respuesta.write("\ufeff")  # BOM: Excel abre los acentos bien
-    escritor = csv.writer(respuesta)
-    escritor.writerow(["sku", "nombre", "codigo_barras", "lote", "rack", "cantidad"])
-    for p in pasos:
-        sku = skus.get(p["sku_id"])
-        escritor.writerow([
-            p["sku"], sku.descripcion if sku else "", sku.codigo_barras if sku else "",
-            p.get("lote") or "", p["ubicacion"] or "CUARENTENA", p["cantidad"],
-        ])
-    return respuesta
 
 
 def _fecha_o_none(crudo):
@@ -2509,7 +2435,7 @@ def _fecha_o_none(crudo):
 
 
 def _posiciones_almacen():
-    """Posiciones a las que Mesa puede acomodar o mover: picking, reserva y tarimas activas."""
+    """Posiciones donde Mesa puede contar o mover cajas: picking, reserva y tarimas activas."""
     from apps.catalogo.models import Ubicacion  # lazy: modelo de otra app
 
     return Ubicacion.objects.filter(tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA), activo=True).order_by("codigo")
@@ -2534,8 +2460,8 @@ def _recepcion_editar_accion(request, orden):
     o lanza ValueError. Todas exigen `motivo` (queda en el expediente)."""
     from apps.inventario.models import LineaASN
     from apps.inventario.services import (  # lazy por contrato
-        acomodar_desde_editor, agregar_linea_recepcion, cerrar_recepcion, corregir_conteo, danar_acomodado,
-        editar_linea_recepcion, mover_acomodo, regresar_acomodo, regresar_cuarentena_sin_espacio, skus_recibibles,
+        agregar_linea_recepcion, ajustar_conteo, cerrar_recepcion, editar_linea_recepcion, marcar_danadas,
+        mover_cajas, skus_recibibles,
     )
 
     P = request.POST
@@ -2546,15 +2472,15 @@ def _recepcion_editar_accion(request, orden):
         crudo = (P.get("tarimas_recibidas") or "").strip()
         tarimas = int(crudo) if crudo.isdigit() else orden.tarimas
         cerrar_recepcion(orden, actor, tarimas_recibidas=tarimas)
-        return f"{orden.folio} cerrada: todo el producto quedó vendible."
+        return f"{orden.folio} cerrada: todo lo recibido quedó vendible."
     if accion == "agregar":
         sku = skus_recibibles(orden.cliente).filter(pk=P.get("sku_id")).first()
         if sku is None:
             raise ValueError("Elige un producto del cliente (activo, no kit).")
-        ubicacion = _posicion(P.get("ubicacion"), obligatoria=False)
+        tarima = _posicion(P.get("tarima"), obligatoria=False)
         linea = agregar_linea_recepcion(
             orden, sku, P.get("lote"), _fecha_o_none(P.get("caducidad")), P.get("anunciadas") or 0, actor, motivo,
-            contadas=P.get("contadas") or 0, danadas=P.get("danadas") or 0, ubicacion=ubicacion, ubicadas=P.get("ubicadas") or 0,
+            contadas=P.get("contadas") or 0, danadas=P.get("danadas") or 0, tarima=tarima,
         )
         return f"{sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''} agregado a {orden.folio}."
     linea = get_object_or_404(LineaASN.objects.select_related("sku"), pk=P.get("linea_id"), orden=orden)
@@ -2563,60 +2489,32 @@ def _recepcion_editar_accion(request, orden):
         editar_linea_recepcion(orden, linea, P.get("lote"), _fecha_o_none(P.get("caducidad")), P.get("anunciadas") or 0, actor, motivo)
         return f"Línea de {linea.sku.codigo} corregida."
     if accion == "conteo":
-        d_c, d_d = corregir_conteo(orden, linea, P.get("contadas") or 0, P.get("danadas") or 0, actor, motivo)
-        return f"{etiqueta}: contadas {d_c:+d}, dañadas {d_d:+d}."
-    if accion == "ubicadas":
-        # Editar el número de ubicadas de una posición (Chema 2026-10-07): subir
-        # toma de "sin acomodar" (recepción); bajar regresa la diferencia ahí.
-        from apps.inventario.services import ubicadas_en  # lazy por contrato
-
-        origen = _posicion(P.get("origen"))
-        nuevo = int(P.get("ubicadas") or 0)
-        actual = ubicadas_en(linea, origen)
-        delta = nuevo - actual
-        if delta == 0:
-            return f"{etiqueta} en {origen.codigo}: sigue en {actual}."
-        if delta > 0:
-            try:
-                acomodar_desde_editor(orden, linea, origen, delta, actor, motivo)
-            except ValueError as exc:
-                raise ValueError(f"{exc} Para poner {nuevo} en {origen.codigo} primero sube las contadas de la línea (las piezas nuevas entran a recepción).") from exc
-            return f"{etiqueta} en {origen.codigo}: {actual} → {nuevo} (+{delta} desde recepción)."
-        regresar_acomodo(orden, linea, origen, -delta, actor, motivo)
-        return f"{etiqueta} en {origen.codigo}: {actual} → {nuevo} ({-delta} de vuelta a recepción, sin acomodar)."
+        tarima = _posicion(P.get("tarima"))
+        d_c, d_d = ajustar_conteo(orden, linea, tarima, P.get("contadas") or 0, P.get("danadas") or 0, actor, motivo)
+        return f"{etiqueta} en {tarima.codigo}: contadas {d_c:+d}, dañadas {d_d:+d}."
     cantidad = P.get("cantidad") or 0
     if accion == "mover":
         origen, destino = _posicion(P.get("origen")), _posicion(P.get("destino"))
-        n = mover_acomodo(orden, linea, origen, destino, cantidad, actor, motivo)
+        n = mover_cajas(orden, linea, origen, destino, cantidad, actor, motivo)
         return f"{n} de {etiqueta}: {origen.codigo} → {destino.codigo}."
-    if accion == "regresar":
-        origen = _posicion(P.get("origen"))
-        n = regresar_acomodo(orden, linea, origen, cantidad, actor, motivo)
-        return f"{n} de {etiqueta} regresaron de {origen.codigo} a recepción (sin acomodar)."
     if accion == "danar":
         origen = _posicion(P.get("origen"))
-        n = danar_acomodado(orden, linea, origen, cantidad, actor, motivo)
+        n = marcar_danadas(orden, linea, origen, cantidad, actor, motivo)
         return f"{n} de {etiqueta} marcadas dañadas (de {origen.codigo} a cuarentena)."
-    if accion == "acomodar":
-        destino = _posicion(P.get("destino"), obligatoria=False)
-        real = acomodar_desde_editor(orden, linea, destino, cantidad, actor, motivo)
-        return f"{cantidad} de {etiqueta} acomodadas en {real.codigo if real else 'cuarentena (sin anaquel con espacio)'}."
-    if accion == "de_cuarentena":
-        n = regresar_cuarentena_sin_espacio(orden, linea.sku, cantidad, actor, motivo)
-        return f"{n} de {linea.sku.codigo} regresaron de cuarentena a recepción (sin acomodar)."
     raise ValueError("No entendí la acción.")
 
 
 @rol_requerido("mesa")
 def recepcion_editar(request, pk):
-    """Editor de recepción (Chema 2026-10-06): la tabla "Realidad" de la orden
-    (por SKU · lote · posición: anunciadas, contadas, dañadas, dónde está cada
-    cosa, lo contado sin acomodar y lo que fue a cuarentena por falta de
-    espacio) con correcciones por fila: conteos, lote/caducidad/anunciadas,
-    mover, regresar a recepción, acomodar, marcar dañadas, agregar un producto
-    que no venía en la orden y cerrar. Posiciones siempre de lista. Cada
-    corrección pide motivo y queda en el historial de abajo. Orden cerrada =
-    solo lectura."""
+    """Editor de recepción (Chema 2026-10-06; por escaneo desde 2026-10-13):
+    la tabla "Realidad" de la orden (por producto · lote: anunciadas,
+    contadas, dañadas, recibidas y, por tarima, cuántas cajas hay y cuántas
+    siguen sin confirmar) con correcciones por fila: contadas/dañadas de una
+    tarima, lote/caducidad/anunciadas, mover cajas a otra posición, marcar
+    dañadas, agregar un producto que no venía en la orden y cerrar.
+    Posiciones siempre de lista. Cada corrección pide motivo y queda en el
+    historial de abajo. Orden cerrada = solo lectura. Es el único lugar
+    donde se corrige una recepción: el piso solo escanea."""
     from apps.inventario.models import OrdenEntrada
     from apps.inventario.services import correcciones_recepcion, realidad_recepcion, skus_recibibles
 
@@ -2630,15 +2528,16 @@ def recepcion_editar(request, pk):
             messages.success(request, exito)
         return redirect("mesa:recepcion_editar", pk=orden.pk)
     filas = realidad_recepcion(orden)
-    pendiente = sum((f["en_recepcion"] or 0) + (f["cuarentena_sin_espacio"] or 0) for f in filas)
+    por_confirmar = sum(f["por_confirmar"] for f in filas)
     return render(request, "mesa/recepcion_editar.html", {
         "seccion": "recepciones", "orden": orden, "filas": filas,
         "editable": orden.estado != OrdenEntrada.CERRADA,
-        "puede_cerrar": orden.estado != OrdenEntrada.CERRADA and orden.estado != OrdenEntrada.ANUNCIADA and pendiente == 0,
+        "puede_cerrar": orden.estado not in (OrdenEntrada.CERRADA, OrdenEntrada.ANUNCIADA) and por_confirmar == 0,
+        "por_confirmar": por_confirmar,
         "posiciones": _posiciones_almacen(),
         "skus": skus_recibibles(orden.cliente),
         "correcciones": correcciones_recepcion(orden),
-        "descuadres": sum(1 for f in filas if f["cuadra"] is False),
+        "con_diferencias": sum(1 for f in filas if f["diferencia"]),
     })
 
 
