@@ -827,6 +827,61 @@ def tarimas_de_orden(orden):
     return resultado
 
 
+def escaneos_lifo(orden, tarima):
+    """Las cajas vivas de la tarima en orden inverso al escaneo (LIFO, Chema
+    2026-10-13): al contar se pasan de la tarima llena a la vacía, así que
+    la última escaneada queda arriba y su etiqueta debe salir primero."""
+    return list(
+        escaneos_vivos(orden).filter(tarima=tarima)
+        .select_related("linea__sku__cliente", "tarima", "orden__cliente").order_by("-ts", "-id")
+    )
+
+
+def resumen_etiquetas(orden, tarima):
+    """{total, impresas, siguiente (posición LIFO de la primera sin imprimir
+    o None), tamano} de las etiquetas de la tarima."""
+    from apps.configuracion.services import tanda_etiquetas as _tamano  # lazy por contrato
+
+    lifo = escaneos_lifo(orden, tarima)
+    siguiente = next((i + 1 for i, e in enumerate(lifo) if e.impresa_ts is None), None)
+    return {"total": len(lifo), "impresas": sum(1 for e in lifo if e.impresa_ts), "siguiente": siguiente, "tamano": _tamano()}
+
+
+def tanda_etiquetas(orden, tarima, desde=None, tamano=None):
+    """La siguiente tanda de etiquetas de la tarima en orden LIFO: sin `desde`,
+    desde la primera caja sin imprimir ("Continuar impresión"); con `desde`
+    (posición 1..total), reimpresión desde esa etiqueta. La etiqueta de la
+    tarima va solo cuando la tanda empieza en la primera caja. Regresa
+    {escaneos, incluye_tarima, desde, hasta, total, tamano, reimpresion}."""
+    from apps.configuracion.services import tanda_etiquetas as _tamano  # lazy por contrato
+
+    lifo = escaneos_lifo(orden, tarima)
+    if not lifo:
+        raise ValueError(f"No hay cajas contadas en {tarima.codigo}.")
+    tamano = int(tamano or _tamano())
+    if desde is None:
+        indice = next((i for i, e in enumerate(lifo) if e.impresa_ts is None), None)
+        if indice is None:
+            raise ValueError(
+                f"Ya salieron las {len(lifo)} etiquetas de {tarima.codigo}. Usa «Reimprimir desde» si te falta alguna."
+            )
+    else:
+        desde = int(desde)
+        if desde < 1 or desde > len(lifo):
+            raise ValueError(f"En {tarima.codigo} hay {len(lifo)} caja(s): pide desde 1 hasta {len(lifo)}.")
+        indice = desde - 1
+    seleccion = lifo[indice:indice + tamano]
+    return {
+        "escaneos": seleccion, "incluye_tarima": indice == 0, "desde": indice + 1, "hasta": indice + len(seleccion),
+        "total": len(lifo), "tamano": tamano, "reimpresion": desde is not None,
+    }
+
+
+def marcar_impresas(escaneos):
+    """Las cajas quedan con su etiqueta impresa (hora de la tanda)."""
+    EscaneoRecepcion.objects.filter(pk__in=[e.pk for e in escaneos]).update(impresa_ts=timezone.now())
+
+
 def _recibir_escaneos(orden, tarima, pendientes, actor):
     """Las cajas CONTADAS `pendientes` (de esa tarima) quedan RECIBIDAS: nace
     el saldo en_putaway en la tarima con el lote de cada línea (kardex

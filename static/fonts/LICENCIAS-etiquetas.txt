@@ -1,0 +1,8 @@
+Fuentes de las etiquetas de recepción (51×51 mm), convertidas a TTF estático
+desde las woff2 del diseño de Chema (etiqueta-caja-51mm.html, 2026-10-13):
+
+- Clash-700.ttf   — Clash Display Bold, Indian Type Foundry vía Fontshare.
+                    Licencia: ITF Free Font License (uso personal y comercial).
+- InterV-700.ttf  — Inter, instancia estática peso 700 de la fuente variable.
+- InterV-800.ttf  — Inter, instancia estática peso 800.
+                    Licencia: SIL Open Font License 1.1.

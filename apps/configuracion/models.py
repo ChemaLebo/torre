@@ -28,3 +28,20 @@ class CorreoIncidencias(models.Model):
     def __str__(self):
         ambito = self.cliente.nombre if self.cliente_id else "todos los clientes"
         return f"{self.correo} · {ambito}"
+
+
+class TandaEtiquetas(models.Model):
+    """Cuántas etiquetas de caja salen por tanda al imprimir una tarima en
+    recepción (Chema 2026-10-13: el rollo se acaba a media tarima; el piso
+    recarga y pulsa "Continuar impresión"). Un solo renglón, solo admin; sin
+    renglón aplica `services.TANDA_ETIQUETAS_DEFAULT`."""
+
+    cajas = models.PositiveIntegerField(default=50, help_text="Etiquetas de caja por tanda (la de la tarima no cuenta)")
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "tanda de etiquetas"
+        verbose_name_plural = "tanda de etiquetas"
+
+    def __str__(self):
+        return f"{self.cajas} etiquetas por tanda"

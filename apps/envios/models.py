@@ -420,13 +420,36 @@ class PaqueteLinea(models.Model):
 class TrabajoImpresion(models.Model):
     """Cola de impresión remota: Torre (VPS) encola, el agente de bodega imprime.
 
-    Con `TORRE_MODO_IMPRESION=relay`, `apps.piso.etiquetas.imprimir_etiqueta`
-    guarda aquí el PDF de la etiqueta en vez de correr `lp` (la térmica ya no
-    vive junto al servidor). El agente (`deploy/agente_impresion.py`) hace
-    polling autenticado a la API, imprime en la bodega y confirma. Tras
-    `settings.TORRE["IMPRESION_MAX_INTENTOS"]` fallas el trabajo pasa a ERROR
-    y queda visible para Mesa vía el evento de auditoría.
+    Con `TORRE_MODO_IMPRESION=relay`, `apps.piso.etiquetas` guarda aquí el PDF
+    en vez de correr `lp` (la térmica ya no vive junto al servidor). El agente
+    (`deploy/agente_impresion.py`) hace polling autenticado a la API, imprime
+    en la bodega y confirma. Tras `settings.TORRE["IMPRESION_MAX_INTENTOS"]`
+    fallas el trabajo pasa a ERROR y queda visible para Mesa vía el evento de
+    auditoría.
+
+    Desde 2026-10-13 la cola es general: `tipo` dice qué es (etiqueta de guía,
+    etiquetas de cajas de una recepción, etiqueta de tarima), `impresora` a
+    qué térmica de bodega va (la de guías 10×15 o la de etiquetas 51×51) y
+    `media` el tamaño de papel que el agente pasa a `lp`. La guía solo existe
+    en los trabajos de guía; `referencia` y `cliente` identifican los demás.
     """
+
+    TIPO_GUIA = "guia"
+    TIPO_PRODUCTO = "producto"
+    TIPO_TARIMA = "tarima"
+    TIPOS = [
+        (TIPO_GUIA, "Etiqueta de guía"),
+        (TIPO_PRODUCTO, "Etiquetas de cajas (recepción)"),
+        (TIPO_TARIMA, "Etiqueta de tarima"),
+    ]
+    IMPRESORA_ENVIOS = "envios"
+    IMPRESORA_ETIQUETAS = "etiquetas"
+    IMPRESORAS = [
+        (IMPRESORA_ENVIOS, "Térmica de guías (10×15 cm)"),
+        (IMPRESORA_ETIQUETAS, "Térmica de etiquetas (51×51 mm)"),
+    ]
+    MEDIA_GUIAS = "Custom.100x150mm"
+    MEDIA_ETIQUETAS = "Custom.51x51mm"
 
     PENDIENTE = "PENDIENTE"
     IMPRESO = "IMPRESO"
@@ -443,8 +466,16 @@ class TrabajoImpresion(models.Model):
     }
 
     guia = models.ForeignKey(
-        "envios.Guia", on_delete=models.PROTECT, related_name="trabajos_impresion"
+        "envios.Guia", null=True, blank=True, on_delete=models.PROTECT, related_name="trabajos_impresion",
     )
+    cliente = models.ForeignKey(
+        "core.Cliente", null=True, blank=True, on_delete=models.PROTECT, related_name="trabajos_impresion",
+    )
+    tipo = models.CharField(max_length=10, choices=TIPOS, default=TIPO_GUIA)
+    impresora = models.CharField(max_length=12, choices=IMPRESORAS, default=IMPRESORA_ENVIOS)
+    media = models.CharField(max_length=40, default=MEDIA_GUIAS, help_text="Tamaño de papel para lp (media=…)")
+    referencia = models.CharField(max_length=60, blank=True, help_text="ASN-x · TAR-nn · etiquetas 1-50")
+    paginas = models.PositiveIntegerField(default=1)
     pdf = models.FileField(upload_to="etiquetas/%Y%m/")
     estado = models.CharField(max_length=10, choices=ESTADOS, default=PENDIENTE, db_index=True)
     intentos = models.PositiveSmallIntegerField(default=0)
@@ -457,8 +488,17 @@ class TrabajoImpresion(models.Model):
         verbose_name = "trabajo de impresión"
         verbose_name_plural = "trabajos de impresión"
 
+    @property
+    def folio(self):
+        """Lo que identifica el trabajo para el agente y la auditoría: el folio
+        del pedido en una guía; la referencia en los demás."""
+        if self.guia_id:
+            return self.guia.pedido.folio
+        return self.referencia
+
     def __str__(self):
-        return f"Impresión #{self.pk} · {self.guia.numero or self.guia.pedido.folio} · {self.estado}"
+        que = (self.guia.numero or self.guia.pedido.folio) if self.guia_id else self.referencia
+        return f"Impresión #{self.pk} · {que} · {self.estado}"
 
     def transicionar(self, nuevo, actor=None, motivo=""):
         """Valida la transición, estampa ts_impreso si aplica y registra auditoría."""
@@ -476,10 +516,10 @@ class TrabajoImpresion(models.Model):
         self.save(update_fields=campos)
         registrar_evento(
             "trabajo_impresion", self.pk, f"impresion_{nuevo.lower()}",
-            actor=actor, cliente=self.guia.pedido.cliente,
+            actor=actor, cliente=self.cliente or (self.guia.pedido.cliente if self.guia_id else None),
             delta={
-                "de": anterior, "a": nuevo, "folio": self.guia.pedido.folio,
-                "guia": self.guia.numero, "intentos": self.intentos, "error": self.error,
+                "de": anterior, "a": nuevo, "folio": self.folio, "tipo": self.tipo,
+                "guia": self.guia.numero if self.guia_id else "", "intentos": self.intentos, "error": self.error,
             },
             motivo=motivo,
         )

@@ -113,6 +113,26 @@ class PendientesTests(ApiImpresionTestCase):
             "http://testserver" + reverse("envios:impresion_pdf", args=[trabajo.pk]),
         )
 
+    def test_trabajo_de_etiquetas_sin_guia_trae_impresora_y_papel(self):
+        trabajo = TrabajoImpresion.objects.create(
+            cliente=self.cliente, tipo=TrabajoImpresion.TIPO_PRODUCTO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
+            media=TrabajoImpresion.MEDIA_ETIQUETAS, referencia="ASN-0012 TAR-09 etiquetas 1-50", paginas=51,
+            pdf=ContentFile(PDF, name="etiquetas.pdf"),
+        )
+        datos = self.get_pendientes().json()[0]
+        self.assertEqual(datos["id"], trabajo.pk)
+        self.assertEqual((datos["folio"], datos["guia"], datos["tipo"], datos["impresora"], datos["media"], datos["paginas"]),
+                         ("ASN-0012 TAR-09 etiquetas 1-50", "", "producto", "etiquetas", "Custom.51x51mm", 51))
+        respuesta = self.get(reverse("envios:impresion_pdf", args=[trabajo.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("etiqueta-ASN-0012", respuesta["Content-Disposition"])
+        self.post_resultado(trabajo, {"ok": True})
+        trabajo.refresh_from_db()
+        self.assertEqual(trabajo.estado, TrabajoImpresion.IMPRESO)
+        guia = self.crear_trabajo()
+        datos = self.get_pendientes().json()[0]
+        self.assertEqual((datos["impresora"], datos["media"]), ("envios", "Custom.100x150mm"))
+
     def test_excluye_impresos_errores_y_agotados(self):
         vivo = self.crear_trabajo(intentos=4)  # aún le queda un intento
         self.crear_trabajo(estado=TrabajoImpresion.IMPRESO)

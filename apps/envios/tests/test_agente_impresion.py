@@ -37,7 +37,7 @@ class AgenteImpresionTests(SimpleTestCase):
         super().setUpClass()
         cls.agente = cargar_agente()
 
-    def procesar(self, trabajo=None, descarga=b"%PDF-1.4 etiqueta", imprime=(True, "")):
+    def procesar(self, trabajo=None, descarga=b"%PDF-1.4 etiqueta", imprime=(True, ""), impresora_etiquetas=""):
         """Corre procesar_trabajo con red y lp falsos. Regresa (ok, peticiones, impresiones)."""
         peticiones, impresiones = [], []
 
@@ -47,17 +47,17 @@ class AgenteImpresionTests(SimpleTestCase):
                 raise descarga
             return descarga if datos is None else b"{}"
 
-        def imprimir_falso(ruta, impresora):
+        def imprimir_falso(ruta, impresora, media=None):
             with open(ruta, "rb") as archivo:
                 contenido = archivo.read()
-            impresiones.append({"ruta": ruta, "impresora": impresora, "contenido": contenido})
+            impresiones.append({"ruta": ruta, "impresora": impresora, "media": media, "contenido": contenido})
             return imprime
 
         with mock.patch.object(self.agente, "_peticion", peticion_falsa), \
                 mock.patch.object(self.agente, "_imprimir_pdf", imprimir_falso), \
                 mock.patch.object(self.agente, "_log"):
             ok = self.agente.procesar_trabajo(
-                dict(trabajo or TRABAJO), BASE, TOKEN, IMPRESORA
+                dict(trabajo or TRABAJO), BASE, TOKEN, IMPRESORA, impresora_etiquetas
             )
         return ok, peticiones, impresiones
 
@@ -73,7 +73,21 @@ class AgenteImpresionTests(SimpleTestCase):
         # lp recibió un tempfile con el PDF completo y la cola configurada.
         self.assertEqual(len(impresiones), 1)
         self.assertEqual(impresiones[0]["impresora"], IMPRESORA)
+        self.assertEqual(impresiones[0]["media"], "Custom.100x150mm")  # sin `media`: papel de guías
         self.assertEqual(impresiones[0]["contenido"], b"%PDF-1.4 etiqueta")
+
+    def test_trabajo_de_etiquetas_va_a_su_impresora_con_su_papel(self):
+        trabajo = dict(TRABAJO, impresora="etiquetas", media="Custom.51x51mm")
+        ok, peticiones, impresiones = self.procesar(trabajo=trabajo, impresora_etiquetas="Etiquetas51")
+        self.assertTrue(ok)
+        self.assertEqual((impresiones[0]["impresora"], impresiones[0]["media"]), ("Etiquetas51", "Custom.51x51mm"))
+        self.assertEqual(peticiones[-1][2], {"ok": True})
+
+    def test_sin_impresora_de_etiquetas_el_trabajo_queda_pendiente_sin_reportar(self):
+        trabajo = dict(TRABAJO, impresora="etiquetas", media="Custom.51x51mm")
+        ok, peticiones, impresiones = self.procesar(trabajo=trabajo)
+        self.assertIsNone(ok)
+        self.assertEqual((peticiones, impresiones), ([], []))
 
     def test_borra_el_tempfile_al_terminar(self):
         for imprime in ((True, ""), (False, "sin papel")):
@@ -109,3 +123,4 @@ class AgenteImpresionTests(SimpleTestCase):
         self.assertIn("systemctl enable --now torre-impresion", doc)
         self.assertIn("TORRE_TOKEN_IMPRESION", doc)
         self.assertIn("IMPRESORA", doc)
+        self.assertIn("IMPRESORA_ETIQUETAS", doc)

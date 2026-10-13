@@ -1,5 +1,9 @@
 """API JSON del relay de impresión — la consume deploy/agente_impresion.py.
 
+Cada trabajo dice a qué térmica va (`impresora`: guías 10×15 o etiquetas
+51×51) y con qué papel (`media`); el agente de bodega tiene una cola CUPS por
+cada una.
+
 Sin DRF: JSON plano sobre vistas función. Autenticación por token estático
 (`TORRE_TOKEN_IMPRESION`) en `Authorization: Bearer <token>`, comparado en
 tiempo constante con hmac.compare_digest; sin token configurado la API queda
@@ -62,12 +66,18 @@ def pendientes(request):
         .select_related("guia__pedido")
         .order_by("creado")[:LOTE_PENDIENTES]
     )
+    # `impresora` y `media` (2026-10-13): el agente elige la cola CUPS (guías
+    # 10×15 o etiquetas 51×51) y el tamaño de papel; un agente viejo los ignora.
     return JsonResponse(
         [
             {
                 "id": trabajo.pk,
-                "folio": trabajo.guia.pedido.folio,
-                "guia": trabajo.guia.numero,
+                "folio": trabajo.folio,
+                "guia": trabajo.guia.numero if trabajo.guia_id else "",
+                "tipo": trabajo.tipo,
+                "impresora": trabajo.impresora,
+                "media": trabajo.media,
+                "paginas": trabajo.paginas,
                 "url_pdf": request.build_absolute_uri(
                     reverse("envios:impresion_pdf", args=[trabajo.pk])
                 ),
@@ -122,5 +132,5 @@ def pdf(request, trabajo_id):
     return FileResponse(
         archivo,
         content_type="application/pdf",
-        filename=f"etiqueta-{trabajo.guia.pedido.folio}.pdf",
+        filename=f"etiqueta-{trabajo.folio}.pdf",
     )

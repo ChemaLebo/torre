@@ -57,9 +57,9 @@ class ManifiestoAdmin(admin.ModelAdmin):
 
 @admin.register(TrabajoImpresion)
 class TrabajoImpresionAdmin(admin.ModelAdmin):
-    list_display = ("id", "guia", "estado", "intentos", "error", "creado", "ts_impreso")
-    list_filter = ("estado",)
-    search_fields = ("guia__numero", "guia__pedido__folio")
+    list_display = ("id", "tipo", "referencia", "guia", "impresora", "paginas", "estado", "intentos", "error", "creado", "ts_impreso")
+    list_filter = ("estado", "tipo", "impresora")
+    search_fields = ("guia__numero", "guia__pedido__folio", "referencia")
     readonly_fields = ("creado", "ts_impreso")
     date_hierarchy = "creado"
 

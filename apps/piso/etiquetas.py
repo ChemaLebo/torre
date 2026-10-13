@@ -1,4 +1,7 @@
-"""Etiqueta de envío en PDF para la térmica de bodega (Aiyin BY-480BT vía CUPS).
+"""Etiquetas en PDF para las térmicas de bodega: la de envío (10×15, Aiyin
+BY-480BT) y, desde 2026-10-13, las de recepción (51×51 mm, Munbyn ITPP130B):
+caja (QR `P|barras|lote`, dañada con banda) y tarima (QR `U|TAR-nn`),
+impresas por tandas en orden inverso al escaneo.
 
 `generar_pdf_etiqueta` dibuja la misma etiqueta 10×15 de piso/etiqueta.html
 pero en PDF de alto contraste para térmica 203 dpi: Code128 del número de guía
@@ -12,20 +15,24 @@ bodega (deploy/agente_impresion.py) la baja, la imprime y confirma.
 """
 import contextlib
 import os
+import re
 import subprocess
 import tempfile
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 
 import requests
 from django.conf import settings
 from django.core.files.base import ContentFile
 from reportlab.graphics import renderPDF
-from reportlab.graphics.barcode import code128
+from reportlab.graphics.barcode import code128, qrencoder
 from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 from apps.core.services import registrar_evento
@@ -385,6 +392,297 @@ def generar_pdf_etiqueta(guia):
     return buffer.getvalue()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Etiquetas de recepción 51×51 mm (Chema 2026-10-13): caja y tarima
+# ─────────────────────────────────────────────────────────────────────────────
+# Calcadas del HTML de Chema (etiqueta-caja-51mm.html): arriba marca y SKU,
+# producto en Clash, presentación; abajo LOTE y CONS. PREF. a la izquierda y
+# el QR a la derecha con módulos de 7 puntos de la térmica (0.875 mm) para
+# que lea a la primera; la dañada lleva una banda negra. La tarima: nombre en
+# grande y QR `U|TAR-nn`. Fuentes TTF en static/fonts (ver LICENCIAS).
+
+MEDIA_ETIQUETAS = "Custom.51x51mm"
+ETIQUETA_LADO = 51 * mm
+ETIQUETA_PAD_ARRIBA, ETIQUETA_PAD_DER, ETIQUETA_PAD_ABAJO, ETIQUETA_PAD_IZQ = 2.6 * mm, 3 * mm, 2 * mm, 3 * mm
+ETIQUETA_ANCHO_UTIL = ETIQUETA_LADO - ETIQUETA_PAD_IZQ - ETIQUETA_PAD_DER
+PUNTO_TERMICA = 25.4 / 203 * mm  # un punto de la térmica de 203 dpi
+NOMBRE_PT_MAX, NOMBRE_PT_MIN, NOMBRE_MAX_CARACTERES = 17.5, 10.0, 40
+FUENTES_DIR = Path(settings.BASE_DIR) / "static" / "fonts"
+FUENTES_ETIQUETA = {"Clash-700": "Clash-700.ttf", "InterV-700": "InterV-700.ttf", "InterV-800": "InterV-800.ttf"}
+RESPALDO_FUENTE = {"Clash-700": "Helvetica-Bold", "InterV-700": "Helvetica-Bold", "InterV-800": "Helvetica-Bold"}
+_fuentes_registradas = {}
+
+
+def _fuente(nombre):
+    """La fuente TTF registrada en reportlab (una vez por proceso); si el
+    archivo no está, Helvetica-Bold para que la etiqueta salga igual."""
+    if not _fuentes_registradas:
+        for clave, archivo in FUENTES_ETIQUETA.items():
+            ruta = FUENTES_DIR / archivo
+            try:
+                pdfmetrics.registerFont(TTFont(clave, str(ruta)))
+                _fuentes_registradas[clave] = clave
+            except Exception:  # archivo ausente o corrupto: respaldo
+                _fuentes_registradas[clave] = RESPALDO_FUENTE[clave]
+    return _fuentes_registradas[nombre]
+
+
+def _ancho_em(texto, fuente, pt, em=0.0):
+    """Ancho de un texto con letter-spacing en em, como lo mide el navegador."""
+    return stringWidth(texto, fuente, pt) + em * pt * max(len(texto) - 1, 0)
+
+
+def _encoger(texto, fuente, pt, em, maximo, minimo):
+    """Baja el tamaño de 0.25 en 0.25 pt hasta que el texto quepa (fit() del HTML)."""
+    while _ancho_em(texto, fuente, pt, em) > maximo and pt > minimo:
+        pt -= 0.25
+    return pt
+
+
+def _texto_em(lienzo, x, y, s, fuente, pt, em=0.0, derecha=False):
+    """Texto con letter-spacing (vive en el objeto de texto, no en el lienzo)."""
+    if derecha:
+        x -= _ancho_em(s, fuente, pt, em)
+    t = lienzo.beginText(x, y)
+    t.setFont(fuente, pt)
+    t.setCharSpace(em * pt)
+    t.textOut(s)
+    lienzo.drawText(t)
+
+
+def _qr_termica(valor, puntos_por_modulo, silencio=4):
+    """QR nivel M con módulos de N puntos exactos de la térmica: (Drawing, lado)."""
+    qr = qrencoder.QRCode(None, qrencoder.QRErrorCorrectLevel.M)
+    qr.addData(valor)
+    qr.make()
+    lado = (qr.getModuleCount() + 2 * silencio) * puntos_por_modulo * PUNTO_TERMICA
+    widget = QrCodeWidget(valor, barLevel="M", barBorder=silencio, barWidth=lado, barHeight=lado)
+    dibujo = Drawing(lado, lado)
+    dibujo.add(widget)
+    return dibujo, lado
+
+
+def _partir_nombre(texto, fuente, ancho):
+    """Regla de nombres largos (Chema 2026-10-13): se encoge de 17.5 a 10 pt;
+    si a 10 pt no cabe, dos renglones de 10 pt partidos por el espacio más
+    cercano a la mitad; pasando 40 caracteres el segundo renglón se corta con
+    puntos suspensivos. Regresa (tamaño, [renglones])."""
+    pt = _encoger(texto, fuente, NOMBRE_PT_MAX, -0.01, ancho, NOMBRE_PT_MIN)
+    if _ancho_em(texto, fuente, pt, -0.01) <= ancho:
+        return pt, [texto]
+    texto = texto[:NOMBRE_MAX_CARACTERES].rstrip() + ("…" if len(texto) > NOMBRE_MAX_CARACTERES else "")
+    espacios = [i for i, c in enumerate(texto) if c == " "]
+    if not espacios:
+        return NOMBRE_PT_MIN, [_recortar(texto, fuente, NOMBRE_PT_MIN, ancho)]
+    corte = min(espacios, key=lambda i: abs(i - len(texto) / 2))
+    primero, segundo = texto[:corte].strip(), texto[corte + 1:].strip()
+    return NOMBRE_PT_MIN, [_recortar(primero, fuente, NOMBRE_PT_MIN, ancho), _recortar(segundo, fuente, NOMBRE_PT_MIN, ancho)]
+
+
+def dibujar_etiqueta_caja(lienzo, *, marca, sku, producto, presentacion, lote, caducidad, barras, qr, danada=False):
+    """Una etiqueta de caja 51×51 en el lienzo (sin showPage)."""
+    clash, inter, inter_negra = _fuente("Clash-700"), _fuente("InterV-700"), _fuente("InterV-800")
+    lienzo.setFillGray(0)
+    lienzo.setStrokeGray(0)
+    x0, x1 = ETIQUETA_PAD_IZQ, ETIQUETA_LADO - ETIQUETA_PAD_DER
+    y = ETIQUETA_LADO - ETIQUETA_PAD_ARRIBA
+
+    marca, sku, producto, presentacion = (str(marca or "").upper(), str(sku or "").upper(), str(producto or "").upper(), str(presentacion or "").upper())
+    pt = _encoger(marca + "  " + sku, inter, 5.4, 0.14, ETIQUETA_ANCHO_UTIL, 4)
+    y -= pt
+    _texto_em(lienzo, x0, y, marca, inter, pt, 0.14)
+    _texto_em(lienzo, x1, y, sku, inter, pt, 0.14, derecha=True)
+    pt, renglones = _partir_nombre(producto, clash, ETIQUETA_ANCHO_UTIL)
+    for renglon in renglones:
+        y -= 1.1 * mm + pt * 0.95
+        _texto_em(lienzo, x0, y + pt * 0.12, renglon, clash, pt, -0.01)
+    if presentacion:
+        pt = _encoger(presentacion, inter, 6.9, 0.10, ETIQUETA_ANCHO_UTIL, 5)
+        y -= 1 * mm + pt
+        _texto_em(lienzo, x0, y, _recortar(presentacion, inter, pt, ETIQUETA_ANCHO_UTIL / (1 + 0.10)), inter, pt, 0.10)
+    y -= 1.4 * mm
+    lienzo.setLineWidth(0.55 * mm)
+    lienzo.line(x0, y, x1, y)
+    y_zona = y - 0.55 * mm
+
+    # QR a la derecha: la zona de silencio aprovecha el margen de la etiqueta.
+    dibujo, lado_qr = _qr_termica(qr, 7)
+    x_qr = ETIQUETA_LADO - lado_qr + 1.2 * mm
+    y_qr = ETIQUETA_PAD_ABAJO + (y_zona - ETIQUETA_PAD_ABAJO - lado_qr) / 2
+    renderPDF.draw(dibujo, lienzo, x_qr, y_qr)
+    ancho_izq = x_qr + 4 * 7 * PUNTO_TERMICA - x0 - 1.5 * mm
+
+    # Columna izquierda: LOTE / valor, CONS. PREF. / valor y el código de barras en chico.
+    y = y_zona - 1.2 * mm
+    filas = [("LOTE", str(lote or "—"))]
+    if caducidad:
+        filas.append(("CONS. PREF.", caducidad.strftime("%d/%m/%Y")))
+    for clave, valor in filas:
+        y -= 6.4
+        _texto_em(lienzo, x0, y, clave, inter, 6.4, 0.12)
+        vpt = _encoger(valor, inter_negra, 9.5, 0.01, ancho_izq, 6)
+        y -= 0.6 * mm + vpt
+        _texto_em(lienzo, x0, y, valor, inter_negra, vpt, 0.01)
+        y -= 1.6 * mm
+    y -= 6.0 - 0.8 * mm
+    _texto_em(lienzo, x0, y, _recortar(str(barras or ""), inter, 6.0, ancho_izq), inter, 6.0, 0.08)
+    if danada:
+        alto = 4.2 * mm
+        yb = max(ETIQUETA_PAD_ABAJO, min(ETIQUETA_PAD_ABAJO + 0.2 * mm, y - 1 * mm - alto))
+        lienzo.rect(x0, yb, ancho_izq, alto, stroke=0, fill=1)
+        lienzo.setFillGray(1)
+        texto = "DAÑADA"
+        spt = _encoger(texto, inter_negra, 9, 0.18, ancho_izq - 2 * mm, 5)
+        _texto_em(lienzo, x0 + (ancho_izq - _ancho_em(texto, inter_negra, spt, 0.18)) / 2, yb + (alto - spt * 0.72) / 2, texto, inter_negra, spt, 0.18)
+        lienzo.setFillGray(0)
+
+
+def dibujar_etiqueta_tarima(lienzo, nombre, qr):
+    """Una etiqueta de tarima 51×51: TORRE · TARIMA, el nombre en grande y el QR."""
+    clash, inter = _fuente("Clash-700"), _fuente("InterV-700")
+    lienzo.setFillGray(0)
+    x0 = ETIQUETA_PAD_IZQ
+    y = ETIQUETA_LADO - ETIQUETA_PAD_ARRIBA - 5.4
+    _texto_em(lienzo, x0, y, "TORRE · TARIMA", inter, 5.4, 0.14)
+    pt = _encoger(str(nombre).upper(), clash, 30, -0.01, ETIQUETA_ANCHO_UTIL, 10)
+    y -= 1.4 * mm + pt * 0.95
+    _texto_em(lienzo, x0, y + pt * 0.12, str(nombre).upper(), clash, pt, -0.01)
+    y -= 1.5 * mm
+    dibujo, lado_qr = _qr_termica(qr, 7)
+    renderPDF.draw(dibujo, lienzo, (ETIQUETA_LADO - lado_qr) / 2, ETIQUETA_PAD_ABAJO + (y - ETIQUETA_PAD_ABAJO - lado_qr) / 2)
+
+
+def generar_pdf_etiquetas(items):
+    """PDF de una página 51×51 por item: {"tipo": "tarima", "nombre", "qr"} o
+    {"tipo": "caja", marca, sku, producto, presentacion, lote, caducidad,
+    barras, qr, danada}. Regresa los bytes."""
+    buffer = BytesIO()
+    lienzo = canvas.Canvas(buffer, pagesize=(ETIQUETA_LADO, ETIQUETA_LADO), pageCompression=0)
+    lienzo.setTitle("Etiquetas de recepción · Torre")
+    for item in items:
+        if item["tipo"] == "tarima":
+            dibujar_etiqueta_tarima(lienzo, item["nombre"], item["qr"])
+        else:
+            dibujar_etiqueta_caja(lienzo, **{k: v for k, v in item.items() if k != "tipo"})
+        lienzo.showPage()
+    lienzo.save()
+    return buffer.getvalue()
+
+
+def paginas_pdf(pdf):
+    """Cuántas páginas trae un PDF de reportlab sin comprimir (para `paginas`)."""
+    return len(re.findall(rb"/Type\s*/Page\b", pdf))
+
+
+def encolar_impresion(pdf, *, tipo, impresora, media, referencia, cliente, nombre, guia=None):
+    """Manda un PDF a la térmica que corresponde según TORRE_MODO_IMPRESION:
+    "relay" lo deja en TrabajoImpresion para el agente de bodega (regresa el
+    trabajo); "local" corre `lp` aquí mismo con la cola de
+    TORRE_IMPRESORA_ETIQUETAS (guías) o TORRE_IMPRESORA_ETIQUETAS_51
+    (etiquetas) y regresa None. Falla con ValueError y qué hacer."""
+    from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
+
+    if getattr(settings, "TORRE_MODO_IMPRESION", "local") == "relay":
+        return TrabajoImpresion.objects.create(
+            guia=guia, cliente=cliente, tipo=tipo, impresora=impresora, media=media, referencia=referencia[:60],
+            paginas=max(paginas_pdf(pdf), 1), pdf=ContentFile(pdf, name=nombre),
+        )
+    variable = "TORRE_IMPRESORA_ETIQUETAS_51" if impresora == TrabajoImpresion.IMPRESORA_ETIQUETAS else "TORRE_IMPRESORA_ETIQUETAS"
+    cola = os.environ.get(variable, "").strip()
+    if not cola:
+        raise ValueError(
+            f"No hay impresora configurada para esto. Pon el nombre de su cola CUPS en torre/.env como {variable}."
+        )
+    with tempfile.NamedTemporaryFile(suffix=".pdf", prefix="torre-etiquetas-", delete=False) as archivo:
+        archivo.write(pdf)
+        ruta = archivo.name
+    try:
+        resultado = subprocess.run(["lp", "-d", cola, "-o", f"media={media}", ruta], capture_output=True, text=True, timeout=15, check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"La impresora '{cola}' no respondió ({exc.__class__.__name__}). Revisa que esté encendida y conectada.") from exc
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(ruta)
+    if resultado.returncode != 0:
+        detalle = " ".join((resultado.stderr or resultado.stdout or "").split())[:160]
+        raise ValueError(f"La impresora '{cola}' rechazó el trabajo: {detalle or 'sin detalle'}.")
+    return None
+
+
+def _item_caja(escaneo):
+    """El item de etiqueta de una caja contada: datos del producto, el lote y
+    su caducidad (la del catálogo, si no la de la línea) y el QR `P|barras|lote`."""
+    from apps.catalogo.models import Lote  # lazy: modelo de otra app
+    from apps.inventario.services import qr_producto  # lazy por contrato
+
+    linea = escaneo.linea
+    sku = linea.sku
+    lote = (linea.lote_codigo or "").strip()
+    caducidad = linea.fecha_caducidad
+    if lote:
+        conocido = Lote.objects.filter(sku=sku, codigo=lote).first()
+        if conocido is not None and conocido.fecha_caducidad:
+            caducidad = conocido.fecha_caducidad
+    return {
+        "tipo": "caja", "marca": sku.cliente.nombre, "sku": sku.codigo, "producto": sku.descripcion,
+        "presentacion": sku.variante, "lote": lote, "caducidad": caducidad,
+        "barras": sku.codigo_barras or sku.codigo, "qr": qr_producto(sku, lote), "danada": escaneo.danada,
+    }
+
+
+def imprimir_etiquetas_recepcion(orden, tarima, actor, desde=None):
+    """Una tanda de etiquetas de la tarima (Chema 2026-10-13): la etiqueta de
+    la tarima primero (solo en la primera tanda) y luego las cajas en orden
+    inverso al escaneo, hasta el tamaño de tanda configurado; sin `desde`
+    sigue por la primera sin imprimir ("Continuar impresión"), con `desde`
+    reimprime a partir de esa etiqueta. Encola un solo trabajo a la térmica
+    de etiquetas, marca las cajas como impresas y audita. Regresa el resumen
+    de la tanda con el trabajo."""
+    from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
+    from apps.inventario.services import marcar_impresas, qr_posicion, tanda_etiquetas  # lazy por contrato
+
+    tanda = tanda_etiquetas(orden, tarima, desde=desde)
+    items = []
+    if tanda["incluye_tarima"]:
+        items.append({"tipo": "tarima", "nombre": tarima.codigo, "qr": qr_posicion(tarima)})
+    items.extend(_item_caja(e) for e in tanda["escaneos"])
+    pdf = generar_pdf_etiquetas(items)
+    referencia = f"{orden.folio} {tarima.codigo} etiquetas {tanda['desde']}-{tanda['hasta']}"
+    trabajo = encolar_impresion(
+        pdf, tipo=TrabajoImpresion.TIPO_PRODUCTO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
+        media=MEDIA_ETIQUETAS, referencia=referencia, cliente=orden.cliente,
+        nombre=f"etiquetas-{orden.folio}-{tarima.codigo}-{tanda['desde']}-{tanda['hasta']}.pdf",
+    )
+    marcar_impresas(tanda["escaneos"])
+    registrar_evento(
+        "asn", orden.folio, "etiquetas_impresas", actor=actor, cliente=orden.cliente,
+        delta={"tarima": tarima.codigo, "desde": tanda["desde"], "hasta": tanda["hasta"], "total": tanda["total"],
+               "cajas": len(tanda["escaneos"]), "con_tarima": tanda["incluye_tarima"], "reimpresion": tanda["reimpresion"],
+               "trabajo": trabajo.pk if trabajo else None},
+        motivo=f"{tarima.codigo}: etiquetas {tanda['desde']} a {tanda['hasta']} de {tanda['total']}"
+        + (" (reimpresión)" if tanda["reimpresion"] else "") + ".",
+    )
+    tanda["trabajo"] = trabajo
+    return tanda
+
+
+def imprimir_etiqueta_caja(escaneo, actor):
+    """La etiqueta de UNA caja al momento (cajas que faltaron al confirmar la
+    tarima): un trabajo de una página, la caja queda marcada como impresa."""
+    from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
+    from apps.inventario.services import marcar_impresas  # lazy por contrato
+
+    orden = escaneo.orden
+    pdf = generar_pdf_etiquetas([_item_caja(escaneo)])
+    trabajo = encolar_impresion(
+        pdf, tipo=TrabajoImpresion.TIPO_PRODUCTO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
+        media=MEDIA_ETIQUETAS, referencia=f"{orden.folio} {escaneo.tarima.codigo} caja {escaneo.pk}",
+        cliente=orden.cliente, nombre=f"etiqueta-{orden.folio}-caja-{escaneo.pk}.pdf",
+    )
+    marcar_impresas([escaneo])
+    return trabajo
+
+
 # La etiqueta del carrier baja del CDN de Envia: timeout corto, el caller ya
 # es best-effort (un fallo se reintenta desde Salida, jamás revierte la guía).
 TIMEOUT_ETIQUETA_CARRIER_S = 20
@@ -451,7 +749,7 @@ def _encolar_etiqueta(guia, interna=False):
     pdf = generar_pdf_etiqueta(guia) if interna else _pdf_etiqueta(guia)
     sufijo = "-interna" if interna else ""
     trabajo = TrabajoImpresion.objects.create(
-        guia=guia,
+        guia=guia, cliente=pedido.cliente, referencia=pedido.folio, paginas=max(paginas_pdf(pdf), 1),
         pdf=ContentFile(pdf, name=f"etiqueta-{pedido.folio}-g{guia.pk}{sufijo}.pdf"),
     )
     registrar_evento(

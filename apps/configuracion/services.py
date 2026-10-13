@@ -3,13 +3,17 @@
   del cliente, activos, sin repetidos.
 - agregar_correo_incidencias(cliente, correo, nombre, actor) / quitar_correo_incidencias(fila, actor):
   la lista del cliente desde su ficha de Mesa (la fija solo se toca en el admin).
+- tanda_etiquetas() -> int: etiquetas de caja por tanda al imprimir una tarima
+  (modelo TandaEtiquetas, un renglón; sin renglón, TANDA_ETIQUETAS_DEFAULT).
 """
 from django.core.validators import validate_email
 from django.db.models import Q
 
 from apps.core.services import registrar_evento
 
-from .models import CorreoIncidencias
+from .models import CorreoIncidencias, TandaEtiquetas
+
+TANDA_ETIQUETAS_DEFAULT = 50
 
 
 def correos_incidencias(cliente):
@@ -59,3 +63,9 @@ def quitar_correo_incidencias(fila, actor=None):
         delta={"correo": fila.correo}, motivo="Correo quitado de la lista de incidencias del cliente desde Mesa.",
     )
     fila.delete()
+
+
+def tanda_etiquetas():
+    """Etiquetas de caja por tanda al imprimir una tarima en recepción."""
+    fila = TandaEtiquetas.objects.order_by("pk").first()
+    return fila.cajas if fila is not None and fila.cajas > 0 else TANDA_ETIQUETAS_DEFAULT

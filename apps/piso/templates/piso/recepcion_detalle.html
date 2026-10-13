@@ -72,10 +72,25 @@
 
 <div class="card mt">
   <div class="titulo"><h2>Tarimas de la orden</h2></div>
+  {% if faltaron_en %}<div class="banner accent"><span class="foco"></span>Cajas que faltaron en <span class="mono">{{ faltaron_en }}</span>: cada caja que cuentes ahí imprime su etiqueta al momento.</div>{% endif %}
   {% for t in tarimas %}
-  <div class="corral-fila">
-    <div class="crece"><span class="mono">{{ t.tarima.codigo }}</span> · {{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}{% if t.sin_etiqueta %} · {{ t.sin_etiqueta }} sin etiqueta{% endif %}</div>
+  <div class="corral-fila" style="flex-wrap:wrap">
+    <div class="crece"><span class="mono">{{ t.tarima.codigo }}</span> · {{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}
+      <div class="small muted">Etiquetas: {{ t.etiquetas.impresas }} de {{ t.etiquetas.total }} impresas{% if t.etiquetas.siguiente %} · sigue la {{ t.etiquetas.siguiente }}{% endif %} · tandas de {{ t.etiquetas.tamano }}</div>
+    </div>
     {% if t.confirmada %}<span class="pill ok">confirmada</span>{% else %}<span class="pill warn">{{ t.por_confirmar }} por confirmar</span>{% endif %}
+    {# Impresión por tandas LIFO (Chema 2026-10-13): primero la tarima, luego las cajas en orden inverso; "Continuar" tras recargar rollo; "Reimprimir desde N" si el corte fue a media tanda. #}
+    <form method="post" class="fila">{% csrf_token %}
+      <input type="hidden" name="accion" value="imprimir"><input type="hidden" name="tarima_id" value="{{ t.tarima.pk }}">
+      {% if t.etiquetas.siguiente %}
+      <button class="btn chico" type="submit">{% if t.etiquetas.impresas %}Continuar impresión{% else %}Imprimir etiquetas{% endif %}</button>
+      {% else %}<span class="pill ok">etiquetas impresas</span>{% endif %}
+    </form>
+    <form method="post" class="fila">{% csrf_token %}
+      <input type="hidden" name="accion" value="imprimir"><input type="hidden" name="tarima_id" value="{{ t.tarima.pk }}">
+      <input type="number" name="desde" min="1" max="{{ t.etiquetas.total }}" inputmode="numeric" placeholder="desde la nº" style="width:110px" aria-label="Reimprimir desde la etiqueta">
+      <button class="btn chico" type="submit">Reimprimir desde</button>
+    </form>
     <a class="btn chico{% if not t.confirmada %} primario{% endif %}" href="{% url 'piso:recepcion_tarima_confirmar' orden.pk t.tarima.pk %}">{% if t.confirmada %}Ver{% else %}Confirmar{% endif %}</a>
   </div>
   {% empty %}
