@@ -1,7 +1,8 @@
 """Etiquetas en PDF para las térmicas de bodega: la de envío (10×15, Aiyin
 BY-480BT) y, desde 2026-10-13, las de recepción (51×51 mm, Munbyn ITPP130B):
 caja (QR `P|barras|lote`, dañada con banda) y tarima (QR `U|TAR-nn`),
-impresas por tandas en orden inverso al escaneo.
+impresas solas al terminar el conteo, tarima por tarima y en orden inverso
+al escaneo, en trabajos del tamaño de tanda configurado.
 
 `generar_pdf_etiqueta` dibuja la misma etiqueta 10×15 de piso/etiqueta.html
 pero en PDF de alto contraste para térmica 203 dpi: Code128 del número de guía
@@ -630,56 +631,97 @@ def _item_caja(escaneo):
     }
 
 
-def imprimir_etiquetas_recepcion(orden, tarima, actor, desde=None):
-    """Una tanda de etiquetas de la tarima (Chema 2026-10-13): la etiqueta de
-    la tarima primero (solo en la primera tanda) y luego las cajas en orden
-    inverso al escaneo, hasta el tamaño de tanda configurado; sin `desde`
-    sigue por la primera sin imprimir ("Continuar impresión"), con `desde`
-    reimprime a partir de esa etiqueta. Encola un solo trabajo a la térmica
-    de etiquetas, marca las cajas como impresas y audita. Regresa el resumen
-    de la tanda con el trabajo."""
+def _encolar_tanda(orden, tarima, escaneos, con_tarima, actor, desde, total):
+    """Un trabajo de impresión con (opcional) la etiqueta de la tarima y las
+    cajas dadas, en ese orden; las marca impresas y audita."""
     from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
-    from apps.inventario.services import marcar_impresas, qr_posicion, tanda_etiquetas  # lazy por contrato
+    from apps.inventario.services import marcar_impresas, qr_posicion  # lazy por contrato
 
-    tanda = tanda_etiquetas(orden, tarima, desde=desde)
     items = []
-    if tanda["incluye_tarima"]:
+    if con_tarima:
         items.append({"tipo": "tarima", "nombre": tarima.codigo, "qr": qr_posicion(tarima)})
-    items.extend(_item_caja(e) for e in tanda["escaneos"])
+    items.extend(_item_caja(e) for e in escaneos)
+    hasta = desde + len(escaneos) - 1
     pdf = generar_pdf_etiquetas(items)
-    referencia = f"{orden.folio} {tarima.codigo} etiquetas {tanda['desde']}-{tanda['hasta']}"
     trabajo = encolar_impresion(
         pdf, tipo=TrabajoImpresion.TIPO_PRODUCTO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
-        media=MEDIA_ETIQUETAS, referencia=referencia, cliente=orden.cliente,
-        nombre=f"etiquetas-{orden.folio}-{tarima.codigo}-{tanda['desde']}-{tanda['hasta']}.pdf",
+        media=MEDIA_ETIQUETAS, referencia=f"{orden.folio} {tarima.codigo} etiquetas {desde}-{hasta}", cliente=orden.cliente,
+        nombre=f"etiquetas-{orden.folio}-{tarima.codigo}-{desde}-{hasta}.pdf",
     )
-    marcar_impresas(tanda["escaneos"])
+    marcar_impresas(escaneos)
     registrar_evento(
         "asn", orden.folio, "etiquetas_impresas", actor=actor, cliente=orden.cliente,
-        delta={"tarima": tarima.codigo, "desde": tanda["desde"], "hasta": tanda["hasta"], "total": tanda["total"],
-               "cajas": len(tanda["escaneos"]), "con_tarima": tanda["incluye_tarima"], "reimpresion": tanda["reimpresion"],
-               "trabajo": trabajo.pk if trabajo else None},
-        motivo=f"{tarima.codigo}: etiquetas {tanda['desde']} a {tanda['hasta']} de {tanda['total']}"
-        + (" (reimpresión)" if tanda["reimpresion"] else "") + ".",
+        delta={"tarima": tarima.codigo, "desde": desde, "hasta": hasta, "total": total, "cajas": len(escaneos),
+               "con_tarima": con_tarima, "trabajo": trabajo.pk if trabajo else None},
+        motivo=f"{tarima.codigo}: etiquetas {desde} a {hasta} de {total}" + (" con la de la tarima" if con_tarima else "") + ".",
     )
-    tanda["trabajo"] = trabajo
-    return tanda
+    return {"tarima": tarima, "desde": desde, "hasta": hasta, "total": total, "con_tarima": con_tarima, "trabajo": trabajo}
 
 
-def imprimir_etiqueta_caja(escaneo, actor):
-    """La etiqueta de UNA caja al momento (cajas que faltaron al confirmar la
-    tarima): un trabajo de una página, la caja queda marcada como impresa."""
+def _imprimir_tarima(orden, tarima, escaneos, con_tarima, actor, total):
+    """Las cajas dadas (ya en orden LIFO) en trabajos del tamaño de tanda
+    configurado, la etiqueta de la tarima solo en el primero."""
+    from apps.configuracion.services import tanda_etiquetas  # lazy por contrato
+
+    tamano = tanda_etiquetas()
+    tandas, desde = [], total - len(escaneos) + 1
+    for i in range(0, len(escaneos), tamano):
+        tandas.append(_encolar_tanda(orden, tarima, escaneos[i:i + tamano], con_tarima and i == 0, actor, desde + i, total))
+    return tandas
+
+
+def imprimir_etiquetas_orden(orden, actor):
+    """Terminar conteo (Chema 2026-10-13): se imprimen solas TODAS las
+    etiquetas, tarima por tarima en orden de primer uso: la etiqueta de la
+    tarima y luego sus cajas en orden inverso al escaneo. Solo las cajas sin
+    etiqueta (un segundo Terminar conteo imprime las nuevas) y la etiqueta de
+    la tarima solo si ninguna caja suya la tenía. Regresa [tandas]."""
+    from apps.inventario.services import escaneos_lifo, tarimas_de_orden  # lazy por contrato
+
+    tandas = []
+    for t in tarimas_de_orden(orden):
+        lifo = escaneos_lifo(orden, t["tarima"])
+        pendientes = [e for e in lifo if e.impresa_ts is None]
+        if not pendientes:
+            continue
+        # LIFO: las últimas escaneadas van primero; las pendientes conservan su posición.
+        con_tarima = len(pendientes) == len(lifo)
+        tandas.extend(_imprimir_tarima(orden, t["tarima"], pendientes, con_tarima, actor, len(lifo)))
+    return tandas
+
+
+def reimprimir_tarima(orden, tarima, actor):
+    """Todas las etiquetas de la tarima otra vez (la de la tarima y sus cajas
+    en orden LIFO), por si el rollo se cortó o se perdieron."""
+    from apps.inventario.services import escaneos_lifo  # lazy por contrato
+
+    lifo = escaneos_lifo(orden, tarima)
+    if not lifo:
+        raise ValueError(f"No hay cajas contadas en {tarima.codigo}.")
+    return _imprimir_tarima(orden, tarima, lifo, True, actor, len(lifo))
+
+
+def imprimir_etiquetas_cajas(escaneos, actor):
+    """Etiquetas de cajas sueltas al momento (las que faltaron en el
+    reetiquetado): un trabajo con una página por caja."""
+    if not escaneos:
+        return None
+    orden, tarima = escaneos[0].orden, escaneos[0].tarima
     from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
     from apps.inventario.services import marcar_impresas  # lazy por contrato
 
-    orden = escaneo.orden
-    pdf = generar_pdf_etiquetas([_item_caja(escaneo)])
+    pdf = generar_pdf_etiquetas([_item_caja(e) for e in escaneos])
     trabajo = encolar_impresion(
         pdf, tipo=TrabajoImpresion.TIPO_PRODUCTO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
-        media=MEDIA_ETIQUETAS, referencia=f"{orden.folio} {escaneo.tarima.codigo} caja {escaneo.pk}",
-        cliente=orden.cliente, nombre=f"etiqueta-{orden.folio}-caja-{escaneo.pk}.pdf",
+        media=MEDIA_ETIQUETAS, referencia=f"{orden.folio} {tarima.codigo} faltaron {len(escaneos)}",
+        cliente=orden.cliente, nombre=f"etiquetas-{orden.folio}-{tarima.codigo}-faltaron-{escaneos[0].pk}.pdf",
     )
-    marcar_impresas([escaneo])
+    marcar_impresas(escaneos)
+    registrar_evento(
+        "asn", orden.folio, "etiquetas_impresas", actor=actor, cliente=orden.cliente,
+        delta={"tarima": tarima.codigo, "cajas": len(escaneos), "faltaron": True, "trabajo": trabajo.pk if trabajo else None},
+        motivo=f"{tarima.codigo}: {len(escaneos)} etiqueta(s) adicionales por cajas que faltaron.",
+    )
     return trabajo
 
 
@@ -792,7 +834,7 @@ def imprimir_etiqueta(guia, interna=False):
         try:
             resultado = subprocess.run(
                 ["lp", "-d", cola, "-o", MEDIA_LP, ruta],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, check=False,
             )
         except FileNotFoundError:
             raise ValueError(

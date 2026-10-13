@@ -610,33 +610,13 @@ def _home_confirmar_restock(request):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Recepciones (ASN): foto de llegada → ¿en qué tarima? → escanear caja por
-# caja → etiquetas → confirmar tarima por tarima → cuadre y cierre
-# (Chema 2026-10-13: el escáner físico cuenta; el piso solo escanea)
+# caja → Terminar conteo (imprime todo) → reetiquetado tarima por tarima →
+# cuadre y cierre (Chema 2026-10-13: el escáner físico cuenta; el piso solo escanea)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _clave_tarima(orden):
     return f"recepcion_tarima_{orden.pk}"
-
-
-def _clave_faltaron(orden):
-    return f"recepcion_faltaron_{orden.pk}"
-
-
-def _etiqueta_al_momento(request, orden, tarima, escaneo):
-    """En modo "Faltaron etiquetas" (sesión), la caja recién contada en esa
-    tarima imprime su etiqueta al momento; un fallo de impresión avisa y no
-    descuenta la caja."""
-    if request.session.get(_clave_faltaron(orden)) != tarima.codigo:
-        return
-    from .etiquetas import imprimir_etiqueta_caja  # lazy por contrato
-
-    try:
-        imprimir_etiqueta_caja(escaneo, request.user)
-    except ValueError as exc:
-        messages.warning(request, f"La caja quedó contada, pero su etiqueta no salió: {exc}")
-    else:
-        messages.info(request, "Su etiqueta va a la impresora.")
 
 
 def _tarima_actual(request, orden):
@@ -687,28 +667,28 @@ def recepcion_detalle(request, pk):
             return _recepcion_escanear(request, orden)
         if accion == "foto":
             return _recepcion_foto(request, orden)
-        if accion == "imprimir":
-            return _recepcion_imprimir(request, orden)
+        if accion == "terminar_conteo":
+            return _recepcion_terminar_conteo(request, orden)
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:recepcion_detalle", pk=orden.pk)
 
-    from apps.inventario.services import resumen_etiquetas, resumen_lineas, tarimas_de_orden  # lazy por contrato
+    from apps.inventario.services import resumen_lineas, tarimas_de_orden  # lazy por contrato
 
     cerrada = orden.estado == OrdenEntrada.CERRADA
+    contando = orden.fase_recepcion == OrdenEntrada.FASE_CONTEO
     tiene_foto = _tiene_foto(orden)
     tarima = _tarima_actual(request, orden)
-    if not cerrada and tiene_foto and tarima is None:
+    if contando and tiene_foto and tarima is None:
         return redirect("piso:recepcion_tarima", pk=orden.pk)
     lineas = resumen_lineas(orden)
     tarimas = tarimas_de_orden(orden)
-    for t in tarimas:
-        t["etiquetas"] = resumen_etiquetas(orden, t["tarima"])
     actual = next((t for t in tarimas if tarima is not None and t["tarima"].pk == tarima.pk), None)
     sla_texto, sla_tono = _sla_recepcion(orden)
     contexto = {
         "seccion": "recepcion",
         "orden": orden,
         "cerrada": cerrada,
+        "contando": contando,
         "lineas": lineas,
         "tarima": tarima,
         "tarima_cajas": actual["cajas"] if actual else 0,
@@ -719,37 +699,38 @@ def recepcion_detalle(request, pk):
         "tiene_foto": tiene_foto,
         "sla_texto": sla_texto,
         "sla_tono": sla_tono,
-        "faltaron_en": request.session.get(_clave_faltaron(orden), ""),
         "fotos_llegada": EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio),
     }
     return render(request, "piso/recepcion_detalle.html", contexto)
 
 
-def _recepcion_imprimir(request, orden):
-    """POST accion=imprimir: una tanda de etiquetas de la tarima (la siguiente
-    sin imprimir, o desde la etiqueta N para reimprimir)."""
-    from .etiquetas import imprimir_etiquetas_recepcion  # lazy por contrato
+def _recepcion_terminar_conteo(request, orden):
+    """POST accion=terminar_conteo: bloquea el escaneo e imprime solas todas
+    las etiquetas (tarima por tarima, cajas en orden inverso); sigue el
+    reetiquetado. Un fallo de impresión no deshace el término del conteo:
+    el reetiquetado tiene Reimprimir."""
+    from apps.inventario.services import terminar_conteo  # lazy por contrato
 
-    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
-    tarima = Ubicacion.objects.filter(pk=request.POST.get("tarima_id") or 0).first()
-    if tarima is None:
-        messages.error(request, "Elige la tarima cuyas etiquetas vas a imprimir.")
-        return volver
+    from .etiquetas import imprimir_etiquetas_orden  # lazy por contrato
+
     try:
-        crudo = (request.POST.get("desde") or "").strip()
-        desde = _entero(crudo, "La etiqueta desde la que reimprimes va en número entero.") if crudo else None
-        tanda = imprimir_etiquetas_recepcion(orden, tarima, request.user, desde=desde)
+        terminar_conteo(orden, request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
-        return volver
-    faltan = tanda["total"] - tanda["hasta"]
-    messages.success(
-        request,
-        f"{tarima.codigo}: etiquetas {tanda['desde']} a {tanda['hasta']} de {tanda['total']} van a la impresora"
-        + (" (con la etiqueta de la tarima)" if tanda["incluye_tarima"] else "")
-        + (f". Cuando salgan, carga rollo si hace falta y pulsa Continuar impresión: faltan {faltan}." if faltan and not tanda["reimpresion"] else ".")
-    )
-    return volver
+        return redirect("piso:recepcion_detalle", pk=orden.pk)
+    try:
+        tandas = imprimir_etiquetas_orden(orden, request.user)
+    except ValueError as exc:
+        messages.warning(request, f"Conteo terminado, pero las etiquetas no salieron: {exc} Usa Reimprimir en cada tarima.")
+    else:
+        cajas = sum(t["hasta"] - t["desde"] + 1 for t in tandas)
+        tarimas = sorted({t["tarima"].codigo for t in tandas})
+        messages.success(
+            request,
+            f"Conteo terminado: {cajas} etiqueta(s) de caja más las de {', '.join(tarimas) or 'sus tarimas'} van a la impresora, tarima por tarima. Pégalas y confirma cada tarima."
+            if tandas else "Conteo terminado: todas las etiquetas ya estaban impresas.",
+        )
+    return redirect("piso:recepcion_reetiquetado", pk=orden.pk)
 
 
 def _recepcion_foto(request, orden):
@@ -778,6 +759,9 @@ def _recepcion_escanear(request, orden):
     if orden.estado == OrdenEntrada.CERRADA:
         messages.error(request, f"La orden {orden.folio} ya está cerrada; no acepta más cajas.")
         return volver
+    if orden.ts_conteo_fin:
+        messages.error(request, "El conteo ya terminó: las cajas que faltaron se agregan desde Reetiquetado, o Regresa a conteo.")
+        return redirect("piso:recepcion_reetiquetado", pk=orden.pk)
     if not _tiene_foto(orden):
         messages.error(request, "Tómale foto al camión/tarimas antes de escanear la primera caja.")
         return volver
@@ -798,12 +782,11 @@ def _recepcion_escanear(request, orden):
         directo = ""
     if directo is not None:
         try:
-            escaneo = contar_caja(orden, sku, directo, None, tarima, request.user)
+            contar_caja(orden, sku, directo, None, tarima, request.user)
         except ValueError as exc:
             messages.error(request, str(exc))
             return volver
         messages.success(request, f"{sku.codigo}{' lote ' + directo if directo else ''}: +1 en {tarima.codigo}. Escanea la siguiente.")
-        _etiqueta_al_momento(request, orden, tarima, escaneo)
         return volver
     return redirect(f"{reverse('piso:recepcion_lote', args=[orden.pk])}?sku={sku.pk}")
 
@@ -821,6 +804,9 @@ def recepcion_tarima(request, pk):
     if orden.estado == OrdenEntrada.CERRADA:
         messages.error(request, f"La orden {orden.folio} ya está cerrada.")
         return redirect("piso:recepcion_detalle", pk=orden.pk)
+    if orden.ts_conteo_fin:
+        messages.info(request, "El conteo ya terminó: sigue en Reetiquetado.")
+        return redirect("piso:recepcion_reetiquetado", pk=orden.pk)
     if request.method == "POST":
         accion = request.POST.get("accion")
         try:
@@ -837,7 +823,6 @@ def recepcion_tarima(request, pk):
             messages.error(request, str(exc))
             return redirect("piso:recepcion_tarima", pk=orden.pk)
         request.session[_clave_tarima(orden)] = tarima.codigo
-        request.session.pop(_clave_faltaron(orden), None)
         messages.info(request, f"Contando en {tarima.codigo}: escanea la primera caja.")
         return redirect("piso:recepcion_detalle", pk=orden.pk)
 
@@ -873,6 +858,9 @@ def recepcion_lote(request, pk):
     if orden.estado == OrdenEntrada.CERRADA:
         messages.error(request, f"La orden {orden.folio} ya está cerrada; no acepta más cajas.")
         return volver
+    if orden.ts_conteo_fin:
+        messages.error(request, "El conteo ya terminó: las cajas que faltaron se agregan desde Reetiquetado.")
+        return redirect("piso:recepcion_reetiquetado", pk=orden.pk)
     sku_id = request.POST.get("sku_id") or request.GET.get("sku")
     sku = SKU.objects.filter(pk=sku_id or 0, cliente=orden.cliente, activo=True).first()
     if sku is None:
@@ -905,7 +893,7 @@ def recepcion_lote(request, pk):
                         caducidad = date.fromisoformat(crudo)
                     except ValueError:
                         raise ValueError("La caducidad del lote nuevo no es válida. Usa el calendario.") from None
-            escaneo = contar_caja(orden, sku, lote, caducidad, tarima, request.user, danada=danada)
+            contar_caja(orden, sku, lote, caducidad, tarima, request.user, danada=danada)
         except ValueError as exc:
             messages.error(request, str(exc))
             return reintentar
@@ -913,7 +901,6 @@ def recepcion_lote(request, pk):
             request,
             f"{sku.codigo}{' lote ' + lote if lote else ''}: +1{' dañada' if danada else ''} en {tarima.codigo}. Escanea la siguiente.",
         )
-        _etiqueta_al_momento(request, orden, tarima, escaneo)
         return volver
 
     from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
@@ -940,76 +927,137 @@ def recepcion_lote(request, pk):
 
 
 @rol_requerido("piso", "mesa")
-def recepcion_tarima_confirmar(request, pk, tarima_pk):
-    """Confirmar una tarima tras pegar etiquetas (Chema 2026-10-13): "Cuadró"
-    la recibe; "Faltaron etiquetas" vuelve al escáner en esa tarima (cada
-    caja nueva se cuenta ahí); "Sobraron etiquetas" resta una caja por cada
-    etiqueta sobrante escaneada (o las que se tecleen por lote)."""
+def recepcion_reetiquetado(request, pk):
+    """Reetiquetado (Chema 2026-10-13): tras Terminar conteo. Arriba todas las
+    tarimas de la orden (se toca cualquiera); de la elegida, sus productos y
+    lotes con lo contado y por renglón **Faltaron X** (+X cajas en esa tarima
+    e imprime X etiquetas al momento) y **Sobraron X** (−X cajas); un renglón
+    para un producto o lote que no estaba en la tarima (lote predictivo, no
+    obligatorio); **TARIMA REETIQUETADA** (confirmar_tarima: nace el stock no
+    vendible); **Reimprimir etiquetas de esta tarima**; **Regresar a conteo**;
+    y **Terminado**, apagado hasta que todas estén reetiquetadas, que lleva al
+    cuadre."""
     from apps.inventario.services import (  # lazy por contrato
-        anular_escaneo, confirmar_tarima, escaneos_vivos, resolver_escaneo, tarimas_de_orden,
+        anular_escaneo, confirmar_tarima, contar_caja, escaneos_vivos, regresar_a_conteo, skus_recibibles,
+        tarimas_de_orden,
     )
 
     orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
-    tarima = get_object_or_404(Ubicacion, pk=tarima_pk)
     detalle = redirect("piso:recepcion_detalle", pk=orden.pk)
-    volver = redirect("piso:recepcion_tarima_confirmar", pk=orden.pk, tarima_pk=tarima.pk)
     if orden.estado == OrdenEntrada.CERRADA:
-        messages.error(request, f"La orden {orden.folio} ya está cerrada.")
         return detalle
+    if not orden.ts_conteo_fin:
+        messages.info(request, "Primero termina el conteo.")
+        return detalle
+    tarimas = tarimas_de_orden(orden)
+    tarima_pk = request.POST.get("tarima_id") or request.GET.get("tarima") or ""
+    actual = next((t for t in tarimas if str(t["tarima"].pk) == str(tarima_pk)), None)
+    if actual is None:
+        actual = next((t for t in tarimas if not t["confirmada"]), tarimas[0] if tarimas else None)
+    volver = redirect(f"{reverse('piso:recepcion_reetiquetado', args=[orden.pk])}?tarima={actual['tarima'].pk}" if actual else reverse("piso:recepcion_reetiquetado", args=[orden.pk]))
+
     if request.method == "POST":
         accion = request.POST.get("accion")
         try:
-            if accion == "cuadro":
+            if accion == "regresar_conteo":
+                regresar_a_conteo(orden, request.user)
+                messages.info(request, f"{orden.folio} vuelve a conteo: escanea lo que falte y termina el conteo otra vez.")
+                return detalle
+            if accion == "terminado":
+                if not tarimas or any(not t["confirmada"] for t in tarimas):
+                    raise ValueError("Marca TARIMA REETIQUETADA en todas las tarimas antes de terminar.")
+                return redirect("piso:recepcion_cuadre", pk=orden.pk)
+            if actual is None:
+                raise ValueError("No hay cajas contadas en esta orden.")
+            tarima = actual["tarima"]
+            if accion == "reetiquetada":
                 r = confirmar_tarima(orden, tarima, request.user)
                 messages.success(
                     request,
-                    f"{tarima.codigo} confirmada: {r['cajas']} caja(s) recibidas"
+                    f"{tarima.codigo} reetiquetada: {r['cajas']} caja(s) recibidas"
                     + (f" y {r['danadas']} dañada(s) a cuarentena" if r["danadas"] else "") + ".",
                 )
-                return detalle
-            if accion == "faltaron":
-                request.session[_clave_tarima(orden)] = tarima.codigo
-                request.session[_clave_faltaron(orden)] = tarima.codigo
-                messages.info(request, f"Escanea cada caja sin etiqueta: se cuenta en {tarima.codigo} y su etiqueta sale al momento. Al terminar, vuelve a confirmar la tarima.")
-                return detalle
-            if accion == "sobrante":
-                r = resolver_escaneo(orden, request.POST.get("codigo"))
-                if r["lote_qr"] is None and r["sku"].requiere_lote:
-                    raise ValueError("Escanea el QR de la etiqueta que sobró, no el código de barras de la caja.")
-                lote = r["lote_qr"] or ""
-                linea = next((l for l in r["lineas"] if (l.lote_codigo or "").strip() == lote), None)
-                if linea is None:
-                    raise ValueError(f"Esa etiqueta ({r['sku'].codigo}{' lote ' + lote if lote else ''}) no es de esta orden.")
-                anular_escaneo(orden, linea, tarima, request.user, motivo="Etiqueta sobrante al confirmar la tarima.")
-                messages.success(request, f"{linea.sku.codigo}{' lote ' + lote if lote else ''}: −1 en {tarima.codigo}.")
                 return volver
-            if accion == "sobrante_cantidad":
+            if accion == "reimprimir":
+                from .etiquetas import reimprimir_tarima  # lazy por contrato
+
+                tandas = reimprimir_tarima(orden, tarima, request.user)
+                messages.success(request, f"{tarima.codigo}: {tandas[-1]['total']} etiqueta(s) y la de la tarima van a la impresora.")
+                return volver
+            if accion == "sobraron":
                 linea = get_object_or_404(LineaASN.objects.select_related("sku"), pk=request.POST.get("linea_id") or 0, orden=orden)
-                n = _entero(request.POST.get("cantidad"), "Captura cuántas etiquetas sobraron.")
+                n = _entero(request.POST.get("cantidad"), "Captura cuántas sobraron.")
                 if n <= 0:
-                    raise ValueError("Captura cuántas etiquetas sobraron.")
+                    raise ValueError("Captura cuántas sobraron.")
                 for _ in range(n):
-                    anular_escaneo(orden, linea, tarima, request.user, motivo="Etiquetas sobrantes al confirmar la tarima (cantidad tecleada).")
+                    anular_escaneo(orden, linea, tarima, request.user, motivo="Sobraron etiquetas en el reetiquetado.")
                 messages.success(request, f"{linea.sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''}: −{n} en {tarima.codigo}.")
+                return volver
+            if accion == "faltaron":
+                n = _entero(request.POST.get("cantidad"), "Captura cuántas faltaron.")
+                if n <= 0:
+                    raise ValueError("Captura cuántas faltaron.")
+                linea_id = (request.POST.get("linea_id") or "").strip()
+                if linea_id:
+                    linea = get_object_or_404(LineaASN.objects.select_related("sku"), pk=linea_id, orden=orden)
+                    sku, lote, caducidad = linea.sku, (linea.lote_codigo or "").strip(), linea.fecha_caducidad
+                else:
+                    sku = skus_recibibles(orden.cliente).filter(pk=request.POST.get("sku_id") or 0).first()
+                    if sku is None:
+                        raise ValueError("Elige el producto.")
+                    lote = (request.POST.get("lote") or "").strip()
+                    caducidad = None
+                    crudo = (request.POST.get("caducidad") or "").strip()
+                    if crudo:
+                        try:
+                            caducidad = date.fromisoformat(crudo)
+                        except ValueError:
+                            raise ValueError("La caducidad no es válida. Usa el calendario.") from None
+                danada = request.POST.get("danada") == "1"
+                nuevos = [
+                    contar_caja(orden, sku, lote, caducidad, tarima, request.user, danada=danada, desde_reetiquetado=True)
+                    for _ in range(n)
+                ]
+                from .etiquetas import imprimir_etiquetas_cajas  # lazy por contrato
+
+                try:
+                    imprimir_etiquetas_cajas(nuevos, request.user)
+                except ValueError as exc:
+                    messages.warning(request, f"Las cajas quedaron contadas, pero sus etiquetas no salieron: {exc}")
+                else:
+                    messages.success(request, f"{sku.codigo}{' lote ' + lote if lote else ''}: +{n} en {tarima.codigo}; {n} etiqueta(s) van a la impresora.")
                 return volver
             raise ValueError("No entendí la acción.")
         except ValueError as exc:
             messages.error(request, str(exc))
             return volver
 
-    resumen = next((t for t in tarimas_de_orden(orden) if t["tarima"].pk == tarima.pk), None)
-    if resumen is None:
-        messages.info(request, f"No hay cajas de {orden.folio} en {tarima.codigo}.")
-        return detalle
-    por_linea = {}
-    for e in escaneos_vivos(orden).filter(tarima=tarima).select_related("linea__sku").order_by("linea__sku__codigo", "linea__lote_codigo"):
-        r = por_linea.setdefault(e.linea_id, {"linea": e.linea, "contadas": 0, "danadas": 0, "por_confirmar": 0})
-        r["danadas" if e.danada else "contadas"] += 1
-        if e.estado == "contada":
-            r["por_confirmar"] += 1
-    return render(request, "piso/recepcion_tarima_confirmar.html", {
-        "seccion": "recepcion", "orden": orden, "tarima": tarima, "resumen": resumen,
-        "lineas": list(por_linea.values()),
+    from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
+
+    lineas, lotes_por_sku = [], {}
+    if actual is not None:
+        por_linea = {}
+        for e in escaneos_vivos(orden).filter(tarima=actual["tarima"]).select_related("linea__sku").order_by("linea__sku__codigo", "linea__lote_codigo"):
+            r = por_linea.setdefault(e.linea_id, {"linea": e.linea, "contadas": 0, "danadas": 0, "por_confirmar": 0, "sin_etiqueta": 0})
+            r["danadas" if e.danada else "contadas"] += 1
+            if e.estado == "contada":
+                r["por_confirmar"] += 1
+            if e.impresa_ts is None:
+                r["sin_etiqueta"] += 1
+        lineas = list(por_linea.values())
+    for linea in orden.lineas.select_related("sku"):
+        if linea.lote_codigo:
+            lotes_por_sku.setdefault(linea.sku_id, []).append({"codigo": linea.lote_codigo, "caducidad": linea.fecha_caducidad.isoformat() if linea.fecha_caducidad else ""})
+    sugeridos = []
+    for sku in skus_recibibles(orden.cliente):
+        vistos = {l["codigo"] for l in lotes_por_sku.get(sku.pk, [])}
+        extra = [s for s in lotes_sugeridos(sku, orden) if s["codigo"] not in vistos] if sku.lineas_asn.filter(orden=orden).exists() else []
+        sugeridos.append({"sku": sku, "lotes": lotes_por_sku.get(sku.pk, []) + extra})
+    return render(request, "piso/recepcion_reetiquetado.html", {
+        "seccion": "recepcion", "orden": orden, "tarimas": tarimas, "actual": actual, "lineas": lineas,
+        "todas_reetiquetadas": bool(tarimas) and all(t["confirmada"] for t in tarimas),
+        "productos": sugeridos,
+        "productos_lotes": {str(p["sku"].pk): p["lotes"] for p in sugeridos},
     })
 
 
@@ -1036,13 +1084,13 @@ def recepcion_cuadre(request, pk):
             messages.error(request, str(exc))
             return redirect("piso:recepcion_cuadre", pk=orden.pk)
         request.session.pop(_clave_tarima(orden), None)
-        request.session.pop(_clave_faltaron(orden), None)
         messages.success(request, f"Orden {orden.folio} cerrada: todo lo recibido quedó vendible.")
         return redirect("piso:recepciones")
     cuadre = cuadre_recepcion(orden)
     return render(request, "piso/recepcion_cuadre.html", {
         "seccion": "recepcion", "orden": orden, "cuadre": cuadre,
-        "puede_cerrar": orden.estado != OrdenEntrada.ANUNCIADA and not cuadre["por_confirmar"],
+        "puede_cerrar": orden.estado != OrdenEntrada.ANUNCIADA and bool(orden.ts_conteo_fin) and not cuadre["por_confirmar"],
+        "en_conteo": not orden.ts_conteo_fin,
     })
 
 

@@ -469,13 +469,13 @@ class Command(BaseCommand):
         """Recepción por escaneo a medias (Chema 2026-10-13): PARAMO-C12 (12
         anunciadas, lote LP-C12-2610) y TICUS-C12 (10 anunciadas SIN lote).
         TAR-01: 7 PARAMO y 5 TICUS (una dañada) contadas con el lote TC-2610
-        vía "Otro", etiquetas impresas y tarima confirmada (stock en
-        recepción, no vendible). TAR-02: 3 PARAMO contadas sin confirmar. Así
-        el piso ve Contado, tarimas confirmada y por confirmar, el cuadre con
-        faltantes; Mesa ve el editor; el portal "Dónde quedó". Idempotente."""
+        vía "Otro". Conteo terminado, etiquetas impresas, TAR-01 reetiquetada
+        (stock en recepción, no vendible) y TAR-02 (3 PARAMO) por reetiquetar.
+        Así el piso cae en Reetiquetado con una tarima lista y otra pendiente;
+        Mesa ve el editor; el portal "Dónde quedó". Idempotente."""
         from apps.core.models import EvidenciaFoto
         from apps.inventario.models import LineaASN, OrdenEntrada
-        from apps.inventario.services import confirmar_tarima, contar_caja, crear_tarima, marcar_impresas
+        from apps.inventario.services import confirmar_tarima, contar_caja, crear_tarima, marcar_impresas, terminar_conteo
 
         existente = OrdenEntrada.objects.filter(
             cliente=colima, tipo=OrdenEntrada.TIPO_ASN, estado=OrdenEntrada.EN_RECEPCION,
@@ -499,10 +499,11 @@ class Command(BaseCommand):
         escaneos = [contar_caja(orden, skus["PARAMO-C12"], "LP-C12-2610", caducidad, tar1, "piso1") for _ in range(7)]
         escaneos += [contar_caja(orden, skus["TICUS-C12"], "TC-2610", caducidad, tar1, "piso1") for _ in range(4)]
         escaneos.append(contar_caja(orden, skus["TICUS-C12"], "TC-2610", caducidad, tar1, "piso1", danada=True))
-        marcar_impresas(escaneos)
-        confirmar_tarima(orden, tar1, "piso1")
         for _ in range(3):
             contar_caja(orden, skus["PARAMO-C12"], "LP-C12-2610", caducidad, tar2, "piso1")
+        terminar_conteo(orden, "piso1")
+        marcar_impresas(escaneos + list(orden.escaneos.filter(tarima=tar2)))
+        confirmar_tarima(orden, tar1, "piso1")
         OrdenEntrada.objects.filter(pk=orden.pk).update(creado=self._dt(0, 8, 30))
         self._folio_recepcion_escaneo = orden.folio
         return orden
@@ -1396,9 +1397,9 @@ class Command(BaseCommand):
             w("    Códigos para probar con el escáner o Teclear: CPL24 → 7503026716090 (QR de la etiqueta de "
               "prueba: P|7503026716090|CPL330ABCD) · COLIMITA-SIX → 7500465010011 · PARAMO-SIX → 7500465010035 "
               "· CAYACO-SIX (sin lote anunciado) → 7500465010073")
-            w(f"  Recepción por escaneo a medias: {getattr(self, '_folio_recepcion_escaneo', 'ya sembrada')} · "
-              "TAR-01 confirmada con etiquetas (PARAMO-C12 ×7; TICUS-C12 ×5 lote TC-2610, 1 dañada) · "
-              "TAR-02 con 3 PARAMO-C12 sin confirmar · PARAMO-C12 → 7500465010042 · TICUS-C12 → 7500465010066")
+            w(f"  Recepción por escaneo a medias (en Reetiquetado): {getattr(self, '_folio_recepcion_escaneo', 'ya sembrada')} · "
+              "TAR-01 reetiquetada (PARAMO-C12 ×7; TICUS-C12 ×5 lote TC-2610, 1 dañada) · "
+              "TAR-02 con 3 PARAMO-C12 por reetiquetar · PARAMO-C12 → 7500465010042 · TICUS-C12 → 7500465010066")
             w(f"  Reingreso por ubicar en piso (cancelado a medio pick {f['cancelado']}): {f['reingreso']}")
             w(f"  Reingresos por decidir (Mesa → Recepciones): {f['retornado']} retornado · "
               f"{f['tardia']} cancelación tardía")

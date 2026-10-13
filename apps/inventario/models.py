@@ -160,6 +160,10 @@ class OrdenEntrada(models.Model):
     tarimas = models.PositiveSmallIntegerField(default=0, help_text="Tarimas anunciadas por el cliente")
     tarimas_recibidas = models.PositiveSmallIntegerField(default=0)
     ts_descarga_fin = models.DateTimeField(null=True, blank=True)
+    ts_conteo_fin = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Cuándo el piso pulsó Terminar conteo (desde ahí: etiquetas y reetiquetado; vacío = contando)",
+    )
     ts_vendible = models.DateTimeField(null=True, blank=True, help_text="Cuándo quedó todo ubicado")
     # Plan de acomodo histórico (hasta 2026-10-13 el piso acomodaba con él).
     # La recepción por escaneo ya no lo usa ni lo escribe; la columna se
@@ -196,6 +200,19 @@ class OrdenEntrada(models.Model):
             actor=actor, cliente=self.cliente, delta={"de": anterior, "a": nuevo}, motivo=motivo,
         )
         return self
+
+    FASE_CONTEO = "conteo"
+    FASE_REETIQUETADO = "reetiquetado"
+    FASE_CERRADA = "cerrada"
+
+    @property
+    def fase_recepcion(self):
+        """En qué paso va la recepción por escaneo (2026-10-13): `conteo`
+        (escaneando), `reetiquetado` (Terminar conteo pulsado: etiquetas
+        impresas, tarimas por confirmar) o `cerrada`."""
+        if self.estado == self.CERRADA:
+            return self.FASE_CERRADA
+        return self.FASE_REETIQUETADO if self.ts_conteo_fin else self.FASE_CONTEO
 
     # ── Reloj SLA de recepción (settings.TORRE) ──
     @property

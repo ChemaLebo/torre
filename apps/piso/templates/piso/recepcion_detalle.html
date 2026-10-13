@@ -21,6 +21,30 @@
 
 {% if cerrada %}
 <div class="banner ok mt"><span class="foco"></span>Orden cerrada: todo lo recibido quedó vendible el {{ orden.ts_vendible|date:"d/M H:i" }}.</div>
+{% elif not contando %}
+{# Conteo terminado (Chema 2026-10-13): las etiquetas ya salieron; sigue el reetiquetado tarima por tarima. #}
+<div class="banner accent mt"><span class="foco"></span>Conteo terminado el {{ orden.ts_conteo_fin|date:"d/M H:i" }}: {{ total_contado }} caja{{ total_contado|pluralize }}. Las etiquetas van a la impresora; sigue el reetiquetado.</div>
+<div class="card mt">
+  <a class="btn primario gigante bloque" href="{% url 'piso:recepcion_reetiquetado' orden.pk %}">Ir al reetiquetado</a>
+</div>
+<div class="card mt">
+  <div class="titulo"><h2>Contado</h2><span class="pill accent">{{ total_contado }} caja{{ total_contado|pluralize }}</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Producto</th><th>Lote</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th></tr></thead>
+      <tbody>
+        {% for l in lineas %}
+        <tr{% if l.es_hija %} class="fila-posicion"{% endif %}>
+          <td>{% if l.es_hija %}<span class="small muted">↳ lote</span>{% else %}<span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span>{% endif %}</td>
+          <td class="mono">{% if l.agrupada %}<span class="small muted">total del producto</span>{% else %}{{ l.lote|default:"—" }}{% endif %}</td>
+          <td class="derecha num">{{ l.contadas }}</td>
+          <td class="derecha num">{{ l.danadas }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% elif not tiene_foto %}
 <div class="card mt">
   <div class="titulo"><h2>Foto de llegada</h2><span class="pill warn">obligatoria</span></div>
@@ -73,26 +97,10 @@
 
 <div class="card mt">
   <div class="titulo"><h2>Tarimas de la orden</h2></div>
-  {% if faltaron_en %}<div class="banner accent"><span class="foco"></span>Cajas que faltaron en <span class="mono">{{ faltaron_en }}</span>: cada caja que cuentes ahí imprime su etiqueta al momento.</div>{% endif %}
   {% for t in tarimas %}
-  <div class="corral-fila" style="flex-wrap:wrap">
-    <div class="crece"><span class="mono">{{ t.tarima.codigo }}</span> · {{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}
-      <div class="small muted">Etiquetas: {{ t.etiquetas.impresas }} de {{ t.etiquetas.total }} impresas{% if t.etiquetas.siguiente %} · sigue la {{ t.etiquetas.siguiente }}{% endif %} · tandas de {{ t.etiquetas.tamano }}</div>
-    </div>
-    {% if t.confirmada %}<span class="pill ok">confirmada</span>{% else %}<span class="pill warn">{{ t.por_confirmar }} por confirmar</span>{% endif %}
-    {# Impresión por tandas LIFO (Chema 2026-10-13): primero la tarima, luego las cajas en orden inverso; "Continuar" tras recargar rollo; "Reimprimir desde N" si el corte fue a media tanda. #}
-    <form method="post" class="fila">{% csrf_token %}
-      <input type="hidden" name="accion" value="imprimir"><input type="hidden" name="tarima_id" value="{{ t.tarima.pk }}">
-      {% if t.etiquetas.siguiente %}
-      <button class="btn chico" type="submit">{% if t.etiquetas.impresas %}Continuar impresión{% else %}Imprimir etiquetas{% endif %}</button>
-      {% else %}<span class="pill ok">etiquetas impresas</span>{% endif %}
-    </form>
-    <form method="post" class="fila">{% csrf_token %}
-      <input type="hidden" name="accion" value="imprimir"><input type="hidden" name="tarima_id" value="{{ t.tarima.pk }}">
-      <input type="number" name="desde" min="1" max="{{ t.etiquetas.total }}" inputmode="numeric" placeholder="desde la nº" style="width:110px" aria-label="Reimprimir desde la etiqueta">
-      <button class="btn chico" type="submit">Reimprimir desde</button>
-    </form>
-    <a class="btn chico{% if not t.confirmada %} primario{% endif %}" href="{% url 'piso:recepcion_tarima_confirmar' orden.pk t.tarima.pk %}">{% if t.confirmada %}Ver{% else %}Confirmar{% endif %}</a>
+  <div class="corral-fila">
+    <div class="crece"><span class="mono">{{ t.tarima.codigo }}</span> · {{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}</div>
+    {% if t.confirmada %}<span class="pill ok">reetiquetada</span>{% endif %}
   </div>
   {% empty %}
   <p class="small muted">Las tarimas aparecen aquí conforme cuentas cajas en ellas.</p>
@@ -100,9 +108,12 @@
 </div>
 
 <div class="card mt">
-  <div class="titulo"><h2>Cerrar la orden</h2></div>
-  <p class="small">Cuando todas las tarimas estén confirmadas. El cuadre muestra lo anunciado contra lo contado antes de cerrar; al cerrar, todo lo recibido queda vendible.</p>
-  <a class="btn bloque" href="{% url 'piso:recepcion_cuadre' orden.pk %}">Ir al cuadre y cerrar</a>
+  <div class="titulo"><h2>Terminar conteo</h2></div>
+  <p class="small">Cuando TODAS las cajas estén escaneadas. Se bloquea el escaneo y salen solas todas las etiquetas, tarima por tarima: primero la de la tarima y luego sus cajas en el orden en que quedaron. Después, el reetiquetado. Si te equivocas, en el reetiquetado está "Regresar a conteo".</p>
+  <form method="post" onsubmit="return confirm('¿Terminar el conteo de {{ orden.folio }} con {{ total_contado }} caja(s)? Se imprimen todas las etiquetas y el escaneo se bloquea.');">{% csrf_token %}
+    <input type="hidden" name="accion" value="terminar_conteo">
+    <button class="btn primario gigante bloque" type="submit" {% if not total_contado %}disabled{% endif %}>Terminar conteo</button>
+  </form>
 </div>
 
 <script>

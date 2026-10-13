@@ -5,9 +5,9 @@
 | **Código / versión** | SOP-03 · v2.0 · Octubre 2026 (una caja por escaneo, etiquetas y tarimas) |
 | **Dueño** | OP-1 Jefe de bodega (captura). FLEX/OP-2 desestiban |
 | **Frecuencia / disparador** | Cada recepción. **El pallet se desarma el MISMO día, siempre** (cláusula de contrato) |
-| **Tiempo estándar** | 30–45 min por tarima (desestiba + escaneo + etiquetas + confirmación) |
+| **Tiempo estándar** | 30–45 min por tarima (desestiba + escaneo + reetiquetado) |
 | **EPP requerido** | Botas con casquillo + guantes anticorte. Faja recomendada. Lentes si aparece vidrio roto |
-| **Pantallas de Torre** | Piso → **Recepción** → **"Trabajar"** → **¿Dónde estás escaneando?** → escanear caja por caja → **¿Qué lote?** → **Imprimir etiquetas** → **Confirmar tarima** → **Cuadre y cierre** |
+| **Pantallas de Torre** | Piso → **Recepción** → **"Trabajar"** → **¿Dónde estás escaneando?** → escanear caja por caja → **¿Qué lote?** → **Terminar conteo** (imprime todo solo) → **Reetiquetado** tarima por tarima → **Terminado** → **Cuadre y cierre** |
 
 Una tarima sin desarmar es inventario fantasma: producto que existe pero no se puede vender, no se puede pickear y nadie sabe si llegó completo. Por eso la regla es brutal y simple: **lo que se descargó hoy, se cuenta hoy**. Y se cuenta **a ciegas y con el lector**: tú no sabes cuánto anunció el cliente, y cada caja existe porque la escaneaste, no porque la viste. Una caja idéntica a otra (misma caja, distinto producto adentro) engaña al ojo; al lector no. **Nada es vendible hasta que la orden se cierra.**
 
@@ -36,18 +36,20 @@ Una tarima sin desarmar es inventario fantasma: producto que existe pero no se p
    - Un producto que **no venía en la orden** pero sí es del cliente: Torre lo agrega con 0 anunciadas y te pide su lote. Un producto de otro cliente o uno que no existe en Torre: error, nada se suma; avisa a Mesa.
    - **Anunciado sin lote:** si el cliente anunció el producto sin lote, cuenta cada caja con el lote que trae impreso usando **"Otro"**; Torre suma todo al total del producto y muestra cada lote debajo.
 10. **Repite caja por caja.** La tabla **"Contado"** lleva por producto y lote cuántas van, cuántas dañadas y cuántas sin etiqueta. Cambia de tarima cuando la llenes o pases a otra.
-11. **Imprime las etiquetas de la tarima** (botón **Imprimir etiquetas** en "Tarimas de la orden"). Salen en tandas: primero la etiqueta de la **tarima** (QR `U|TAR-nn`) y luego una por caja en **orden inverso al escaneo**, que es el orden físico en la tarima nueva. Pega cada etiqueta en su caja conforme salen: si una caja no cuadra con su etiqueta, el conteo falló ahí y lo verás al pegar.
-    - Si el rollo se acaba, cárgalo y pulsa **Continuar impresión**: sigue la siguiente tanda. Si el corte fue a media tanda, **Reimprimir desde** la etiqueta N.
+11. **Termina el conteo** cuando TODAS las cajas de la orden estén escaneadas (botón **Terminar conteo**, responde **Sí**). Torre bloquea el escaneo e imprime **solas todas las etiquetas**, tarima por tarima: la etiqueta de la **tarima** (QR `U|TAR-nn`) y luego una por caja en **orden inverso al escaneo**, que es el orden físico en la tarima nueva; después la siguiente tarima. Salen en tandas (50 por defecto).
+    - Si el rollo se acaba, cárgalo: la impresora sigue sola con lo que quedó en cola. Si algo no salió, en el reetiquetado está **Reimprimir etiquetas de esta tarima**.
     - La etiqueta de caja lleva marca, producto, lote, caducidad y el **QR con el lote** (es lo que después hace el picking FEFO sin falla). La caja dañada lleva la banda **DAÑADA**.
-12. **Confirma cada tarima** (botón **Confirmar** en "Tarimas de la orden"). La pantalla muestra lo que hay en la tarima y tres salidas:
-    - **Cuadró**: cada caja tiene etiqueta y no sobró ninguna. La tarima queda **recibida**: ahora sí existe el stock, en esa tarima, todavía **no vendible**. Las dañadas van solas a cuarentena.
-    - **Faltaron etiquetas**: hay cajas sin etiqueta. Vuelves al escáner en esa tarima y cuentas cada una; su etiqueta sale al momento. Al terminar, confirma otra vez.
-    - **Sobraron etiquetas**: escanea cada etiqueta que sobró: Torre resta esa caja de la tarima (si no se deja escanear, teclea cuántas sobraron por lote y pulsa **Restar**).
+    - ¿Terminaste por error? En el reetiquetado, **Regresar a conteo** reabre el escáner. Las etiquetas ya impresas siguen valiendo y un segundo Terminar conteo imprime solo las cajas nuevas.
+12. **Reetiqueta tarima por tarima** (pantalla **Reetiquetado**: arriba están todas las tarimas, toca la que traes). Pega cada etiqueta en su caja en el orden en que salieron: si una caja no cuadra con su etiqueta, el conteo falló ahí y lo verás al pegar.
+    - **Faltaron X**: quedaron X cajas de ese producto y lote sin etiqueta. Captura cuántas y pulsa **Faltaron**: Torre suma X cajas a la tarima e imprime X etiquetas al momento. Si el producto o el lote no aparece en la tarima, usa **"Faltó un producto o lote que no está en esta tarima"**: el lote se escribe (Torre sugiere los de la orden, pero puedes poner uno nuevo).
+    - **Sobraron X**: te sobraron X etiquetas de ese producto y lote. Captura cuántas y pulsa **Sobraron**: Torre resta X cajas de la tarima. Tira las etiquetas sobrantes.
+    - **TARIMA REETIQUETADA** cuando cada caja tiene su etiqueta y no sobró ninguna. La tarima queda **recibida**: ahora sí existe el stock, en esa tarima, todavía **no vendible**. Las dañadas van solas a cuarentena. Un Faltaron o Sobraron después la deja pendiente otra vez: vuelve a marcarla.
+    - **Terminado** se enciende cuando todas las tarimas están marcadas y te lleva al cuadre.
 
 ## C. Cuadre y cierre de la orden
 
-13. **Cierra cuando TODAS las tarimas estén confirmadas.** El botón **Ir al cuadre y cerrar** abre **Cuadre y cierre**: aquí sí ves lo anunciado contra lo contado por producto y lote. Mientras una tarima tenga cajas sin confirmar, el cierre queda apagado y la pantalla te dice cuál.
-14. **Lee las alarmas antes de cerrar**: *"¿Cajas cambiadas?"* aparece cuando a un producto le faltan las mismas cajas que a otro le sobran: casi siempre son cajas idénticas contadas como el otro producto; revisa el lote y el código de las cajas, no el color. *"N cajas sin etiqueta impresa"* te recuerda imprimir.
+13. **Cierra cuando TODAS las tarimas estén reetiquetadas.** El botón **Terminado** abre **Cuadre y cierre**: aquí sí ves lo anunciado contra lo contado por producto y lote. Mientras el conteo no haya terminado o una tarima tenga cajas sin reetiquetar, el cierre queda apagado y la pantalla te dice cuál.
+14. **Lee las alarmas antes de cerrar**: *"¿Cajas cambiadas?"* aparece cuando a un producto le faltan las mismas cajas que a otro le sobran: casi siempre son cajas idénticas contadas como el otro producto; revisa el lote y el código de las cajas, no el color. *"N cajas sin etiqueta impresa"* te manda a **Reimprimir** en el reetiquetado.
 15. **Captura "Tarimas recibidas"** (las que contaste en SOP-02 paso 15) y pulsa **Confirmar cierre**. Si hay diferencias, Torre pregunta *"¿Seguro?"*: responde que sí solo cuando ya revisaste.
 16. **Entiende qué pasa al cerrar** — y por qué no debes "maquillar" nada antes:
     - **Todo lo recibido se vuelve vendible** en ese momento, en su tarima, y la tienda del cliente lo ve.
@@ -62,8 +64,9 @@ Una tarima sin desarmar es inventario fantasma: producto que existe pero no se p
 
 - **Contar "confirmando" la remisión del chofer.** Es el anti-patrón exacto que el conteo ciego previene. La remisión se archiva; tú cuentas lo que hay en el piso.
 - **Mezclar dos SKUs parecidos en una columna** (misma caja, distinto producto). Se ve como dos líneas descuadradas en espejo (+12 en una, −12 en otra): el cuadre lo marca como *"¿Cajas cambiadas?"*. Con el lector no pasa si escaneas la caja, no la columna: escanea cada caja, no "una y las demás iguales".
-- **Escanear la misma caja dos veces** ("¿ya había pasado esta?"). Se ve como una etiqueta sobrante al confirmar la tarima: escanéala en **Sobraron etiquetas** y listo. Mueve físicamente cada caja a la tarima nueva apenas la escaneas.
-- **Confirmar la tarima sin pegar etiquetas.** Pierdes la única verificación física del conteo y el picking FEFO se queda sin QR. Imprime, pega y luego confirma.
+- **Escanear la misma caja dos veces** ("¿ya había pasado esta?"). Se ve como una etiqueta sobrante al reetiquetar la tarima: **Sobraron 1** de ese producto y listo. Mueve físicamente cada caja a la tarima nueva apenas la escaneas.
+- **Marcar TARIMA REETIQUETADA sin pegar etiquetas.** Pierdes la única verificación física del conteo y el picking FEFO se queda sin QR. Pega y luego marca.
+- **Terminar el conteo con una tarima a medias.** Las etiquetas salen todas de golpe y el escáner se bloquea; si pasó, **Regresar a conteo**.
 - **Dejar lo dañado revuelto con lo bueno** "para decidir después". Se ve como botella rota vendida a un comprador final. Dañado se separa en el momento y se captura en "Dañadas".
 - **Cerrar la orden con prisa sin capturar las tarimas.** El campo trae precargado lo anunciado; si llegaron menos tarimas y no lo corriges, el registro miente.
 - **Contar con la tablet en español y el lector en inglés.** Se ve como `U]TAR'09` en vez de `U|TAR-09`. Torre lo corrige solo, pero la tablet debe tener el lector configurado como teclado **Inglés (Estados Unidos)** en Ajustes → Administración general → Teclado físico.
@@ -80,8 +83,8 @@ Una tarima sin desarmar es inventario fantasma: producto que existe pero no se p
 
 ## Qué queda registrado
 
-- Cada **caja escaneada**: producto, lote, tarima, dañada, usuario y hora (bitácora de escaneos). Al **confirmar la tarima** nace el stock en esa tarima (kardex de recepción) y las dañadas entran solas a **cuarentena** (visibles en Piso → Cuarentena) — de ahí solo salen con dictamen de dos firmas (SOP-10).
-- Cada tanda de etiquetas impresa (qué tarima, de qué etiqueta a cuál) y cada etiqueta sobrante anulada.
+- Cada **caja escaneada**: producto, lote, tarima, dañada, usuario y hora (bitácora de escaneos). Al marcar **TARIMA REETIQUETADA** nace el stock en esa tarima (kardex de recepción) y las dañadas entran solas a **cuarentena** (visibles en Piso → Cuarentena) — de ahí solo salen con dictamen de dos firmas (SOP-10).
+- Terminar conteo y Regresar a conteo (quién y cuándo), cada tanda de etiquetas impresa (qué tarima, de qué etiqueta a cuál) y cada caja que sobró, anulada.
 - Fotos de llegada y de daños como EvidenciaFoto ligadas al folio del ASN.
 - Al cerrar: tarimas recibidas, el paso a **vendible** de todo lo recibido, timestamp de "vendible" (para el reloj SLA) y la **confirmación automática al cliente con cifras**; discrepancias → incidencia automática con folio.
 
@@ -104,10 +107,11 @@ CONTEO POR ESCANEO
 [ ] Tarima elegida en "¿Dónde estás escaneando?": TAR-____
 [ ] Una caja, un escaneo → lote → Confirmar → Sí
 [ ] Dañadas marcadas al contar: ______ (van a cuarentena)
-[ ] Etiquetas impresas y PEGADAS (tarima + cajas, en orden)
-[ ] Tarima confirmada: Cuadró / Faltaron / Sobraron resuelto
+[ ] Terminar conteo pulsado: salieron solas todas las etiquetas
+[ ] Reetiquetado: etiquetas PEGADAS (tarima + cajas, en orden), Faltaron / Sobraron resuelto
+[ ] TARIMA REETIQUETADA marcada en cada tarima → Terminado
 
-CIERRE (cuando todas las tarimas estén confirmadas)
+CIERRE (cuando todas las tarimas estén reetiquetadas)
 [ ] Cuadre revisado: alarma "¿Cajas cambiadas?" atendida
 [ ] "Tarimas recibidas" capturadas: ______
 [ ] "Confirmar cierre" pulsado → todo vendible

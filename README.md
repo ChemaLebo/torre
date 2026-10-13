@@ -84,8 +84,8 @@ manage.py cerrar_entregas_presuntas
 ## Recepción por escaneo (octubre 2026)
 
 - **Una caja, un escaneo.** El lector Bluetooth escribe en la tablet (sin cámara en recepción); cada caja se cuenta en una tarima con su lote (tarjetas de lote, "Otro", "Dañado"). Lo anunciado no se ve hasta el cuadre.
-- **Etiquetas 51×51 por tandas** en orden inverso al escaneo: primero la tarima (QR `U|TAR-nn`), luego cada caja (QR `P|barras|lote`, banda DAÑADA). "Continuar impresión" tras recargar rollo; "Reimprimir desde N". Tamaño de tanda en `/admin/configuracion/tandaetiquetas/`.
-- **Confirmar tarima** (cuadró / faltaron etiquetas / sobraron etiquetas) crea el stock **no vendible**; **cerrar la orden** lo vuelve vendible y avisa a Shopify. Mesa corrige desde el editor de recepción.
+- **Terminar conteo** bloquea el escaneo e imprime solas **todas las etiquetas 51×51**, tarima por tarima, en orden inverso al escaneo: primero la tarima (QR `U|TAR-nn`), luego cada caja (QR `P|barras|lote`, banda DAÑADA), en tandas (tamaño en `/admin/configuracion/tandaetiquetas/`). "Reimprimir etiquetas de esta tarima" como red; "Regresar a conteo" si se terminó por error.
+- **Reetiquetado** tarima por tarima: Faltaron X (suma e imprime al momento), Sobraron X (resta), **TARIMA REETIQUETADA** crea el stock **no vendible**; **Terminado** lleva al cuadre y **cerrar la orden** lo vuelve vendible y avisa a Shopify. Mesa corrige desde el editor de recepción.
 - **Dos térmicas en bodega:** la de guías (10×15, `IMPRESORA`) y la de etiquetas (51×51, Munbyn ITPP130B, `IMPRESORA_ETIQUETAS`) en el ambiente de `deploy/agente_impresion.py`; cada trabajo de la cola dice a cuál va y con qué papel.
 - **Producto anunciado sin lote:** la línea del producto es el total y los lotes que llegaron cuelgan debajo.
 - Siguiente fase: anaquel fijo por producto (máximo dos por anaquel), restock desde reserva y picking que lee el QR y exige el lote FEFO.

@@ -8,13 +8,16 @@
     <h1>Cuadre y cierre</h1>
     <div class="small">{{ orden.cliente.nombre }} · lo anunciado contra lo contado</div>
   </div>
-  <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Regresar</a>
+  <a class="btn chico" href="{% if en_conteo %}{% url 'piso:recepcion_detalle' orden.pk %}{% else %}{% url 'piso:recepcion_reetiquetado' orden.pk %}{% endif %}">Regresar</a>
 </div>
 
+{% if en_conteo %}
+<div class="banner warn"><span class="foco"></span>La orden sigue en conteo: termina el conteo y el reetiquetado antes de cerrar.</div>
+{% endif %}
 {% if cuadre.por_confirmar %}
-<div class="banner crit"><span class="foco"></span>Tarimas sin confirmar:
-  {% for t in cuadre.por_confirmar %}<a href="{% url 'piso:recepcion_tarima_confirmar' orden.pk t.tarima.pk %}" class="mono">{{ t.tarima.codigo }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}.
-  Confírmalas antes de cerrar.</div>
+<div class="banner crit"><span class="foco"></span>Tarimas sin reetiquetar:
+  {% for t in cuadre.por_confirmar %}<a href="{% url 'piso:recepcion_reetiquetado' orden.pk %}?tarima={{ t.tarima.pk }}" class="mono">{{ t.tarima.codigo }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}.
+  Márcalas como reetiquetadas antes de cerrar.</div>
 {% endif %}
 {% if cuadre.espejo %}
 <div class="banner crit"><span class="foco"></span><b>¿Cajas cambiadas?</b>

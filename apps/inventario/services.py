@@ -722,15 +722,19 @@ def _lote_de_linea(linea, caducidad=None, crear=True):
     return Lote.objects.filter(sku=linea.sku, codigo=codigo).first()
 
 
-def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=False):
+def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=False, desde_reetiquetado=False):
     """Una caja escaneada queda CONTADA en esa tarima (sin stock): la línea
     del producto y lote (se crea con anunciado 0 si el lote, o el producto,
     no venían en la orden; eventos `lote_no_anunciado` / `sku_no_anunciado`),
     el Lote del catálogo con su caducidad y el escaneo con quién lo hizo. El
-    primer escaneo pasa la orden a EN_RECEPCION. Regresa el EscaneoRecepcion."""
+    primer escaneo pasa la orden a EN_RECEPCION. Con el conteo terminado solo
+    se acepta desde el reetiquetado ("Faltaron X") o desde el editor de Mesa.
+    Regresa el EscaneoRecepcion."""
     from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
 
     _orden_abierta(orden)
+    if orden.ts_conteo_fin and not desde_reetiquetado:
+        raise ValueError(f"El conteo de {orden.folio} ya terminó: las cajas que faltaron se agregan desde Reetiquetado, o Regresa a conteo.")
     if sku.cliente_id != orden.cliente_id:
         raise ValueError(f"{sku.codigo} no es de {orden.cliente.nombre}.")
     if not es_tarima(tarima) or not tarima.activo:
@@ -772,6 +776,47 @@ def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=
 def escaneos_vivos(orden):
     """Escaneos de la orden que cuentan: contadas y recibidas (no anuladas)."""
     return orden.escaneos.exclude(estado=EscaneoRecepcion.ANULADA)
+
+
+def terminar_conteo(orden, actor):
+    """El piso terminó de escanear (Chema 2026-10-13): la orden pasa a
+    reetiquetado (ts_conteo_fin), el escaneo se bloquea y el llamador imprime
+    todas las etiquetas (piso.etiquetas.imprimir_etiquetas_orden). Exige al
+    menos una caja viva. Evento `conteo_terminado`. Regresa la orden."""
+    _orden_abierta(orden)
+    with transaction.atomic():
+        orden = OrdenEntrada.objects.select_for_update().get(pk=orden.pk)
+        if orden.ts_conteo_fin:
+            raise ValueError(f"El conteo de {orden.folio} ya estaba terminado.")
+        cajas = escaneos_vivos(orden).count()
+        if not cajas:
+            raise ValueError("Todavía no hay cajas contadas: escanea al menos una antes de terminar el conteo.")
+        orden.ts_conteo_fin = timezone.now()
+        orden.save(update_fields=["ts_conteo_fin"])
+        registrar_evento(
+            "asn", orden.folio, "conteo_terminado", actor=actor, cliente=orden.cliente,
+            delta={"cajas": cajas, "tarimas": [t["tarima"].codigo for t in tarimas_de_orden(orden)]},
+            motivo=f"Conteo terminado con {cajas} caja(s): se imprimen las etiquetas y sigue el reetiquetado.",
+        )
+    return orden
+
+
+def regresar_a_conteo(orden, actor):
+    """Terminar conteo se pulsó sin querer: la orden vuelve a conteo (las
+    etiquetas ya impresas siguen impresas; al terminar otra vez solo salen
+    las cajas nuevas). Evento `conteo_reabierto`."""
+    _orden_abierta(orden)
+    with transaction.atomic():
+        orden = OrdenEntrada.objects.select_for_update().get(pk=orden.pk)
+        if not orden.ts_conteo_fin:
+            raise ValueError(f"{orden.folio} sigue en conteo.")
+        orden.ts_conteo_fin = None
+        orden.save(update_fields=["ts_conteo_fin"])
+        registrar_evento(
+            "asn", orden.folio, "conteo_reabierto", actor=actor, cliente=orden.cliente,
+            motivo="Regresar a conteo: el piso vuelve a escanear; lo ya impreso sigue impreso.",
+        )
+    return orden
 
 
 def _agrupar_sin_lote(filas, totales):
@@ -1002,7 +1047,7 @@ def confirmar_tarima(orden, tarima, actor):
         registrar_evento(
             "asn", orden.folio, "tarima_confirmada", actor=actor, cliente=orden.cliente,
             delta={"tarima": tarima.codigo, **resumen},
-            motivo=f"{tarima.codigo}: {resumen['cajas']} caja(s) recibidas"
+            motivo=f"{tarima.codigo} reetiquetada: {resumen['cajas']} caja(s) recibidas"
             + (f" y {resumen['danadas']} dañada(s) a cuarentena" if resumen["danadas"] else "") + ".",
         )
     return resumen
@@ -1151,6 +1196,9 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
         if tarimas_recibidas is not None:
             orden.tarimas_recibidas = tarimas_recibidas
             orden.save(update_fields=["tarimas_recibidas"])
+        if orden.ts_conteo_fin is None:  # cerrar desde Mesa sin pasar por Terminar conteo
+            orden.ts_conteo_fin = timezone.now()
+            orden.save(update_fields=["ts_conteo_fin"])
 
         discrepancias = []
         for cuenta in _cuentas_para_cierre(lineas):
@@ -1255,7 +1303,8 @@ def reiniciar_recepcion(orden, actor=None):
         if orden.estado == OrdenEntrada.RECIBIDA:
             orden.estado = OrdenEntrada.EN_RECEPCION
             orden.ts_descarga_fin = None
-            orden.save(update_fields=["estado", "ts_descarga_fin"])
+        orden.ts_conteo_fin = None
+        orden.save(update_fields=["estado", "ts_descarga_fin", "ts_conteo_fin"])
         registrar_evento(
             "asn", orden.folio, "recepcion_reiniciada", actor=actor, cliente=orden.cliente,
             delta={**r, "estado": [estado_anterior, orden.estado]},

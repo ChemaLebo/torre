@@ -9,6 +9,7 @@ anunciado antes del cuadre.
 """
 from datetime import date
 
+from django.test import override_settings
 from django.urls import reverse
 
 from apps.catalogo.models import SKU, Ubicacion
@@ -179,51 +180,101 @@ class EscaneoTests(RecepcionEscaneoBase):
         self.assertEqual(self.vivos().count(), 0)
 
 
-class ConfirmarTarimaTests(RecepcionEscaneoBase):
+@override_settings(TORRE_MODO_IMPRESION="relay")
+class ReetiquetadoTests(RecepcionEscaneoBase):
+    """Terminar conteo bloquea el escaneo e imprime (en relay: la cola); el
+    reetiquetado ajusta con faltaron/sobraron, marca cada tarima y Terminado
+    lleva al cuadre."""
+
     def setUp(self):
         super().setUp()
         self.en_tarima()
         self.tarima = Ubicacion.objects.get(codigo="TAR-01")
-        self.confirmar_url = reverse("piso:recepcion_tarima_confirmar", args=[self.orden.pk, self.tarima.pk])
+        self.reetiquetado = reverse("piso:recepcion_reetiquetado", args=[self.orden.pk])
 
-    def test_cuadro_recibe_la_tarima(self):
+    def terminar(self):
+        return self.client.post(self.detalle, {"accion": "terminar_conteo"}, follow=True)
+
+    def test_terminar_conteo_bloquea_el_escaneo_y_manda_al_reetiquetado(self):
+        r = self.client.get(self.detalle)
+        self.assertContains(r, "Terminar conteo")
+        self.assertContains(r, "disabled")  # sin cajas no se termina
         self.contar(3)
         self.contar(1, danada=True)
+        r = self.terminar()
+        self.assertRedirects(r, self.reetiquetado)
+        self.assertContains(r, "Conteo terminado: 4 etiqueta(s) de caja más las de TAR-01 van a la impresora")
+        self.orden.refresh_from_db()
+        self.assertIsNotNone(self.orden.ts_conteo_fin)
+        self.assertEqual(self.orden.fase_recepcion, OrdenEntrada.FASE_REETIQUETADO)
+        r = self.escanear("7501234567890")
+        self.assertRedirects(r, self.reetiquetado)
         r = self.client.get(self.detalle)
-        self.assertContains(r, "4 por confirmar")
-        r = self.client.get(self.confirmar_url)
-        self.assertContains(r, "Cuadró")
-        self.assertContains(r, "Faltaron etiquetas")
-        self.assertContains(r, "Sobraron etiquetas")
-        r = self.client.post(self.confirmar_url, {"accion": "cuadro"}, follow=True)
-        self.assertRedirects(r, self.detalle)
-        self.assertContains(r, "TAR-01 confirmada: 3 caja(s) recibidas y 1 dañada(s) a cuarentena")
-        self.assertContains(r, "confirmada")
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 3)
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.CUARENTENA).cantidad, 1)
-        self.assertEqual(Saldo.objects.filter(estado=Saldo.UBICADO_VENDIBLE).count(), 0)
+        self.assertContains(r, "Conteo terminado el")
+        self.assertContains(r, "Ir al reetiquetado")
+        self.assertNotContains(r, 'name="codigo"')
+        r = self.client.get(f"{self.lote_url}?sku={self.sku.pk}")
+        self.assertRedirects(r, self.reetiquetado)
+        r = self.terminar()
+        self.assertContains(r, "ya estaba terminado")
 
-    def test_faltaron_vuelve_al_escaner_en_esa_tarima_y_sobraron_resta_por_etiqueta_o_cantidad(self):
-        self.contar(4)
-        self.client.post(self.confirmar_url, {"accion": "cuadro"})
-        # Faltaron: una caja más contada en la misma tarima deja la tarima por confirmar otra vez.
-        r = self.client.post(self.confirmar_url, {"accion": "faltaron"}, follow=True)
-        self.assertContains(r, "Escanea cada caja sin etiqueta")
+    def test_regresar_a_conteo_reabre_y_un_segundo_termino_imprime_solo_lo_nuevo(self):
+        self.contar(2)
+        self.terminar()
+        r = self.client.post(self.reetiquetado, {"accion": "regresar_conteo"}, follow=True)
+        self.assertRedirects(r, self.detalle)
+        self.assertContains(r, "vuelve a conteo")
+        self.orden.refresh_from_db()
+        self.assertIsNone(self.orden.ts_conteo_fin)
         self.contar(1)
-        r = self.client.get(self.confirmar_url)
-        self.assertContains(r, "1 por confirmar")
-        # Sobraron: la etiqueta escaneada resta esa caja; una cantidad tecleada resta varias.
-        r = self.client.post(self.confirmar_url, {"accion": "sobrante", "codigo": "P|7501234567890|L1"}, follow=True)
-        self.assertContains(r, "COLIMITA-SIX lote L1: −1 en TAR-01")
-        self.assertEqual(self.vivos().count(), 4)
-        r = self.client.post(self.confirmar_url, {"accion": "sobrante_cantidad", "linea_id": self.linea.pk, "cantidad": 2}, follow=True)
-        self.assertContains(r, "−2 en TAR-01")
-        self.assertEqual(self.vivos().count(), 2)
-        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 2)
-        r = self.client.post(self.confirmar_url, {"accion": "sobrante", "codigo": "7501234567890"}, follow=True)
-        self.assertContains(r, "Escanea el QR de la etiqueta que sobró")
-        r = self.client.post(self.confirmar_url, {"accion": "sobrante", "codigo": "P|7501234567890|ZZZ"}, follow=True)
-        self.assertContains(r, "no es de esta orden")
+        r = self.terminar()
+        self.assertContains(r, "Conteo terminado: 1 etiqueta(s) de caja")
+        self.assertEqual(self.vivos().filter(impresa_ts__isnull=True).count(), 0)
+
+    def test_reetiquetado_faltaron_sobraron_marcar_y_terminado(self):
+        self.contar(4)
+        self.contar(2, sku=self.sku_b, linea=self.linea_b)
+        self.terminar()
+        r = self.client.get(self.reetiquetado)
+        self.assertContains(r, "TARIMA REETIQUETADA")
+        self.assertContains(r, "por reetiquetar")
+        self.assertContains(r, "Regresar a conteo")
+        self.assertContains(r, "Terminado · ir al cuadre")
+        self.assertContains(r, "disabled")
+        # Faltaron 2 de L1: +2 cajas y 2 etiquetas al momento.
+        r = self.client.post(self.reetiquetado, {"accion": "faltaron", "tarima_id": self.tarima.pk, "linea_id": self.linea.pk, "cantidad": 2}, follow=True)
+        self.assertContains(r, "COLIMITA-SIX lote L1: +2 en TAR-01; 2 etiqueta(s) van a la impresora")
+        self.assertEqual(self.vivos().filter(linea=self.linea).count(), 6)
+        # Sobraron 1 de B1: −1.
+        r = self.client.post(self.reetiquetado, {"accion": "sobraron", "tarima_id": self.tarima.pk, "linea_id": self.linea_b.pk, "cantidad": 1}, follow=True)
+        self.assertContains(r, "CC24LCAR lote B1: −1 en TAR-01")
+        self.assertEqual(self.vivos().filter(linea=self.linea_b).count(), 1)
+        # Faltó un producto que no estaba en la tarima, con lote nuevo escrito a mano.
+        extra = SKU.objects.create(cliente=self.cliente, codigo="EXTRA", codigo_barras="7501000000042", descripcion="Extra", requiere_lote=True)
+        r = self.client.post(self.reetiquetado, {"accion": "faltaron", "tarima_id": self.tarima.pk, "sku_id": extra.pk, "lote": "X-77", "caducidad": "2027-02-02", "cantidad": 3}, follow=True)
+        self.assertContains(r, "EXTRA lote X-77: +3 en TAR-01")
+        linea_extra = self.orden.lineas.get(sku=extra)
+        self.assertEqual((linea_extra.lote_codigo, linea_extra.cantidad_anunciada, str(linea_extra.fecha_caducidad)), ("X-77", 0, "2027-02-02"))
+        # Terminado apagado hasta marcar la tarima.
+        r = self.client.post(self.reetiquetado, {"accion": "terminado"}, follow=True)
+        self.assertContains(r, "Marca TARIMA REETIQUETADA en todas las tarimas")
+        r = self.client.post(self.reetiquetado, {"accion": "reetiquetada", "tarima_id": self.tarima.pk}, follow=True)
+        self.assertContains(r, "TAR-01 reetiquetada: 10 caja(s) recibidas")
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 6)
+        self.assertEqual(Saldo.objects.filter(estado=Saldo.UBICADO_VENDIBLE).count(), 0)
+        r = self.client.get(self.reetiquetado)
+        self.assertContains(r, "Ya reetiquetada")
+        self.assertContains(r, "Todas las tarimas están reetiquetadas")
+        r = self.client.post(self.reetiquetado, {"accion": "terminado"})
+        self.assertRedirects(r, self.cuadre_url)
+        # Un ajuste después la deja pendiente otra vez.
+        self.client.post(self.reetiquetado, {"accion": "sobraron", "tarima_id": self.tarima.pk, "linea_id": self.linea.pk, "cantidad": 1})
+        self.assertEqual(Saldo.objects.get(sku=self.sku, estado=Saldo.EN_PUTAWAY).cantidad, 5)
+        r = self.client.post(self.reetiquetado, {"accion": "faltaron", "tarima_id": self.tarima.pk, "linea_id": self.linea.pk, "cantidad": 1}, follow=True)
+        self.assertContains(r, "por reetiquetar")
+        r = self.client.post(self.reetiquetado, {"accion": "reimprimir", "tarima_id": self.tarima.pk}, follow=True)
+        self.assertContains(r, "etiqueta(s) y la de la tarima van a la impresora")
+        self.assertEqual(self.vivos().filter(impresa_ts__isnull=True).count(), 0)
 
 
 class CuadreYCierreTests(RecepcionEscaneoBase):
@@ -231,16 +282,21 @@ class CuadreYCierreTests(RecepcionEscaneoBase):
         super().setUp()
         self.en_tarima()
         self.tarima = Ubicacion.objects.get(codigo="TAR-01")
-        self.confirmar_url = reverse("piso:recepcion_tarima_confirmar", args=[self.orden.pk, self.tarima.pk])
+        self.reetiquetado = reverse("piso:recepcion_reetiquetado", args=[self.orden.pk])
+
+    def reetiquetar(self):
+        self.client.post(self.detalle, {"accion": "terminar_conteo"})
+        self.client.post(self.reetiquetado, {"accion": "reetiquetada", "tarima_id": self.tarima.pk})
 
     def test_cuadre_muestra_anunciadas_espejo_y_bloquea_sin_confirmar(self):
         self.contar(7)
         self.contar(8, sku=self.sku_b, linea=self.linea_b)
+        self.client.post(self.detalle, {"accion": "terminar_conteo"})
         r = self.client.get(self.cuadre_url)
         self.assertContains(r, "Anunciadas")
         self.assertContains(r, "¿Cajas cambiadas?")
         self.assertContains(r, "le faltan 3")
-        self.assertContains(r, "Tarimas sin confirmar")
+        self.assertContains(r, "Tarimas sin reetiquetar")
         self.assertContains(r, "disabled")
         r = self.client.post(self.cuadre_url, {}, follow=True)
         self.assertContains(r, "sin confirmar en TAR-01")
@@ -250,7 +306,7 @@ class CuadreYCierreTests(RecepcionEscaneoBase):
     def test_cerrar_vuelve_vendible_y_guarda_tarimas(self):
         self.contar(10)
         self.contar(5, sku=self.sku_b, linea=self.linea_b)
-        self.client.post(self.confirmar_url, {"accion": "cuadro"})
+        self.reetiquetar()
         r = self.client.get(self.cuadre_url)
         self.assertContains(r, "cuadra")
         r = self.client.post(self.cuadre_url, {"tarimas_recibidas": "3"}, follow=True)

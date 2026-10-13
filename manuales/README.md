@@ -117,7 +117,7 @@ Sin botas con casquillo no se pisa el piso operativo. Punto. Visitas: solo acomp
 | 8:30 | Apertura + montaje de zona de descarga: conos listos, polipasto inspeccionado (SOP-11), zona amarilla vacía | OP-1 + FLEX |
 | 9:00–13:00 | **Ventana de recepción con cita (ASN).** Descarga con polipasto (SOP-02). OP-2 sostiene el picking en paralelo: la recepción nunca se come el corte. | OP-1 dirige, FLEX acarrea |
 | Mismo día | Desarmado de TODAS las tarimas + conteo ciego (SOP-03) | OP-1 + FLEX |
-| ≤ 4 h internas (8 h contractuales) | Recepción completa: descargado → escaneado caja por caja → etiquetado → tarimas confirmadas → orden cerrada = **vendible** (SOP-03) | OP-1 + OP-2 |
+| ≤ 4 h internas (8 h contractuales) | Recepción completa: descargado → escaneado caja por caja → conteo terminado → reetiquetado → orden cerrada = **vendible** (SOP-03) | OP-1 + OP-2 |
 | 14:00 en adelante | Igual que un día normal | Todos |
 
 ---

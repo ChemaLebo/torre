@@ -1,7 +1,8 @@
-"""Etiquetas de recepción 51×51 (Chema 2026-10-13): impresión por tandas en
-orden inverso al escaneo (primero la tarima, luego las cajas), "Continuar
-impresión" tras recargar rollo, "Reimprimir desde N", la etiqueta al momento
-de las cajas que faltaron, y el PDF (caja, dañada, tarima, nombres largos)."""
+"""Etiquetas de recepción 51×51 (Chema 2026-10-13): al terminar el conteo se
+imprimen solas todas, tarima por tarima en orden inverso al escaneo (primero
+la tarima, luego las cajas) en trabajos del tamaño de tanda; las cajas que
+faltaron se imprimen al momento; Reimprimir saca la tarima completa; y el PDF
+(caja, dañada, tarima, nombres largos)."""
 from datetime import date
 
 from django.test import override_settings
@@ -12,7 +13,7 @@ from apps.configuracion.models import TandaEtiquetas
 from apps.core.models import EventoAuditoria
 from apps.envios.models import TrabajoImpresion
 from apps.inventario.models import EscaneoRecepcion, LineaASN, OrdenEntrada
-from apps.inventario.services import confirmar_tarima, contar_caja, crear_tarima, escaneos_lifo, tanda_etiquetas
+from apps.inventario.services import contar_caja, crear_tarima, escaneos_lifo, tanda_etiquetas
 from apps.piso.etiquetas import _fuente, generar_pdf_etiquetas, paginas_pdf
 
 from .base import PisoTestCase
@@ -36,75 +37,55 @@ class EtiquetasRecepcionTests(PisoTestCase):
         self.client.post(self.detalle, {"accion": "foto", "foto_llegada": self.foto()})
         self.client.post(reverse("piso:recepcion_tarima", args=[self.orden.pk]), {"accion": "elegir", "tarima_id": self.tarima.pk})
 
-    def imprimir(self, desde=""):
-        return self.client.post(self.detalle, {"accion": "imprimir", "tarima_id": self.tarima.pk, "desde": desde}, follow=True)
+    def terminar(self):
+        return self.client.post(self.detalle, {"accion": "terminar_conteo"}, follow=True)
 
-    def test_primera_tanda_lleva_la_tarima_y_las_cajas_en_orden_inverso(self):
+    def test_terminar_conteo_imprime_todo_tarima_por_tarima_en_orden_inverso(self):
+        otra = crear_tarima(self.operador)
+        self.client.post(reverse("piso:recepcion_tarima", args=[self.orden.pk]), {"accion": "elegir", "tarima_id": otra.pk})
+        extra = [contar_caja(self.orden, self.sku, "L1", None, otra, self.operador) for _ in range(2)]
         self.assertEqual([e.pk for e in escaneos_lifo(self.orden, self.tarima)], [e.pk for e in reversed(self.escaneos)])
-        r = self.imprimir()
-        self.assertContains(r, "TAR-01: etiquetas 1 a 5 de 5 van a la impresora (con la etiqueta de la tarima)")
-        trabajo = TrabajoImpresion.objects.get()
-        self.assertEqual((trabajo.tipo, trabajo.impresora, trabajo.media, trabajo.paginas, trabajo.cliente, trabajo.guia), ("producto", "etiquetas", "Custom.51x51mm", 6, self.cliente, None))
-        self.assertEqual(trabajo.referencia, f"{self.orden.folio} TAR-01 etiquetas 1-5")
-        self.assertEqual(trabajo.folio, trabajo.referencia)
-        with trabajo.pdf.open("rb") as archivo:
+        r = self.terminar()
+        self.assertContains(r, "Conteo terminado: 7 etiqueta(s) de caja más las de TAR-01, TAR-02 van a la impresora")
+        trabajos = list(TrabajoImpresion.objects.order_by("pk"))
+        self.assertEqual([(t.referencia, t.paginas) for t in trabajos],
+                         [(f"{self.orden.folio} TAR-01 etiquetas 1-5", 6), (f"{self.orden.folio} TAR-02 etiquetas 1-2", 3)])
+        self.assertEqual((trabajos[0].tipo, trabajos[0].impresora, trabajos[0].media, trabajos[0].cliente, trabajos[0].guia), ("producto", "etiquetas", "Custom.51x51mm", self.cliente, None))
+        with trabajos[0].pdf.open("rb") as archivo:
             pdf = archivo.read()
         self.assertTrue(pdf.startswith(b"%PDF"))
         self.assertEqual(paginas_pdf(pdf), 6)
-        self.assertEqual(EscaneoRecepcion.objects.filter(orden=self.orden, impresa_ts__isnull=False).count(), 5)
-        evento = EventoAuditoria.objects.get(entidad="asn", entidad_id=self.orden.folio, accion="etiquetas_impresas")
-        self.assertEqual((evento.delta["desde"], evento.delta["hasta"], evento.delta["con_tarima"], evento.delta["trabajo"]), (1, 5, True, trabajo.pk))
-        r = self.imprimir()
-        self.assertContains(r, "Ya salieron las 5 etiquetas de TAR-01")
-        r = self.client.get(self.detalle)
-        self.assertContains(r, "Etiquetas: 5 de 5 impresas")
-        self.assertContains(r, "etiquetas impresas")
+        self.assertEqual(EscaneoRecepcion.objects.filter(orden=self.orden, impresa_ts__isnull=False).count(), 7)
+        eventos = EventoAuditoria.objects.filter(entidad="asn", entidad_id=self.orden.folio, accion="etiquetas_impresas").order_by("pk")
+        self.assertEqual([(e.delta["tarima"], e.delta["desde"], e.delta["hasta"], e.delta["con_tarima"]) for e in eventos], [("TAR-01", 1, 5, True), ("TAR-02", 1, 2, True)])
+        # Regresar a conteo y terminar otra vez: solo la caja nueva, numerada a continuación (3/3), sin etiqueta de tarima.
+        self.client.post(reverse("piso:recepcion_reetiquetado", args=[self.orden.pk]), {"accion": "regresar_conteo"})
+        contar_caja(self.orden, self.sku, "L1", None, otra, self.operador)
+        r = self.terminar()
+        self.assertContains(r, "Conteo terminado: 1 etiqueta(s) de caja")
+        ultimo = TrabajoImpresion.objects.latest("pk")
+        self.assertEqual((ultimo.referencia, ultimo.paginas), (f"{self.orden.folio} TAR-02 etiquetas 3-3", 1))
 
-    def test_tandas_cortas_continuar_y_reimprimir_desde(self):
+    def test_tandas_cortas_parten_la_tarima_en_varios_trabajos_seguidos(self):
         TandaEtiquetas.objects.create(cajas=2)
-        r = self.imprimir()
-        self.assertContains(r, "etiquetas 1 a 2 de 5")
-        self.assertContains(r, "pulsa Continuar impresión: faltan 3")
-        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 3)  # tarima + 2 cajas
-        r = self.client.get(self.detalle)
-        self.assertContains(r, "Continuar impresión")
-        self.assertContains(r, "sigue la 3")
-        self.imprimir()
-        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 2)  # sin tarima
-        r = self.imprimir()
-        self.assertContains(r, "etiquetas 5 a 5 de 5")
-        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 1)
-        r = self.imprimir(desde="4")
-        self.assertContains(r, "etiquetas 4 a 5 de 5")
-        self.assertEqual(TrabajoImpresion.objects.latest("pk").referencia, f"{self.orden.folio} TAR-01 etiquetas 4-5")
-        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 2)
-        r = self.imprimir(desde="1")
-        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 3)  # vuelve a llevar la tarima
-        r = self.imprimir(desde="9")
-        self.assertContains(r, "hay 5 caja(s): pide desde 1 hasta 5")
+        self.terminar()
+        trabajos = list(TrabajoImpresion.objects.order_by("pk"))
+        self.assertEqual([(t.referencia[-13:], t.paginas) for t in trabajos], [("etiquetas 1-2", 3), ("etiquetas 3-4", 2), ("etiquetas 5-5", 1)])
         tanda = tanda_etiquetas(self.orden, self.tarima, desde=2, tamano=10)
         self.assertEqual((tanda["desde"], tanda["hasta"], tanda["incluye_tarima"], len(tanda["escaneos"])), (2, 5, False, 4))
 
-    def test_faltaron_imprime_la_etiqueta_al_momento(self):
-        self.imprimir()
-        confirmar_tarima(self.orden, self.tarima, self.operador)
-        confirmar_url = reverse("piso:recepcion_tarima_confirmar", args=[self.orden.pk, self.tarima.pk])
-        self.client.post(confirmar_url, {"accion": "faltaron"})
-        r = self.client.get(self.detalle)
-        self.assertContains(r, "imprime su etiqueta al momento")
+    def test_faltaron_imprime_al_momento_y_reimprimir_saca_la_tarima_completa(self):
+        self.terminar()
+        reetiquetado = reverse("piso:recepcion_reetiquetado", args=[self.orden.pk])
         antes = TrabajoImpresion.objects.count()
-        r = self.client.post(reverse("piso:recepcion_lote", args=[self.orden.pk]), {"sku_id": self.sku.pk, "linea_id": self.linea.pk}, follow=True)
-        self.assertContains(r, "Su etiqueta va a la impresora")
-        self.assertEqual(TrabajoImpresion.objects.count(), antes + 1)
+        r = self.client.post(reetiquetado, {"accion": "faltaron", "tarima_id": self.tarima.pk, "linea_id": self.linea.pk, "cantidad": 2}, follow=True)
+        self.assertContains(r, "2 etiqueta(s) van a la impresora")
         trabajo = TrabajoImpresion.objects.latest("pk")
-        nuevo = EscaneoRecepcion.objects.filter(orden=self.orden).latest("pk")
-        self.assertEqual((trabajo.paginas, trabajo.referencia), (1, f"{self.orden.folio} TAR-01 caja {nuevo.pk}"))
-        self.assertIsNotNone(nuevo.impresa_ts)
-        # Cambiar de tarima apaga el modo.
-        otra = crear_tarima(self.operador)
-        self.client.post(reverse("piso:recepcion_tarima", args=[self.orden.pk]), {"accion": "elegir", "tarima_id": otra.pk})
-        r = self.client.get(self.detalle)
-        self.assertNotContains(r, "imprime su etiqueta al momento")
+        self.assertEqual((TrabajoImpresion.objects.count(), trabajo.paginas, trabajo.referencia), (antes + 1, 2, f"{self.orden.folio} TAR-01 faltaron 2"))
+        self.assertEqual(EscaneoRecepcion.objects.filter(orden=self.orden, impresa_ts__isnull=True).count(), 0)
+        r = self.client.post(reetiquetado, {"accion": "reimprimir", "tarima_id": self.tarima.pk}, follow=True)
+        self.assertContains(r, "TAR-01: 7 etiqueta(s) y la de la tarima van a la impresora")
+        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 8)
 
     def test_pdf_caja_danada_tarima_y_nombre_largo(self):
         self.assertEqual(_fuente("Clash-700"), "Clash-700")  # las TTF del repo se registran
@@ -120,9 +101,11 @@ class EtiquetasRecepcionTests(PisoTestCase):
         self.assertEqual(paginas_pdf(pdf), 3)
 
     @override_settings(TORRE_MODO_IMPRESION="local")
-    def test_modo_local_sin_impresora_avisa_sin_marcar_impresas(self):
-        with self.settings():
-            r = self.imprimir()
+    def test_modo_local_sin_impresora_avisa_y_el_conteo_queda_terminado(self):
+        r = self.terminar()
+        self.assertContains(r, "las etiquetas no salieron")
         self.assertContains(r, "No hay impresora configurada")
         self.assertEqual(TrabajoImpresion.objects.count(), 0)
         self.assertEqual(EscaneoRecepcion.objects.filter(orden=self.orden, impresa_ts__isnull=False).count(), 0)
+        self.orden.refresh_from_db()
+        self.assertIsNotNone(self.orden.ts_conteo_fin)

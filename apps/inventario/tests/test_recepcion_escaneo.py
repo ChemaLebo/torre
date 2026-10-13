@@ -16,8 +16,8 @@ from apps.inventario.models import EscaneoRecepcion, LineaASN, Movimiento, Orden
 from apps.inventario.services import (
     agregar_linea_recepcion, ajustar_conteo, anular_escaneo, cerrar_recepcion, confirmar_tarima, contar_caja,
     crear_tarima, cuadre_recepcion, editar_linea_recepcion, marcar_danadas, mover_cajas, nombre_tarima_propuesto,
-    normalizar_escaneo, qr_posicion, qr_producto, realidad_recepcion, reingresar_desde_pedido, reiniciar_recepcion,
-    reservar, resolver_escaneo, resumen_lineas, tarimas_de_orden, confirmar_pick,
+    normalizar_escaneo, qr_posicion, qr_producto, realidad_recepcion, regresar_a_conteo, reingresar_desde_pedido,
+    reiniciar_recepcion, reservar, resolver_escaneo, resumen_lineas, tarimas_de_orden, confirmar_pick, terminar_conteo,
 )
 
 from .base import InventarioTestCase
@@ -312,6 +312,44 @@ class AnunciadoSinLoteTests(EscaneoBase):
         contar_caja(self.orden, self.sku, "L2", None, self.tarima, "piso1")
         filas = [f for f in resumen_lineas(self.orden) if f["sku"] == self.sku]
         self.assertEqual([(f["lote"], f["agrupada"], f["es_hija"], f["diferencia"]) for f in filas], [("L1", False, False, -10), ("L2", False, False, 1)])
+
+
+class TerminarConteoTests(EscaneoBase):
+    def test_terminar_bloquea_contar_y_regresar_lo_reabre(self):
+        with self.assertRaisesMessage(ValueError, "al menos una"):
+            terminar_conteo(self.orden, "piso1")
+        self.contar(2)
+        terminar_conteo(self.orden, "piso1")
+        self.orden.refresh_from_db()
+        self.assertEqual(self.orden.fase_recepcion, OrdenEntrada.FASE_REETIQUETADO)
+        self.assertEqual(self.eventos("conteo_terminado").get().delta["cajas"], 2)
+        with self.assertRaisesMessage(ValueError, "ya terminó"):
+            contar_caja(self.orden, self.sku, "L1", None, self.tarima, "piso1")
+        contar_caja(self.orden, self.sku, "L1", None, self.tarima, "piso1", desde_reetiquetado=True)  # Faltaron X
+        with self.assertRaisesMessage(ValueError, "ya estaba terminado"):
+            terminar_conteo(self.orden, "piso1")
+        regresar_a_conteo(self.orden, "piso1")
+        self.orden.refresh_from_db()
+        self.assertEqual(self.orden.fase_recepcion, OrdenEntrada.FASE_CONTEO)
+        self.contar(1)
+        self.assertEqual(self.fila()["contadas"], 4)
+        with self.assertRaisesMessage(ValueError, "sigue en conteo"):
+            regresar_a_conteo(self.orden, "piso1")
+
+    def test_cerrar_desde_mesa_estampa_el_fin_del_conteo_y_reiniciar_lo_borra(self):
+        self.contar(2)
+        confirmar_tarima(self.orden, self.tarima, "piso1")
+        cerrar_recepcion(self.orden, "mesa")
+        self.orden.refresh_from_db()
+        self.assertIsNotNone(self.orden.ts_conteo_fin)
+        self.assertEqual(self.orden.fase_recepcion, OrdenEntrada.FASE_CERRADA)
+        otra = OrdenEntrada.objects.create(cliente=self.cliente)
+        LineaASN.objects.create(orden=otra, sku=self.sku, cantidad_anunciada=1, lote_codigo="L1")
+        contar_caja(otra, self.sku, "L1", None, self.tarima, "piso1")
+        terminar_conteo(otra, "piso1")
+        reiniciar_recepcion(otra, "mesa")
+        otra.refresh_from_db()
+        self.assertIsNone(otra.ts_conteo_fin)
 
 
 class TarimasTests(EscaneoBase):

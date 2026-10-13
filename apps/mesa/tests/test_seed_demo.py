@@ -108,7 +108,8 @@ class SeedDemoTests(TestCase):
         vivos = EscaneoRecepcion.objects.filter(orden=a_medias).exclude(estado=EscaneoRecepcion.ANULADA)
         self.assertEqual(vivos.count(), 15)
         self.assertEqual(vivos.filter(estado=EscaneoRecepcion.RECIBIDA).count(), 12)
-        self.assertEqual(vivos.filter(impresa_ts__isnull=False).count(), 12)
+        self.assertEqual(vivos.filter(impresa_ts__isnull=False).count(), 15)
+        self.assertEqual(a_medias.fase_recepcion, OrdenEntrada.FASE_REETIQUETADO)
         tar1 = Ubicacion.objects.get(codigo="TAR-01")
         self.assertEqual(Saldo.objects.filter(ubicacion=tar1, estado=Saldo.EN_PUTAWAY).count(), 2)  # PARAMO y TICUS, no vendibles
         self.assertEqual(Saldo.objects.filter(ubicacion=tar1, estado=Saldo.UBICADO_VENDIBLE).count(), 0)

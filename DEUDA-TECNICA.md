@@ -702,9 +702,12 @@ lectura; "Mover a" vive en el editor de recepción.
 
 ## Recepción por escaneo, etiquetas 51×51 y segunda térmica — hecho 2026-10-13
 
-Contar ≠ recibir: cada caja se escanea a una tarima (`EscaneoRecepcion`), las
-etiquetas salen por tandas en orden inverso, la tarima se confirma y nada es
-vendible hasta cerrar la orden. Mesa corrige desde el editor; el piso solo
+Contar ≠ recibir: cada caja se escanea a una tarima (`EscaneoRecepcion`);
+**Terminar conteo** bloquea el escaneo e imprime solas todas las etiquetas
+(tarima por tarima, cajas en orden inverso, en tandas); en el **Reetiquetado**
+el piso ajusta (Faltaron X imprime al momento, Sobraron X resta), marca
+TARIMA REETIQUETADA y Terminado lleva al cuadre; nada es vendible hasta
+cerrar la orden. Mesa corrige desde el editor; el piso solo
 escanea. Cola de impresión general con dos térmicas en el agente de bodega.
 Ver CONVENTIONS (inventario, piso, envios, configuracion) y SOP-02/03/04.
 
@@ -723,9 +726,14 @@ Ver CONVENTIONS (inventario, piso, envios, configuracion) y SOP-02/03/04.
   vuelven vendibles juntas al cerrar la primera (aceptado).
 - Modo de impresión `local` (dev): la térmica de etiquetas sale de
   `TORRE_IMPRESORA_ETIQUETAS_51` en `.env`; en producción todo va por relay.
-- El agente marca las cajas como impresas al ENCOLAR la tanda, no al salir
-  del rodillo: si el trabajo falla, "Reimprimir desde N" es el camino; un
-  reporte del agente por etiqueta sería el siguiente paso si estorba.
+- Las cajas quedan marcadas como impresas al ENCOLAR la tanda, no al salir
+  del rodillo: si el trabajo falla, "Reimprimir etiquetas de esta tarima"
+  es el camino (saca tarima + todas sus cajas); un reporte del agente por
+  etiqueta sería el siguiente paso si estorba. Un rollo que se acaba a media
+  tanda: CUPS retoma solo al recargar (por confirmar en bodega).
+- Un segundo Terminar conteo (tras Regresar a conteo) numera las cajas
+  nuevas a continuación (N/total con el total nuevo); las etiquetas viejas
+  conservan su total anterior. Aceptado: el número es orientativo.
 - `TrabajoImpresion.transicionar` y la API tratan la guía como opcional;
   los eventos de auditoría viejos siguen leyendo `delta.folio`.
 

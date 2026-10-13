@@ -9,7 +9,7 @@
 | **EPP requerido** | Botas con casquillo + guantes anticorte. Faja recomendada |
 | **Pantallas de Torre** | Piso → **Cuarentena** → sección **"Put-away pendiente"** → botón **"Ubicar"** · Mesa → **Recepciones** → **Editar recepción** → **Mover** (cajas de una tarima a un rack) |
 
-**Desde octubre de 2026 la recepción no acomoda** (Chema 2026-10-13): cada caja se escanea a una tarima, se etiqueta, la tarima se confirma y **al cerrar la orden todo lo recibido queda vendible en su tarima** (SOP-03). Las tarimas son posiciones de reserva (TAR-nn) y el picking llega a ellas por FEFO como a cualquier reserva. Mover cajas de una tarima a un rack es una corrección que hace **Mesa** desde el editor de recepción (Mover). El **anaquel fijo por producto con restock desde reserva** es la siguiente fase y se documentará aquí cuando exista. Este SOP sigue vigente para el put-away suelto desde **Cuarentena** (dictámenes revendibles y retornos) y para las reglas físicas de los racks.
+**Desde octubre de 2026 la recepción no acomoda** (Chema 2026-10-13): cada caja se escanea a una tarima, al terminar el conteo salen las etiquetas, la tarima se marca reetiquetada y **al cerrar la orden todo lo recibido queda vendible en su tarima** (SOP-03). Las tarimas son posiciones de reserva (TAR-nn) y el picking llega a ellas por FEFO como a cualquier reserva. Mover cajas de una tarima a un rack es una corrección que hace **Mesa** desde el editor de recepción (Mover). El **anaquel fijo por producto con restock desde reserva** es la siguiente fase y se documentará aquí cuando exista. Este SOP sigue vigente para el put-away suelto desde **Cuarentena** (dictámenes revendibles y retornos) y para las reglas físicas de los racks.
 
 ---
 
@@ -88,7 +88,7 @@ Reglas físicas de los racks:
 FECHA: ______  FOLIO ASN / ORIGEN: ____________
 
 [ ] Reloj SLA visto: vence a las ______
-[ ] Recepción: cajas en su tarima, etiquetadas y confirmadas (SOP-03)
+[ ] Recepción: cajas en su tarima, etiquetadas y tarimas reetiquetadas (SOP-03)
 [ ] Cuarentena → Put-away pendiente revisado hoy
 [ ] Columna verificada: SKU ______ · lote ______ · caduca ______
 [ ] Destino correcto: picking A-*/B-* o reserva RES-*/TAR-*

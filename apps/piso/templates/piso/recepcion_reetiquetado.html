@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Reetiquetado · {{ orden.folio }}{% endblock %}
+{% block content %}
+{# Reetiquetado (Chema 2026-10-13): todas las tarimas arriba; de la elegida, faltaron (+cajas e imprime) / sobraron (−cajas), TARIMA REETIQUETADA, Reimprimir, Regresar a conteo y Terminado (apagado hasta reetiquetar todas). #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
+    <h1>Reetiquetado</h1>
+    <div class="small">{{ orden.cliente.nombre }} · conteo terminado {{ orden.ts_conteo_fin|date:"d/M H:i" }} · pega las etiquetas y confirma tarima por tarima</div>
+  </div>
+  <form method="post" onsubmit="return confirm('¿Regresar {{ orden.folio }} a conteo? Podrás escanear más cajas; las etiquetas ya impresas siguen impresas.');">{% csrf_token %}
+    <input type="hidden" name="accion" value="regresar_conteo">
+    <button class="btn chico" type="submit">Regresar a conteo</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Tarimas</h2><span class="small muted">toca la que estás revisando</span></div>
+  <div class="grid g2 tarjetas-eleccion">
+    {% for t in tarimas %}
+    <a class="tarjeta-eleccion{% if actual and actual.tarima.pk == t.tarima.pk %} seleccionada{% endif %}" href="?tarima={{ t.tarima.pk }}">
+      <div class="tarjeta-titulo mono">{{ t.tarima.codigo }}</div>
+      <div class="small">{{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}{% if t.sin_etiqueta %} · {{ t.sin_etiqueta }} sin etiqueta{% endif %}</div>
+      <div class="mt">{% if t.confirmada %}<span class="pill ok">reetiquetada</span>{% else %}<span class="pill warn">por reetiquetar</span>{% endif %}</div>
+    </a>
+    {% empty %}
+    <p class="muted">No hay cajas contadas.</p>
+    {% endfor %}
+  </div>
+</div>
+
+{% if actual %}
+<div class="card mt">
+  <div class="titulo"><h2>Tarima <span class="mono">{{ actual.tarima.codigo }}</span></h2>{% if actual.confirmada %}<span class="pill ok">reetiquetada</span>{% else %}<span class="pill warn">{{ actual.por_confirmar }} por confirmar</span>{% endif %}</div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Producto</th><th>Lote</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th><th>Faltaron</th><th>Sobraron</th></tr></thead>
+      <tbody>
+        {% for l in lineas %}
+        <tr>
+          <td><span class="mono">{{ l.linea.sku.codigo }}</span> <span class="small muted">{{ l.linea.sku.descripcion }}</span></td>
+          <td class="mono">{{ l.linea.lote_codigo|default:"—" }}</td>
+          <td class="derecha num">{{ l.contadas }}</td>
+          <td class="derecha num">{{ l.danadas }}</td>
+          <td>
+            {# Faltaron X: +X cajas en esta tarima e imprime X etiquetas al momento. #}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="faltaron"><input type="hidden" name="tarima_id" value="{{ actual.tarima.pk }}"><input type="hidden" name="linea_id" value="{{ l.linea.pk }}">
+              <input type="number" name="cantidad" min="1" inputmode="numeric" placeholder="cuántas" style="width:90px" aria-label="Faltaron de {{ l.linea.sku.codigo }}">
+              <button class="btn chico" type="submit">Faltaron</button>
+            </form>
+          </td>
+          <td>
+            {# Sobraron X: −X cajas en esta tarima. #}
+            <form method="post" class="fila">{% csrf_token %}
+              <input type="hidden" name="accion" value="sobraron"><input type="hidden" name="tarima_id" value="{{ actual.tarima.pk }}"><input type="hidden" name="linea_id" value="{{ l.linea.pk }}">
+              <input type="number" name="cantidad" min="1" max="{{ l.contadas|add:l.danadas }}" inputmode="numeric" placeholder="cuántas" style="width:90px" aria-label="Sobraron de {{ l.linea.sku.codigo }}">
+              <button class="btn chico" type="submit">Sobraron</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# Producto o lote que no estaba en esta tarima: lote como texto predictivo, no obligatorio. #}
+  <details class="colapsable mt">
+    <summary>Faltó un producto o lote que no está en esta tarima</summary>
+    <div class="colapsable-cuerpo">
+      <form method="post" class="grid g2" id="form-faltaron-nuevo">{% csrf_token %}
+        <input type="hidden" name="accion" value="faltaron"><input type="hidden" name="tarima_id" value="{{ actual.tarima.pk }}">
+        <div>
+          <label for="fn-sku">Producto</label>
+          <select name="sku_id" id="fn-sku" required><option value="">— elige —</option>{% for p in productos %}<option value="{{ p.sku.pk }}">{{ p.sku.codigo }} · {{ p.sku.descripcion|truncatechars:40 }}</option>{% endfor %}</select>
+        </div>
+        <div>
+          <label for="fn-lote">Lote (escribe uno nuevo o elige)</label>
+          <input type="text" name="lote" id="fn-lote" class="mono" autocomplete="off" autocapitalize="characters" spellcheck="false" list="fn-lotes" placeholder="código del lote">
+          <datalist id="fn-lotes"></datalist>
+        </div>
+        <div><label for="fn-cad">Caducidad</label><input type="date" name="caducidad" id="fn-cad"></div>
+        <div><label for="fn-n">Cuántas</label><input type="number" name="cantidad" id="fn-n" min="1" inputmode="numeric" required></div>
+        <label class="fila" for="fn-dan"><input type="checkbox" name="danada" value="1" id="fn-dan"> Dañadas</label>
+        <div><button class="btn primario" type="submit">Faltaron · contar e imprimir</button></div>
+      </form>
+    </div>
+  </details>
+
+  <div class="grid g2 mt">
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="reetiquetada"><input type="hidden" name="tarima_id" value="{{ actual.tarima.pk }}">
+      <button class="btn primario gigante bloque" type="submit" {% if not actual.por_confirmar %}disabled{% endif %}>{% if actual.por_confirmar %}TARIMA REETIQUETADA{% else %}Ya reetiquetada{% endif %}</button>
+    </form>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="reimprimir"><input type="hidden" name="tarima_id" value="{{ actual.tarima.pk }}">
+      <button class="btn gigante bloque" type="submit">Reimprimir etiquetas de esta tarima</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mt">
+  <div class="titulo"><h2>Terminado</h2></div>
+  <p class="small">{% if todas_reetiquetadas %}Todas las tarimas están reetiquetadas: sigue el cuadre contra lo anunciado y el cierre.{% else %}Se activa cuando TODAS las tarimas estén marcadas como reetiquetadas.{% endif %}</p>
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="terminado">
+    <button class="btn primario gigante bloque" type="submit" {% if not todas_reetiquetadas %}disabled{% endif %}>Terminado · ir al cuadre</button>
+  </form>
+</div>
+
+{{ productos_lotes|json_script:"lotes-por-producto" }}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  // Lote predictivo: las opciones cambian con el producto elegido; no son obligatorias.
+  var datos = JSON.parse(document.getElementById("lotes-por-producto").textContent);
+  var sel = document.getElementById("fn-sku"), lista = document.getElementById("fn-lotes"), lote = document.getElementById("fn-lote"), cad = document.getElementById("fn-cad");
+  if (!sel) return;
+  function pinta() {
+    lista.innerHTML = "";
+    (datos[sel.value] || []).forEach(function (l) {
+      var o = document.createElement("option"); o.value = l.codigo; o.dataset.caducidad = l.caducidad || ""; lista.appendChild(o);
+    });
+  }
+  sel.addEventListener("change", pinta); pinta();
+  lote.addEventListener("input", function () {
+    var o = Array.prototype.slice.call(lista.options).filter(function (x) { return x.value === lote.value.trim(); })[0];
+    if (o && o.dataset.caducidad && !cad.value) cad.value = o.dataset.caducidad;
+  });
+});
+</script>
+{% endblock %}
