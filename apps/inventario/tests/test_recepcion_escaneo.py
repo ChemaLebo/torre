@@ -280,6 +280,40 @@ class CuadreYCierreTests(EscaneoBase):
         self.assertEqual(self.eventos("recepcion_reiniciada").count(), 1)
 
 
+class AnunciadoSinLoteTests(EscaneoBase):
+    """El próximo ASN de Colima viene sin lotes (Chema 2026-10-13): la línea
+    sin lote es el total del producto y los lotes que llegan cuelgan de ella."""
+
+    def setUp(self):
+        super().setUp()
+        self.sin_lote = LineaASN.objects.create(orden=self.orden, sku=self.sku_b, cantidad_anunciada=20)
+        self.linea_b.delete()  # CC24LCAR queda anunciado solo sin lote
+
+    def test_resumen_cuadre_y_cierre_agrupan_bajo_la_linea_sin_lote(self):
+        for lote, n in (("B-A", 12), ("B-B", 7)):
+            for _ in range(n):
+                contar_caja(self.orden, self.sku_b, lote, None, self.tarima, "piso1")
+        filas = [f for f in resumen_lineas(self.orden) if f["sku"] == self.sku_b]
+        madre, hijas = filas[0], filas[1:]
+        self.assertTrue(madre["agrupada"])
+        self.assertEqual((madre["lote"], madre["anunciadas"], madre["contadas"], madre["diferencia"], madre["faltante"]), ("", 20, 19, -1, 1))
+        self.assertEqual([(h["lote"], h["contadas"], h["es_hija"], h["diferencia"]) for h in hijas], [("B-A", 12, True, None), ("B-B", 7, True, None)])
+        cuadre = cuadre_recepcion(self.orden)
+        self.assertEqual(cuadre["espejo"], [])
+        self.assertEqual([l["lote"] for l in cuadre["lineas"] if l["sku"] == self.sku_b], ["", "B-A", "B-B"])
+        confirmar_tarima(self.orden, self.tarima, "piso1")
+        cerrar_recepcion(self.orden, "piso1")
+        evento = self.eventos("cerrada_con_discrepancia").get()
+        self.assertEqual(sorted((d["sku"], d["anunciada"], d["recibida"], d["faltante"]) for d in evento.delta["discrepancias"]),
+                         [("CC24LCAR", 20, 19, 1), ("COLIMITA-SIX", 10, 0, 10)])
+        self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE, sku=self.sku_b), 19)
+
+    def test_producto_anunciado_con_lote_no_agrupa(self):
+        contar_caja(self.orden, self.sku, "L2", None, self.tarima, "piso1")
+        filas = [f for f in resumen_lineas(self.orden) if f["sku"] == self.sku]
+        self.assertEqual([(f["lote"], f["agrupada"], f["es_hija"], f["diferencia"]) for f in filas], [("L1", False, False, -10), ("L2", False, False, 1)])
+
+
 class TarimasTests(EscaneoBase):
     def test_nombre_propuesto_editable_y_unico(self):
         self.assertEqual(self.tarima.codigo, "TAR-01")

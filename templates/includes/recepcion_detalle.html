@@ -11,14 +11,16 @@
       </thead>
       <tbody>
         {% for l in orden.detalle_lineas %}
-        <tr{% if l.con_diferencia %} class="con-diferencia"{% endif %}>
-          <td><span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span></td>
-          <td class="mono">{{ l.lote|default:"—" }}{% if l.caducidad %} <span class="small muted">cad. {{ l.caducidad|date:"d/M/Y" }}</span>{% endif %}</td>
-          <td class="derecha mono">{{ l.anunciada }}</td>
+        {# Producto anunciado sin lote: la fila del producto trae el total y debajo cuelga cada lote que llegó (sin diferencia propia). #}
+        <tr class="{% if l.con_diferencia %}con-diferencia{% endif %}{% if l.es_hija %} fila-posicion{% endif %}">
+          <td>{% if l.es_hija %}<span class="small muted">↳ lote</span>{% else %}<span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span>{% endif %}</td>
+          <td class="mono">{% if l.agrupada %}<span class="small muted">total del producto</span>{% else %}{{ l.lote|default:"—" }}{% endif %}{% if l.caducidad and not l.agrupada %} <span class="small muted">cad. {{ l.caducidad|date:"d/M/Y" }}</span>{% endif %}</td>
+          <td class="derecha mono">{% if l.es_hija %}<span class="muted">—</span>{% else %}{{ l.anunciada }}{% endif %}</td>
           <td class="derecha mono">{{ l.recibida }}</td>
           <td class="derecha mono">{% if l.danada %}<span class="pill crit">{{ l.danada }}</span>{% else %}0{% endif %}</td>
           <td class="derecha mono">
-            {% if orden.evaluada %}
+            {% if l.es_hija %}<span class="muted">—</span>
+            {% elif orden.evaluada %}
               {% if l.diferencia == 0 and not l.danada %}<span class="pill ok">completo</span>
               {% elif l.diferencia == 0 %}<span class="pill warn">con daño</span>
               {% else %}<span class="pill {% if l.diferencia < 0 %}crit{% else %}warn{% endif %}">{{ l.diferencia|stringformat:"+d" }}</span>{% endif %}

@@ -109,7 +109,8 @@ class EscaneoTests(RecepcionEscaneoBase):
         self.assertContains(r, "Dañado")
         self.assertContains(r, "Regresar (mal conteo)")
         self.assertContains(r, "¿Contar 1 caja?")
-        self.assertNotContains(r, "10")  # ciego: nada de anunciadas
+        self.assertNotContains(r, "nunciad")  # ciego: nada de anunciadas
+        self.assertNotContains(r, "de 10")
         self.assertEqual(self.vivos().count(), 0)  # abrir la pantalla no cuenta
 
     def test_elegir_lote_cuenta_una_caja_y_regresa_al_escaner(self):
@@ -264,6 +265,22 @@ class CuadreYCierreTests(RecepcionEscaneoBase):
         r = self.escanear("7501234567890")
         r = self.client.get(self.detalle)
         self.assertContains(r, "ya está cerrada")
+
+    def test_producto_anunciado_sin_lote_muestra_total_y_lotes_debajo(self):
+        LineaASN.objects.create(orden=self.orden, sku=self.sku, cantidad_anunciada=8)  # COLIMITA-SIX también sin lote
+        r = self.client.get(f"{self.lote_url}?sku={self.sku.pk}")
+        self.assertContains(r, 'data-lote="L1"')
+        self.assertNotContains(r, 'data-lote="sin lote"')  # requiere lote: la línea sin lote no es tarjeta
+        self.client.post(self.lote_url, {"sku_id": self.sku.pk, "nl_codigo": "L7"})
+        self.client.post(self.lote_url, {"sku_id": self.sku.pk, "nl_codigo": "L7"})
+        self.contar(1)
+        r = self.client.get(self.detalle)
+        self.assertContains(r, "total del producto")
+        self.assertContains(r, "↳ lote")
+        r = self.client.get(self.cuadre_url)
+        self.assertContains(r, "total del producto")
+        fila = next(f for f in r.context["cuadre"]["lineas"] if f["agrupada"])
+        self.assertEqual((fila["anunciadas"], fila["contadas"], fila["diferencia"]), (18, 3, -15))
 
     def test_lista_de_recepciones_muestra_contadas_sin_anunciadas(self):
         self.contar(2)

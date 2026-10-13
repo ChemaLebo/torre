@@ -526,16 +526,17 @@ def detalle_recepciones(ordenes):
         fotos.setdefault(foto.entidad_id, []).append(foto)
     for orden in ordenes:
         orden.evaluada = orden.estado == OrdenEntrada.CERRADA
-        orden.detalle_lineas = []
-        for linea in orden.lineas.all():
-            llegaron = linea.cantidad_recibida + linea.cantidad_danada
-            orden.detalle_lineas.append({
-                "sku": linea.sku, "anunciada": linea.cantidad_anunciada,
-                "recibida": linea.cantidad_recibida, "danada": linea.cantidad_danada,
-                "diferencia": llegaron - linea.cantidad_anunciada,
-                "lote": linea.lote_codigo, "caducidad": linea.fecha_caducidad,
-                "con_diferencia": orden.evaluada and (llegaron != linea.cantidad_anunciada or linea.cantidad_danada > 0),
-            })
+        filas = [{
+            "sku": linea.sku, "anunciada": linea.cantidad_anunciada,
+            "recibida": linea.cantidad_recibida, "danada": linea.cantidad_danada,
+            "lote": (linea.lote_codigo or "").strip(), "caducidad": linea.fecha_caducidad,
+        } for linea in orden.lineas.all()]
+        # Producto anunciado sin lote: la madre trae el total y los lotes cuelgan de ella.
+        orden.detalle_lineas = _agrupar_sin_lote(filas, ("anunciada", "recibida", "danada"))
+        for f in orden.detalle_lineas:
+            llegaron = f["recibida"] + f["danada"]
+            f["diferencia"] = None if f["es_hija"] else llegaron - f["anunciada"]
+            f["con_diferencia"] = orden.evaluada and not f["es_hija"] and (llegaron != f["anunciada"] or f["danada"] > 0)
         orden.fotos_llegada = fotos.get(orden.folio, [])
         orden.incidencias_orden = list(orden.incidencias.all())
     # Dónde quedó cada cosa (Chema 2026-10-06, solo lectura en el portal): las
@@ -773,11 +774,48 @@ def escaneos_vivos(orden):
     return orden.escaneos.exclude(estado=EscaneoRecepcion.ANULADA)
 
 
+def _agrupar_sin_lote(filas, totales):
+    """Anunciado sin lote (Chema 2026-10-13): cuando el cliente anuncia un
+    producto sin lote y el piso cuenta sus cajas con el lote que traen, la
+    línea sin lote es el TOTAL del producto y los lotes que llegaron cuelgan
+    de ella (`hijas`), sin compararse uno por uno contra lo anunciado. Las
+    filas vienen por línea; regresa la lista con la madre (`agrupada`)
+    seguida de sus hijas (`es_hija`), sumando en la madre los campos
+    `totales`. Un producto anunciado con lote no se agrupa: sus lotes nuevos
+    sí son diferencias."""
+    por_sku = {}
+    for f in filas:
+        por_sku.setdefault(f["sku"].pk, []).append(f)
+    resultado, vistos = [], set()
+    for f in filas:
+        if f["sku"].pk in vistos:
+            continue
+        vistos.add(f["sku"].pk)
+        grupo = por_sku[f["sku"].pk]
+        madre = next((g for g in grupo if not g["lote"]), None)
+        if madre is None or len(grupo) == 1:
+            for g in grupo:
+                g["agrupada"], g["es_hija"] = False, False
+            resultado.extend(grupo)
+            continue
+        hijas = [g for g in grupo if g is not madre]
+        for campo in totales:
+            madre[campo] += sum(h[campo] for h in hijas)
+        madre["agrupada"], madre["es_hija"], madre["hijas"] = True, False, hijas
+        for h in hijas:
+            h["agrupada"], h["es_hija"] = False, True
+        resultado.append(madre)
+        resultado.extend(hijas)
+    return resultado
+
+
 def resumen_lineas(orden):
     """Por línea (producto · lote), la cuenta viva: `contadas` (cajas buenas
     escaneadas), `danadas`, `recibidas` (confirmadas en tarima, buenas),
     `por_confirmar`, `llegaron` (contadas + dañadas), `diferencia` contra lo
-    anunciado, `faltante`, `sobrante` y `sin_etiqueta`."""
+    anunciado, `faltante`, `sobrante` y `sin_etiqueta`. Un producto anunciado
+    sin lote agrupa sus lotes (ver _agrupar_sin_lote): la madre trae los
+    totales y la diferencia; las hijas, solo su cuenta."""
     vivos = {}
     for e in escaneos_vivos(orden).values("linea_id", "estado", "danada", "impresa_ts"):
         r = vivos.setdefault(e["linea_id"], {"contadas": 0, "danadas": 0, "por_confirmar": 0, "sin_etiqueta": 0})
@@ -797,6 +835,13 @@ def resumen_lineas(orden):
             "llegaron": llegaron, "diferencia": llegaron - linea.cantidad_anunciada,
             "faltante": max(linea.cantidad_anunciada - llegaron, 0), "sobrante": max(llegaron - linea.cantidad_anunciada, 0),
         })
+    filas = _agrupar_sin_lote(filas, ("anunciadas", "contadas", "danadas", "recibidas", "por_confirmar", "sin_etiqueta", "llegaron"))
+    for f in filas:
+        if f["agrupada"]:
+            f["diferencia"] = f["llegaron"] - f["anunciadas"]
+            f["faltante"], f["sobrante"] = max(f["anunciadas"] - f["llegaron"], 0), max(f["llegaron"] - f["anunciadas"], 0)
+        elif f["es_hija"]:
+            f["diferencia"], f["faltante"], f["sobrante"] = None, 0, 0
     return filas
 
 
@@ -1039,6 +1084,20 @@ def cuadre_recepcion(orden):
     }
 
 
+def _cuentas_para_cierre(lineas):
+    """[{sku, anunciada, recibida, danada}] con lo confirmado de cada línea,
+    agrupando bajo la línea sin lote los lotes del mismo producto (ver
+    _agrupar_sin_lote): el cliente anunció el total, no los lotes."""
+    filas = [{
+        "sku": l.sku, "lote": (l.lote_codigo or "").strip(),
+        "anunciada": l.cantidad_anunciada, "recibida": l.cantidad_recibida, "danada": l.cantidad_danada,
+    } for l in lineas]
+    return [
+        {"sku": f["sku"].codigo, "anunciada": f["anunciada"], "recibida": f["recibida"], "danada": f["danada"]}
+        for f in _agrupar_sin_lote(filas, ("anunciada", "recibida", "danada")) if not f["es_hija"]
+    ]
+
+
 def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
     """Cierra la recepción: exige que no quede caja contada sin confirmar ni
     stock de la orden en la zona de recepción sin tarima, guarda las tarimas
@@ -1094,19 +1153,12 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
             orden.save(update_fields=["tarimas_recibidas"])
 
         discrepancias = []
-        for linea in lineas:
-            llegado = linea.cantidad_recibida + linea.cantidad_danada
-            faltante = max(linea.cantidad_anunciada - llegado, 0)
-            sobrante = max(llegado - linea.cantidad_anunciada, 0)
+        for cuenta in _cuentas_para_cierre(lineas):
+            llegado = cuenta["recibida"] + cuenta["danada"]
+            faltante = max(cuenta["anunciada"] - llegado, 0)
+            sobrante = max(llegado - cuenta["anunciada"], 0)
             if faltante or sobrante:
-                discrepancias.append({
-                    "sku": linea.sku.codigo,
-                    "anunciada": linea.cantidad_anunciada,
-                    "recibida": linea.cantidad_recibida,
-                    "danada": linea.cantidad_danada,
-                    "faltante": faltante,
-                    "sobrante": sobrante,
-                })
+                discrepancias.append({**cuenta, "faltante": faltante, "sobrante": sobrante})
 
         # Vendible: lo recibido de cada línea (producto + lote) en su tarima o
         # posición pasa a ubicado_vendible ahí mismo (Chema 2026-10-13: nada

@@ -55,9 +55,10 @@
       <thead><tr><th>Producto</th><th>Lote</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th><th class="derecha">Sin etiqueta</th></tr></thead>
       <tbody>
         {% for l in lineas %}
-        <tr>
-          <td><span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span></td>
-          <td class="mono">{{ l.lote|default:"—" }}{% if l.caducidad %} <span class="small muted">cad. {{ l.caducidad|date:"d/m/Y" }}</span>{% endif %}</td>
+        <tr{% if l.es_hija %} class="fila-posicion"{% endif %}>
+          {# Producto anunciado sin lote: la fila del producto trae el total y debajo cuelga cada lote que llegó. #}
+          <td>{% if l.es_hija %}<span class="small muted">↳ lote</span>{% else %}<span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span>{% endif %}</td>
+          <td class="mono">{% if l.agrupada %}<span class="small muted">total del producto</span>{% else %}{{ l.lote|default:"—" }}{% endif %}{% if l.caducidad and not l.agrupada %} <span class="small muted">cad. {{ l.caducidad|date:"d/m/Y" }}</span>{% endif %}</td>
           <td class="derecha num">{{ l.contadas }}</td>
           <td class="derecha num">{% if l.danadas %}<span class="pill crit">{{ l.danadas }}</span>{% else %}0{% endif %}</td>
           <td class="derecha num">{{ l.sin_etiqueta }}</td>

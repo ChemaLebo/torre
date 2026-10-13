@@ -923,10 +923,13 @@ def recepcion_lote(request, pk):
     for linea_id, danada in escaneos_vivos(orden).filter(linea__sku=sku).values_list("linea_id", "danada"):
         r = contadas.setdefault(linea_id, [0, 0])
         r[1 if danada else 0] += 1
+    # Anunciado sin lote (Chema 2026-10-13): la línea sin lote es el total del
+    # producto; sus cajas se cuentan con el lote que traen ("Otro"), así que
+    # para un producto que requiere lote esa línea no es tarjeta.
     tarjetas = [
         {"linea": l, "lote": (l.lote_codigo or "").strip(), "caducidad": l.fecha_caducidad,
          "contadas": contadas.get(l.pk, [0, 0])[0], "danadas": contadas.get(l.pk, [0, 0])[1]}
-        for l in lineas
+        for l in lineas if (l.lote_codigo or "").strip() or not sku.requiere_lote
     ]
     vistos = {t["lote"] for t in tarjetas}
     return render(request, "piso/recepcion_lote.html", {

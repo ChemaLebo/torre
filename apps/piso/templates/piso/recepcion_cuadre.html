@@ -31,13 +31,13 @@
       <thead><tr><th>Producto</th><th>Lote</th><th class="derecha">Anunciadas</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th><th class="derecha">Diferencia</th></tr></thead>
       <tbody>
         {% for l in cuadre.lineas %}
-        <tr>
-          <td><span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span></td>
-          <td class="mono">{{ l.lote|default:"—" }}</td>
-          <td class="derecha num">{{ l.anunciadas }}</td>
+        <tr{% if l.es_hija %} class="fila-posicion"{% endif %}>
+          <td>{% if l.es_hija %}<span class="small muted">↳ lote</span>{% else %}<span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span>{% endif %}</td>
+          <td class="mono">{% if l.agrupada %}<span class="small muted">total del producto</span>{% else %}{{ l.lote|default:"—" }}{% endif %}</td>
+          <td class="derecha num">{% if l.es_hija %}<span class="muted">—</span>{% else %}{{ l.anunciadas }}{% endif %}</td>
           <td class="derecha num">{{ l.contadas }}</td>
           <td class="derecha num">{% if l.danadas %}<span class="pill crit">{{ l.danadas }}</span>{% else %}0{% endif %}</td>
-          <td class="derecha num">{% if l.diferencia == 0 %}<span class="pill ok">0</span>{% else %}<span class="pill {% if l.diferencia < 0 %}crit{% else %}warn{% endif %}">{{ l.diferencia|stringformat:"+d" }}</span>{% endif %}</td>
+          <td class="derecha num">{% if l.es_hija %}<span class="muted">—</span>{% elif l.diferencia == 0 %}<span class="pill ok">0</span>{% else %}<span class="pill {% if l.diferencia < 0 %}crit{% else %}warn{% endif %}">{{ l.diferencia|stringformat:"+d" }}</span>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>

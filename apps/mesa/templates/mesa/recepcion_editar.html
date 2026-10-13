@@ -22,8 +22,9 @@
       <tbody>
       {% for f in filas %}
         <tr class="fila-linea">
-          <td><span class="mono"><b>{{ f.sku.codigo }}</b></span><div class="small muted">{{ f.sku.descripcion }}</div>
-            <a class="small" href="{% url 'mesa:bodega' %}?q={{ f.sku.codigo|urlencode }}">¿dónde está?</a></td>
+          {# Producto anunciado sin lote: la madre trae el total y la diferencia; cada lote que llegó cuelga como hija. #}
+          <td>{% if f.es_hija %}<span class="small muted">↳ lote de {{ f.sku.codigo }}</span>{% else %}<span class="mono"><b>{{ f.sku.codigo }}</b></span><div class="small muted">{{ f.sku.descripcion }}{% if f.agrupada %} · total del producto{% endif %}</div>
+            <a class="small" href="{% url 'mesa:bodega' %}?q={{ f.sku.codigo|urlencode }}">¿dónde está?</a>{% endif %}</td>
           <td>
             {% if editable %}
             <form method="post" class="fila campos-editor" title="Lote, caducidad y anunciadas de la línea">{% csrf_token %}
@@ -44,7 +45,7 @@
           <td class="small muted">{{ f.tarimas|length }} tarima{{ f.tarimas|length|pluralize }}</td>
           <td class="small muted">{% if f.por_confirmar %}<span class="pill warn">{{ f.por_confirmar }} sin confirmar</span>{% endif %}</td>
           <td>
-            {% if f.diferencia %}<span class="pill {% if f.diferencia < 0 %}crit{% else %}warn{% endif %}" title="contadas + dañadas − anunciadas">{{ f.diferencia|stringformat:"+d" }}</span>{% else %}<span class="pill ok">0</span>{% endif %}
+            {% if f.es_hija %}<span class="muted" title="cuenta dentro del total del producto">—</span>{% elif f.diferencia %}<span class="pill {% if f.diferencia < 0 %}crit{% else %}warn{% endif %}" title="contadas + dañadas − anunciadas">{{ f.diferencia|stringformat:"+d" }}</span>{% else %}<span class="pill ok">0</span>{% endif %}
           </td>
         </tr>
         {% for t in f.tarimas %}

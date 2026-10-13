@@ -149,6 +149,25 @@ class EditorRecepcionTests(PisoTestCase):
         self.assertNotContains(respuesta, "Editar recepción")
         self.assertNotContains(respuesta, "Reiniciar recepción")
 
+    def test_anunciado_sin_lote_se_ve_como_total_con_sus_lotes_debajo(self):
+        from apps.catalogo.models import SKU
+
+        ticus = SKU.objects.create(cliente=self.cliente, codigo="TICUS-C12", codigo_barras="7500465010066", descripcion="Ticús caja 12", requiere_lote=True)
+        LineaASN.objects.create(orden=self.orden, sku=ticus, cantidad_anunciada=10)
+        for _ in range(4):
+            contar_caja(self.orden, ticus, "TC-2610", None, self.t3, self.operador)
+        filas = [f for f in realidad_recepcion(self.orden) if f["sku"] == ticus]
+        self.assertEqual([(f["lote"], f["agrupada"], f["es_hija"], f["anunciadas"], f["contadas"]) for f in filas], [("", True, False, 10, 4), ("TC-2610", False, True, 0, 4)])
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "total del producto")
+        self.assertContains(respuesta, "↳ lote de TICUS-C12")
+        respuesta = self.client.get(reverse("mesa:recepciones"), {"cliente": self.cliente.slug})
+        self.assertContains(respuesta, "total del producto")
+        self.client.force_login(self.usuario_portal)
+        respuesta = self.client.get(reverse("portal:recepciones"))
+        self.assertContains(respuesta, "total del producto")
+        self.assertContains(respuesta, "TC-2610")
+
     def test_reiniciar_desde_la_lista(self):
         respuesta = self.client.get(reverse("mesa:recepciones"), {"cliente": self.cliente.slug})
         self.assertContains(respuesta, "Reiniciar recepción (conteos a cero)")
