@@ -3562,10 +3562,11 @@ def confirmar_restock(pedido, actor, motivo=""):
 def _devolver_stock_y_cancelar(pedido, actor, motivo, tardia=False):
     """Núcleo de la cancelación con mercancía en proceso, en UNA transacción:
     por línea (kits fuera), lo pickeado que sigue en bodega → reingreso
-    (put-away en recepción, desde empaque si ESTA ola ya se empacó, desde
-    vendible si sigue en carrito) y el resto libera su reserva; si hubo
-    reingreso nace una OrdenEntrada tipo reingreso ya RECIBIDA; el pedido pasa
-    a CANCELADO. Las guías activas se cancelan con el carrier fuera de la
+    (put-away en la zona de recepción, desde empaque si ESTA ola ya se empacó,
+    desde vendible si sigue en carrito) y el resto libera su reserva; si hubo
+    reingreso nace una OrdenEntrada tipo reingreso EN_RECEPCION con 0 recibidas:
+    el piso escanea esas cajas a una tarima y al confirmarla el stock sale de
+    la zona de recepción (2026-10-13); el pedido pasa a CANCELADO. Las guías activas se cancelan con el carrier fuera de la
     transacción, best-effort.
 
     `tardia=True` (segunda ola cancelada con la primera en la calle): lo que
@@ -3623,18 +3624,16 @@ def _devolver_stock_y_cancelar(pedido, actor, motivo, tardia=False):
             ahora = timezone.now()
             orden = OrdenEntrada.objects.create(
                 cliente=pedido.cliente, tipo=OrdenEntrada.TIPO_REINGRESO, pedido=pedido,
-                estado=OrdenEntrada.RECIBIDA, fecha_compromiso=timezone.localdate(),
+                estado=OrdenEntrada.EN_RECEPCION, fecha_compromiso=timezone.localdate(),
                 ts_descarga_fin=ahora,
             )
             for sku, piezas in reingreso:
-                LineaASN.objects.create(
-                    orden=orden, sku=sku, cantidad_anunciada=piezas, cantidad_recibida=piezas,
-                )
+                LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=piezas)
             registrar_evento(
                 "asn", orden.folio, "reingreso_creado", actor=actor, cliente=pedido.cliente,
                 delta={"pedido": pedido.folio, "desde": "empaque" if empacado else "carrito",
                        "lineas": [{"sku": s.codigo, "cantidad": n} for s, n in reingreso]},
-                motivo=f"Mercancía de {pedido.folio} de vuelta a recepción; el piso la ubica.",
+                motivo=f"Mercancía de {pedido.folio} de vuelta en la zona de recepción; el piso la escanea a una tarima.",
             )
             if not tardia:
                 pedido.reingreso_estado = Pedido.REINGRESADO

@@ -5,6 +5,10 @@ Modelo de estados del stock (BLUEPRINT §2.2, ledger):
     en_putaway → ubicado_vendible → (reservado) → en_empaque → despachado
     + cuarentena (dañado / retorno en revisión)
 
+`en_putaway` desde 2026-10-13 = recibido en su tarima pero todavía no
+vendible: el stock nace al confirmar la tarima (EscaneoRecepcion) y se vuelve
+vendible al cerrar la orden de entrada (cerrar_recepcion), no antes.
+
 `reservado` es una CAPA sobre `ubicado_vendible`: la unidad reservada sigue
 contada en su saldo vendible (así el push a Shopify empuja on_hand físico y
 Shopify deriva available sin doble descuento). Por eso:
@@ -39,7 +43,7 @@ class Saldo(models.Model):
     EN_EMPAQUE = "en_empaque"
     CUARENTENA = "cuarentena"
     ESTADOS = [
-        (EN_PUTAWAY, "En put-away (recibido sin ubicar)"),
+        (EN_PUTAWAY, "En recepción (recibido, no vendible)"),
         (UBICADO_VENDIBLE, "Ubicado vendible"),
         (RESERVADO, "Reservado (capa sobre vendible)"),
         (EN_EMPAQUE, "En empaque"),
@@ -157,10 +161,9 @@ class OrdenEntrada(models.Model):
     tarimas_recibidas = models.PositiveSmallIntegerField(default=0)
     ts_descarga_fin = models.DateTimeField(null=True, blank=True)
     ts_vendible = models.DateTimeField(null=True, blank=True, help_text="Cuándo quedó todo ubicado")
-    # Plan de acomodo de TODA la orden (inventario.services.planear_acomodo):
-    # {"generado": iso, "pasos": [{sku_id, sku, ubicacion (None = cuarentena,
-    # sin espacio), cantidad, ubicadas, motivo}]}. La pantalla de ubicar del
-    # piso sigue el plan pieza por pieza; Mesa lo ve y lo rehace.
+    # Plan de acomodo histórico (hasta 2026-10-13 el piso acomodaba con él).
+    # La recepción por escaneo ya no lo usa ni lo escribe; la columna se
+    # retira en una migración posterior (DEUDA-TECNICA).
     plan_acomodo = models.JSONField(default=dict, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
@@ -222,16 +225,19 @@ class OrdenEntrada(models.Model):
 
 
 class LineaASN(models.Model):
-    """Línea de una orden de entrada: lo anunciado contra lo que realmente llegó."""
+    """Línea de una orden de entrada: un producto y un lote, lo anunciado
+    contra lo que realmente llegó. `cantidad_recibida` y `cantidad_danada`
+    son cajas CONFIRMADAS en tarima (EscaneoRecepcion recibidas); lo contado
+    y aún sin confirmar se lee de los escaneos."""
 
     orden = models.ForeignKey(OrdenEntrada, on_delete=models.CASCADE, related_name="lineas")
     sku = models.ForeignKey("catalogo.SKU", on_delete=models.PROTECT, related_name="lineas_asn")
     cantidad_anunciada = models.PositiveIntegerField()
-    cantidad_recibida = models.PositiveIntegerField(default=0)
-    cantidad_danada = models.PositiveIntegerField(default=0)
+    cantidad_recibida = models.PositiveIntegerField(default=0, help_text="Cajas confirmadas en tarima (buenas)")
+    cantidad_danada = models.PositiveIntegerField(default=0, help_text="Cajas confirmadas como dañadas (cuarentena)")
     lote_codigo = models.CharField(
         max_length=60, blank=True, default="",
-        help_text="Lote anunciado por el cliente; el piso lo ve preseleccionado al ubicar",
+        help_text="Lote anunciado por el cliente; el piso lo ve como tarjeta al contar",
     )
     fecha_caducidad = models.DateField(null=True, blank=True)
 
@@ -246,6 +252,50 @@ class LineaASN(models.Model):
 
     def __str__(self):
         return f"{self.orden.folio} · {self.sku.codigo} ({self.cantidad_recibida}/{self.cantidad_anunciada})"
+
+
+class EscaneoRecepcion(models.Model):
+    """Una caja escaneada en recepción (Chema 2026-10-13: contar ≠ recibir).
+
+    Nace CONTADA al confirmar el lote en el piso: bitácora sin stock. Al
+    confirmar la tarima pasa a RECIBIDA y es entonces cuando existe el saldo
+    (en_putaway en la tarima; dañada → cuarentena en la zona de recepción).
+    ANULADA = se contó de más (etiqueta sobrante) o Mesa la quitó; si ya
+    estaba recibida, el stock se revierte con kardex. El lote es el de la
+    línea. `tarima` es donde se contó, o la posición a la que Mesa la movió
+    después. `impresa_ts` marca que su etiqueta ya salió de la térmica (las
+    tandas se imprimen en orden inverso al de `ts`, tarima por tarima).
+    """
+
+    CONTADA = "contada"
+    RECIBIDA = "recibida"
+    ANULADA = "anulada"
+    ESTADOS = [
+        (CONTADA, "Contada (sin stock todavía)"),
+        (RECIBIDA, "Recibida (stock en su tarima)"),
+        (ANULADA, "Anulada (contada de más)"),
+    ]
+
+    orden = models.ForeignKey(OrdenEntrada, on_delete=models.CASCADE, related_name="escaneos")
+    linea = models.ForeignKey(LineaASN, on_delete=models.CASCADE, related_name="escaneos")
+    tarima = models.ForeignKey("catalogo.Ubicacion", on_delete=models.PROTECT, related_name="escaneos_recepcion")
+    danada = models.BooleanField(default=False)
+    estado = models.CharField(max_length=10, choices=ESTADOS, default=CONTADA, db_index=True)
+    actor = models.CharField(max_length=120, blank=True)
+    ts = models.DateTimeField(auto_now_add=True, db_index=True)
+    impresa_ts = models.DateTimeField(null=True, blank=True)
+    anulada_ts = models.DateTimeField(null=True, blank=True)
+    anulada_por = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ["ts", "id"]
+        indexes = [models.Index(fields=["orden", "tarima", "estado"])]
+        verbose_name = "escaneo de recepción"
+        verbose_name_plural = "escaneos de recepción"
+
+    def __str__(self):
+        marca = " dañada" if self.danada else ""
+        return f"{self.orden.folio} · {self.linea.sku.codigo} @{self.tarima.codigo}{marca} [{self.estado}]"
 
 
 class Conteo(models.Model):

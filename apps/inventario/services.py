@@ -7,6 +7,7 @@ Semántica clave (ver models.py): `reservado` es una capa sobre
 `ubicado_vendible` — la unidad reservada sigue contada en su saldo vendible.
     disponible = suma(ubicado_vendible) − suma(reservado) − buffer del cliente
 """
+import re
 from datetime import date
 
 from django.conf import settings
@@ -18,7 +19,7 @@ from apps.catalogo.models import Lote, Ubicacion
 from apps.core.fechas import FORMATOS_LEGIBLES, parsear_fecha_csv
 from apps.core.services import registrar_evento
 
-from .models import Ajuste, Conteo, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
+from .models import Ajuste, Conteo, EscaneoRecepcion, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers internos
@@ -603,21 +604,399 @@ def anunciar_asn(cliente, fecha_compromiso, tarimas, lineas, actor, origen, moti
     return orden
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Recepción por escaneo (Chema 2026-10-13): contar ≠ recibir
+# ─────────────────────────────────────────────────────────────────────────────
+# Cada caja se escanea una vez y queda CONTADA en una tarima (EscaneoRecepcion,
+# sin stock). Tras imprimir y pegar etiquetas, el piso confirma tarima por
+# tarima: las cajas pasan a RECIBIDAS y nace el saldo en_putaway (no vendible)
+# en esa tarima; las dañadas, a cuarentena en la zona de recepción. Cerrar la
+# orden vuelve vendible todo lo recibido y avisa a Shopify una sola vez.
+
+PATRON_QR_PRODUCTO = re.compile(r"^P\|(?P<barras>[^|]*)\|(?P<lote>[^|]*)$")
+PATRON_QR_POSICION = re.compile(r"^U\|(?P<codigo>[^|]+)$")
+PATRON_CODIGO_POSICION = re.compile(r"^[A-Z]{2,4}-[A-Z0-9][A-Z0-9-]*$")
+
+
+def normalizar_escaneo(valor):
+    """Lo que tecleó el escáner, corregido si la tablet tenía el teclado en
+    español: un lector configurado como teclado de EE. UU. manda `]` donde
+    quería `|` y `'` donde quería `-`. Solo se corrige cuando el resultado
+    tiene la forma de un código de Torre (QR de producto `P|barras|lote`, QR
+    de posición `U|código` o un código de posición con guiones); ningún
+    código nuestro lleva esos dos caracteres, así que no hay ambigüedad."""
+    valor = (valor or "").strip()
+    if "]" not in valor and "'" not in valor:
+        return valor
+    candidato = valor.replace("]", "|").replace("'", "-")
+    if (
+        PATRON_QR_PRODUCTO.match(candidato)
+        or PATRON_QR_POSICION.match(candidato)
+        or PATRON_CODIGO_POSICION.match(candidato.upper())
+    ):
+        return candidato
+    return valor
+
+
+def qr_producto(sku, lote_codigo):
+    """Contenido del QR de la etiqueta de caja: `P|<código de barras>|<lote>`
+    (sin código de barras va el código del SKU; sin lote queda vacío)."""
+    return f"P|{sku.codigo_barras or sku.codigo}|{(lote_codigo or '').strip()}"
+
+
+def qr_posicion(ubicacion):
+    """Contenido del QR de una tarima o posición: `U|<código>`."""
+    return f"U|{ubicacion.codigo}"
+
+
+def _sku_por_codigo(cliente, valor):
+    """SKU activo del cliente con ese código de barras o código. Un producto de
+    otro cliente o uno que no existe son errores distintos para que el piso
+    sepa qué pasó; un kit no se recibe (se arma al empacar)."""
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+
+    filtro = Q(codigo_barras=valor) | Q(codigo__iexact=valor)
+    sku = SKU.objects.filter(cliente=cliente, activo=True).filter(filtro).order_by("pk").first()
+    if sku is None:
+        ajeno = SKU.objects.filter(filtro).exclude(cliente=cliente).select_related("cliente").first()
+        if ajeno is not None:
+            raise ValueError(f"{valor} es un producto de {ajeno.cliente.nombre}, no de {cliente.nombre}.")
+        raise ValueError(f"El código {valor} no está registrado. Pide a Mesa que dé de alta el producto.")
+    if sku.es_kit:
+        raise ValueError(f"{sku.codigo} es un kit: se arma al empacar, no se recibe.")
+    return sku
+
+
+def resolver_escaneo(orden, valor):
+    """Qué producto es el código escaneado en esta orden. Acepta el código de
+    barras o el código del SKU y el QR de una etiqueta de Torre (que además
+    trae el lote). Regresa {"sku", "lineas" (las de la orden para ese SKU, en
+    orden), "lote_qr" (código del lote si vino en el QR, si no None),
+    "en_orden"}. Un producto del cliente que no venía en la orden NO es error:
+    se agrega con anunciado 0 al contar la primera caja (Chema 2026-10-13)."""
+    valor = normalizar_escaneo(valor)
+    if not valor:
+        raise ValueError("Escanea un código.")
+    if PATRON_QR_POSICION.match(valor):
+        raise ValueError("Eso es una etiqueta de posición, no de producto.")
+    lote_qr = None
+    qr = PATRON_QR_PRODUCTO.match(valor)
+    if qr:
+        valor, lote_qr = qr["barras"].strip(), qr["lote"].strip()
+        if not valor:
+            raise ValueError("El QR no trae el código del producto.")
+    sku = _sku_por_codigo(orden.cliente, valor)
+    lineas = list(orden.lineas.filter(sku=sku).select_related("sku").order_by("pk"))
+    return {"sku": sku, "lineas": lineas, "lote_qr": lote_qr, "en_orden": bool(lineas)}
+
+
+def es_tarima(ubicacion):
+    """True si la ubicación es una tarima (reserva TAR-nn)."""
+    return ubicacion is not None and ubicacion.tipo == Ubicacion.RESERVA and ubicacion.codigo.startswith(PREFIJO_TARIMA)
+
+
+def _orden_abierta(orden):
+    if orden.estado == OrdenEntrada.CERRADA:
+        raise ValueError(f"La orden {orden.folio} ya está cerrada; no acepta más cajas.")
+
+
+def _linea_bloqueada(linea_o_pk):
+    """La línea fresca y bloqueada (SELECT FOR UPDATE): los contadores de
+    recibidas/dañadas nunca se leen de la instancia que trae el llamador,
+    que puede estar vieja (p. ej. varias cajas de la misma línea en un bucle)."""
+    pk = getattr(linea_o_pk, "pk", linea_o_pk)
+    return LineaASN.objects.select_for_update().select_related("sku", "orden").get(pk=pk)
+
+
+def _lote_de_linea(linea, caducidad=None, crear=True):
+    """El Lote de la línea (por su código); None si la línea no lleva lote.
+    Con `crear` lo da de alta con la caducidad de la línea si no existía."""
+    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+
+    codigo = (linea.lote_codigo or "").strip()
+    if not codigo:
+        return None
+    if crear:
+        return obtener_o_crear_lote(linea.sku, codigo, caducidad or linea.fecha_caducidad)
+    return Lote.objects.filter(sku=linea.sku, codigo=codigo).first()
+
+
+def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=False):
+    """Una caja escaneada queda CONTADA en esa tarima (sin stock): la línea
+    del producto y lote (se crea con anunciado 0 si el lote, o el producto,
+    no venían en la orden; eventos `lote_no_anunciado` / `sku_no_anunciado`),
+    el Lote del catálogo con su caducidad y el escaneo con quién lo hizo. El
+    primer escaneo pasa la orden a EN_RECEPCION. Regresa el EscaneoRecepcion."""
+    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
+
+    _orden_abierta(orden)
+    if sku.cliente_id != orden.cliente_id:
+        raise ValueError(f"{sku.codigo} no es de {orden.cliente.nombre}.")
+    if not es_tarima(tarima) or not tarima.activo:
+        raise ValueError("Elige en qué tarima estás contando.")
+    lote_codigo = (lote_codigo or "").strip()
+    if sku.requiere_lote and not lote_codigo:
+        raise ValueError(f"{sku.codigo} requiere lote: elige uno o captura el nuevo.")
+    with transaction.atomic():
+        linea = orden.lineas.filter(sku=sku, lote_codigo=lote_codigo).order_by("pk").first()
+        if linea is None:
+            habia = orden.lineas.filter(sku=sku).exists()
+            linea = LineaASN.objects.create(
+                orden=orden, sku=sku, cantidad_anunciada=0, lote_codigo=lote_codigo, fecha_caducidad=fecha_caducidad,
+            )
+            registrar_evento(
+                "asn", orden.folio, "lote_no_anunciado" if habia else "sku_no_anunciado",
+                actor=actor, cliente=orden.cliente, delta={"sku": sku.codigo, "lote": lote_codigo or None},
+                motivo=(
+                    f"Llegó {sku.codigo} con el lote {lote_codigo or '—'}, que no venía en la orden."
+                    if habia else f"Llegó {sku.codigo}, que no venía en la orden: se agrega con 0 anunciadas."
+                ),
+            )
+        elif fecha_caducidad and linea.fecha_caducidad is None:
+            linea.fecha_caducidad = fecha_caducidad
+            linea.save(update_fields=["fecha_caducidad"])
+        if lote_codigo:
+            obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad or linea.fecha_caducidad)
+        if orden.estado == OrdenEntrada.ANUNCIADA:
+            orden.transicionar(OrdenEntrada.EN_RECEPCION, actor=actor, motivo="Inicio de descarga")
+        escaneo = EscaneoRecepcion.objects.create(
+            orden=orden, linea=linea, tarima=tarima, danada=bool(danada), actor=_actor_str(actor),
+        )
+    return escaneo
+
+
+def escaneos_vivos(orden):
+    """Escaneos de la orden que cuentan: contadas y recibidas (no anuladas)."""
+    return orden.escaneos.exclude(estado=EscaneoRecepcion.ANULADA)
+
+
+def resumen_lineas(orden):
+    """Por línea (producto · lote), la cuenta viva: `contadas` (cajas buenas
+    escaneadas), `danadas`, `recibidas` (confirmadas en tarima, buenas),
+    `por_confirmar`, `llegaron` (contadas + dañadas), `diferencia` contra lo
+    anunciado, `faltante`, `sobrante` y `sin_etiqueta`."""
+    vivos = {}
+    for e in escaneos_vivos(orden).values("linea_id", "estado", "danada", "impresa_ts"):
+        r = vivos.setdefault(e["linea_id"], {"contadas": 0, "danadas": 0, "por_confirmar": 0, "sin_etiqueta": 0})
+        r["danadas" if e["danada"] else "contadas"] += 1
+        if e["estado"] == EscaneoRecepcion.CONTADA:
+            r["por_confirmar"] += 1
+        if e["impresa_ts"] is None:
+            r["sin_etiqueta"] += 1
+    filas = []
+    for linea in orden.lineas.select_related("sku").order_by("sku__codigo", "lote_codigo", "pk"):
+        r = vivos.get(linea.pk, {"contadas": 0, "danadas": 0, "por_confirmar": 0, "sin_etiqueta": 0})
+        llegaron = r["contadas"] + r["danadas"]
+        filas.append({
+            "linea": linea, "sku": linea.sku, "lote": (linea.lote_codigo or "").strip(), "caducidad": linea.fecha_caducidad,
+            "anunciadas": linea.cantidad_anunciada, "contadas": r["contadas"], "danadas": r["danadas"],
+            "recibidas": linea.cantidad_recibida, "por_confirmar": r["por_confirmar"], "sin_etiqueta": r["sin_etiqueta"],
+            "llegaron": llegaron, "diferencia": llegaron - linea.cantidad_anunciada,
+            "faltante": max(linea.cantidad_anunciada - llegaron, 0), "sobrante": max(llegaron - linea.cantidad_anunciada, 0),
+        })
+    return filas
+
+
+def tarimas_de_orden(orden):
+    """Tarimas (o posiciones) donde hay cajas de la orden, en orden de primer
+    uso: {tarima, cajas (vivas), por_confirmar, recibidas, danadas,
+    sin_etiqueta, confirmada (hay cajas y ninguna por confirmar)}."""
+    filas, orden_uso = {}, []
+    for e in escaneos_vivos(orden).select_related("tarima").order_by("ts", "id"):
+        if e.tarima_id not in filas:
+            filas[e.tarima_id] = {"tarima": e.tarima, "cajas": 0, "por_confirmar": 0, "recibidas": 0, "danadas": 0, "sin_etiqueta": 0}
+            orden_uso.append(e.tarima_id)
+        r = filas[e.tarima_id]
+        r["cajas"] += 1
+        if e.estado == EscaneoRecepcion.CONTADA:
+            r["por_confirmar"] += 1
+        else:
+            r["recibidas"] += 1
+        if e.danada:
+            r["danadas"] += 1
+        if e.impresa_ts is None:
+            r["sin_etiqueta"] += 1
+    resultado = []
+    for pk in orden_uso:
+        r = filas[pk]
+        r["confirmada"] = r["cajas"] > 0 and r["por_confirmar"] == 0
+        resultado.append(r)
+    return resultado
+
+
+def _recibir_escaneos(orden, tarima, pendientes, actor):
+    """Las cajas CONTADAS `pendientes` (de esa tarima) quedan RECIBIDAS: nace
+    el saldo en_putaway en la tarima con el lote de cada línea (kardex
+    RECEPCION) y las dañadas van a cuarentena en la zona de recepción; la
+    línea suma recibidas/dañadas. Stock que ya estaba en la zona de recepción
+    sin tarima (reingreso de una cancelación en bodega, recepciones viejas)
+    se toma de ahí en vez de crearse. Corre dentro de la transacción del
+    llamador. Regresa {"cajas", "danadas", "lineas": [...]}."""
+    zona = _ubicacion_tipo(Ubicacion.RECEPCION)
+    por_linea = {}
+    for e in pendientes:
+        r = por_linea.setdefault(e.linea_id, {"buenas": 0, "danadas": 0})
+        r["danadas" if e.danada else "buenas"] += 1
+    detalle = []
+    for linea_id, r in por_linea.items():
+        linea = _linea_bloqueada(linea_id)
+        sku = linea.sku
+        lote = _lote_de_linea(linea)
+        lote_id = lote.pk if lote else None
+        if r["buenas"]:
+            movidas = _tomar_de_recepcion(sku, lote, r["buenas"], tarima, orden.folio, actor)
+            nuevas = r["buenas"] - movidas
+            if nuevas:
+                _incrementar(sku, tarima.pk, lote_id, Saldo.EN_PUTAWAY, nuevas)
+                _mov(sku, Movimiento.RECEPCION, nuevas, lote=lote, destino=Saldo.EN_PUTAWAY, referencia=orden.folio, actor=actor)
+            linea.cantidad_recibida += r["buenas"]
+        if r["danadas"]:
+            if zona is None:
+                raise ValueError("No hay ubicación de recepción activa para las cajas dañadas. Da de alta una (tipo recepción).")
+            _incrementar(sku, zona.pk, lote_id, Saldo.CUARENTENA, r["danadas"])
+            _mov(sku, Movimiento.RECEPCION, r["danadas"], lote=lote, destino=Saldo.CUARENTENA, referencia=orden.folio, actor=actor)
+            linea.cantidad_danada += r["danadas"]
+        linea.save(update_fields=["cantidad_recibida", "cantidad_danada"])
+        detalle.append({"sku": sku.codigo, "lote": (linea.lote_codigo or "").strip() or None, "cajas": r["buenas"], "danadas": r["danadas"]})
+    EscaneoRecepcion.objects.filter(pk__in=[e.pk for e in pendientes]).update(estado=EscaneoRecepcion.RECIBIDA)
+    return {"cajas": sum(d["cajas"] for d in detalle), "danadas": sum(d["danadas"] for d in detalle), "lineas": detalle}
+
+
+def _tomar_de_recepcion(sku, lote, cantidad, tarima, folio, actor):
+    """Mueve a la tarima hasta `cantidad` piezas del SKU que ya estaban en
+    put-away en la zona de recepción (mismo lote primero, luego sin lote):
+    es el stock de un reingreso contado por la cancelación en bodega, o de
+    una recepción anterior al escaneo. Sin cambio de estado: kardex con delta
+    0. Regresa cuántas movió."""
+    zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
+    if not zonas:
+        return 0
+    saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY, ubicacion_id__in=zonas, cantidad__gt=0))
+    lote_id = lote.pk if lote else None
+    saldos.sort(key=lambda s: (s.lote_id != lote_id, s.lote_id is not None, s.pk))
+    mover = min(sum(s.cantidad for s in saldos), cantidad)
+    if mover <= 0:
+        return 0
+    _restar(saldos, mover)
+    _incrementar(sku, tarima.pk, lote_id, Saldo.EN_PUTAWAY, mover)
+    _mov(sku, Movimiento.PUTAWAY, 0, lote=lote, origen=Saldo.EN_PUTAWAY, destino=Saldo.EN_PUTAWAY, referencia=folio, actor=actor)
+    return mover
+
+
+def confirmar_tarima(orden, tarima, actor):
+    """La tarima cuadró: sus cajas contadas quedan recibidas (ver
+    _recibir_escaneos). Evento `tarima_confirmada`. Regresa el resumen."""
+    _orden_abierta(orden)
+    with transaction.atomic():
+        orden = OrdenEntrada.objects.select_for_update().get(pk=orden.pk)
+        pendientes = list(
+            escaneos_vivos(orden).filter(tarima=tarima, estado=EscaneoRecepcion.CONTADA)
+            .select_related("linea__sku").order_by("ts", "id")
+        )
+        if not pendientes:
+            raise ValueError(f"No hay cajas por confirmar en {tarima.codigo}.")
+        resumen = _recibir_escaneos(orden, tarima, pendientes, actor)
+        registrar_evento(
+            "asn", orden.folio, "tarima_confirmada", actor=actor, cliente=orden.cliente,
+            delta={"tarima": tarima.codigo, **resumen},
+            motivo=f"{tarima.codigo}: {resumen['cajas']} caja(s) recibidas"
+            + (f" y {resumen['danadas']} dañada(s) a cuarentena" if resumen["danadas"] else "") + ".",
+        )
+    return resumen
+
+
+def _revertir_recibida(escaneo, actor):
+    """Deshace el stock de UNA caja recibida: sale de la tarima (o de la
+    cuarentena de recepción si era dañada) con kardex RECEPCION −1 y la
+    línea baja. ValueError si la caja ya no está donde se recibió."""
+    linea = _linea_bloqueada(escaneo.linea_id)
+    sku = linea.sku
+    lote = _lote_de_linea(linea, crear=False)
+    if escaneo.danada:
+        zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
+        saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas, lote=lote, cantidad__gt=0))
+        origen, donde = Saldo.CUARENTENA, "la cuarentena de recepción"
+    else:
+        saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY, ubicacion=escaneo.tarima, lote=lote, cantidad__gt=0))
+        origen, donde = Saldo.EN_PUTAWAY, escaneo.tarima.codigo
+    if sum(s.cantidad for s in saldos) < 1:
+        raise ValueError(f"Esa caja de {sku.codigo} ya no está en {donde}: Mesa la movió o la dictaminó. Corrige desde el editor.")
+    _restar(saldos, 1)
+    _mov(sku, Movimiento.RECEPCION, -1, lote=lote, origen=origen, referencia=escaneo.orden.folio, actor=actor)
+    if escaneo.danada:
+        linea.cantidad_danada = max(linea.cantidad_danada - 1, 0)
+    else:
+        linea.cantidad_recibida = max(linea.cantidad_recibida - 1, 0)
+    linea.save(update_fields=["cantidad_recibida", "cantidad_danada"])
+
+
+def anular_escaneo(orden, linea, tarima, actor, motivo=""):
+    """Resta UNA caja de esa línea en esa tarima: el último escaneo vivo
+    queda ANULADO (etiqueta sobrante, Chema 2026-10-13). Si ya estaba
+    recibida, el stock se revierte con kardex. Evento `escaneo_anulado`."""
+    _orden_abierta(orden)
+    with transaction.atomic():
+        escaneo = (
+            escaneos_vivos(orden).filter(linea=linea, tarima=tarima).select_related("linea__sku", "tarima")
+            .order_by("-ts", "-id").select_for_update().first()
+        )
+        if escaneo is None:
+            raise ValueError(f"No hay cajas de {linea.sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''} contadas en {tarima.codigo}.")
+        estaba = escaneo.estado
+        if estaba == EscaneoRecepcion.RECIBIDA:
+            _revertir_recibida(escaneo, actor)
+        escaneo.estado = EscaneoRecepcion.ANULADA
+        escaneo.anulada_ts = timezone.now()
+        escaneo.anulada_por = _actor_str(actor)
+        escaneo.save(update_fields=["estado", "anulada_ts", "anulada_por"])
+        registrar_evento(
+            "asn", orden.folio, "escaneo_anulado", actor=actor, cliente=orden.cliente,
+            delta={"sku": linea.sku.codigo, "lote": (linea.lote_codigo or "").strip() or None, "tarima": tarima.codigo,
+                   "danada": escaneo.danada, "estaba": estaba},
+            motivo=(motivo or "Caja contada de más (etiqueta sobrante).")[:300],
+        )
+    return escaneo
+
+
+def cuadre_recepcion(orden):
+    """Lo que el cierre muestra: `lineas` (resumen_lineas), `espejo` (a un
+    producto le faltan las mismas cajas que a otro le sobran: cajas
+    idénticas cambiadas, la falla de ASN-0007), `tarimas`, `por_confirmar`
+    (tarimas con cajas contadas sin confirmar), `sin_etiqueta` (cajas sin
+    etiqueta impresa) y `con_diferencias`."""
+    lineas = resumen_lineas(orden)
+    faltan = [l for l in lineas if l["faltante"]]
+    sobran = [l for l in lineas if l["sobrante"]]
+    espejo = [
+        {"falta": f["sku"].codigo, "sobra": s["sku"].codigo, "cajas": f["faltante"]}
+        for f in faltan for s in sobran
+        if f["sku"].pk != s["sku"].pk and f["faltante"] == s["sobrante"]
+    ]
+    tarimas = tarimas_de_orden(orden)
+    return {
+        "lineas": lineas, "espejo": espejo, "tarimas": tarimas,
+        "por_confirmar": [t for t in tarimas if t["por_confirmar"]],
+        "sin_etiqueta": sum(l["sin_etiqueta"] for l in lineas),
+        "con_diferencias": any(l["diferencia"] or l["danadas"] for l in lineas),
+    }
+
+
 def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
-    """Cierra la recepción: valida que nada quede en put-away, guarda las tarimas
-    recibidas, transiciona a CERRADA y hace la confirmación honesta.
+    """Cierra la recepción: exige que no quede caja contada sin confirmar ni
+    stock de la orden en la zona de recepción sin tarima, guarda las tarimas
+    recibidas, vuelve VENDIBLE todo lo recibido (en_putaway → ubicado_vendible
+    en su tarima o posición, kardex PUTAWAY) y avisa a Shopify una vez por
+    producto; transiciona a CERRADA y hace la confirmación honesta.
 
     Si hubo faltantes o sobrantes contra lo anunciado, registra el evento
-    `cerrada_con_discrepancia` y abre UNA incidencia DES con el desglose por SKU.
-    Siempre avisa al cliente (lazy a mensajeria.enviar_recepcion_cerrada).
+    `cerrada_con_discrepancia` y abre UNA incidencia DES con el desglose por
+    SKU. Siempre avisa al cliente (lazy a mensajeria.enviar_recepcion_cerrada).
 
-    Con faltantes la orden nunca llega sola a RECIBIDA (la línea no se
-    completa): cerrar desde EN_RECEPCION pasa primero por RECIBIDA — es la
-    decisión honesta de "ya no va a llegar más".
-
-    OJO: el filtro de put-away es por SKU global (mismo criterio histórico del
-    piso): put-away de otra orden del mismo SKU también bloquea el cierre.
+    Con faltantes la orden nunca llega sola a RECIBIDA: cerrar desde
+    EN_RECEPCION pasa primero por RECIBIDA (la decisión honesta de "ya no va
+    a llegar más") estampando la descarga con el último movimiento.
     """
+    skus_vendibles = set()
     with transaction.atomic():
         # Bajo lock: un re-POST del form de cierre o dos cierres concurrentes
         # no deben mutar tarimas ni duplicar incidencia/evento.
@@ -629,14 +1008,22 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
         if orden.estado not in (OrdenEntrada.EN_RECEPCION, OrdenEntrada.RECIBIDA):
             raise ValueError(f"La orden {orden.folio} ya está cerrada.")
         lineas = list(orden.lineas.select_related("sku"))
-        pendiente = (
+        sin_confirmar = sorted({
+            t for t in escaneos_vivos(orden).filter(estado=EscaneoRecepcion.CONTADA).values_list("tarima__codigo", flat=True)
+        })
+        if sin_confirmar:
+            raise ValueError(
+                f"Hay cajas contadas sin confirmar en {', '.join(sin_confirmar)}. Confirma cada tarima antes de cerrar."
+            )
+        zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
+        en_zona = (
             Saldo.objects.filter(
-                sku_id__in=[linea.sku_id for linea in lineas], estado=Saldo.EN_PUTAWAY,
+                sku_id__in=[linea.sku_id for linea in lineas], estado=Saldo.EN_PUTAWAY, ubicacion_id__in=zonas,
             ).aggregate(t=Sum("cantidad"))["t"] or 0
         )
-        if pendiente > 0:
+        if en_zona > 0:
             raise ValueError(
-                f"Aún hay {pendiente} piezas sin ubicar. Ubica todo antes de cerrar la orden."
+                f"Aún hay {en_zona} pieza(s) en la zona de recepción sin tarima. Mesa las acomoda desde el editor antes de cerrar."
             )
         if tarimas_recibidas is not None:
             tarimas_recibidas = int(tarimas_recibidas)
@@ -663,6 +1050,29 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
                     "sobrante": sobrante,
                 })
 
+        # Vendible: lo recibido de cada línea (producto + lote) en su tarima o
+        # posición pasa a ubicado_vendible ahí mismo (Chema 2026-10-13: nada
+        # es vendible hasta cerrar). Dos órdenes abiertas del mismo producto y
+        # lote se vuelven vendibles juntas: caso raro, aceptado.
+        for linea in lineas:
+            lote = _lote_de_linea(linea, crear=False)
+            saldos = list(
+                Saldo.objects.select_for_update().filter(
+                    sku=linea.sku, estado=Saldo.EN_PUTAWAY, lote=lote, cantidad__gt=0,
+                    ubicacion__tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA),
+                ).select_related("ubicacion")
+            )
+            for saldo in saldos:
+                n = saldo.cantidad
+                _restar([saldo], n)
+                _incrementar(linea.sku, saldo.ubicacion_id, saldo.lote_id, Saldo.UBICADO_VENDIBLE, n)
+                _mov(
+                    linea.sku, Movimiento.PUTAWAY, n, lote=lote,
+                    origen=Saldo.EN_PUTAWAY, destino=Saldo.UBICADO_VENDIBLE,
+                    referencia=saldo.ubicacion.codigo, actor=actor,
+                )
+                skus_vendibles.add(linea.sku)
+
         if orden.estado == OrdenEntrada.EN_RECEPCION:
             # Cierre con líneas incompletas: la descarga real terminó con el
             # último movimiento de recepción, no al momento del cierre — si no,
@@ -681,9 +1091,9 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
                 orden.save(update_fields=["ts_descarga_fin"])
             orden.transicionar(
                 OrdenEntrada.RECIBIDA, actor=actor,
-                motivo="Descarga terminada: cierre con líneas incompletas",
+                motivo="Descarga terminada: cierre de la recepción",
             )
-        orden.transicionar(OrdenEntrada.CERRADA, actor=actor, motivo="Todo ubicado y vendible")
+        orden.transicionar(OrdenEntrada.CERRADA, actor=actor, motivo="Recepción cerrada: todo lo recibido queda vendible")
 
         if discrepancias:
             registrar_evento(
@@ -696,7 +1106,52 @@ def cerrar_recepcion(orden, actor, tarimas_recibidas=None):
 
         if orden.tipo == OrdenEntrada.TIPO_ASN:
             _notificar_recepcion_cerrada(orden)
+    for sku in sorted(skus_vendibles, key=lambda s: s.codigo):
+        _notificar_cambio_disponible(sku)
+        _reintentar_pendientes(sku)
     return orden
+
+
+def reiniciar_recepcion(orden, actor=None):
+    """La recepción vuelve a cero para recontar todo escaneando: cada caja
+    viva queda anulada (las recibidas revierten su stock con kardex; una
+    caja que ya no está donde se recibió se anula igual y se reporta), las
+    líneas vuelven a 0 recibidas/dañadas y una orden RECIBIDA regresa a
+    EN_RECEPCION (deshacer explícito, auditado). La foto de llegada se
+    queda. Regresa {"anuladas", "recibidas_revertidas", "no_encontradas"}."""
+    _orden_abierta(orden)
+    r = {"anuladas": 0, "recibidas_revertidas": 0, "no_encontradas": 0}
+    with transaction.atomic():
+        orden = OrdenEntrada.objects.select_for_update().get(pk=orden.pk)
+        ahora = timezone.now()
+        for escaneo in escaneos_vivos(orden).select_related("linea__sku", "tarima").order_by("-ts", "-id"):
+            if escaneo.estado == EscaneoRecepcion.RECIBIDA:
+                try:
+                    with transaction.atomic():
+                        _revertir_recibida(escaneo, actor)
+                    r["recibidas_revertidas"] += 1
+                except ValueError:
+                    r["no_encontradas"] += 1
+                    linea = _linea_bloqueada(escaneo.linea_id)
+                    campo = "cantidad_danada" if escaneo.danada else "cantidad_recibida"
+                    setattr(linea, campo, max(getattr(linea, campo) - 1, 0))
+                    linea.save(update_fields=[campo])
+            escaneo.estado = EscaneoRecepcion.ANULADA
+            escaneo.anulada_ts = ahora
+            escaneo.anulada_por = _actor_str(actor)
+            escaneo.save(update_fields=["estado", "anulada_ts", "anulada_por"])
+            r["anuladas"] += 1
+        estado_anterior = orden.estado
+        if orden.estado == OrdenEntrada.RECIBIDA:
+            orden.estado = OrdenEntrada.EN_RECEPCION
+            orden.ts_descarga_fin = None
+            orden.save(update_fields=["estado", "ts_descarga_fin"])
+        registrar_evento(
+            "asn", orden.folio, "recepcion_reiniciada", actor=actor, cliente=orden.cliente,
+            delta={**r, "estado": [estado_anterior, orden.estado]},
+            motivo="Reinicio de la recepción: las cajas contadas se anulan y el stock recibido se revierte para volver a escanear todo.",
+        )
+    return r
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1998,174 +2453,11 @@ def marcar_anaquel(ubicacion, lleno, actor=None):
     return True
 
 
-# ── Plan de acomodo por orden de entrada (recepción pieza por pieza) ──
-
-def planear_acomodo(orden, actor=None):
-    """Plan de put-away de TODA la orden con lo que falta por ubicar de cada
-    línea: lo anunciado que no ha llegado más lo que ya está en recepción
-    (en_putaway) de ese SKU. Las líneas se planean de clase A a C para que la
-    alta rotación tome los mejores anaqueles, apartando virtualmente lo que
-    cada SKU va ocupando (sin doble asignación). Lo que no cabe (o no tiene
-    medidas) va como paso a la zona de desborde (TORRE["ZONA_DESBORDE"],
-    reserva vendible; Chema 2026-09-24: "que se vaya al anaquel de Reservas y
-    cuente como disponible"); solo sin zona configurada queda como paso sin
-    anaquel: cuarentena. Se guarda en orden.plan_acomodo y se audita."""
-    from apps.catalogo.services import clases_rotacion  # lazy por contrato
-
-    clases = clases_rotacion(orden.cliente)
-    desborde = zona_desborde()
-    destino_sobrante = desborde.codigo if desborde is not None else None
-    a_donde = f"a {destino_sobrante} (reservas, vendible)" if desborde is not None else "a cuarentena"
-    lineas = list(orden.lineas.select_related("sku"))
-    lineas.sort(key=lambda l: (clases.get(l.sku_id, "C"), l.sku.codigo, l.lote_codigo or ""))
-    # Lo ya ubicado según el plan anterior, por (sku, lote): no se vuelve a
-    # planear. Un plan viejo sin lote acredita sus ubicadas a las líneas del
-    # SKU en orden. Y el total por SKU se limita a lo que FÍSICAMENTE falta
-    # (anunciado no llegado, línea por línea, + en recepción): lo ubicado a
-    # mano tampoco se replanea aunque el plan no lo haya visto. Línea por
-    # línea para que un lote que llegó de más (o no anunciado) no tape lo que
-    # falta de otro lote (2026-10-06).
-    previo = orden.plan_acomodo or {}
-    ubicadas_previas = dict(previo.get("ubicadas", {}))
-    for p in previo.get("pasos", []):
-        clave = f"{p['sku_id']}|{p.get('lote') or ''}"
-        ubicadas_previas[clave] = ubicadas_previas.get(clave, 0) + p.get("ubicadas", 0)
-    sin_lote = {}
-    for clave, n in list(ubicadas_previas.items()):
-        sku_id, lote = clave.split("|", 1)
-        if not lote and n:
-            sin_lote[int(sku_id)] = sin_lote.get(int(sku_id), 0) + n
-            ubicadas_previas.pop(clave)
-    por_llegar = {}
-    for linea in lineas:
-        por_llegar[linea.sku_id] = por_llegar.get(linea.sku_id, 0) + max(linea.cantidad_anunciada - linea.cantidad_recibida, 0)
-    tope = {
-        sku_id: faltan + _suma(SKU_por_id(sku_id, lineas), Saldo.EN_PUTAWAY)
-        for sku_id, faltan in por_llegar.items()
-    }
-    reservas, pasos, acreditadas, completas = {}, [], {}, []
-    for linea in lineas:
-        sku = linea.sku
-        lote = (linea.lote_codigo or "").strip()
-        clave = f"{sku.pk}|{lote}"
-        previas = ubicadas_previas.get(clave, 0)
-        if sin_lote.get(sku.pk):  # plan viejo sin lote: se acredita en orden
-            extra = min(sin_lote[sku.pk], max(linea.cantidad_anunciada - previas, 0))
-            previas += extra
-            sin_lote[sku.pk] -= extra
-        pendientes = max(linea.cantidad_anunciada - previas, 0)
-        pendientes = min(pendientes, max(tope.get(sku.pk, 0) - sum(
-            p["cantidad"] for p in pasos if p["sku_id"] == sku.pk
-        ), 0))
-        acreditadas[clave] = previas
-        if pendientes <= 0:
-            completas.append({
-                "sku": sku.codigo, "lote": lote, "anunciadas": linea.cantidad_anunciada,
-                "recibidas": linea.cantidad_recibida, "danadas": linea.cantidad_danada,
-                "diferencia": linea.cantidad_recibida + linea.cantidad_danada - linea.cantidad_anunciada,
-            })
-            continue
-        plan = sugerir_anaquel(sku, pendientes, reservas, lote=lote or None)
-        if not plan:  # sin medidas: a la zona de desborde (o cuarentena) hasta que Mesa las capture
-            plan = [{"ubicacion": None, "cantidad": pendientes, "motivo": f"sin medidas del producto: {a_donde}"}]
-        for paso in plan:
-            u = paso["ubicacion"]
-            if u is not None:
-                reservas.setdefault(u.codigo, []).append((sku, paso["cantidad"], lote or None))
-            motivo = paso["motivo"] if u is not None else f"sin anaquel con espacio: {a_donde}"
-            if paso["motivo"].startswith("sin medidas"):
-                motivo = paso["motivo"]
-            pasos.append({
-                "sku_id": sku.pk, "sku": sku.codigo, "lote": lote,
-                "ubicacion": u.codigo if u else destino_sobrante,
-                "cantidad": paso["cantidad"], "ubicadas": 0, "motivo": motivo,
-            })
-    orden.plan_acomodo = {
-        "generado": timezone.now().isoformat(), "pasos": pasos,
-        "ubicadas": {clave: n for clave, n in acreditadas.items() if n},  # ya ubicadas antes de este plan
-        "completas": completas,  # líneas sin nada por ubicar (todo recibido y acomodado)
-    }
-    orden.save(update_fields=["plan_acomodo"])
-    registrar_evento(
-        "asn", orden.folio, "plan_acomodo", actor=actor, cliente=orden.cliente,
-        delta={"pasos": [(p["sku"], p["ubicacion"], p["cantidad"]) for p in pasos]},
-        motivo=f"Plan de acomodo de {orden.folio}: {len(pasos)} paso(s).",
-    )
-    return orden.plan_acomodo
-
-
-def SKU_por_id(sku_id, lineas):
-    """El SKU de las líneas de la orden por id (evita otra consulta)."""
-    return next(l.sku for l in lineas if l.sku_id == sku_id)
-
-
-def siguiente_paso(orden, sku, lote=None):
-    """Paso del plan que sigue para ese SKU y lote (el primero con piezas por
-    ubicar); None si el plan no lo contempla (se rehace o se sugiere ad hoc)."""
-    lote = (lote or "").strip()
-    for paso in (orden.plan_acomodo or {}).get("pasos", []):
-        if paso["sku_id"] == sku.pk and (paso.get("lote") or "") == lote and paso["ubicadas"] < paso["cantidad"]:
-            return paso
-    return None
-
-
-def _avanzar_plan(orden, sku, codigo_ubicacion, lote=None, cantidad=1):
-    """Marca `cantidad` piezas ubicadas en el plan: primero en el paso del
-    anaquel elegido si le faltan, y el resto en los siguientes pasos del SKU y
-    lote (las piezas ya están en su anaquel; esto solo lleva la cuenta)."""
-    lote = (lote or "").strip()
-    pasos = (orden.plan_acomodo or {}).get("pasos", [])
-    candidatos = [
-        p for p in pasos
-        if p["sku_id"] == sku.pk and (p.get("lote") or "") == lote and p["ubicadas"] < p["cantidad"]
-    ]
-    candidatos.sort(key=lambda p: p["ubicacion"] != codigo_ubicacion)
-    restante = cantidad
-    for paso in candidatos:
-        if restante <= 0:
-            break
-        toma = min(paso["cantidad"] - paso["ubicadas"], restante)
-        paso["ubicadas"] += toma
-        restante -= toma
-    if restante != cantidad:
-        orden.save(update_fields=["plan_acomodo"])
-
-
-def a_cuarentena_desde_recepcion(sku, cantidad, referencia, actor, motivo=""):
-    """Piezas recibidas (en_putaway) que no tienen anaquel: pasan a cuarentena
-    en la zona de recepción, con kardex y evento."""
-    cantidad = _validar_cantidad(cantidad, "cuarentena")
-    with transaction.atomic():
-        en_putaway = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
-        if sum(s.cantidad for s in en_putaway) < cantidad:
-            raise ValueError(f"No hay {cantidad} piezas de {sku.codigo} en recepción.")
-        _restar(en_putaway, cantidad)
-        ubic = _ubicacion_tipo(Ubicacion.RECEPCION) or en_putaway[0].ubicacion
-        _incrementar(sku, ubic.pk, None, Saldo.CUARENTENA, cantidad)
-        _mov(sku, Movimiento.PUTAWAY, 0, origen=Saldo.EN_PUTAWAY, destino=Saldo.CUARENTENA, referencia=referencia, actor=actor)
-        registrar_evento(
-            "sku", sku.codigo, "a_cuarentena", actor=actor, cliente=sku.cliente,
-            delta={"cantidad": cantidad, "referencia": str(referencia)}, motivo=motivo[:300],
-        )
-
-
-def zona_desborde():
-    """Ubicación de desborde (settings.TORRE["ZONA_DESBORDE"], reserva o
-    picking, activa): ahí va lo que el plan no pudo meter en picking, vendible
-    con su lote, en vez de a cuarentena (la zona de cuarentena se usaba como
-    almacén y ese stock no se vendía; Chema 2026-09-22). None si no existe."""
-    codigo = str(settings.TORRE.get("ZONA_DESBORDE") or "").strip()
-    if not codigo:
-        return None
-    return Ubicacion.objects.filter(
-        codigo__iexact=codigo, activo=True, tipo__in=[Ubicacion.RESERVA, Ubicacion.PICKING],
-    ).first()
-
-
-# ── Tarimas (Chema 2026-09-24) ───────────────────────────────────────────────
-# Una tarima es una ubicación de reserva TAR-nn que el piso crea desde Ubicar
-# cuando el producto no va a un anaquel: lo que vive ahí es vendible y se
-# sabe en qué tarima está. Sin medidas ni prioridad: el plan no la sugiere.
+# ── Tarimas (Chema 2026-09-24; nombre editable 2026-10-13) ────────────────────
+# Una tarima es una ubicación de reserva TAR-nn: en recepción cada caja se
+# cuenta en una tarima y ahí nace su saldo al confirmarla. Sin medidas ni
+# prioridad. El piso la abre desde "¿Dónde estás escaneando?" con el nombre
+# propuesto (el siguiente número) o uno propio con el mismo prefijo.
 PREFIJO_TARIMA = "TAR-"
 
 
@@ -2178,6 +2470,12 @@ def tarimas_activas():
     """Tarimas activas en orden numérico (TAR-01, TAR-02, …)."""
     tarimas = Ubicacion.objects.filter(tipo=Ubicacion.RESERVA, activo=True, codigo__startswith=PREFIJO_TARIMA)
     return sorted(tarimas, key=lambda u: (_numero_tarima(u.codigo), u.codigo))
+
+
+def nombre_tarima_propuesto():
+    """El siguiente TAR-nn libre (no la crea)."""
+    existentes = Ubicacion.objects.filter(codigo__startswith=PREFIJO_TARIMA).values_list("codigo", flat=True)
+    return f"{PREFIJO_TARIMA}{max((_numero_tarima(c) for c in existentes), default=0) + 1:02d}"
 
 
 def contenido_ubicacion(ubicacion):
@@ -2195,517 +2493,56 @@ def contenido_ubicacion(ubicacion):
     )
 
 
-def crear_tarima(actor=None):
-    """Tarima nueva: la siguiente TAR-nn (reserva, activa). Auditada."""
+def crear_tarima(actor=None, codigo=None):
+    """Tarima nueva (reserva, activa): la siguiente TAR-nn o el nombre que
+    diga el piso, que debe empezar con TAR- y no repetirse. Auditada."""
     with transaction.atomic():
-        existentes = Ubicacion.objects.select_for_update().filter(codigo__startswith=PREFIJO_TARIMA)
-        numero = max((_numero_tarima(u.codigo) for u in existentes), default=0) + 1
-        tarima = Ubicacion.objects.create(codigo=f"{PREFIJO_TARIMA}{numero:02d}", tipo=Ubicacion.RESERVA, activo=True)
+        list(Ubicacion.objects.select_for_update().filter(codigo__startswith=PREFIJO_TARIMA))  # candado: dos altas a la vez no chocan
+        codigo = (codigo or "").strip().upper() or nombre_tarima_propuesto()
+        if not codigo.startswith(PREFIJO_TARIMA) or len(codigo) <= len(PREFIJO_TARIMA):
+            raise ValueError(f"El nombre de una tarima empieza con {PREFIJO_TARIMA} (ej. {nombre_tarima_propuesto()}).")
+        if len(codigo) > 20:
+            raise ValueError("El nombre de la tarima es muy largo (máximo 20 caracteres).")
+        if Ubicacion.objects.filter(codigo__iexact=codigo).exists():
+            raise ValueError(f"Ya existe {codigo}: elige otro nombre.")
+        tarima = Ubicacion.objects.create(codigo=codigo, tipo=Ubicacion.RESERVA, activo=True)
     registrar_evento(
         "ubicacion", tarima.codigo, "tarima_creada", actor=actor,
-        motivo="Tarima creada desde Ubicar en recepción; lo que se ubique ahí es vendible.",
+        motivo="Tarima creada desde recepción; lo que se cuente ahí es vendible al cerrar la orden.",
     )
     return tarima
 
 
-def _desvio_del_plan(orden, sku, codigo_lote, codigo_ubicacion, cantidad):
-    """Por qué este acomodo se sale del plan ("" si lo sigue): "tarima"
-    (el plan nunca nombra tarimas), "sin_paso" (el plan no contemplaba ese
-    producto y lote), "otra_posicion" (otro anaquel que el del paso) o
-    "mas_de_lo_planeado" (más piezas de las que el paso decía)."""
-    if codigo_ubicacion and codigo_ubicacion.startswith(PREFIJO_TARIMA):
-        return "tarima"
-    paso = siguiente_paso(orden, sku, codigo_lote)
-    if paso is None:
-        return "sin_paso"
-    if (paso["ubicacion"] or "") != (codigo_ubicacion or ""):
-        return "otra_posicion"
-    if cantidad > paso["cantidad"] - paso["ubicadas"]:
-        return "mas_de_lo_planeado"
-    return ""
-
-
-def ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad=1, replanear=True):
-    """`cantidad` piezas (default una, la recién contada): a su anaquel
-    (ubicar) o, sin anaquel (ubicacion=None), a la zona de desborde si existe
-    (vendible con su lote; evento a_desborde) y si no, a cuarentena por falta
-    de espacio; avanza el plan, primero el paso de esa misma ubicación (la
-    zona de desborde incluida: desde 2026-09-24 el plan la nombra). La
-    realidad manda (Chema 2026-10-06): si el acomodo se sale del plan (otra
-    posición, más piezas, tarima, sin paso) se rehace el plan de lo que falta
-    con lo acomodado como fijo (`replanear=False` lo pospone: recibir_y_ubicar
-    replanea una sola vez al final). Regresa la ubicación destino (None =
-    cuarentena)."""
-    cantidad = _validar_cantidad(cantidad, "ubicar")
-    codigo_lote = lote.codigo if lote is not None else None
-    desborde = zona_desborde()
-    if ubicacion is None and desborde is None:
-        a_cuarentena_desde_recepcion(sku, cantidad, orden.folio, actor, motivo="Sin anaquel con espacio en el plan de acomodo.")
-        _avanzar_plan(orden, sku, None, codigo_lote, cantidad)
-        return None
-    if ubicacion is None:
-        ubicacion = desborde
-    desvio = _desvio_del_plan(orden, sku, codigo_lote, ubicacion.codigo, cantidad)
-    ubicar(sku, cantidad, ubicacion, lote, actor)
-    es_desborde = desborde is not None and ubicacion.pk == desborde.pk
-    _avanzar_plan(orden, sku, ubicacion.codigo, codigo_lote, cantidad)
-    if es_desborde:
-        registrar_evento(
-            "sku", sku.codigo, "a_desborde", actor=actor, cliente=sku.cliente,
-            delta={"cantidad": cantidad, "referencia": str(orden.folio), "ubicacion": ubicacion.codigo,
-                   "lote": codigo_lote},
-            motivo="Sin anaquel con espacio en el plan: a la zona de desborde, vendible con su lote.",
-        )
-    if desvio and replanear:
-        _replanear_tras_desvio(orden, sku, ubicacion, cantidad, codigo_lote, actor, desvio)
-    return ubicacion
-
-
-def _replanear_tras_desvio(orden, sku, ubicacion, cantidad, codigo_lote, actor, desvio):
-    """Un acomodo fuera del plan (tarima, otra posición, más piezas, sin paso)
-    cambia qué espacio queda libre: se rehace el plan de lo que falta de la
-    orden con lo ya acomodado como fijo (Chema 2026-10-05 tarimas, 2026-10-06
-    todo desvío). Solo si el plan todavía tiene pasos pendientes."""
-    pasos = (orden.plan_acomodo or {}).get("pasos", [])
-    if not any(p["ubicadas"] < p["cantidad"] for p in pasos):
-        return
-    antes = sum(p["cantidad"] - p["ubicadas"] for p in pasos)
-    plan = planear_acomodo(orden, actor)
-    registrar_evento(
-        "asn", orden.folio, "acomodo_replaneado", actor=actor, cliente=orden.cliente,
-        delta={"sku": sku.codigo, "lote": codigo_lote, "ubicacion": ubicacion.codigo, "cantidad": cantidad,
-               "por": desvio, "pendientes_antes": antes, "pasos": len(plan.get("pasos", []))},
-        motivo=f"{cantidad} de {sku.codigo} a {ubicacion.codigo} ({desvio.replace('_', ' ')}): se replanea lo que falta con lo acomodado como fijo.",
-    )
-
-
-def recibir_y_ubicar(orden, sku, renglones, actor):
-    """Contar y acomodar un producto por lote en UNA transacción (Chema
-    2026-10-06: Contar ya no registra nada; todo se confirma en Acomodar con
-    el modal). `renglones` = [{"linea": LineaASN|None, "lote_codigo", "fecha_caducidad",
-    "contadas", "danadas", "acomodos": [(Ubicacion|None, cantidad), ...]}]:
-    por lote se recibe lo contado y dañado (una línea nueva del ASN si el lote
-    no venía anunciado), se crea su Lote y se acomoda cada renglón en su
-    posición (None = desborde o cuarentena). Tope: Σ acomodar ≤ Σ contadas +
-    lo que ya estaba en recepción sin ubicar. Al final, si algún acomodo se
-    salió del plan, se replanea una sola vez. Regresa [(linea, lote, destino,
-    cantidad)] de lo acomodado."""
-    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
-
-    renglones = [r for r in renglones if r["contadas"] or r["danadas"] or any(c > 0 for _, c in r["acomodos"])]
-    if not renglones:
-        raise ValueError("Captura cuántas contaste o cuántas acomodas de al menos un lote.")
-    for r in renglones:
-        if r["contadas"] < 0 or r["danadas"] < 0 or any(c < 0 for _, c in r["acomodos"]):
-            raise ValueError("Las cantidades no pueden ser negativas.")
-        if r["linea"] is None and not r["lote_codigo"] and sku.requiere_lote:
-            raise ValueError(f"{sku.codigo} requiere lote: captura el código del lote nuevo.")
-    with transaction.atomic():
-        previo = _suma(sku, Saldo.EN_PUTAWAY)
-        contadas = sum(r["contadas"] for r in renglones)
-        acomodar = sum(c for r in renglones for _, c in r["acomodos"])
-        if acomodar > contadas + previo:
-            raise ValueError(
-                f"Vas a acomodar {acomodar} de {sku.codigo} pero solo hay {contadas} contada{'s' if contadas != 1 else ''} ahora"
-                + (f" y {previo} en recepción de antes" if previo else "") + "."
-            )
-        acomodado, desvio = [], ""
-        desborde = zona_desborde()
-        for r in renglones:
-            linea = r["linea"]
-            if linea is None:
-                linea = LineaASN.objects.create(
-                    orden=orden, sku=sku, cantidad_anunciada=0,
-                    lote_codigo=r["lote_codigo"] or "", fecha_caducidad=r["fecha_caducidad"],
-                )
-                registrar_evento(
-                    "asn", orden.folio, "lote_no_anunciado", actor=actor, cliente=orden.cliente,
-                    delta={"sku": sku.codigo, "lote": r["lote_codigo"]},
-                    motivo=f"Llegó {sku.codigo} con el lote {r['lote_codigo'] or '—'}, que no venía en la orden.",
-                )
-            if r["contadas"] or r["danadas"]:
-                recibir(linea, r["contadas"], r["danadas"], actor)
-            codigo = (r["lote_codigo"] or linea.lote_codigo or "").strip()
-            lote = obtener_o_crear_lote(sku, codigo, r["fecha_caducidad"] or linea.fecha_caducidad) if codigo else None
-            for ubicacion, cantidad in r["acomodos"]:
-                if cantidad <= 0:
-                    continue
-                # El desvío se mide ANTES de avanzar el plan, contra el destino real
-                # (vacío = la zona de desborde si existe; cuarentena no se replanea).
-                real = ubicacion if ubicacion is not None else desborde
-                se_sale = _desvio_del_plan(orden, sku, codigo or None, real.codigo, cantidad) if real is not None else ""
-                destino = ubicar_pieza(orden, sku, lote, ubicacion, actor, cantidad, replanear=False)
-                desvio = desvio or se_sale
-                acomodado.append((linea, lote, destino, cantidad))
-        con_destino = [a for a in acomodado if a[2] is not None]
-        if desvio and con_destino:
-            _linea, lote, destino, cantidad = con_destino[-1]
-            _replanear_tras_desvio(orden, sku, destino, cantidad, lote.codigo if lote else None, actor, desvio)
-    return acomodado
-
-
-def _cuarentena_por_orden(sku, folio):
-    """Piezas del SKU que la orden mandó a cuarentena por falta de espacio y
-    siguen ahí: lo registrado en el event log como a_cuarentena con esa
-    referencia menos lo que un reinicio ya regresó (cuarentena_regresada).
-    Las dañadas no cuentan: entran a cuarentena por otro camino."""
-    from apps.core.models import EventoAuditoria  # lazy por contrato
-
-    eventos = EventoAuditoria.objects.filter(
-        entidad="sku", entidad_id=sku.codigo, accion__in=("a_cuarentena", "cuarentena_regresada"),
-    ).values_list("accion", "delta")
-    total = 0
-    for accion, delta in eventos:
-        if str((delta or {}).get("referencia", "")) != str(folio):
-            continue
-        n = int((delta or {}).get("cantidad") or 0)
-        total += n if accion == "a_cuarentena" else -n
-    return max(total, 0)
-
-
-def _regresar_a_recepcion(sku, saldos, cantidad, ubic_recepcion, origen, folio, actor):
-    """Pasa hasta `cantidad` piezas de esos saldos (ya bloqueados) a en_putaway
-    en recepción, con kardex; regresa cuántas movió."""
-    mover = min(sum(s.cantidad for s in saldos), cantidad)
-    if mover <= 0:
-        return 0
-    _restar(saldos, mover)
-    _incrementar(sku, ubic_recepcion.pk, None, Saldo.EN_PUTAWAY, mover)
-    _mov(sku, Movimiento.PUTAWAY, 0, origen=origen, destino=Saldo.EN_PUTAWAY, referencia=folio, actor=actor)
-    return mover
-
-
-def _regresar_acomodado(orden, actor, ubic_recepcion, lineas):
-    """Regresa a recepción (en_putaway) TODO lo que esta orden ya acomodó: lo
-    ubicado por el plan, lo acomodado a mano en otro anaquel y lo mandado a
-    cuarentena por falta de espacio (decisión de Chema 2026-09-18). Se quedan
-    donde están las dañadas (cuarentena), lo apartado para pedidos y lo que ya
-    salió; eso se reporta como no encontrado. Por SKU debe regresar lo
-    recibido menos lo que sigue en recepción, y se busca en este orden:
-    anaqueles del plan (con su lote), cuarentena de recepción (hasta lo que la
-    orden mandó ahí, ver _cuarentena_por_orden) y cualquier anaquel donde viva
-    el SKU con un lote de la orden. Corre dentro de la transacción del
-    llamador. Regresa {"regresadas", "del_plan", "de_cuarentena", "a_mano":
-    {anaquel: n}, "no_encontradas"}."""
-    r = {"regresadas": 0, "del_plan": 0, "de_cuarentena": 0, "a_mano": {}, "no_encontradas": 0}
-    pasos = (orden.plan_acomodo or {}).get("pasos", [])
-    for sku in sorted({l.sku for l in lineas}, key=lambda s: s.codigo):
-        recibidas = sum(l.cantidad_recibida for l in lineas if l.sku_id == sku.pk)
-        faltan = max(recibidas - _suma(sku, Saldo.EN_PUTAWAY), 0)
-        if faltan <= 0:
-            continue
-        lotes_orden = {(l.lote_codigo or "").strip() for l in lineas if l.sku_id == sku.pk} - {""}
-        salio_vendible = False
-        # 1) Los anaqueles del plan, con el lote del paso.
-        for paso in pasos:
-            if faltan <= 0:
-                break
-            if paso["sku_id"] != sku.pk or not paso.get("ubicacion") or not paso.get("ubicadas"):
-                continue
-            anaquel = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
-            if anaquel is None:
-                continue
-            filtro = {"sku": sku, "ubicacion": anaquel, "estado": Saldo.UBICADO_VENDIBLE}
-            if paso.get("lote"):
-                filtro["lote"] = Lote.objects.filter(sku=sku, codigo=paso["lote"]).first()
-            saldos = list(Saldo.objects.select_for_update().filter(**filtro))
-            n = _regresar_a_recepcion(sku, saldos, min(paso["ubicadas"], faltan), ubic_recepcion, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
-            faltan -= n
-            r["del_plan"] += n
-            salio_vendible = salio_vendible or n > 0
-        # 2) Cuarentena de recepción: solo lo que esta orden mandó por falta de espacio.
-        tope = min(_cuarentena_por_orden(sku, orden.folio), faltan)
-        if tope > 0:
-            zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
-            saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
-            n = _regresar_a_recepcion(sku, saldos, tope, ubic_recepcion, Saldo.CUARENTENA, orden.folio, actor)
-            if n:
-                registrar_evento(
-                    "sku", sku.codigo, "cuarentena_regresada", actor=actor, cliente=sku.cliente,
-                    delta={"cantidad": n, "referencia": orden.folio},
-                    motivo="Reinicio del acomodo: de cuarentena (sin espacio) vuelve a recepción para reacomodarse.",
-                )
-            faltan -= n
-            r["de_cuarentena"] += n
-        # 3) Acomodo a mano: donde viva el SKU con un lote de la orden, en cualquier anaquel.
-        if faltan > 0:
-            anaqueles = dict(Ubicacion.objects.filter(tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA)).values_list("pk", "codigo"))
-            consulta = Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE, ubicacion_id__in=list(anaqueles))
-            if lotes_orden:
-                consulta = consulta.filter(lote_id__in=list(Lote.objects.filter(sku=sku, codigo__in=lotes_orden).values_list("pk", flat=True)))
-            for saldo in sorted(consulta, key=lambda s: anaqueles[s.ubicacion_id]):
-                if faltan <= 0:
-                    break
-                n = _regresar_a_recepcion(sku, [saldo], faltan, ubic_recepcion, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
-                if n:
-                    codigo = anaqueles[saldo.ubicacion_id]
-                    r["a_mano"][codigo] = r["a_mano"].get(codigo, 0) + n
-                    faltan -= n
-                    salio_vendible = True
-        if salio_vendible:
-            _notificar_cambio_disponible(sku)
-        r["no_encontradas"] += faltan
-    r["regresadas"] = r["del_plan"] + r["de_cuarentena"] + sum(r["a_mano"].values())
-    return r
-
-
-def reiniciar_acomodo(orden, actor=None):
-    """Regresa a recepción TODO lo que esta orden ya acomodó para volver a
-    acomodarlo con el plan nuevo (ver _regresar_acomodado); los conteos de la
-    orden se quedan: el piso NO vuelve a escanear, ubica desde "Por ubicar".
-    Pone el plan en cero, lo rehace y audita."""
-    ubic_recepcion = _ubicacion_tipo(Ubicacion.RECEPCION)
-    if ubic_recepcion is None:
-        raise ValueError("No hay ubicación de recepción activa.")
-    with transaction.atomic():
-        r = _regresar_acomodado(orden, actor, ubic_recepcion, list(orden.lineas.select_related("sku")))
-        registrar_evento(
-            "asn", orden.folio, "acomodo_reiniciado", actor=actor, cliente=orden.cliente, delta=r,
-            motivo="Reinicio del acomodo: lo que la orden ya acomodó (plan, a mano y cuarentena sin espacio) vuelve a recepción.",
-        )
-        orden.plan_acomodo = {}
-        orden.save(update_fields=["plan_acomodo"])
-        planear_acomodo(orden, actor)
-    return r
-
-
-def _ejecutar_plan_acomodo(orden, lineas, actor, resumen):
-    """Ubica (o manda a cuarentena) lo pendiente de cada paso del plan vigente,
-    hasta lo que haya en recepción del SKU; el lote sale del código del paso
-    (con la caducidad de la línea). Un paso cuyo anaquel ya no existe se salta:
-    lo recoge el replan. Suma a `resumen` ubicadas y a_cuarentena."""
-    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
-
-    for paso in list((orden.plan_acomodo or {}).get("pasos", [])):
-        pendiente = paso["cantidad"] - paso["ubicadas"]
-        if pendiente <= 0:
-            continue
-        sku = SKU_por_id(paso["sku_id"], lineas)
-        n = min(pendiente, _suma(sku, Saldo.EN_PUTAWAY))
-        if n <= 0:
-            continue
-        lote = None
-        if paso.get("lote"):
-            linea = next((l for l in lineas if l.sku_id == sku.pk and (l.lote_codigo or "").strip() == paso["lote"]), None)
-            lote = obtener_o_crear_lote(sku, paso["lote"], linea.fecha_caducidad if linea else None)
-        ubicacion = None
-        if paso.get("ubicacion"):
-            ubicacion = Ubicacion.objects.filter(codigo=paso["ubicacion"]).first()
-            if ubicacion is None:
-                continue
-        if ubicar_pieza(orden, sku, lote, ubicacion, actor, n) is None:
-            resumen["a_cuarentena"] += n
-        else:
-            resumen["ubicadas"] += n
-
-
-def _retirar_conteo_de_mas(orden, sku, lote_codigo, cantidad, actor, retiradas):
-    """Quita del stock `cantidad` piezas del SKU que se contaron de más contra
-    lo anunciado (el ASN es la cuenta real, Chema 2026-09-20): primero de
-    recepción (en_putaway), luego de lo vendible con ese lote, empezando por
-    los anaqueles del plan. Kardex RECEPCION en negativo. Lo que no se
-    encuentra se reporta. Suma a `retiradas`; regresa cuántas retiró."""
-    restante = cantidad
-    saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
-    n = min(sum(s.cantidad for s in saldos), restante)
-    if n > 0:
-        _restar(saldos, n)
-        _mov(sku, Movimiento.RECEPCION, -n, origen=Saldo.EN_PUTAWAY, referencia=orden.folio, actor=actor)
-        retiradas["recepcion"] += n
-        restante -= n
-    if restante > 0:
-        del_plan = {
-            p["ubicacion"] for p in (orden.plan_acomodo or {}).get("pasos", [])
-            if p["sku_id"] == sku.pk and p.get("ubicacion") and (p.get("lote") or "") == (lote_codigo or "")
-        }
-        consulta = Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE)
-        if lote_codigo:
-            consulta = consulta.filter(lote__codigo=lote_codigo)
-        codigos = dict(Ubicacion.objects.filter(pk__in={s.ubicacion_id for s in consulta}).values_list("pk", "codigo"))
-        saldos = sorted(consulta, key=lambda s: (codigos[s.ubicacion_id] not in del_plan, codigos[s.ubicacion_id]))
-        n = min(sum(s.cantidad for s in saldos), restante)
-        if n > 0:
-            _restar(saldos, n)
-            _mov(sku, Movimiento.RECEPCION, -n, origen=Saldo.UBICADO_VENDIBLE, referencia=orden.folio, actor=actor)
-            _notificar_cambio_disponible(sku)
-            retiradas["anaqueles"] += n
-            restante -= n
-    retiradas["no_encontradas"] += restante
-    return cantidad - restante
-
-
-def completar_recepcion_con_lo_anunciado(orden, actor=None):
-    """Cierre exprés (Chema 2026-09-20): la recepción queda EXACTAMENTE como
-    se anunció, acomodada según el plan y cerrada, sin escanear pieza por
-    pieza; el piso acomoda físicamente después con el plan exportado. El ASN
-    es la cuenta final y real: 1) cada línea recibe lo que le falta para
-    llegar a lo anunciado (las dañadas cuentan como llegadas) y lo contado de
-    más se descuenta de la línea y se retira del stock (_retirar_conteo_de_mas:
-    de recepción y, si no alcanza, de lo vendible de ese lote). 2) Se ejecuta
-    el plan vigente paso por paso (_ejecutar_plan_acomodo); sin plan se
-    planea, y si algo queda en recepción sin paso se rehace una vez. 3) Lo
-    que aun así siga en recepción no está en el ASN: se retira igual. 4)
-    Cierra (cerrar_recepcion). Todo en una transacción: si un paso falla no
-    cambia nada. Regresa {"recibidas", "descontadas", "retiradas": {"recepcion",
-    "anaqueles", "no_encontradas"}, "ubicadas", "a_cuarentena"}."""
-    if orden.estado == OrdenEntrada.CERRADA:
-        raise ValueError(f"La orden {orden.folio} ya está cerrada.")
-    resumen = {
-        "recibidas": 0, "descontadas": 0,
-        "retiradas": {"recepcion": 0, "anaqueles": 0, "no_encontradas": 0},
-        "ubicadas": 0, "a_cuarentena": 0,
-    }
-    with transaction.atomic():
-        lineas = list(orden.lineas.select_related("sku").order_by("pk"))
-        for linea in lineas:
-            diferencia = linea.cantidad_anunciada - linea.cantidad_recibida - linea.cantidad_danada
-            if diferencia > 0:
-                recibir(linea, diferencia, 0, actor)
-                resumen["recibidas"] += diferencia
-            elif diferencia < 0:
-                exceso = min(-diferencia, linea.cantidad_recibida)  # lo de más se contó como bueno
-                _retirar_conteo_de_mas(orden, linea.sku, (linea.lote_codigo or "").strip(), exceso, actor, resumen["retiradas"])
-                linea.cantidad_recibida -= exceso
-                linea.save(update_fields=["cantidad_recibida"])
-                resumen["descontadas"] += exceso
-        if not (orden.plan_acomodo or {}).get("pasos"):
-            planear_acomodo(orden, actor)
-        for intento in range(2):
-            _ejecutar_plan_acomodo(orden, lineas, actor, resumen)
-            if not any(_suma(l.sku, Saldo.EN_PUTAWAY) for l in lineas):
-                break
-            if intento == 0:
-                planear_acomodo(orden, actor)
-        for sku in sorted({l.sku for l in lineas}, key=lambda s: s.codigo):
-            sobra = _suma(sku, Saldo.EN_PUTAWAY)
-            if sobra > 0:  # el plan ya cubrió lo anunciado: esto no está en el ASN
-                _retirar_conteo_de_mas(orden, sku, "", sobra, actor, resumen["retiradas"])
-                resumen["descontadas"] += sobra
-        registrar_evento(
-            "asn", orden.folio, "completada_con_lo_anunciado", actor=actor, cliente=orden.cliente,
-            delta=dict(resumen), motivo="Cierre exprés: la orden queda exactamente como se anunció y acomodada según el plan; el piso acomoda con el plan exportado.",
-        )
-        cerrar_recepcion(orden, actor)
-    return resumen
-
-
-def reiniciar_recepcion(orden, actor=None):
-    """La recepción vuelve a cero para recontar todo escaneando (decisión de
-    Chema 2026-09-18): primero lo acomodado regresa a recepción
-    (_regresar_acomodado) y luego se deshacen los conteos: lo recibido de
-    cada línea sale de recepción (en_putaway) y lo dañado sale de cuarentena,
-    con kardex en negativo; la línea baja solo en lo que sí se retiró (lo que
-    no se encuentra, apartado, vendido o dictaminado, sigue contado para que
-    el cierre no lo reclame como faltante). Una orden RECIBIDA vuelve a
-    EN_RECEPCION (no hay transición hacia atrás: es un deshacer explícito y se
-    audita), la foto de llegada se queda y el plan se rehace con toda la
-    orden. Regresa {"acomodo", "recibidas", "danadas", "siguen_contadas":
-    {"recibidas", "danadas"}}."""
-    if orden.estado == OrdenEntrada.CERRADA:
-        raise ValueError(f"La orden {orden.folio} ya está cerrada; no se puede reiniciar.")
-    ubic_recepcion = _ubicacion_tipo(Ubicacion.RECEPCION)
-    if ubic_recepcion is None:
-        raise ValueError("No hay ubicación de recepción activa.")
-    lineas = list(orden.lineas.select_related("sku").order_by("pk"))
-    r = {"acomodo": None, "recibidas": 0, "danadas": 0, "siguen_contadas": {"recibidas": 0, "danadas": 0}}
-    with transaction.atomic():
-        r["acomodo"] = _regresar_acomodado(orden, actor, ubic_recepcion, lineas)
-        zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
-        for linea in lineas:
-            sku = linea.sku
-            quitar_ok = quitar_danadas = 0
-            if linea.cantidad_recibida:
-                saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY))
-                quitar_ok = min(sum(s.cantidad for s in saldos), linea.cantidad_recibida)
-                if quitar_ok:
-                    _restar(saldos, quitar_ok)
-                    _mov(sku, Movimiento.RECEPCION, -quitar_ok, origen=Saldo.EN_PUTAWAY, referencia=orden.folio, actor=actor)
-            if linea.cantidad_danada:
-                saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
-                quitar_danadas = min(sum(s.cantidad for s in saldos), linea.cantidad_danada)
-                if quitar_danadas:
-                    _restar(saldos, quitar_danadas)
-                    _mov(sku, Movimiento.RECEPCION, -quitar_danadas, origen=Saldo.CUARENTENA, referencia=orden.folio, actor=actor)
-            r["siguen_contadas"]["recibidas"] += linea.cantidad_recibida - quitar_ok
-            r["siguen_contadas"]["danadas"] += linea.cantidad_danada - quitar_danadas
-            r["recibidas"] += quitar_ok
-            r["danadas"] += quitar_danadas
-            linea.cantidad_recibida -= quitar_ok
-            linea.cantidad_danada -= quitar_danadas
-            linea.save(update_fields=["cantidad_recibida", "cantidad_danada"])
-        estado_anterior = orden.estado
-        if orden.estado == OrdenEntrada.RECIBIDA:
-            orden.estado = OrdenEntrada.EN_RECEPCION
-            orden.ts_descarga_fin = None
-        orden.plan_acomodo = {}
-        orden.save(update_fields=["estado", "ts_descarga_fin", "plan_acomodo"])
-        registrar_evento(
-            "asn", orden.folio, "recepcion_reiniciada", actor=actor, cliente=orden.cliente,
-            delta={**r, "estado": [estado_anterior, orden.estado]},
-            motivo="Reinicio de la recepción: lo acomodado vuelve a recepción y los conteos a cero para volver a escanear todo.",
-        )
-        planear_acomodo(orden, actor)
-    return r
-
-
-# ── Editor de recepción (Mesa, Chema 2026-10-06) ─────────────────────────────
-# La tabla "Realidad": por SKU · lote · posición qué hay de verdad (contra la
-# tabla del plan), y correcciones con kardex donde cambia el estado y evento
-# `recepcion_corregida` siempre (motivo obligatorio).
-
-def _saldos_de_linea(sku, codigo_lote, estado):
-    """Saldos del SKU con el lote de la línea (sin lote = saldos sin lote) en ese estado."""
-    consulta = Saldo.objects.filter(sku=sku, estado=estado, cantidad__gt=0)
-    return consulta.filter(lote__codigo=codigo_lote) if codigo_lote else consulta.filter(lote__isnull=True)
-
-
-def ubicadas_en(linea, ubicacion):
-    """Piezas vendibles del lote de la línea en esa posición (lo que el editor muestra como "ubicadas")."""
-    return sum(s.cantidad for s in _saldos_de_linea(linea.sku, (linea.lote_codigo or "").strip(), Saldo.UBICADO_VENDIBLE).filter(ubicacion=ubicacion))
+# ── Editor de recepción (Mesa, Chema 2026-10-06; por escaneo desde 2026-10-13) ──
+# La tabla "Realidad": por línea (producto · lote) qué hay de verdad y en qué
+# tarima, y correcciones con kardex donde cambia el stock y evento
+# `recepcion_corregida` siempre (motivo obligatorio). Es el único lugar donde
+# se corrige una recepción: el piso solo escanea.
 
 
 def realidad_recepcion(orden):
-    """Tabla "Realidad" de la orden: por línea (SKU · lote) lo anunciado,
-    contado y dañado, y por posición cuántas hay vendibles con ese lote (más
-    las apartadas), lo que sigue en recepción sin acomodar (por SKU: lo que
-    está en recepción no tiene lote) y lo que la orden mandó a cuarentena por
-    falta de espacio. `cuadra` = contadas == acomodadas + apartadas + en
-    recepción + cuarentena sin espacio, por SKU (una línea sin lote puede
-    incluir stock previo del SKU: se avisa, no se cuadra)."""
-    lineas = list(orden.lineas.select_related("sku").order_by("sku__codigo", "lote_codigo"))
-    filas, vistos = [], set()
-    for linea in lineas:
-        sku, lote = linea.sku, (linea.lote_codigo or "").strip()
-        posiciones = []
-        for s in _saldos_de_linea(sku, lote, Saldo.UBICADO_VENDIBLE).select_related("ubicacion").order_by("ubicacion__codigo"):
-            otros = set(
-                Saldo.objects.filter(sku=sku, ubicacion=s.ubicacion, cantidad__gt=0, estado=Saldo.UBICADO_VENDIBLE).exclude(lote__codigo=lote)
-                .values_list("lote__codigo", flat=True)
-            ) if lote else set()
-            posiciones.append({"ubicacion": s.ubicacion, "cantidad": s.cantidad, "mezclado": sorted(x or "sin lote" for x in otros)})
-        apartadas = sum(s.cantidad for s in _saldos_de_linea(sku, lote, Saldo.RESERVADO))
-        primera_del_sku = sku.pk not in vistos
-        vistos.add(sku.pk)
-        filas.append({
-            "linea": linea, "sku": sku, "lote": lote, "caducidad": linea.fecha_caducidad,
-            "anunciadas": linea.cantidad_anunciada, "contadas": linea.cantidad_recibida, "danadas": linea.cantidad_danada,
-            "posiciones": posiciones, "acomodadas": sum(p["cantidad"] for p in posiciones), "apartadas": apartadas,
-            "en_recepcion": _suma(sku, Saldo.EN_PUTAWAY) if primera_del_sku else None,
-            "cuarentena_sin_espacio": _cuarentena_por_orden(sku, orden.folio) if primera_del_sku else None,
-            "diferencia": linea.cantidad_recibida + linea.cantidad_danada - linea.cantidad_anunciada,
-            "sin_lote": not lote,
-        })
-    # Cuadre por SKU: lo contado contra dónde está hoy.
-    por_sku = {}
-    for f in filas:
-        r = por_sku.setdefault(f["sku"].pk, {"contadas": 0, "donde": 0, "sin_lote": False})
-        r["contadas"] += f["contadas"]
-        r["donde"] += f["acomodadas"] + f["apartadas"] + (f["en_recepcion"] or 0) + (f["cuarentena_sin_espacio"] or 0)
-        r["sin_lote"] = r["sin_lote"] or f["sin_lote"]
-    for f in filas:
-        r = por_sku[f["sku"].pk]
-        f["cuadra"] = None if r["sin_lote"] else r["contadas"] == r["donde"]
-        f["donde"] = r["donde"]
+    """Tabla "Realidad" de la orden: por línea (producto · lote) lo anunciado,
+    contado, dañado y recibido, y por tarima cuántas cajas hay (contadas sin
+    confirmar y recibidas). `posiciones` y `en_recepcion` alimentan la tabla
+    "Dónde quedó" del portal (solo lectura)."""
+    por_linea = {}
+    for e in escaneos_vivos(orden).select_related("tarima").order_by("ts", "id"):
+        tarimas = por_linea.setdefault(e.linea_id, {})
+        r = tarimas.setdefault(e.tarima_id, {"tarima": e.tarima, "contadas": 0, "danadas": 0, "por_confirmar": 0, "recibidas": 0, "sin_etiqueta": 0})
+        r["danadas" if e.danada else "contadas"] += 1
+        if e.estado == EscaneoRecepcion.CONTADA:
+            r["por_confirmar"] += 1
+        elif not e.danada:
+            r["recibidas"] += 1
+        if e.impresa_ts is None:
+            r["sin_etiqueta"] += 1
+    filas = []
+    for f in resumen_lineas(orden):
+        tarimas = list(por_linea.get(f["linea"].pk, {}).values())
+        f["tarimas"] = tarimas
+        f["posiciones"] = [{"ubicacion": t["tarima"], "cantidad": t["recibidas"]} for t in tarimas if t["recibidas"]]
+        f["en_recepcion"] = f["por_confirmar"]
+        filas.append(f)
     return filas
 
 
@@ -2728,184 +2565,128 @@ def _evento_correccion(orden, tipo, actor, motivo, **delta):
     )
 
 
-def replanear_desde_realidad(orden, actor=None):
-    """Rehace el plan tomando como ya ubicado lo que de verdad está acomodado
-    con el lote de cada línea (tope: lo contado), en vez del crédito que el
-    plan traía: tras una corrección del editor el crédito viejo mentiría."""
-    credito = {}
-    for linea in orden.lineas.select_related("sku"):
-        lote = (linea.lote_codigo or "").strip()
-        acomodadas = sum(s.cantidad for s in _saldos_de_linea(linea.sku, lote, Saldo.UBICADO_VENDIBLE))
-        acomodadas += sum(s.cantidad for s in _saldos_de_linea(linea.sku, lote, Saldo.RESERVADO))
-        credito[f"{linea.sku_id}|{lote}"] = min(acomodadas, linea.cantidad_recibida)
-    orden.plan_acomodo = {"ubicadas": {k: n for k, n in credito.items() if n}}
-    orden.save(update_fields=["plan_acomodo"])
-    return planear_acomodo(orden, actor)
+def _validar_tarima_editor(tarima):
+    if tarima is None or not tarima.activo or tarima.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA):
+        raise ValueError("Elige una tarima o posición de almacén activa.")
 
 
-def corregir_conteo(orden, linea, contadas, danadas, actor, motivo):
-    """Mesa corrige contadas y/o dañadas de una línea. Subir contadas mete
-    piezas a recepción (recibir); bajarlas las quita primero de recepción y
-    luego de los anaqueles donde vive ese lote (kardex RECEPCION negativo,
-    como completar con lo anunciado). Dañadas: subir entra directo a
-    cuarentena; bajar sale de la cuarentena de recepción. Regresa (Δcontadas, Δdañadas)."""
+def _cajas_vivas(orden, linea, tarima, danada):
+    return escaneos_vivos(orden).filter(linea=linea, tarima=tarima, danada=danada)
+
+
+def ajustar_conteo(orden, linea, tarima, contadas, danadas, actor, motivo):
+    """Mesa deja la línea con `contadas` cajas buenas y `danadas` dañadas en
+    esa tarima. Subir crea escaneos ya RECIBIDOS (stock a la tarima, dañadas a
+    cuarentena); bajar anula las últimas (con su stock). Regresa (Δbuenas, Δdañadas)."""
     _orden_editable(orden)
     motivo = _validar_motivo(motivo)
+    _validar_tarima_editor(tarima)
     contadas, danadas = int(contadas), int(danadas)
     if contadas < 0 or danadas < 0:
         raise ValueError("Las cantidades no pueden ser negativas.")
-    d_c, d_d = contadas - linea.cantidad_recibida, danadas - linea.cantidad_danada
-    if not d_c and not d_d:
-        return 0, 0
-    sku, lote = linea.sku, (linea.lote_codigo or "").strip()
     with transaction.atomic():
-        if d_c > 0 or d_d > 0:
-            recibir(linea, max(d_c, 0), max(d_d, 0), actor)
-        if d_c < 0:
-            retiradas = {"recepcion": 0, "anaqueles": 0, "no_encontradas": 0}
-            _retirar_conteo_de_mas(orden, sku, lote, -d_c, actor, retiradas)
-            if retiradas["no_encontradas"]:
-                raise ValueError(
-                    f"Solo se encontraron {-d_c - retiradas['no_encontradas']} de las {-d_c} piezas a descontar "
-                    f"de {sku.codigo} (el resto está apartado, vendido o ya no está). Nada se cambió."
-                )
-            linea.cantidad_recibida += d_c
-            linea.save(update_fields=["cantidad_recibida"])
-        if d_d < 0:
-            zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
-            saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
-            if sum(s.cantidad for s in saldos) < -d_d:
-                raise ValueError(f"No hay {-d_d} piezas de {sku.codigo} en la cuarentena de recepción para descontar.")
-            _restar(saldos, -d_d)
-            _mov(sku, Movimiento.RECEPCION, d_d, origen=Saldo.CUARENTENA, referencia=orden.folio, actor=actor)
-            linea.cantidad_danada += d_d
-            linea.save(update_fields=["cantidad_danada"])
-        _evento_correccion(orden, "conteo", actor, motivo, sku=sku.codigo, lote=lote or None,
-                           contadas=[linea.cantidad_recibida - d_c, linea.cantidad_recibida],
-                           danadas=[linea.cantidad_danada - d_d, linea.cantidad_danada])
-        replanear_desde_realidad(orden, actor)
+        d_c = contadas - _cajas_vivas(orden, linea, tarima, False).count()
+        d_d = danadas - _cajas_vivas(orden, linea, tarima, True).count()
+        if not d_c and not d_d:
+            return 0, 0
+        nuevas = []
+        for danada, n in ((False, d_c), (True, d_d)):
+            for _ in range(max(n, 0)):
+                nuevas.append(EscaneoRecepcion.objects.create(
+                    orden=orden, linea=linea, tarima=tarima, danada=danada, actor=_actor_str(actor),
+                ))
+        if nuevas:
+            if orden.estado == OrdenEntrada.ANUNCIADA:
+                orden.transicionar(OrdenEntrada.EN_RECEPCION, actor=actor, motivo="Conteo capturado desde el editor")
+            _lote_de_linea(linea)
+            _recibir_escaneos(orden, tarima, nuevas, actor)
+        for danada, n in ((False, d_c), (True, d_d)):
+            for _ in range(max(-n, 0)):
+                escaneo = _cajas_vivas(orden, linea, tarima, danada).order_by("-ts", "-id").select_for_update().first()
+                if escaneo.estado == EscaneoRecepcion.RECIBIDA:
+                    _revertir_recibida(escaneo, actor)
+                escaneo.estado = EscaneoRecepcion.ANULADA
+                escaneo.anulada_ts = timezone.now()
+                escaneo.anulada_por = _actor_str(actor)
+                escaneo.save(update_fields=["estado", "anulada_ts", "anulada_por"])
+        _evento_correccion(
+            orden, "conteo", actor, motivo, sku=linea.sku.codigo, lote=(linea.lote_codigo or "").strip() or None,
+            tarima=tarima.codigo, contadas=[contadas - d_c, contadas], danadas=[danadas - d_d, danadas],
+        )
     return d_c, d_d
 
 
-def mover_acomodo(orden, linea, origen, destino, cantidad, actor, motivo):
-    """Mueve `cantidad` piezas vendibles del lote de la línea de una posición a
-    otra (mismo estado: sin kardex, como mover_ubicacion; evento)."""
+def mover_cajas(orden, linea, origen, destino, cantidad, actor, motivo):
+    """Mueve `cantidad` cajas recibidas (buenas) de la línea de una tarima o
+    posición a otra: el saldo en_putaway cambia de posición (mismo estado,
+    sin kardex, como mover_ubicacion) y los últimos escaneos de esa tarima
+    se reapuntan para que la realidad siga diciendo dónde está cada caja."""
     _orden_editable(orden)
     motivo = _validar_motivo(motivo)
     cantidad = _validar_cantidad(cantidad, "mover")
+    _validar_tarima_editor(destino)
     if origen.pk == destino.pk:
         raise ValueError("Elige una posición distinta.")
-    if destino.tipo == Ubicacion.SALIDA or not destino.activo:
-        raise ValueError(f"{destino.codigo} no es una posición de almacén activa.")
-    sku, lote = linea.sku, (linea.lote_codigo or "").strip()
+    sku = linea.sku
     with transaction.atomic():
-        saldos = list(_saldos_de_linea(sku, lote, Saldo.UBICADO_VENDIBLE).filter(ubicacion=origen).select_for_update())
+        recibidas = list(
+            _cajas_vivas(orden, linea, origen, False).filter(estado=EscaneoRecepcion.RECIBIDA)
+            .order_by("-ts", "-id").select_for_update()[:cantidad]
+        )
+        if len(recibidas) < cantidad:
+            raise ValueError(f"En {origen.codigo} solo hay {len(recibidas)} caja(s) recibidas de {sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''}.")
+        lote = _lote_de_linea(linea, crear=False)
+        saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY, ubicacion=origen, lote=lote, cantidad__gt=0))
         if sum(s.cantidad for s in saldos) < cantidad:
-            raise ValueError(f"En {origen.codigo} solo hay {sum(s.cantidad for s in saldos)} de {sku.codigo}{' lote ' + lote if lote else ''}.")
+            raise ValueError(f"En {origen.codigo} solo hay {sum(s.cantidad for s in saldos)} pieza(s) de {sku.codigo} sin vender. Nada se cambió.")
         _restar(saldos, cantidad)
-        _incrementar(sku, destino.pk, saldos[0].lote_id, Saldo.UBICADO_VENDIBLE, cantidad)
-        _evento_correccion(orden, "mover", actor, motivo, sku=sku.codigo, lote=lote or None,
+        _incrementar(sku, destino.pk, lote.pk if lote else None, Saldo.EN_PUTAWAY, cantidad)
+        EscaneoRecepcion.objects.filter(pk__in=[e.pk for e in recibidas]).update(tarima=destino)
+        _evento_correccion(orden, "mover", actor, motivo, sku=sku.codigo, lote=(linea.lote_codigo or "").strip() or None,
                            de=origen.codigo, a=destino.codigo, cantidad=cantidad)
-        replanear_desde_realidad(orden, actor)
     return cantidad
 
 
-def regresar_acomodo(orden, linea, ubicacion, cantidad, actor, motivo):
-    """Regresa a recepción (sin acomodar) `cantidad` piezas vendibles del lote
-    de la línea que están en esa posición (kardex PUTAWAY inverso)."""
-    _orden_editable(orden)
-    motivo = _validar_motivo(motivo)
-    cantidad = _validar_cantidad(cantidad, "regresar")
-    rec = _ubicacion_tipo(Ubicacion.RECEPCION)
-    if rec is None:
-        raise ValueError("No hay ubicación de recepción activa.")
-    sku, lote = linea.sku, (linea.lote_codigo or "").strip()
-    with transaction.atomic():
-        saldos = list(_saldos_de_linea(sku, lote, Saldo.UBICADO_VENDIBLE).filter(ubicacion=ubicacion).select_for_update())
-        if sum(s.cantidad for s in saldos) < cantidad:
-            raise ValueError(f"En {ubicacion.codigo} solo hay {sum(s.cantidad for s in saldos)} de {sku.codigo}{' lote ' + lote if lote else ''}.")
-        _regresar_a_recepcion(sku, saldos, cantidad, rec, Saldo.UBICADO_VENDIBLE, orden.folio, actor)
-        _evento_correccion(orden, "regresar", actor, motivo, sku=sku.codigo, lote=lote or None, de=ubicacion.codigo, cantidad=cantidad)
-        replanear_desde_realidad(orden, actor)
-    return cantidad
-
-
-def regresar_cuarentena_sin_espacio(orden, sku, cantidad, actor, motivo):
-    """Lo que la orden mandó a cuarentena por falta de espacio vuelve a
-    recepción para acomodarse (evento cuarentena_regresada, como el reinicio)."""
-    _orden_editable(orden)
-    motivo = _validar_motivo(motivo)
-    cantidad = _validar_cantidad(cantidad, "regresar")
-    tope = _cuarentena_por_orden(sku, orden.folio)
-    if cantidad > tope:
-        raise ValueError(f"Esta orden solo tiene {tope} pieza(s) de {sku.codigo} en cuarentena por falta de espacio.")
-    rec = _ubicacion_tipo(Ubicacion.RECEPCION)
-    with transaction.atomic():
-        zonas = list(Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION).values_list("pk", flat=True))
-        saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.CUARENTENA, ubicacion_id__in=zonas))
-        n = _regresar_a_recepcion(sku, saldos, cantidad, rec, Saldo.CUARENTENA, orden.folio, actor)
-        if n < cantidad:
-            raise ValueError(f"Solo hay {n} pieza(s) de {sku.codigo} en la cuarentena de recepción. Nada se cambió.")
-        registrar_evento("sku", sku.codigo, "cuarentena_regresada", actor=actor, cliente=sku.cliente,
-                         delta={"cantidad": n, "referencia": orden.folio}, motivo=motivo)
-        _evento_correccion(orden, "de_cuarentena", actor, motivo, sku=sku.codigo, cantidad=n)
-        replanear_desde_realidad(orden, actor)
-    return n
-
-
-def acomodar_desde_editor(orden, linea, ubicacion, cantidad, actor, motivo):
-    """Acomoda desde recepción `cantidad` piezas con el lote de la línea en esa
-    posición (ubicar_pieza: vendible, avanza el plan; posición vacía = desborde
-    o cuarentena como en el piso)."""
-    from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
-
-    _orden_editable(orden)
-    motivo = _validar_motivo(motivo)
-    cantidad = _validar_cantidad(cantidad, "acomodar")
-    sku, lote = linea.sku, (linea.lote_codigo or "").strip()
-    if ubicacion is not None and (ubicacion.tipo == Ubicacion.SALIDA or not ubicacion.activo):
-        raise ValueError(f"{ubicacion.codigo} no es una posición de almacén activa.")
-    if _suma(sku, Saldo.EN_PUTAWAY) < cantidad:
-        raise ValueError(f"Solo hay {_suma(sku, Saldo.EN_PUTAWAY)} pieza(s) de {sku.codigo} en recepción sin acomodar.")
-    with transaction.atomic():
-        objeto_lote = obtener_o_crear_lote(sku, lote, linea.fecha_caducidad) if lote else None
-        destino = ubicar_pieza(orden, sku, objeto_lote, ubicacion, actor, cantidad, replanear=False)
-        _evento_correccion(orden, "acomodar", actor, motivo, sku=sku.codigo, lote=lote or None,
-                           a=destino.codigo if destino else None, cantidad=cantidad)
-        replanear_desde_realidad(orden, actor)
-    return destino
-
-
-def danar_acomodado(orden, linea, ubicacion, cantidad, actor, motivo):
-    """Piezas ya acomodadas que resultan dañadas: salen de vendible a la
-    cuarentena de recepción y la línea las pasa de contadas a dañadas."""
+def marcar_danadas(orden, linea, tarima, cantidad, actor, motivo):
+    """`cantidad` cajas recibidas de la línea en esa tarima resultan dañadas:
+    salen de la tarima a la cuarentena de recepción (kardex) y la línea las
+    pasa de recibidas a dañadas; sus escaneos quedan marcados."""
     _orden_editable(orden)
     motivo = _validar_motivo(motivo)
     cantidad = _validar_cantidad(cantidad, "dañar")
-    rec = _ubicacion_tipo(Ubicacion.RECEPCION)
-    sku, lote = linea.sku, (linea.lote_codigo or "").strip()
-    if cantidad > linea.cantidad_recibida:
-        raise ValueError(f"La línea solo tiene {linea.cantidad_recibida} contada(s).")
+    zona = _ubicacion_tipo(Ubicacion.RECEPCION)
+    if zona is None:
+        raise ValueError("No hay ubicación de recepción activa para la cuarentena.")
+    sku = linea.sku
     with transaction.atomic():
-        saldos = list(_saldos_de_linea(sku, lote, Saldo.UBICADO_VENDIBLE).filter(ubicacion=ubicacion).select_for_update())
+        linea = _linea_bloqueada(linea)
+        recibidas = list(
+            _cajas_vivas(orden, linea, tarima, False).filter(estado=EscaneoRecepcion.RECIBIDA)
+            .order_by("-ts", "-id").select_for_update()[:cantidad]
+        )
+        if len(recibidas) < cantidad:
+            raise ValueError(f"En {tarima.codigo} solo hay {len(recibidas)} caja(s) recibidas de {sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''}.")
+        lote = _lote_de_linea(linea, crear=False)
+        lote_id = lote.pk if lote else None
+        saldos = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_PUTAWAY, ubicacion=tarima, lote=lote, cantidad__gt=0))
         if sum(s.cantidad for s in saldos) < cantidad:
-            raise ValueError(f"En {ubicacion.codigo} solo hay {sum(s.cantidad for s in saldos)} de {sku.codigo}{' lote ' + lote if lote else ''}.")
+            raise ValueError(f"En {tarima.codigo} solo hay {sum(s.cantidad for s in saldos)} pieza(s) de {sku.codigo}. Nada se cambió.")
         _restar(saldos, cantidad)
-        _incrementar(sku, rec.pk, None, Saldo.CUARENTENA, cantidad)
-        _mov(sku, Movimiento.RECEPCION, 0, origen=Saldo.UBICADO_VENDIBLE, destino=Saldo.CUARENTENA, referencia=orden.folio, actor=actor)
+        _incrementar(sku, zona.pk, lote_id, Saldo.CUARENTENA, cantidad)
+        _mov(sku, Movimiento.RECEPCION, 0, lote=lote, origen=Saldo.EN_PUTAWAY, destino=Saldo.CUARENTENA, referencia=orden.folio, actor=actor)
+        EscaneoRecepcion.objects.filter(pk__in=[e.pk for e in recibidas]).update(danada=True)
         linea.cantidad_recibida -= cantidad
         linea.cantidad_danada += cantidad
         linea.save(update_fields=["cantidad_recibida", "cantidad_danada"])
-        _evento_correccion(orden, "danar", actor, motivo, sku=sku.codigo, lote=lote or None, de=ubicacion.codigo, cantidad=cantidad)
-        replanear_desde_realidad(orden, actor)
+        _evento_correccion(orden, "danar", actor, motivo, sku=sku.codigo, lote=(linea.lote_codigo or "").strip() or None,
+                           de=tarima.codigo, cantidad=cantidad)
     return cantidad
 
 
 def editar_linea_recepcion(orden, linea, codigo_lote, caducidad, anunciadas, actor, motivo):
     """Corrige lote, caducidad y/o anunciadas de una línea (sin mover stock;
-    el lote del catálogo toma la caducidad nueva)."""
-    from apps.catalogo.models import Lote  # lazy: modelo de otra app
-
+    el lote del catálogo toma la caducidad nueva y, si ya había stock con el
+    lote viejo, se renombra para que siga siendo el mismo stock)."""
     _orden_editable(orden)
     motivo = _validar_motivo(motivo)
     codigo_lote = (codigo_lote or "").strip()
@@ -2918,8 +2699,8 @@ def editar_linea_recepcion(orden, linea, codigo_lote, caducidad, anunciadas, act
         raise ValueError(f"{linea.sku.codigo} ya tiene una línea con el lote {codigo_lote or '(sin lote)'} en esta orden.")
     antes = {"lote": linea.lote_codigo, "caducidad": str(linea.fecha_caducidad or ""), "anunciadas": linea.cantidad_anunciada}
     with transaction.atomic():
-        if linea.cantidad_recibida and codigo_lote != (linea.lote_codigo or "").strip():
-            # El lote de lo ya acomodado se renombra con la línea (mismo stock, otro código).
+        linea = _linea_bloqueada(linea)
+        if (linea.cantidad_recibida or linea.cantidad_danada) and codigo_lote != (linea.lote_codigo or "").strip():
             viejo = Lote.objects.filter(sku=linea.sku, codigo=linea.lote_codigo).first() if linea.lote_codigo else None
             if viejo is not None and codigo_lote and not Lote.objects.filter(sku=linea.sku, codigo=codigo_lote).exists():
                 viejo.codigo = codigo_lote
@@ -2933,14 +2714,13 @@ def editar_linea_recepcion(orden, linea, codigo_lote, caducidad, anunciadas, act
                 lote.save(update_fields=["fecha_caducidad"])
         _evento_correccion(orden, "linea", actor, motivo, sku=linea.sku.codigo, antes=antes,
                            despues={"lote": codigo_lote, "caducidad": str(caducidad or ""), "anunciadas": anunciadas})
-        replanear_desde_realidad(orden, actor)
     return linea
 
 
-def agregar_linea_recepcion(orden, sku, codigo_lote, caducidad, anunciadas, actor, motivo, contadas=0, danadas=0, ubicacion=None, ubicadas=0):
+def agregar_linea_recepcion(orden, sku, codigo_lote, caducidad, anunciadas, actor, motivo, contadas=0, danadas=0, tarima=None):
     """Agrega a la orden un producto que llegó sin venir anunciado (o un lote
-    nuevo de uno anunciado): línea con `anunciadas` (default 0) y, en el mismo
-    paso, lo contado y lo acomodado en una posición (recibir_y_ubicar)."""
+    nuevo de uno anunciado): línea con `anunciadas` (default 0) y, en el
+    mismo paso, cajas ya recibidas en una tarima (ajustar_conteo)."""
     _orden_editable(orden)
     motivo = _validar_motivo(motivo)
     codigo_lote = (codigo_lote or "").strip()
@@ -2950,19 +2730,18 @@ def agregar_linea_recepcion(orden, sku, codigo_lote, caducidad, anunciadas, acto
         raise ValueError(f"{sku.codigo} requiere lote.")
     if orden.lineas.filter(sku=sku, lote_codigo=codigo_lote).exists():
         raise ValueError(f"{sku.codigo} ya tiene una línea con ese lote en {orden.folio}: edítala.")
-    anunciadas, contadas, danadas, ubicadas = int(anunciadas or 0), int(contadas or 0), int(danadas or 0), int(ubicadas or 0)
-    if min(anunciadas, contadas, danadas, ubicadas) < 0:
+    anunciadas, contadas, danadas = int(anunciadas or 0), int(contadas or 0), int(danadas or 0)
+    if min(anunciadas, contadas, danadas) < 0:
         raise ValueError("Las cantidades no pueden ser negativas.")
+    if (contadas or danadas) and tarima is None:
+        raise ValueError("Di en qué tarima están las cajas.")
     with transaction.atomic():
         linea = LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=anunciadas, lote_codigo=codigo_lote, fecha_caducidad=caducidad)
         _evento_correccion(orden, "agregar", actor, motivo, sku=sku.codigo, lote=codigo_lote or None,
-                           anunciadas=anunciadas, contadas=contadas, danadas=danadas, a=ubicacion.codigo if ubicacion else None, ubicadas=ubicadas)
-        if contadas or danadas or ubicadas:
-            recibir_y_ubicar(orden, sku, [{
-                "linea": linea, "lote_codigo": codigo_lote, "fecha_caducidad": caducidad,
-                "contadas": contadas, "danadas": danadas, "acomodos": [(ubicacion, ubicadas)] if ubicadas else [],
-            }], actor)
-        replanear_desde_realidad(orden, actor)
+                           anunciadas=anunciadas, contadas=contadas, danadas=danadas, tarima=tarima.codigo if tarima else None)
+        if contadas or danadas:
+            ajustar_conteo(orden, linea, tarima, contadas, danadas, actor, motivo)
+            linea.refresh_from_db()
     return linea
 
 
@@ -2978,12 +2757,11 @@ def realidad_csv_filas(orden):
     filas = []
     for f in realidad_recepcion(orden):
         base = [f["sku"].codigo, f["sku"].descripcion, f["sku"].codigo_barras or "", f["lote"], f["caducidad"].isoformat() if f["caducidad"] else ""]
-        for p in f["posiciones"]:
-            filas.append([*base, p["ubicacion"].codigo, "vendible", p["cantidad"]])
-        if f["en_recepcion"]:
-            filas.append([*base[:4], "", "RECEPCION", "sin acomodar", f["en_recepcion"]])
-        if f["cuarentena_sin_espacio"]:
-            filas.append([*base[:4], "", "RECEPCION", "cuarentena sin espacio", f["cuarentena_sin_espacio"]])
-        if f["danadas"]:
-            filas.append([*base, "RECEPCION", "dañadas", f["danadas"]])
+        for t in f["tarimas"]:
+            if t["recibidas"]:
+                filas.append([*base, t["tarima"].codigo, "recibida", t["recibidas"]])
+            if t["por_confirmar"]:
+                filas.append([*base, t["tarima"].codigo, "contada sin confirmar", t["por_confirmar"]])
+            if t["danadas"]:
+                filas.append([*base, t["tarima"].codigo, "dañada (cuarentena)", t["danadas"]])
     return filas

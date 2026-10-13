@@ -67,9 +67,9 @@ class CancelarEnBodegaTests(BaseReingreso):
         self.assertEqual(suma(self.sku, Saldo.CUARENTENA), 0)
         self.assertEqual(disponible(self.sku), 6)
         orden = pedido.reingresos.get()
-        self.assertEqual((orden.tipo, orden.estado, orden.pedido_id), ("reingreso", "RECIBIDA", pedido.pk))
+        self.assertEqual((orden.tipo, orden.estado, orden.pedido_id), ("reingreso", "EN_RECEPCION", pedido.pk))
         linea = orden.lineas.get()
-        self.assertEqual((linea.cantidad_anunciada, linea.cantidad_recibida), (4, 4))
+        self.assertEqual((linea.cantidad_anunciada, linea.cantidad_recibida), (4, 0))  # el piso las escanea a una tarima
         ubicar(self.sku, 4, self.pic, None, self.operador)
         self.assertEqual(disponible(self.sku), 10)
 
@@ -87,7 +87,7 @@ class CancelarEnBodegaTests(BaseReingreso):
         self.assertEqual(suma(self.sku, Saldo.RESERVADO), 0)
         self.assertEqual(suma(self.sku, Saldo.EN_PUTAWAY), 1)
         self.assertEqual(disponible(self.sku), 9)
-        self.assertEqual(pedido.reingresos.get().lineas.get().cantidad_recibida, 1)
+        self.assertEqual(pedido.reingresos.get().lineas.get().cantidad_anunciada, 1)
 
     def test_guia_activa_se_cancela_con_el_carrier(self):
         pedido = self.pedido_con_linea(2, estado=Pedido.GUIA_GENERADA)

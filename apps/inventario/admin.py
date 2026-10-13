@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Ajuste, Conteo, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
+from .models import Ajuste, Conteo, EscaneoRecepcion, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
 
 
 @admin.register(Saldo)
@@ -82,3 +82,22 @@ class TareaConteoAdmin(admin.ModelAdmin):
     list_display = ("fecha", "sku", "estado", "conteo")
     list_filter = ("estado", "fecha")
     search_fields = ("sku__codigo",)
+
+
+@admin.register(EscaneoRecepcion)
+class EscaneoRecepcionAdmin(admin.ModelAdmin):
+    """Bitácora del conteo por escaneo: solo lectura (se corrige desde el editor de Mesa)."""
+
+    list_display = ("ts", "orden", "linea", "tarima", "danada", "estado", "actor", "impresa_ts")
+    list_filter = ("estado", "danada", "orden__cliente")
+    search_fields = ("orden__folio", "linea__sku__codigo", "tarima__codigo", "actor")
+    date_hierarchy = "ts"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

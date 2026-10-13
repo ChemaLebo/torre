@@ -1,8 +1,9 @@
 """Cierre de recepción: tarimas en la ASN y confirmación honesta.
 
 `cerrar_recepcion` es la única puerta para cerrar una ASN desde la operación:
-valida el put-away, guarda tarimas recibidas, abre incidencia DES si hubo
-faltantes/sobrantes y siempre avisa al cliente (mensajería lazy).
+exige que ninguna caja contada quede sin confirmar, guarda tarimas recibidas,
+vuelve vendible lo recibido, abre incidencia DES si hubo faltantes/sobrantes
+y siempre avisa al cliente (mensajería lazy).
 """
 from datetime import timedelta
 
@@ -10,8 +11,8 @@ from django.utils import timezone
 
 from apps.core.models import EventoAuditoria
 from apps.incidencias.models import Incidencia
-from apps.inventario.models import LineaASN, Movimiento, OrdenEntrada
-from apps.inventario.services import cerrar_recepcion, recibir, ubicar
+from apps.inventario.models import LineaASN, Movimiento, OrdenEntrada, Saldo
+from apps.inventario.services import cerrar_recepcion, confirmar_tarima, contar_caja, crear_tarima
 from apps.mensajeria.models import NotificacionEnviada
 
 from .base import InventarioTestCase
@@ -30,14 +31,23 @@ class TarimasModeloTests(InventarioTestCase):
 
 
 class CerrarRecepcionTests(InventarioTestCase):
-    def _orden_recibida(self, anunciada=10, ok=10, danada=0, ubicar_cantidad=None, tarimas=2):
-        """ASN por la puerta oficial: anunciar → recibir → ubicar."""
+    def _orden_recibida(self, anunciada=10, ok=10, danada=0, sin_confirmar=0, tarimas=2):
+        """ASN por la puerta oficial del escaneo: anunciar → contar caja por
+        caja en una tarima → confirmar la tarima (`sin_confirmar` cajas se
+        quedan contadas sin confirmar)."""
         orden = OrdenEntrada.objects.create(cliente=self.cliente, tarimas=tarimas)
-        linea = LineaASN.objects.create(orden=orden, sku=self.sku, cantidad_anunciada=anunciada)
-        recibir(linea, ok, danada, "piso1")
-        a_ubicar = ok if ubicar_cantidad is None else ubicar_cantidad
-        if a_ubicar:
-            ubicar(self.sku, a_ubicar, self.ubic_picking, None, "piso1")
+        LineaASN.objects.create(orden=orden, sku=self.sku, cantidad_anunciada=anunciada)
+        tarima = crear_tarima("piso1")
+        for _ in range(ok):
+            contar_caja(orden, self.sku, "", None, tarima, "piso1")
+        for _ in range(danada):
+            contar_caja(orden, self.sku, "", None, tarima, "piso1", danada=True)
+        if ok + danada > sin_confirmar:
+            confirmar_tarima(orden, tarima, "piso1")
+        if sin_confirmar:
+            otra = crear_tarima("piso1")
+            for _ in range(sin_confirmar):
+                contar_caja(orden, self.sku, "", None, otra, "piso1")
         orden.refresh_from_db()
         return orden
 
@@ -108,13 +118,26 @@ class CerrarRecepcionTests(InventarioTestCase):
         orden.refresh_from_db()
         self.assertNotEqual(orden.estado, OrdenEntrada.CERRADA)
 
-    def test_putaway_pendiente_bloquea_el_cierre(self):
-        orden = self._orden_recibida(ok=10, ubicar_cantidad=6)
-        with self.assertRaisesMessage(ValueError, "sin ubicar"):
+    def test_cajas_contadas_sin_confirmar_bloquean_el_cierre(self):
+        orden = self._orden_recibida(ok=6, sin_confirmar=4)
+        with self.assertRaisesMessage(ValueError, "sin confirmar en TAR-02"):
             cerrar_recepcion(orden, "piso1")
         orden.refresh_from_db()
         self.assertNotEqual(orden.estado, OrdenEntrada.CERRADA)
         self.assertEqual(Incidencia.objects.count(), 0)
+        self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE), 0)  # nada vendible hasta cerrar
+
+    def test_cerrar_vuelve_vendible_lo_recibido_en_su_tarima(self):
+        orden = self._orden_recibida(ok=10)
+        self.assertEqual(self.suma(Saldo.EN_PUTAWAY), 10)
+        self.assertEqual(self.suma(Saldo.UBICADO_VENDIBLE), 0)
+        cerrar_recepcion(orden, "piso1")
+        self.assertEqual(self.suma(Saldo.EN_PUTAWAY), 0)
+        vendible = Saldo.objects.get(sku=self.sku, estado=Saldo.UBICADO_VENDIBLE)
+        self.assertEqual((vendible.ubicacion.codigo, vendible.cantidad), ("TAR-01", 10))
+        putaway = Movimiento.objects.filter(sku=self.sku, tipo=Movimiento.PUTAWAY).get()
+        self.assertEqual((putaway.delta, putaway.estado_origen, putaway.estado_destino, putaway.referencia),
+                         (10, Saldo.EN_PUTAWAY, Saldo.UBICADO_VENDIBLE, "TAR-01"))
 
     def test_anunciada_sin_recibir_no_se_cierra(self):
         orden = OrdenEntrada.objects.create(cliente=self.cliente)
