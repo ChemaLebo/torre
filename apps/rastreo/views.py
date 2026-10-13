@@ -207,22 +207,36 @@ def _promesa(fila, caja, guia, pedido):
     return None, False, f"Tu paquete está programado para llegar {dias} días después de que salga{domingos}."
 
 
+def _paquete_vivo(fila, caja, guia):
+    """Solo paquetes vivos (Chema 2026-10-12): el comprador no ve lo que
+    regresó, lo sustituido por una reposición, lo decidido como reingreso ni
+    lo cancelado por reembolso; ve la caja de reposición en su lugar."""
+    if guia is not None and (guia.estado == Guia.RETORNO or guia.sustituida):
+        return False
+    if caja is not None and (caja.reingreso_estado or caja.cancelada_por_reembolso):
+        return False
+    return not (caja is None and guia is None and fila["pedido"].estado == Pedido.CANCELADO)
+
+
 def _paquetes(pedido):
-    """Una tarjeta por caja (o por guía, en pedidos sin plan): contenido,
+    """Una tarjeta por caja viva (o por guía, en pedidos sin plan): contenido,
     estado, pasos con hora, link de rastreo del carrier, fecha programada y
-    notas. Las horas salen de pedidos.linea_tiempo, como en Mesa."""
+    notas; numeradas 1..N entre las vivas. Las horas salen de
+    pedidos.linea_tiempo, como en Mesa."""
     cajas = {
         c.numero: c
         for c in pedido.paquetes.prefetch_related("lineas__linea_pedido__sku", "lineas__repone_a", "guias")
     }
     quitadas = set(LineaManifiesto.objects.filter(pedido=pedido, no_salio=True).values_list("paquete_id", flat=True))
     sueltas = [g for g in pedido.guias.all() if g.paquete_id is None]
-    paquetes = []
+    vivas = []
     for fila in construir(Pedido.objects.filter(pk=pedido.pk)):
         caja = cajas.get(fila["caja"]) if fila["caja"] is not None else None
+        if _paquete_vivo(fila, caja, fila["guia"]):
+            vivas.append((fila, caja))
+    paquetes = []
+    for numero, (fila, caja) in enumerate(vivas, start=1):
         guia = fila["guia"]
-        if caja is None and guia is None and pedido.estado == Pedido.CANCELADO:
-            continue
         guias_caja = list(caja.guias.all()) if caja is not None else sueltas
         cambiada = any(
             (g.estado == Guia.CANCELADA or g.sustituida) and (guia is None or g.pk != guia.pk) for g in guias_caja
@@ -234,7 +248,7 @@ def _paquetes(pedido):
         fecha, retraso, promesa = _promesa(fila, caja, guia, pedido)
         numero_guia = guia.numero if guia is not None and not guia.numero.startswith("LOCAL-") else ""
         paquetes.append({
-            "numero": fila["caja"] or 1, "total": fila["total_cajas"],
+            "numero": numero, "total": len(vivas),
             "contenido": _contenido(caja, pedido),
             "carrier": _carrier_humano(carrier),
             "guia": numero_guia,
@@ -268,28 +282,30 @@ def _contexto(pedido):
 
     return {
         "b": branding,
-        "url_whatsapp": _url_whatsapp(branding, pedido),
+        "url_whatsapp": _url_whatsapp(branding, pedido, paquetes),
         "formulario_reporte": bool(settings.TORRE.get("RASTREO_REPORTE_FORMULARIO", False)),
         "pedido": pedido,
         "nombre_pila": nombre_pila,
         "estado_titulo": titulo,
         "estado_descripcion": descripcion,
         "paquetes": paquetes,
+        "sin_paquetes": not paquetes,
         "pod": pod,
         "tipos_reporte": TIPOS_REPORTE,
         "sla_min": settings.TORRE["SLA_PRIMERA_RESPUESTA_COMPRADOR_MIN"],
     }
 
 
-def _url_whatsapp(branding, pedido):
+def _url_whatsapp(branding, pedido, paquetes=()):
     """Link wa.me al WhatsApp de soporte del cliente con el mensaje prellenado
-    (número de orden o folio y guías); "" si el cliente no capturó número."""
+    (número de orden o folio y las guías de los paquetes vivos); "" si el
+    cliente no capturó número."""
     from urllib.parse import quote  # lazy: solo aquí
 
     numero = "".join(ch for ch in str(branding.get("whatsapp_soporte") or "") if ch.isdigit())
     if not numero:
         return ""
-    guias = [g.numero for g in pedido.guias.all() if g.es_activa and g.numero and not g.numero.startswith("LOCAL-")]
+    guias = [p["guia"] for p in paquetes if p.get("guia")]
     orden = getattr(pedido, "shopify_order_name", "") or pedido.folio
     texto = f"Hola, escribo por mi pedido {orden}" + (f" (guía {', '.join(guias)})" if guias else "") + "."
     return f"https://wa.me/{numero}?text={quote(texto)}"

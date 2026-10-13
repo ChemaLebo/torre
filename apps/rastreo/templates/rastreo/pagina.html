@@ -164,6 +164,14 @@
   </div>
   {% endfor %}
 
+  {% if sin_paquetes %}
+  {# Nada vivo que mostrar (regresó, se repuso o se reembolsó y aún no hay caja nueva): sin detalles de lo que falló. #}
+  <div class="tarjeta">
+    <div class="paquete-cab"><b>Tu envío</b><span class="chip alerta">En revisión</span></div>
+    <p style="font-size:13.5px;margin-top:8px">Estamos revisando tu pedido. En cuanto tengamos novedades esta página se actualiza{% if url_whatsapp %}; si necesitas algo antes, escríbenos por WhatsApp aquí abajo{% endif %}.</p>
+  </div>
+  {% endif %}
+
   {% if pod %}
   <div class="tarjeta pod">
     <h2>Confirmación de entrega</h2>

@@ -310,6 +310,39 @@ class TestPaquetes(BaseRastreo):
         self.assertIn("5 Oct, 16:45", html)
         self.assertNotIn("≈", html)  # el comprador las ve limpias
 
+    def test_el_comprador_solo_ve_los_paquetes_vivos(self):
+        """Chema 2026-10-12: nada de "De regreso con nosotros" ni cajas sustituidas
+        o canceladas por reembolso; la reposición se ve en su lugar, renumerada."""
+        from django.utils import timezone
+
+        from apps.envios.models import Guia
+
+        c1, c2, c3 = self._caja(numero=1), self._caja(numero=2), self._caja(numero=3)
+        self._guia(c1, numero="EST-1", estado=Guia.ENTREGADO)
+        self._guia(c2, numero="EST-2", estado=Guia.RETORNO, sustituida_motivo="devolucion")  # regresó y se repuso
+        self._guia(c3, numero="EST-3")  # la reposición, lista para salir
+        html = self._html()
+        self.assertIn("Paquete 1 de 2", html)
+        self.assertIn("Paquete 2 de 2", html)
+        self.assertNotIn("Paquete 3", html)
+        self.assertNotIn("De regreso con nosotros", html)
+        self.assertNotIn("EST-2", html)
+        self.assertIn("EST-3", html)
+        # Cancelada por reembolso: tampoco se ve; con una sola viva ya es "Tu envío".
+        c3.cancelada_por_reembolso = timezone.now()
+        c3.save(update_fields=["cancelada_por_reembolso"])
+        html = self._html()
+        self.assertIn("Tu envío", html)
+        self.assertNotIn("Paquete 1 de", html)
+        self.assertNotIn("EST-3", html)
+        # Sin ninguna viva: tarjeta de revisión, sin detalles de lo que falló.
+        c1.cancelada_por_reembolso = timezone.now()
+        c1.save(update_fields=["cancelada_por_reembolso"])
+        html = self._html()
+        self.assertIn("Estamos revisando tu pedido", html)
+        self.assertNotIn("EST-1", html)
+        self.assertNotIn("Entregado", html.split("Estamos revisando")[1][:200])
+
     def test_dos_cajas_cada_una_con_su_estado(self):
         from datetime import date
 
