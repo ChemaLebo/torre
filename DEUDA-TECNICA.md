@@ -699,3 +699,33 @@ cuadre no se evalúa. Si estorba, guardar el folio de la orden en el kardex
 de put-away. El portal solo calcula "Dónde quedó" para las abiertas y las 5
 cerradas más recientes (costo por línea). El buscador de Bodega es de solo
 lectura; "Mover a" vive en el editor de recepción.
+
+## Recepción por escaneo, etiquetas 51×51 y segunda térmica — hecho 2026-10-13
+
+Contar ≠ recibir: cada caja se escanea a una tarima (`EscaneoRecepcion`), las
+etiquetas salen por tandas en orden inverso, la tarima se confirma y nada es
+vendible hasta cerrar la orden. Mesa corrige desde el editor; el piso solo
+escanea. Cola de impresión general con dos térmicas en el agente de bodega.
+Ver CONVENTIONS (inventario, piso, envios, configuracion) y SOP-02/03/04.
+
+**Queda:**
+- `OrdenEntrada.plan_acomodo` sigue en la tabla sin uso: migración que la
+  borre cuando ya no haya órdenes abiertas del flujo viejo.
+- `settings.TORRE["ZONA_DESBORDE"]` y la variable `ZONA_DESBORDE` ya no se
+  leen (el desborde desapareció con el plan); quitarlas junto con
+  `SKUS_POR_CELDA_MAX` cuando entre el anaquel fijo (fase 2: dos productos
+  por anaquel, restock desde reserva como tarea de Mi turno, picking que lee
+  el QR y exige el lote FEFO, etiquetas de posición en racks: pendiente 19).
+- `recibir` / `ubicar` quedan como puerta clásica (seeds, Cuarentena →
+  Put-away pendiente). El reingreso de una cancelación en bodega deja su
+  stock en la zona de recepción hasta que el piso lo escanea a una tarima.
+- Dos recepciones abiertas del mismo producto y lote en la misma posición se
+  vuelven vendibles juntas al cerrar la primera (aceptado).
+- Modo de impresión `local` (dev): la térmica de etiquetas sale de
+  `TORRE_IMPRESORA_ETIQUETAS_51` en `.env`; en producción todo va por relay.
+- El agente marca las cajas como impresas al ENCOLAR la tanda, no al salir
+  del rodillo: si el trabajo falla, "Reimprimir desde N" es el camino; un
+  reporte del agente por etiqueta sería el siguiente paso si estorba.
+- `TrabajoImpresion.transicionar` y la API tratan la guía como opcional;
+  los eventos de auditoría viejos siguen leyendo `delta.folio`.
+

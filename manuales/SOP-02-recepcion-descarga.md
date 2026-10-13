@@ -2,12 +2,12 @@
 
 | Campo | Valor |
 |---|---|
-| **Código / versión** | SOP-02 · v1.0 · Agosto 2026 |
+| **Código / versión** | SOP-02 · v1.1 · Octubre 2026 (recepción por escaneo) |
 | **Dueño** | OP-1 Jefe de bodega (dirige; es el único que opera el polipasto salvo certificados) |
 | **Frecuencia / disparador** | Martes y jueves 9:00–13:00, **con cita (ASN)**. Llegada de camión = disparador |
 | **Tiempo estándar** | Inicio de descarga ≤ 30 min desde la llegada · ~20–30 min por tarima calle→piso |
 | **EPP requerido** | Botas con casquillo + guantes anticorte. **Chaleco alta visibilidad para todo el que pise banqueta/calle** |
-| **Pantallas de Torre** | Piso → **Recepción** (`/piso/recepciones/`) → botón **"Trabajar"** → detalle de la orden (tarjeta **"1 · Recibir"**) |
+| **Pantallas de Torre** | Piso → **Recepción** (`/piso/recepciones/`) → botón **"Trabajar"** → detalle de la orden (tarjeta **"Foto de llegada"**, luego **"¿Dónde estás escaneando?"**) |
 
 El Local 380 E recibe la mercancía desde la calle: el camión se queda arriba y **todo baja al nivel de piso por el polipasto, a baja velocidad**. Esto convierte cada recepción en la maniobra de mayor riesgo de la semana: vidrio pesado, suspendido, con gente y vía pública alrededor. Este SOP existe para que sea aburrida y sin sustos, siempre igual.
 
@@ -17,7 +17,7 @@ El Local 380 E recibe la mercancía desde la calle: el camión se queda arriba y
 
 ## A. Antes de que llegue el camión
 
-1. **Verifica la cita en Torre**: abre **Piso → Recepción**. La orden anunciada (ASN) aparece en la tabla con folio, cliente, cita y avance. Si hoy hay cita, la orden ya debe estar visible desde temprano.
+1. **Verifica la cita en Torre**: abre **Piso → Recepción**. La orden anunciada (ASN) aparece como tarjeta con folio, cliente, cita y cajas contadas (nunca las anunciadas: el conteo es ciego). Si hoy hay cita, la orden ya debe estar visible desde temprano. Ten listo el **lector de códigos** (Bluetooth, conectado a la tablet) y la **térmica de etiquetas** con rollo de 51×51.
 2. **Prepara la zona** (idealmente desde la apertura): zona amarilla de descarga/desarmado vacía, patín a la mano, carritos listos, polipasto con su checklist diaria firmada (SOP-11), conos junto al acceso.
 3. **Confirma el equipo humano**: quién opera el polipasto (arriba), quién recibe abajo, quién acarrea. Repítelo en voz alta: en la maniobra cada quien tiene un solo puesto.
 
@@ -28,7 +28,7 @@ El Local 380 E recibe la mercancía desde la calle: el camión se queda arriba y
    - ⚠️ La banqueta es vía pública: mientras haya maniobra siempre hay una persona viendo hacia la calle. Un peatón con audífonos no va a esquivar tu tarima; tú lo vas a esquivar a él.
 6. **Verifica al chofer y su papel**: pide la remisión/factura y compárala contra lo que Torre anuncia (folio del ASN, cliente, número de tarimas). El nombre del transportista y las cantidades deben tener sentido con la cita.
    - **¿Llegó SIN cita?** Se recibe de todas formas —nunca se regresa un camión con producto del cliente— pero **marcado "sin aviso"**: llama a Mesa de Control en ese momento; **Mesa captura la ASN** en Torre mientras tú preparas la descarga física. No inventes tú la orden. La descarga no arranca hasta que la orden exista en **Piso → Recepción**.
-7. **FOTO DE LLEGADA — antes de tocar nada.** Con la tablet, fotografía el camión abierto y las tarimas **tal como llegaron** (emplaye, inclinación, etiquetas visibles). Torre la va a exigir: en la tarjeta **"1 · Recibir"** el campo se llama **"Foto de llegada (tarima / caja como llegó) — obligatoria en la primera línea"**. Si intentas registrar la primera línea sin foto, Torre te frena con el mensaje: *"Tómale foto al camión/tarimas antes de registrar la primera línea."*
+7. **FOTO DE LLEGADA — antes de tocar nada.** Con la tablet, fotografía el camión abierto y las tarimas **tal como llegaron** (emplaye, inclinación, etiquetas visibles). Torre la va a exigir: al abrir la orden, la primera tarjeta es **"Foto de llegada — obligatoria"** y hasta que la guardas no aparece el escáner. Si intentas escanear sin foto, Torre te frena: *"Tómale foto al camión/tarimas antes de escanear la primera caja."*
    - ⚠️ La foto ANTES de mover es tu única defensa si el producto venía dañado de origen. Después de que lo tocaste, el daño es tuyo.
 8. **Inspecciona cada tarima arriba del camión, antes de bajarla**:
    - **Emplaye violado, roto o re-emplayado** → foto adicional de cerca + nota en la remisión ("emplaye violado, tarima N") con firma del chofer + esa tarima se baja al final y su producto se cuenta con lupa; lo dudoso se segrega a cuarentena (SOP-10).
@@ -54,16 +54,16 @@ El Local 380 E recibe la mercancía desde la calle: el camión se queda arriba y
 
 ## D. Cierre de la maniobra
 
-15. **Cuenta las tarimas** recibidas y anótalas (se capturan en Torre al cerrar la orden, campo **"Tarimas recibidas"** — ver SOP-03/SOP-04). Firma de recibido en la remisión del chofer **"salvo posterior revisión de contenido"** — tú aún no has contado piezas, y el conteo ciego manda (SOP-03).
+15. **Cuenta las tarimas** recibidas y anótalas (se capturan en Torre al cerrar la orden, en la pantalla **Cuadre y cierre**, campo **"Tarimas recibidas"** — ver SOP-03). Firma de recibido en la remisión del chofer **"salvo posterior revisión de contenido"** — tú aún no has contado cajas, y el conteo ciego manda (SOP-03).
 16. **Despide al camión** solo cuando la carga esté toda adentro y la remisión anotada.
 17. **Cierra el andén/acceso** y **retira los conos** de la vía pública. Los conos afuera sin maniobra son un aviso de "aquí hay descuido".
-18. **Arranca el reloj**: desde el fin de la descarga corre el SLA — **descargado → contado → ubicado → vendible en ≤ 8 h hábiles** (meta interna: 4 h). En **Piso → Recepción**, la orden muestra su reloj: *"Quedan X h XX min para quedar vendible"*. Sigue con SOP-03 (desarmado y conteo ciego) **hoy mismo**.
+18. **Arranca el reloj**: desde el fin de la descarga corre el SLA — **descargado → contado por escaneo → etiquetado → tarimas confirmadas → orden cerrada = vendible en ≤ 8 h hábiles** (meta interna: 4 h). En **Piso → Recepción**, la orden muestra su reloj: *"Quedan X h XX min para quedar vendible"*. Sigue con SOP-03 (desarmado y conteo por escaneo) **hoy mismo**.
 
 ---
 
 ## Errores comunes y cómo se ven
 
-- **Registrar la primera línea sin foto de llegada.** Torre te rebota con *"Tómale foto al camión/tarimas antes de registrar la primera línea."* No es burocracia: es la evidencia que paga (o nos cobra) una disputa con el transportista.
+- **Escanear la primera caja sin foto de llegada.** Torre te rebota con *"Tómale foto al camión/tarimas antes de escanear la primera caja."* No es burocracia: es la evidencia que paga (o nos cobra) una disputa con el transportista.
 - **Firmar la remisión "de recibido conforme" con cantidades.** Todavía no contaste nada; el conteo es ciego y posterior. Firma siempre "salvo posterior revisión".
 - **Bajar una tarima inclinada "con cuidado".** Se ve como cascada de vidrio a media banqueta, con peatones. Se re-estiba arriba, siempre.
 - **El de abajo esperando debajo del hueco** "para ganar tiempo". Es la infracción más grave de toda la operación. Quien la comete se retira de la maniobra ese día; reincidencia se trata como falta grave.
@@ -82,7 +82,7 @@ El Local 380 E recibe la mercancía desde la calle: el camión se queda arriba y
 ## Qué queda registrado
 
 - **EvidenciaFoto** tipo "llegada" ligada al folio del ASN (visible en el detalle de la orden, sección "Fotos de llegada"), con usuario y hora.
-- Cada línea recibida (buenas/dañadas) con usuario y timestamp — kardex y EventoAuditoria (SOP-03).
+- Cada caja escaneada (contada) con usuario, tarima y hora, y cada tarima confirmada (ahí nace el stock, todavía no vendible) — kardex y EventoAuditoria (SOP-03).
 - Tarimas recibidas capturadas al cerrar la orden; el cliente recibe **confirmación automática con cifras reales** al cierre.
 - Remisión del chofer anotada y archivada en la carpeta de recepciones (12 meses).
 - El reloj SLA de la orden (pantalla Recepción) — y el crédito que cuesta si se vence: recepción gratis + $150/tarima/día.
@@ -115,6 +115,6 @@ DESCARGA (por tarima: ___ de ___)
 CIERRE
 [ ] Tarimas contadas: ____  · Remisión firmada "salvo revisión"
 [ ] Andén cerrado · conos retirados
-[ ] Reloj SLA visto en Torre · sigue SOP-03 HOY
+[ ] Lector y térmica de etiquetas listos · Reloj SLA visto en Torre · sigue SOP-03 HOY
 FIRMA OP-1: ____________________
 ```

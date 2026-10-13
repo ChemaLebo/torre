@@ -80,3 +80,13 @@ manage.py cerrar_entregas_presuntas
 - **Una línea sin inventario no detiene el pedido.** Lo que sí hay se pickea, empaca y sale; la línea sin existencias se ve con el tag **"Sin inventario"** en piso, Mesa y portal, y el escáner la rechaza.
 - **Mismo folio, misma orden de Shopify.** Al firmar el manifiesto el pedido queda "Parcialmente despachado" esperando stock (Shopify: Partially fulfilled). Cuando entra el inventario, vuelve solo a "Por iniciar" para surtir lo que faltó: cajas nuevas, su guía, su "va en camino" y su correo de Shopify; el fulfillment cierra los line items restantes.
 - **Reglas:** el pedido no se entrega en Shopify ni en Torre hasta que salió todo; con varias líneas faltantes espera a tener todas; el kit con un componente faltante espera completo; lo que ya salió nunca vuelve a salir del kardex ni se repone en una cancelación (esa parte sigue la cancelación tardía).
+
+## Recepción por escaneo (octubre 2026)
+
+- **Una caja, un escaneo.** El lector Bluetooth escribe en la tablet (sin cámara en recepción); cada caja se cuenta en una tarima con su lote (tarjetas de lote, "Otro", "Dañado"). Lo anunciado no se ve hasta el cuadre.
+- **Etiquetas 51×51 por tandas** en orden inverso al escaneo: primero la tarima (QR `U|TAR-nn`), luego cada caja (QR `P|barras|lote`, banda DAÑADA). "Continuar impresión" tras recargar rollo; "Reimprimir desde N". Tamaño de tanda en `/admin/configuracion/tandaetiquetas/`.
+- **Confirmar tarima** (cuadró / faltaron etiquetas / sobraron etiquetas) crea el stock **no vendible**; **cerrar la orden** lo vuelve vendible y avisa a Shopify. Mesa corrige desde el editor de recepción.
+- **Dos térmicas en bodega:** la de guías (10×15, `IMPRESORA`) y la de etiquetas (51×51, Munbyn ITPP130B, `IMPRESORA_ETIQUETAS`) en el ambiente de `deploy/agente_impresion.py`; cada trabajo de la cola dice a cuál va y con qué papel.
+- **Producto anunciado sin lote:** la línea del producto es el total y los lotes que llegaron cuelgan debajo.
+- Siguiente fase: anaquel fijo por producto (máximo dos por anaquel), restock desde reserva y picking que lee el QR y exige el lote FEFO.
+

@@ -2,14 +2,14 @@
 
 | Campo | Valor |
 |---|---|
-| **Código / versión** | SOP-04 · v1.0 · Agosto 2026 |
+| **Código / versión** | SOP-04 · v1.1 · Octubre 2026 (la recepción ya no acomoda: ver SOP-03) |
 | **Dueño** | OP-1 Jefe de bodega (responsable del SLA); OP-2 ejecuta |
-| **Frecuencia / disparador** | Después de cada conteo de recepción (SOP-03) y de cada dictamen "revendible" o retorno (SOP-10) |
+| **Frecuencia / disparador** | Después de cada dictamen "revendible" o retorno (SOP-10). La recepción ya NO pasa por aquí: sus cajas quedan en su tarima y se vuelven vendibles al cerrar la orden (SOP-03) |
 | **Tiempo estándar** | ≤ 4 h internas desde fin de descarga (contractual: **≤ 8 h hábiles** hasta "vendible") |
 | **EPP requerido** | Botas con casquillo + guantes anticorte. Faja recomendada |
-| **Pantallas de Torre** | Piso → **Recepción** → detalle de orden → tarjeta **"2 · Ubicar (put-away)"** → botón **"Ubicar"** · Piso → **Cuarentena** → sección **"Put-away pendiente"** → botón **"Ubicar"** |
+| **Pantallas de Torre** | Piso → **Cuarentena** → sección **"Put-away pendiente"** → botón **"Ubicar"** · Mesa → **Recepciones** → **Editar recepción** → **Mover** (cajas de una tarima a un rack) |
 
-Lo contado **todavía no se vende**. En Torre, el producto recibido queda "en put-away": existe, pero no es vendible ni aparece disponible en la tienda del cliente. Solo cuando lo escaneas a su anaquel se vuelve **vendible**. Por eso el put-away no es "acomodar cajas": es el paso que enciende las ventas del cliente, con reloj contractual encima.
+**Desde octubre de 2026 la recepción no acomoda** (Chema 2026-10-13): cada caja se escanea a una tarima, se etiqueta, la tarima se confirma y **al cerrar la orden todo lo recibido queda vendible en su tarima** (SOP-03). Las tarimas son posiciones de reserva (TAR-nn) y el picking llega a ellas por FEFO como a cualquier reserva. Mover cajas de una tarima a un rack es una corrección que hace **Mesa** desde el editor de recepción (Mover). El **anaquel fijo por producto con restock desde reserva** es la siguiente fase y se documentará aquí cuando exista. Este SOP sigue vigente para el put-away suelto desde **Cuarentena** (dictámenes revendibles y retornos) y para las reglas físicas de los racks.
 
 ---
 
@@ -37,25 +37,17 @@ Reglas físicas de los racks:
 - Física del FEFO en el anaquel: el lote **más próximo a caducar al frente / más accesible**; lote nuevo atrás o en RES-\*. Si llega lote nuevo y todavía hay viejo en picking, el nuevo va a reserva — no lo pongas enfrente "porque ahí había hueco".
 - En picking (SOP-05), Torre ordena las ubicaciones sugeridas por caducidad: tu acomodo de hoy es la sugerencia correcta de mañana.
 
-## C. Ejecutar el put-away (recepción)
+## C. Recepción: ya no hay put-away por caja
 
-1. **Toma una columna contada** (un SKU, un lote) y cárgala al carrito. Verifica en la caja: SKU, lote, caducidad.
-2. **Elige el destino**: hueco en picking A-\*/B-\* del SKU si tiene espacio; el resto a RES-\*. En el detalle de la orden, la tarjeta "2 · Ubicar (put-away)" lista al pie los **"Anaqueles válidos"**.
-3. **Traslada y acomoda** respetando pesado-abajo, FEFO al frente, etiquetas de frente.
-4. **Captura en Torre** — tarjeta **"2 · Ubicar (put-away)"**:
-   - **Producto**: el selector muestra cada SKU con sus piezas "por ubicar".
-   - **Cantidad**: cuántas estás dejando en ESTE anaquel (si repartes entre dos anaqueles, son dos capturas).
-   - **"Ubicación escaneada"**: **escanea la etiqueta del anaquel destino** (ej. `A-01-2`). Es la etiqueta del ANAQUEL, no la del producto — si te equivocas, Torre te lo dice: *"No existe la ubicación X. Escanea la etiqueta del anaquel, no la del producto."*
-   - **"Lote (si el producto lo pide)"** y **"Caducidad del lote"**: cópialos de la caja, con el calendario para la fecha.
-   - Pulsa **"Ubicar"**. Torre confirma: *"N × [SKU] ubicadas en [UBICACIÓN]: ya cuentan como vendibles."*
-   - ⚠️ Captura ANAQUEL POR ANAQUEL en el momento, no "todo junto al final desde la oficina". El escaneo del anaquel en sitio es lo único que garantiza que el sistema y el físico dicen lo mismo.
-5. **Repite** hasta que la orden marque cero "por ubicar", y cierra la orden (SOP-03 sección C: **"Todo ubicado — cerrar orden"**).
+1. Las cajas de una recepción **viven en la tarima donde se contaron** (SOP-03): etiqueta de tarima con QR `U|TAR-nn`, etiqueta en cada caja con su lote. Al cerrar la orden son vendibles ahí.
+2. Si una tarima estorba o se vacía a un rack, **Mesa** lo registra en **Recepciones → Editar recepción → Mover** (elige la posición destino de la lista). El piso no captura posiciones en recepción.
+3. El picking (SOP-05) manda al operador a la tarima o al rack donde Torre tiene el lote que caduca primero; la etiqueta de la caja le confirma el lote.
 
 ## D. Put-away pendiente desde Cuarentena
 
 6. **Revisa a diario** Piso → **Cuarentena**, sección **"Put-away pendiente"**: ahí caen los dictámenes "revendibles" y los retornos aceptados que esperan anaquel. Mismo procedimiento: Cantidad + "Ubicación escaneada" + botón **"Ubicar"** (si la fila ya trae lote, Torre lo conserva y no te lo vuelve a pedir).
 7. Ese producto **no es vendible hasta que lo ubiques** — no lo dejes envejecer en la repisa de cuarentena.
-8. **Sin espacio en picking**: la pantalla de Ubicar te manda a la **zona de desborde** (`RES-CUAR`) en vez de a cuarentena. Ahí el producto queda vendible con su lote; Mesa lo reacomoda cuando haya espacio. Cuarentena es solo para lo dañado o en revisión.
+8. **Sin espacio en picking**: ubica en una posición de reserva (RES-\* o una tarima activa). Ahí el producto queda vendible con su lote; Mesa lo reacomoda cuando haya espacio. Cuarentena es solo para lo dañado o en revisión.
 
 ## E. El reloj SLA y qué pasa si no llegas
 
@@ -75,7 +67,7 @@ Reglas físicas de los racks:
 
 ## NUNCA hagas esto
 
-- NUNCA dejes producto contado sin ubicar de un día para otro.
+- NUNCA dejes producto dictaminado revendible sin ubicar de un día para otro.
 - NUNCA pongas cajas completas de vidrio arriba de la altura del hombro ni excedas el peso por nivel.
 - NUNCA "ubiques" en un pasillo, en el piso o en un hueco que no tiene etiqueta de ubicación.
 - NUNCA ignores el lote/caducidad de la caja al capturar.
@@ -83,10 +75,10 @@ Reglas físicas de los racks:
 
 ## Qué queda registrado
 
-- Cada **"Ubicar"**: SKU, cantidad, ubicación, lote, usuario y timestamp → kardex por SKU/lote (exportable por el cliente) + EventoAuditoria.
-- El paso a estado **vendible**: es lo que empuja el disponible a la tienda del cliente. Tu escaneo enciende (o no) sus ventas.
+- Cada **"Ubicar"** desde Cuarentena: SKU, cantidad, ubicación, lote, usuario y timestamp → kardex por SKU/lote (exportable por el cliente) + EventoAuditoria.
+- En recepción, el paso a **vendible** ocurre al cerrar la orden (SOP-03): es lo que empuja el disponible a la tienda del cliente.
 - El timestamp "vendible" de la orden — el dato con el que se mide el SLA 8 h y sus créditos.
-- El detalle de la orden muestra las piezas "por ubicar" en vivo; la pantalla de Cuarentena, el put-away pendiente.
+- La pantalla de Cuarentena muestra el put-away pendiente; el editor de recepción de Mesa, dónde quedó cada caja.
 
 ---
 
@@ -96,14 +88,14 @@ Reglas físicas de los racks:
 FECHA: ______  FOLIO ASN / ORIGEN: ____________
 
 [ ] Reloj SLA visto: vence a las ______
+[ ] Recepción: cajas en su tarima, etiquetadas y confirmadas (SOP-03)
+[ ] Cuarentena → Put-away pendiente revisado hoy
 [ ] Columna verificada: SKU ______ · lote ______ · caduca ______
-[ ] Destino correcto: picking A-*/B-* o reserva RES-*
+[ ] Destino correcto: picking A-*/B-* o reserva RES-*/TAR-*
 [ ] Pesado abajo · nada arriba del hombro · etiquetas de frente
 [ ] FEFO: lote próximo a caducar AL FRENTE, nuevo atrás/reserva
 [ ] Anaquel ESCANEADO en sitio (no de memoria)
 [ ] Lote y caducidad capturados en Torre
 [ ] "Ubicar" pulsado → mensaje "ya cuentan como vendibles"
-[ ] Orden con CERO por ubicar → "Todo ubicado — cerrar orden"
-[ ] Put-away pendiente de Cuarentena revisado hoy
 FIRMA: ____________________
 ```
