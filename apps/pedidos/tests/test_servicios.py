@@ -1224,8 +1224,8 @@ class CancelacionTests(BaseServicios):
         reingresar.assert_called_once_with(self.sku, 1, pedido.folio, None, desde_empaque=False)
         liberar.assert_called_once_with(self.sku, 1, pedido.folio)
         orden = pedido.reingresos.get()
-        self.assertEqual((orden.tipo, orden.estado), ("reingreso", "RECIBIDA"))
-        self.assertEqual(orden.lineas.get().cantidad_recibida, 1)
+        self.assertEqual((orden.tipo, orden.estado), ("reingreso", "EN_RECEPCION"))  # 2026-10-13: el piso la escanea a una tarima
+        self.assertEqual((orden.lineas.get().cantidad_anunciada, orden.lineas.get().cantidad_recibida), (1, 0))
         self.assertFalse(pedido.lineas.get().reservada)
 
     def test_cancelar_empacado_reingresa_desde_empaque(self):

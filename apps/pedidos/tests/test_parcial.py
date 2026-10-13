@@ -202,7 +202,7 @@ class CancelacionMixtaTests(BaseParcial):
         self.assertEqual(pedido.reingreso_estado, Pedido.REINGRESO_PENDIENTE)  # la calle sigue por decidir
         self.assertEqual(suma(self.b, Saldo.EN_PUTAWAY), 1)
         self.assertEqual(suma(self.b, Saldo.RESERVADO), 0)
-        self.assertEqual(pedido.reingresos.get().lineas.get().cantidad_recibida, 1)
+        self.assertEqual(pedido.reingresos.get().lineas.get().cantidad_anunciada, 1)  # nace sin recibir: el piso la escanea a una tarima
         orden = services.registrar_reingreso(pedido, self.operador)  # lo de la calle: solo A
         self.assertEqual(
             [(l.sku_id, l.cantidad_anunciada) for l in orden.lineas.all()], [(self.a.pk, 2)],
