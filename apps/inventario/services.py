@@ -741,6 +741,9 @@ def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=
         linea = orden.lineas.filter(sku=sku, lote_codigo=lote_codigo).order_by("pk").first()
         if linea is None:
             habia = orden.lineas.filter(sku=sku).exists()
+            if fecha_caducidad is None and lote_codigo:  # el QR trae el lote, no la fecha: la del catálogo
+                conocido = Lote.objects.filter(sku=sku, codigo=lote_codigo).first()
+                fecha_caducidad = conocido.fecha_caducidad if conocido else None
             linea = LineaASN.objects.create(
                 orden=orden, sku=sku, cantidad_anunciada=0, lote_codigo=lote_codigo, fecha_caducidad=fecha_caducidad,
             )

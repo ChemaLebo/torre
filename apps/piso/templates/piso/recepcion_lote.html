@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}¿Qué lote? · {{ orden.folio }}{% endblock %}
+{% block content %}
+{# Pantalla de lotes (Chema 2026-10-13): tarjetas 2 por fila con código y caducidad en renglones separados, "Otro" con código y fecha, "Dañado" apagado. Tocar + Confirmar + modal; "Regresar (mal conteo)" vuelve sin contar. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción · {{ orden.folio }} · <span class="mono">{{ tarima.codigo }}</span></div>
+    <h1>¿Qué lote?</h1>
+    <div class="small"><span class="mono">{{ sku.codigo }}</span> · {{ sku.descripcion }}</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:recepcion_detalle' orden.pk %}">Regresar (mal conteo)</a>
+</div>
+
+{% if not en_orden %}
+<div class="banner warn"><span class="foco"></span>Este producto no venía en la orden: se agrega con 0 anunciadas. Captura su lote.</div>
+{% endif %}
+
+<form method="post" class="card" id="form-lote">{% csrf_token %}
+  <input type="hidden" name="sku_id" value="{{ sku.pk }}">
+  <input type="hidden" name="linea_id" id="linea-id" value="">
+  <div class="grid g2 tarjetas-eleccion">
+    {% for t in tarjetas %}
+    <button type="button" class="tarjeta-eleccion tarjeta-lote" data-linea="{{ t.linea.pk }}" data-lote="{{ t.lote|default:'sin lote' }}">
+      <div class="tarjeta-titulo mono">{{ t.lote|default:"Sin lote" }}</div>
+      <div class="tarjeta-sub">{% if t.caducidad %}{{ t.caducidad|date:"d/m/Y" }}{% else %}sin caducidad{% endif %}</div>
+      <div class="small muted">{{ t.contadas }} contada{{ t.contadas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}</div>
+    </button>
+    {% endfor %}
+    <div class="tarjeta-eleccion tarjeta-otro" id="tarjeta-otro">
+      <div class="tarjeta-titulo">Otro</div>
+      <label class="small" for="nl_codigo">Lote</label>
+      <input type="text" name="nl_codigo" id="nl_codigo" class="mono" autocomplete="off" autocapitalize="characters" spellcheck="false" list="lotes-sku" placeholder="código del lote">
+      <datalist id="lotes-sku">{% for s in lotes_sugeridos %}<option value="{{ s.codigo }}" data-caducidad="{{ s.caducidad }}"></option>{% endfor %}</datalist>
+      <label class="small mt" for="nl_cad">Caducidad</label>
+      <input type="date" name="nl_cad" id="nl_cad">
+    </div>
+  </div>
+  <label class="fila mt" for="danada"><input type="checkbox" name="danada" value="1" id="danada"> Dañado</label>
+  <div class="fila mt">
+    <button class="btn primario gigante" type="button" id="btn-confirmar" disabled>Confirmar</button>
+    <a class="btn gigante" href="{% url 'piso:recepcion_detalle' orden.pk %}">Regresar (mal conteo)</a>
+  </div>
+</form>
+
+<dialog class="modal" id="modal-confirmar" aria-labelledby="modal-titulo">
+  <div class="titulo"><h2 id="modal-titulo">¿Contar 1 caja?</h2></div>
+  <p id="modal-texto"></p>
+  <div class="fila mt">
+    <button class="btn primario gigante" type="button" id="modal-si">Sí</button>
+    <button class="btn gigante" type="button" id="modal-no">No</button>
+  </div>
+</dialog>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var form = document.getElementById("form-lote");
+  var oculto = document.getElementById("linea-id");
+  var boton = document.getElementById("btn-confirmar");
+  var otro = document.getElementById("tarjeta-otro");
+  var nlCodigo = document.getElementById("nl_codigo"), nlCad = document.getElementById("nl_cad"), lista = document.getElementById("lotes-sku");
+  var tarjetas = Array.prototype.slice.call(document.querySelectorAll(".tarjeta-lote"));
+  var elegida = null;
+  function refrescar() { boton.disabled = !(elegida || nlCodigo.value.trim()); }
+  tarjetas.forEach(function (t) {
+    t.addEventListener("click", function () {
+      tarjetas.forEach(function (x) { x.classList.remove("seleccionada"); });
+      otro.classList.remove("seleccionada");
+      t.classList.add("seleccionada");
+      elegida = t; oculto.value = t.dataset.linea; nlCodigo.value = ""; nlCad.value = "";
+      refrescar();
+    });
+  });
+  // Lote nuevo: escribir en "Otro" deselecciona las tarjetas; un lote conocido rellena su caducidad.
+  function enOtro() {
+    tarjetas.forEach(function (x) { x.classList.remove("seleccionada"); });
+    otro.classList.add("seleccionada");
+    elegida = null; oculto.value = "";
+    var o = Array.prototype.slice.call(lista.options).filter(function (x) { return x.value === nlCodigo.value.trim(); })[0];
+    if (o && o.dataset.caducidad && !nlCad.value) nlCad.value = o.dataset.caducidad;
+    refrescar();
+  }
+  nlCodigo.addEventListener("input", enOtro); nlCodigo.addEventListener("focus", enOtro); nlCad.addEventListener("focus", enOtro);
+  // Enter en el lote nuevo no manda la página: el modal confirma.
+  form.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); if (!boton.disabled) abrir(); } });
+  var modal = document.getElementById("modal-confirmar");
+  function abrir() {
+    var lote = elegida ? elegida.dataset.lote : (nlCodigo.value.trim() || "sin lote");
+    var danada = document.getElementById("danada").checked ? ", dañada," : "";
+    document.getElementById("modal-texto").textContent = "¿Contar 1 caja de {{ sku.codigo|escapejs }}, lote " + lote + danada + " en {{ tarima.codigo|escapejs }}?";
+    modal.showModal();
+  }
+  boton.addEventListener("click", abrir);
+  document.getElementById("modal-si").addEventListener("click", function () { modal.close(); form.submit(); });
+  document.getElementById("modal-no").addEventListener("click", function () { modal.close(); });
+});
+</script>
+{% endblock %}

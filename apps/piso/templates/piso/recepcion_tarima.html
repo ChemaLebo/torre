@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}¿Dónde estás escaneando? · {{ orden.folio }}{% endblock %}
+{% block content %}
+{# ¿Dónde estás escaneando? (Chema 2026-10-13): tarimas existentes como tarjetas, o una nueva con el siguiente nombre propuesto, editable y único. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Recepción · {{ orden.folio }}</div>
+    <h1>¿Dónde estás escaneando?</h1>
+    <div class="small">{{ orden.cliente.nombre }}{% if actual %} · ahora en <span class="mono">{{ actual.codigo }}</span>{% endif %}</div>
+  </div>
+  <a class="btn chico" href="{% if actual %}{% url 'piso:recepcion_detalle' orden.pk %}{% else %}{% url 'piso:recepciones' %}{% endif %}">Regresar</a>
+</div>
+
+{% if not tiene_foto %}
+<div class="banner warn"><span class="foco"></span>Primero la foto de llegada: <a href="{% url 'piso:recepcion_detalle' orden.pk %}">tómala aquí</a>.</div>
+{% endif %}
+
+<form method="post" class="card" id="form-elegir">{% csrf_token %}
+  <input type="hidden" name="accion" value="elegir">
+  <input type="hidden" name="tarima_id" id="tarima-id" value="">
+  <div class="titulo"><h2>Tarimas existentes</h2></div>
+  {% if tarimas %}
+  <div class="grid g2 tarjetas-eleccion">
+    {% for t in tarimas %}
+    <button type="button" class="tarjeta-eleccion{% if actual and actual.pk == t.tarima.pk %} seleccionada{% endif %}" data-id="{{ t.tarima.pk }}">
+      <div class="tarjeta-titulo mono">{{ t.tarima.codigo }}</div>
+      <div class="small">{% if t.piezas %}{{ t.piezas }} pza{{ t.piezas|pluralize }}: {{ t.contenido }}{% else %}vacía{% endif %}</div>
+      {% if t.cajas_orden %}<div class="small">{{ t.cajas_orden }} caja{{ t.cajas_orden|pluralize }} de esta orden{% if t.confirmada %} · confirmada{% endif %}</div>{% endif %}
+    </button>
+    {% endfor %}
+  </div>
+  <div class="fila mt">
+    <button class="btn primario gigante" type="submit" id="btn-elegir" {% if not actual %}disabled{% endif %}>Confirmar</button>
+    <a class="btn gigante" href="{% if actual %}{% url 'piso:recepcion_detalle' orden.pk %}{% else %}{% url 'piso:recepciones' %}{% endif %}">Regresar</a>
+  </div>
+  {% else %}
+  <p class="muted">Todavía no hay tarimas: crea la primera abajo.</p>
+  {% endif %}
+</form>
+
+<form method="post" class="card mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="nueva">
+  <div class="titulo"><h2>Nueva tarima</h2></div>
+  <label for="codigo-tarima">Nombre: te propongo el siguiente; puedes cambiarlo, no se puede repetir.</label>
+  <input type="text" name="codigo" id="codigo-tarima" class="mono campo-escaneo" value="{{ propuesto }}" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+  <div class="fila mt">
+    <button class="btn primario gigante" type="submit">Confirmar</button>
+    <a class="btn gigante" href="{% if actual %}{% url 'piso:recepcion_detalle' orden.pk %}{% else %}{% url 'piso:recepciones' %}{% endif %}">Regresar</a>
+  </div>
+</form>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var oculto = document.getElementById("tarima-id");
+  var boton = document.getElementById("btn-elegir");
+  var tarjetas = document.querySelectorAll("#form-elegir .tarjeta-eleccion");
+  tarjetas.forEach(function (t) {
+    if (t.classList.contains("seleccionada")) oculto.value = t.dataset.id;
+    t.addEventListener("click", function () {
+      tarjetas.forEach(function (x) { x.classList.remove("seleccionada"); });
+      t.classList.add("seleccionada");
+      oculto.value = t.dataset.id;
+      if (boton) boton.disabled = false;
+    });
+  });
+});
+</script>
+{% endblock %}

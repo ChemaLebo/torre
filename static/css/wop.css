@@ -685,3 +685,14 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 .campos-editor > label { display: flex; flex-direction: column; gap: 3px; margin: 0; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-50); }
 .campos-editor > label > input, .campos-editor > label > select { margin: 0; }
 .campos-editor .botones-editor { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ── Recepción por escaneo (2026-10-13): tarjetas grandes para elegir tarima o lote ── */
+.tarjetas-eleccion .tarjeta-eleccion {
+  display: block; width: 100%; text-align: left; padding: 16px; min-height: 112px; cursor: pointer;
+  border: 2px solid var(--hair); border-radius: var(--r); background: var(--panel); color: inherit; font: inherit;
+}
+.tarjetas-eleccion .tarjeta-eleccion.seleccionada { border-color: var(--accent); background: var(--accent-soft); }
+.tarjeta-eleccion .tarjeta-titulo { font-size: 24px; font-weight: 600; line-height: 1.15; word-break: break-all; }
+.tarjeta-eleccion .tarjeta-sub { font-size: 18px; margin-top: 4px; }
+.tarjeta-eleccion.tarjeta-otro input { width: 100%; }
+.campo-escaneo { font-size: 20px; padding: 12px 14px; }

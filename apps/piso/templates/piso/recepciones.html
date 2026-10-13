@@ -6,7 +6,7 @@
     <div class="eyebrow">Piso · Recepción</div>
     <h1>Recepciones</h1>
   </div>
-  <div class="quien">El pallet se desarma el mismo día, siempre.</div>
+  <div class="quien">Una caja por escaneo. Nada es vendible hasta cerrar.</div>
 </div>
 
 {% if abiertas %}
@@ -20,7 +20,7 @@
     </div>
     <p>{{ orden.cliente.nombre }}
       <span class="small">· cita <span class="mono">{{ orden.fecha_compromiso|date:"D d/M"|default:"—" }}</span>
-      · avance <span class="num">{{ orden.total_recibido }} / {{ orden.total_anunciado }}</span></span>
+      · contadas <span class="num">{{ orden.total_contado }}</span></span>
     </p>
     {% if orden.sla_texto %}<p><span class="pill {{ orden.sla_tono }}">{{ orden.sla_texto }}</span></p>
     {% else %}<p class="small muted">Reloj SLA: aún no inicia</p>{% endif %}

@@ -1,28 +1,30 @@
 {% extends "base.html" %}
 {% block title %}{{ orden.folio }}{% endblock %}
 {% block content %}
+{# Pantalla de escaneo (Chema 2026-10-13): escáner físico (sin cámara), una caja por escaneo en la tarima actual; tabla "Contado" sin anunciadas; tarimas de la orden con su confirmación; el cierre vive en el cuadre. #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Recepción</div>
     <h1>{{ orden.folio }}</h1>
     <div class="small">{{ orden.cliente.nombre }} · cita {{ orden.fecha_compromiso|date:"D d/M"|default:"sin cita" }}</div>
-    {% if orden.tipo == 'reingreso' %}<div class="small"><span class="pill accent">reingreso{% if orden.pedido %} · {{ orden.pedido.folio }}{% endif %}</span> Mercancía que vuelve de un pedido: recíbela y ubícala como cualquier entrada; lo dañado va a cuarentena.</div>{% endif %}
+    {% if orden.tipo == 'reingreso' %}<div class="small"><span class="pill accent">reingreso{% if orden.pedido %} · {{ orden.pedido.folio }}{% endif %}</span> Mercancía que vuelve de un pedido: cuéntala caja por caja como cualquier entrada.</div>{% endif %}
   </div>
   <div class="fila">
-    <span class="pill {% if orden.estado == 'CERRADA' %}ok{% elif orden.estado == 'RECIBIDA' %}warn{% else %}accent{% endif %}">{{ orden.get_estado_display }}</span>
+    <span class="pill {% if cerrada %}ok{% elif orden.estado == 'RECIBIDA' %}warn{% else %}accent{% endif %}">{{ orden.get_estado_display }}</span>
     <a class="btn chico" href="{% url 'piso:recepciones' %}">Volver</a>
   </div>
 </div>
 
 {% if sla_texto %}
-<div class="banner {{ sla_tono }}"><span class="foco"></span>{{ sla_texto }}. La orden se cierra cuando TODO quedó ubicado y vendible.</div>
+<div class="banner {{ sla_tono }}"><span class="foco"></span>{{ sla_texto }}. La orden se cierra desde el cuadre, con todas las tarimas confirmadas.</div>
 {% endif %}
 
-{% if orden.estado != 'CERRADA' %}
-{% if not tiene_foto %}
+{% if cerrada %}
+<div class="banner ok mt"><span class="foco"></span>Orden cerrada: todo lo recibido quedó vendible el {{ orden.ts_vendible|date:"d/M H:i" }}.</div>
+{% elif not tiene_foto %}
 <div class="card mt">
   <div class="titulo"><h2>Foto de llegada</h2><span class="pill warn">obligatoria</span></div>
-  <p class="small">Tómale foto al camión o a las tarimas como llegaron antes de escanear la primera pieza (SOP RE-01).</p>
+  <p class="small">Tómale foto al camión o a las tarimas como llegaron antes de escanear la primera caja (SOP RE-01).</p>
   <form method="post" enctype="multipart/form-data">{% csrf_token %}
     <input type="hidden" name="accion" value="foto">
     <input type="file" name="foto_llegada" accept="image/*" capture="environment" required>
@@ -31,85 +33,82 @@
 </div>
 {% else %}
 <div class="card mt">
-  <div class="titulo"><h2>Escanea un producto</h2><span class="pill accent">escanear · contar · ubicar</span></div>
-  <p class="small">Apunta al código de barras. Torre abre la cuenta de ese producto por lote: capturas cuántas y te dice dónde ubicarlas. Reescanea para volver a ubicar lo ya contado.</p>
-  <div id="visor-escaner" class="escaner-visor" aria-label="Visor del escáner de cámara"></div>
-  {# Sin cámara: teclea el código y confirma. #}
+  <div class="titulo">
+    <h2>Contando en <span class="mono">{{ tarima.codigo }}</span></h2>
+    <a class="btn chico" href="{% url 'piso:recepcion_tarima' orden.pk %}">Cambiar tarima</a>
+  </div>
+  <p class="small">{{ tarima_cajas }} caja{{ tarima_cajas|pluralize }} de esta orden en esta tarima{% if tarima_por_confirmar %} · {{ tarima_por_confirmar }} sin confirmar{% endif %}.</p>
   <form method="post" class="fila mt" id="form-escanear">{% csrf_token %}
     <input type="hidden" name="accion" value="escanear">
-    <input type="text" name="codigo" id="codigo" class="mono crece" placeholder="código de barras o SKU" autocomplete="off" autofocus>
+    {# inputmode=none: el lector escribe aquí sin que salga el teclado del teléfono; "Teclear" lo abre. #}
+    <input type="text" name="codigo" id="codigo" class="mono crece campo-escaneo" placeholder="escanea la caja" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="none" autofocus aria-label="Código escaneado">
+    <button class="btn" type="button" id="btn-teclear">Teclear</button>
     <button class="btn primario" type="submit">Contar</button>
   </form>
+  <p class="small muted">Una caja por escaneo. Torre abre los lotes del producto; con la etiqueta de Torre suma directo.</p>
 </div>
 
-{% if pendiente_putaway %}
-{# Contadas y sin anaquel: una fila por producto con su botón de ubicar (una o varias piezas, con el plan). #}
 <div class="card mt">
-  <div class="titulo"><h2>Por ubicar</h2><span class="pill warn">{{ pendiente_putaway }} pieza(s) en recepción</span></div>
+  <div class="titulo"><h2>Contado</h2><span class="pill accent">{{ total_contado }} caja{{ total_contado|pluralize }}</span></div>
   <div class="tabla-wrap">
     <table>
-      <thead><tr><th>Producto</th><th>SKU</th><th class="derecha">Por ubicar</th><th></th></tr></thead>
+      <thead><tr><th>Producto</th><th>Lote</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th><th class="derecha">Sin etiqueta</th></tr></thead>
       <tbody>
-        {% for linea in lineas %}{% if linea.por_ubicar %}
+        {% for l in lineas %}
         <tr>
-          <td>{{ linea.sku.descripcion }}</td>
-          <td class="mono">{{ linea.sku.codigo }}</td>
-          <td class="derecha num">{{ linea.por_ubicar }}</td>
-          <td class="derecha"><a class="btn primario chico" href="{% url 'piso:recepcion_ubicar' orden.pk %}?sku={{ linea.sku_id }}">Ubicar</a></td>
+          <td><span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span></td>
+          <td class="mono">{{ l.lote|default:"—" }}{% if l.caducidad %} <span class="small muted">cad. {{ l.caducidad|date:"d/m/Y" }}</span>{% endif %}</td>
+          <td class="derecha num">{{ l.contadas }}</td>
+          <td class="derecha num">{% if l.danadas %}<span class="pill crit">{{ l.danadas }}</span>{% else %}0{% endif %}</td>
+          <td class="derecha num">{{ l.sin_etiqueta }}</td>
         </tr>
-        {% endif %}{% endfor %}
+        {% empty %}
+        <tr><td colspan="5" class="muted">Todavía no hay cajas contadas.</td></tr>
+        {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
-{% endif %}
-{% endif %}
 
 <div class="card mt">
-  <div class="titulo"><h2>Líneas de la orden</h2><span class="pill accent">conteo ciego</span></div>
-  <p class="small">Escanea el producto, captura cuántas cuentas por lote y ubícalas. Aquí solo aparece lo que TÚ has capturado.</p>
-  {% for linea in lineas %}
+  <div class="titulo"><h2>Tarimas de la orden</h2></div>
+  {% for t in tarimas %}
   <div class="corral-fila">
-    <div class="crece">
-      <span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}
-      <div class="small">Recibido <span class="num">{{ linea.cantidad_recibida }}</span>
-        · Dañado <span class="num">{{ linea.cantidad_danada }}</span>
-        · Por ubicar <span class="num">{{ linea.por_ubicar }}</span></div>
-    </div>
-    {% if linea.completa %}<span class="pill ok">Completa</span>{% else %}<span class="pill warn">En conteo</span>{% endif %}
+    <div class="crece"><span class="mono">{{ t.tarima.codigo }}</span> · {{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}{% if t.sin_etiqueta %} · {{ t.sin_etiqueta }} sin etiqueta{% endif %}</div>
+    {% if t.confirmada %}<span class="pill ok">confirmada</span>{% else %}<span class="pill warn">{{ t.por_confirmar }} por confirmar</span>{% endif %}
+    <a class="btn chico{% if not t.confirmada %} primario{% endif %}" href="{% url 'piso:recepcion_tarima_confirmar' orden.pk t.tarima.pk %}">{% if t.confirmada %}Ver{% else %}Confirmar{% endif %}</a>
   </div>
+  {% empty %}
+  <p class="small muted">Las tarimas aparecen aquí conforme cuentas cajas en ellas.</p>
   {% endfor %}
 </div>
 
-{% if orden.estado != 'CERRADA' %}
 <div class="card mt">
   <div class="titulo"><h2>Cerrar la orden</h2></div>
-  <p class="small">Solo cuando TODO esté ubicado. Captura las tarimas que de verdad llegaron (vacío = las anunciadas).</p>
-  <form method="post">{% csrf_token %}
-    <input type="hidden" name="accion" value="cerrar">
-    <label for="tarimas_recibidas">Tarimas recibidas</label>
-    <input type="number" name="tarimas_recibidas" id="tarimas_recibidas" min="0" inputmode="numeric" placeholder="{{ orden.tarimas }}">
-    <div class="mt"><button class="btn bloque" type="submit">Cerrar recepción</button></div>
-  </form>
+  <p class="small">Cuando todas las tarimas estén confirmadas. El cuadre muestra lo anunciado contra lo contado antes de cerrar; al cerrar, todo lo recibido queda vendible.</p>
+  <a class="btn bloque" href="{% url 'piso:recepcion_cuadre' orden.pk %}">Ir al cuadre y cerrar</a>
 </div>
-{% endif %}
 
 <script>
-/* escaner.js carga con defer: todo inline que use Escaner/Feedback espera DOMContentLoaded. */
+/* El campo de escaneo siempre tiene el foco: el lector físico escribe ahí y manda Enter. */
 document.addEventListener("DOMContentLoaded", function () {
-  var form = document.getElementById("form-escanear");
-  var visor = document.getElementById("visor-escaner");
-  if (!form || !visor) return;
   var input = document.getElementById("codigo");
-  Escaner.montar(visor, function (valor) {
-    input.value = valor.trim();
-    Feedback.ok();
-    form.submit();
+  var teclear = document.getElementById("btn-teclear");
+  if (!input) return;
+  function enfocar() { if (document.activeElement !== input) input.focus({ preventScroll: true }); }
+  enfocar();
+  window.addEventListener("focus", enfocar);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) enfocar(); });
+  document.addEventListener("click", function (ev) {
+    if (!ev.target.closest("input, textarea, select, button, a, label, summary, dialog")) enfocar();
+  });
+  teclear.addEventListener("click", function () {
+    input.setAttribute("inputmode", "text");
+    input.blur();
+    input.focus();
   });
 });
 </script>
-{% else %}
-<div class="banner ok mt"><span class="foco"></span>Orden cerrada: todo quedó vendible el {{ orden.ts_vendible|date:"d/M H:i" }}.</div>
 {% endif %}
 
 {% if fotos_llegada %}

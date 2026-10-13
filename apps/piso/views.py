@@ -1,19 +1,19 @@
 """Vistas del operador de piso (tablet) — contrato CONVENTIONS.md §piso.
 
-Flujo lineal y táctil: recibir → ubicar → pickear → empacar → salida →
-entrega local, más los conteos cíclicos del día. Cada acción llama a los
+Flujo lineal y táctil: recibir (escanear caja por caja a una tarima, confirmar
+tarimas, cerrar) → pickear → empacar → salida → entrega local, más los conteos
+cíclicos del día. Cada acción llama a los
 servicios de dominio (inventario / pedidos / envios, imports lazy por
 contrato) — el piso jamás toca Saldo, Movimiento ni estados directo.
 """
 import re
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Sum
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -23,7 +23,7 @@ from apps.catalogo.models import SKU, Ubicacion
 from apps.core.decorators import rol_requerido
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
-from apps.envios.models import Guia, Paquete, PaqueteLinea
+from apps.envios.models import Guia, Paquete
 from apps.inventario.models import LineaASN, OrdenEntrada, Saldo, TareaConteo
 from apps.pedidos.models import Pedido
 
@@ -609,20 +609,44 @@ def _home_confirmar_restock(request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Recepciones (ASN): recibir → foto de llegada → ubicar → cerrar
+# Recepciones (ASN): foto de llegada → ¿en qué tarima? → escanear caja por
+# caja → etiquetas → confirmar tarima por tarima → cuadre y cierre
+# (Chema 2026-10-13: el escáner físico cuenta; el piso solo escanea)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _clave_tarima(orden):
+    return f"recepcion_tarima_{orden.pk}"
+
+
+def _tarima_actual(request, orden):
+    """La tarima en la que ESTE usuario está contando esta orden (vive en su
+    sesión: dos personas contando usan tarimas distintas); None si no eligió."""
+    from apps.inventario.services import es_tarima  # lazy por contrato
+
+    codigo = request.session.get(_clave_tarima(orden))
+    if not codigo:
+        return None
+    tarima = Ubicacion.objects.filter(codigo=codigo, activo=True).first()
+    return tarima if es_tarima(tarima) else None
+
+
+def _tiene_foto(orden):
+    return EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio, tipo="llegada").exists()
 
 
 @rol_requerido("piso", "mesa")
 def recepciones(request):
+    """Órdenes abiertas con su reloj SLA y cuántas cajas lleva contadas cada
+    una (ciego: el piso no ve lo anunciado), más las últimas cerradas."""
+    from apps.inventario.services import escaneos_vivos  # lazy por contrato
+
     abiertas = list(
-        OrdenEntrada.objects.filter(estado__in=ESTADOS_ASN_ABIERTOS)
-        .select_related("cliente", "pedido").prefetch_related("lineas__sku")
+        OrdenEntrada.objects.filter(estado__in=ESTADOS_ASN_ABIERTOS).select_related("cliente", "pedido")
     )
     for orden in abiertas:
         orden.sla_texto, orden.sla_tono = _sla_recepcion(orden)
-        orden.total_anunciado = sum(l.cantidad_anunciada for l in orden.lineas.all())
-        orden.total_recibido = sum(l.cantidad_recibida + l.cantidad_danada for l in orden.lineas.all())
+        orden.total_contado = escaneos_vivos(orden).count()
     cerradas = list(
         OrdenEntrada.objects.filter(estado=OrdenEntrada.CERRADA).select_related("cliente")[:5]
     )
@@ -632,51 +656,46 @@ def recepciones(request):
 
 @rol_requerido("piso", "mesa")
 def recepcion_detalle(request, pk):
+    """Pantalla de escaneo de una orden: foto de llegada obligatoria, tarima
+    actual (si no hay, manda a elegirla), campo de escaneo con foco permanente
+    (escáner físico; sin cámara), tabla "Contado" por producto y lote sin
+    anunciadas, tarimas de la orden con su confirmación y el paso al cuadre."""
     orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente", "pedido"), pk=pk)
-
     if request.method == "POST":
         accion = request.POST.get("accion")
         if accion == "escanear":
             return _recepcion_escanear(request, orden)
         if accion == "foto":
             return _recepcion_foto(request, orden)
-        if accion == "recibir":
-            return _recepcion_recibir(request, orden)
-        if accion == "ubicar":
-            return _recepcion_ubicar(request, orden)
-        if accion == "cerrar":
-            return _recepcion_cerrar(request, orden)
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:recepcion_detalle", pk=orden.pk)
 
-    # Plan de acomodo de toda la orden (una vez; Mesa lo rehace si hace falta).
-    if orden.estado != OrdenEntrada.CERRADA and not (orden.plan_acomodo or {}).get("pasos"):
-        from apps.inventario.services import planear_acomodo  # lazy por contrato
-        planear_acomodo(orden, request.user)
+    from apps.inventario.services import resumen_lineas, tarimas_de_orden  # lazy por contrato
 
-    lineas = list(orden.lineas.select_related("sku"))
-    putaway = dict(
-        Saldo.objects.filter(sku_id__in=[l.sku_id for l in lineas], estado=Saldo.EN_PUTAWAY)
-        .values_list("sku_id")
-        .annotate(t=Sum("cantidad"))
-        .values_list("sku_id", "t")
-    )
-    for linea in lineas:
-        linea.por_ubicar = putaway.get(linea.sku_id, 0)
+    cerrada = orden.estado == OrdenEntrada.CERRADA
+    tiene_foto = _tiene_foto(orden)
+    tarima = _tarima_actual(request, orden)
+    if not cerrada and tiene_foto and tarima is None:
+        return redirect("piso:recepcion_tarima", pk=orden.pk)
+    lineas = resumen_lineas(orden)
+    tarimas = tarimas_de_orden(orden)
+    actual = next((t for t in tarimas if tarima is not None and t["tarima"].pk == tarima.pk), None)
     sla_texto, sla_tono = _sla_recepcion(orden)
-    fotos_llegada = EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio)
     contexto = {
         "seccion": "recepcion",
         "orden": orden,
+        "cerrada": cerrada,
         "lineas": lineas,
-        "pendiente_putaway": sum(putaway.values()),
-        "tiene_foto": fotos_llegada.filter(tipo="llegada").exists(),
+        "tarima": tarima,
+        "tarima_cajas": actual["cajas"] if actual else 0,
+        "tarima_por_confirmar": actual["por_confirmar"] if actual else 0,
+        "tarimas": tarimas,
+        "total_contado": sum(l["llegaron"] for l in lineas),
+        "sin_etiqueta": sum(l["sin_etiqueta"] for l in lineas),
+        "tiene_foto": tiene_foto,
         "sla_texto": sla_texto,
         "sla_tono": sla_tono,
-        "ubicaciones_destino": Ubicacion.objects.filter(
-            tipo__in=[Ubicacion.PICKING, Ubicacion.RESERVA], activo=True
-        ),
-        "fotos_llegada": fotos_llegada,
+        "fotos_llegada": EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio),
     }
     return render(request, "piso/recepcion_detalle.html", contexto)
 
@@ -691,457 +710,280 @@ def _recepcion_foto(request, orden):
     EvidenciaFoto.objects.create(
         entidad="asn", entidad_id=orden.folio, tipo="llegada", archivo=foto, tomada_por=request.user.username,
     )
-    messages.success(request, "Foto de llegada guardada. Ya puedes escanear.")
+    messages.success(request, "Foto de llegada guardada. Elige en qué tarima vas a contar.")
     return destino
-
-
-def _linea_por_codigo(orden, valor):
-    """Línea de la orden cuyo SKU tiene ese código de barras o código; None si no es de la orden."""
-    valor = (valor or "").strip()
-    if not valor:
-        return None
-    for linea in orden.lineas.select_related("sku"):
-        if valor in (linea.sku.codigo_barras, linea.sku.codigo) or valor.upper() == linea.sku.codigo.upper():
-            return linea
-    return None
 
 
 def _recepcion_escanear(request, orden):
-    """Un escaneo identifica el producto y abre su cuenta por lote (Contar);
-    ya no suma piezas por sí solo: el "1" automático quedaba aislado y contaba
-    de más (Chema, 2026-09-21). Exige la foto de llegada (SOP RE-01)."""
-    destino = redirect("piso:recepcion_detalle", pk=orden.pk)
-    linea = _linea_por_codigo(orden, request.POST.get("codigo"))
-    if linea is None:
-        messages.error(request, "Ese código no es de un producto de esta orden. Revisa la etiqueta.")
-        return destino
-    if not EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio, tipo="llegada").exists():
-        messages.error(request, "Tómale foto al camión/tarimas antes de registrar la primera línea.")
-        return destino
-    return redirect(f"{reverse('piso:recepcion_contar', args=[orden.pk])}?sku={linea.sku_id}")
+    """Un escaneo = una caja. El código de barras o el código del SKU abren la
+    pantalla de lotes; el QR de una etiqueta de Torre trae el lote y suma
+    directo; un producto sin lote suma directo. Producto del cliente fuera de
+    la orden: pasa (se agrega con 0 anunciadas al contar). Otro cliente o no
+    registrado: error, nada se suma. Exige foto de llegada y tarima actual."""
+    from apps.inventario.services import contar_caja, resolver_escaneo  # lazy por contrato
+
+    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
+    if orden.estado == OrdenEntrada.CERRADA:
+        messages.error(request, f"La orden {orden.folio} ya está cerrada; no acepta más cajas.")
+        return volver
+    if not _tiene_foto(orden):
+        messages.error(request, "Tómale foto al camión/tarimas antes de escanear la primera caja.")
+        return volver
+    tarima = _tarima_actual(request, orden)
+    if tarima is None:
+        messages.error(request, "Elige en qué tarima estás contando.")
+        return redirect("piso:recepcion_tarima", pk=orden.pk)
+    try:
+        r = resolver_escaneo(orden, request.POST.get("codigo"))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return volver
+    sku = r["sku"]
+    directo = None
+    if r["lote_qr"] is not None and (r["lote_qr"] or not sku.requiere_lote):
+        directo = r["lote_qr"]
+    elif not sku.requiere_lote:
+        directo = ""
+    if directo is not None:
+        try:
+            contar_caja(orden, sku, directo, None, tarima, request.user)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return volver
+        messages.success(request, f"{sku.codigo}{' lote ' + directo if directo else ''}: +1 en {tarima.codigo}. Escanea la siguiente.")
+        return volver
+    return redirect(f"{reverse('piso:recepcion_lote', args=[orden.pk])}?sku={sku.pk}")
 
 
 @rol_requerido("piso", "mesa")
-def recepcion_contar(request, pk):
-    """Cuenta de UN producto, todos sus lotes a la vez (Chema 2026-10-06):
-    contadas y dañadas por lote anunciado (conteo ciego, cero permitido) y un
-    renglón "otro lote" para lo que no venía en la orden. NO registra nada:
-    manda las cuentas a Acomodar por GET, donde se confirman junto con las
-    posiciones. Un reingreso ya contado salta directo a Acomodar."""
+def recepcion_tarima(request, pk):
+    """¿Dónde estás escaneando? Tarimas existentes como tarjetas (con lo que
+    ya tienen) o una nueva con el siguiente nombre propuesto, editable y
+    único. La elegida queda como tarima actual de este usuario para la orden."""
+    from apps.inventario.services import (  # lazy por contrato
+        contenido_ubicacion, crear_tarima, es_tarima, nombre_tarima_propuesto, tarimas_activas, tarimas_de_orden,
+    )
+
+    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
+    if orden.estado == OrdenEntrada.CERRADA:
+        messages.error(request, f"La orden {orden.folio} ya está cerrada.")
+        return redirect("piso:recepcion_detalle", pk=orden.pk)
+    if request.method == "POST":
+        accion = request.POST.get("accion")
+        try:
+            if accion == "elegir":
+                tarima = Ubicacion.objects.filter(pk=request.POST.get("tarima_id") or 0, activo=True).first()
+                if not es_tarima(tarima):
+                    raise ValueError("Elige una tarima de la lista.")
+            elif accion == "nueva":
+                tarima = crear_tarima(request.user, codigo=request.POST.get("codigo"))
+                messages.success(request, f"Tarima {tarima.codigo} creada.")
+            else:
+                raise ValueError("No entendí la acción.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("piso:recepcion_tarima", pk=orden.pk)
+        request.session[_clave_tarima(orden)] = tarima.codigo
+        messages.info(request, f"Contando en {tarima.codigo}: escanea la primera caja.")
+        return redirect("piso:recepcion_detalle", pk=orden.pk)
+
+    de_esta_orden = {t["tarima"].pk: t for t in tarimas_de_orden(orden)}
+    tarimas = []
+    for tarima in tarimas_activas():
+        contenido = contenido_ubicacion(tarima)
+        propia = de_esta_orden.get(tarima.pk)
+        tarimas.append({
+            "tarima": tarima,
+            "piezas": sum(f["piezas"] for f in contenido),
+            "contenido": ", ".join(f"{f['sku'].codigo} ×{f['piezas']}" for f in contenido),
+            "cajas_orden": propia["cajas"] if propia else 0,
+            "confirmada": bool(propia and propia["confirmada"]),
+        })
+    return render(request, "piso/recepcion_tarima.html", {
+        "seccion": "recepcion", "orden": orden, "tarimas": tarimas,
+        "propuesto": nombre_tarima_propuesto(), "actual": _tarima_actual(request, orden),
+        "tiene_foto": _tiene_foto(orden),
+    })
+
+
+@rol_requerido("piso", "mesa")
+def recepcion_lote(request, pk):
+    """Pantalla de lotes de UN producto (Chema 2026-10-13): tarjetas 2 por
+    fila con código y caducidad, "Otro" con código y fecha, "Dañado" apagado,
+    tocar + Confirmar + modal; "Regresar (mal conteo)" vuelve sin contar.
+    El POST cuenta UNA caja en la tarima actual y regresa al escáner."""
+    from apps.inventario.services import contar_caja  # lazy por contrato
+
     orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
     volver = redirect("piso:recepcion_detalle", pk=orden.pk)
     if orden.estado == OrdenEntrada.CERRADA:
-        messages.error(request, f"La orden {orden.folio} ya está cerrada; no acepta más conteos.")
+        messages.error(request, f"La orden {orden.folio} ya está cerrada; no acepta más cajas.")
         return volver
-    sku_id = request.GET.get("sku")
-    lineas = [l for l in orden.lineas.select_related("sku") if str(l.sku_id) == str(sku_id)]
-    if not lineas:
-        messages.error(request, "Escanea un producto de la orden para contarlo.")
+    sku_id = request.POST.get("sku_id") or request.GET.get("sku")
+    sku = SKU.objects.filter(pk=sku_id or 0, cliente=orden.cliente, activo=True).first()
+    if sku is None:
+        messages.error(request, "Escanea un producto para contarlo.")
         return volver
-    sku = lineas[0].sku
-    if orden.tipo == OrdenEntrada.TIPO_REINGRESO and orden.estado == OrdenEntrada.RECIBIDA:
-        # Reingreso de una cancelación en bodega (ASN-0006, Chema 2026-09-30):
-        # la cancelación ya contó y metió las piezas a recepción; contarlas
-        # otra vez las duplicaba en put-away. Aquí solo se ubican.
-        piezas = sum(l.cantidad_recibida for l in lineas)
-        messages.info(request, f"{orden.folio} es un reingreso ya contado ({piezas} pieza{'s' if piezas != 1 else ''} de {sku.codigo}): solo ubícalas.")
-        return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?sku={sku.pk}")
+    tarima = _tarima_actual(request, orden)
+    if tarima is None:
+        messages.error(request, "Elige en qué tarima estás contando.")
+        return redirect("piso:recepcion_tarima", pk=orden.pk)
+    lineas = list(orden.lineas.filter(sku=sku).order_by("pk"))
+    reintentar = redirect(f"{reverse('piso:recepcion_lote', args=[orden.pk])}?sku={sku.pk}")
+
+    if request.method == "POST":
+        danada = request.POST.get("danada") == "1"
+        try:
+            linea_id = (request.POST.get("linea_id") or "").strip()
+            if linea_id:
+                linea = next((l for l in lineas if str(l.pk) == linea_id), None)
+                if linea is None:
+                    raise ValueError("Ese lote no es de este producto. Vuelve a elegir.")
+                lote, caducidad = (linea.lote_codigo or "").strip(), linea.fecha_caducidad
+            else:
+                lote = (request.POST.get("nl_codigo") or "").strip()
+                if not lote and sku.requiere_lote:
+                    raise ValueError("Elige un lote o captura el código del lote nuevo.")
+                caducidad = None
+                crudo = (request.POST.get("nl_cad") or "").strip()
+                if crudo:
+                    try:
+                        caducidad = date.fromisoformat(crudo)
+                    except ValueError:
+                        raise ValueError("La caducidad del lote nuevo no es válida. Usa el calendario.") from None
+            contar_caja(orden, sku, lote, caducidad, tarima, request.user, danada=danada)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return reintentar
+        messages.success(
+            request,
+            f"{sku.codigo}{' lote ' + lote if lote else ''}: +1{' dañada' if danada else ''} en {tarima.codigo}. Escanea la siguiente.",
+        )
+        return volver
+
     from apps.catalogo.services import lotes_sugeridos  # lazy por contrato
-    from apps.inventario.services import _suma  # lazy por contrato
-    return render(request, "piso/recepcion_contar.html", {
-        "seccion": "recepcion", "orden": orden, "sku": sku, "lineas": lineas,
-        "por_ubicar": _suma(sku, Saldo.EN_PUTAWAY),
-        "lotes_sugeridos": lotes_sugeridos(sku, orden),
-        "url_ubicar": reverse("piso:recepcion_ubicar", args=[orden.pk]),
-    })
+    from apps.inventario.services import escaneos_vivos  # lazy por contrato
 
-
-def _cuentas_de_get(GET, lineas):
-    """[(linea|None, lote, caducidad, contadas, dañadas)] que Contar mandó por
-    GET: c_<linea>/d_<linea> por lote anunciado y nl_codigo/nl_cad/nl_c/nl_d
-    para el lote no anunciado. Solo los renglones con algo contado."""
-    cuentas = []
-    for linea in lineas:
-        contadas = _entero(GET.get(f"c_{linea.pk}") or 0, "Las cuentas van en número entero.")
-        danadas = _entero(GET.get(f"d_{linea.pk}") or 0, "Las dañadas van en número entero.")
-        if contadas < 0 or danadas < 0:
-            raise ValueError("Las cantidades no pueden ser negativas.")
-        if contadas or danadas:
-            cuentas.append((linea, (linea.lote_codigo or "").strip(), linea.fecha_caducidad, contadas, danadas))
-    codigo = (GET.get("nl_codigo") or "").strip()
-    nl_c = _entero(GET.get("nl_c") or 0, "Las cuentas van en número entero.")
-    nl_d = _entero(GET.get("nl_d") or 0, "Las dañadas van en número entero.")
-    if codigo and (nl_c or nl_d):
-        caducidad = None
-        crudo = (GET.get("nl_cad") or "").strip()
-        if crudo:
-            try:
-                caducidad = date.fromisoformat(crudo)
-            except ValueError:
-                raise ValueError("La caducidad del lote nuevo no es válida. Usa el calendario.") from None
-        existente = next((l for l in lineas if (l.lote_codigo or "").strip() == codigo), None)
-        cuentas.append((existente, codigo, caducidad or (existente.fecha_caducidad if existente else None), nl_c, nl_d))
-    return cuentas
-
-
-def _pasos_pendientes(orden, sku, lote):
-    """Pasos del plan de la orden para ese producto y lote con piezas por ubicar."""
-    return [
-        p for p in (orden.plan_acomodo or {}).get("pasos", [])
-        if p["sku_id"] == sku.pk and (p.get("lote") or "") == (lote or "") and p["ubicadas"] < p["cantidad"]
+    contadas = {}
+    for linea_id, danada in escaneos_vivos(orden).filter(linea__sku=sku).values_list("linea_id", "danada"):
+        r = contadas.setdefault(linea_id, [0, 0])
+        r[1 if danada else 0] += 1
+    tarjetas = [
+        {"linea": l, "lote": (l.lote_codigo or "").strip(), "caducidad": l.fecha_caducidad,
+         "contadas": contadas.get(l.pk, [0, 0])[0], "danadas": contadas.get(l.pk, [0, 0])[1]}
+        for l in lineas
     ]
-
-
-def _filas_de_acomodo(orden, sku, lote, cantidad, anunciado=True, actor=None):
-    """Filas (posición, cantidad, motivo) para `cantidad` piezas de ese lote:
-    una por paso pendiente del plan (aunque la cantidad llegue a 0, para que
-    el piso la capture) y, si no alcanzan, la siguiente sugerencia o la zona
-    de desborde / cuarentena. Un lote anunciado que el plan no conoce (plan
-    viejo) rehace el plan una vez; un lote no anunciado no está en el plan y
-    va directo a la sugerencia."""
-    from apps.inventario.services import planear_acomodo, sugerir_anaquel, zona_desborde  # lazy
-
-    pasos = _pasos_pendientes(orden, sku, lote)
-    plan = orden.plan_acomodo or {}
-    conocido = any(p["sku_id"] == sku.pk and (p.get("lote") or "") == (lote or "") for p in plan.get("pasos", [])) or any(
-        c["sku"] == sku.codigo and (c.get("lote") or "") == (lote or "") for c in plan.get("completas", [])
-    )
-    if not pasos and anunciado and not conocido:
-        planear_acomodo(orden, actor)
-        pasos = _pasos_pendientes(orden, sku, lote)
-    filas, restante = [], cantidad
-    for p in pasos:
-        caben = p["cantidad"] - p["ubicadas"]
-        toma = max(min(caben, restante), 0)
-        filas.append({"ubicacion": p["ubicacion"] or "", "cantidad": toma, "motivo": p.get("motivo", ""), "plan": caben})
-        restante -= toma
-    if restante > 0:
-        sugerencia = sugerir_anaquel(sku, restante, lote=lote or None)
-        if sugerencia and sugerencia[0]["ubicacion"] is not None:
-            u = sugerencia[0]["ubicacion"]
-            filas.append({"ubicacion": u.codigo, "cantidad": min(sugerencia[0]["cantidad"], restante), "motivo": sugerencia[0]["motivo"] + " (fuera del plan)", "plan": 0})
-            restante -= min(sugerencia[0]["cantidad"], restante)
-        if restante > 0:
-            desborde = zona_desborde()
-            filas.append({
-                "ubicacion": desborde.codigo if desborde else "", "cantidad": restante,
-                "motivo": "sin anaquel con espacio: zona de desborde, vendible" if desborde else "sin anaquel con espacio: cuarentena",
-                "plan": 0,
-            })
-    if not filas:
-        filas.append({"ubicacion": "", "cantidad": 0, "motivo": "", "plan": 0})
-    return filas
+    vistos = {t["lote"] for t in tarjetas}
+    return render(request, "piso/recepcion_lote.html", {
+        "seccion": "recepcion", "orden": orden, "sku": sku, "tarima": tarima, "tarjetas": tarjetas,
+        "en_orden": bool(lineas),
+        "lotes_sugeridos": [s for s in lotes_sugeridos(sku, orden) if s["codigo"] not in vistos],
+    })
 
 
 @rol_requerido("piso", "mesa")
-def recepcion_ubicar(request, pk):
-    """Acomodar (Chema 2026-10-06): todos los lotes del producto en una
-    pantalla. Por lote: contadas y dañadas (editables, vienen de Contar por
-    GET) y una FILA POR POSICIÓN del plan con cuántas van ahí (editables;
-    "+ otra posición"; tarimas; vacío = desborde o cuarentena). Al confirmar,
-    un modal resume "Lote L · se contaron X · vas a acomodar Y en P" por fila
-    y el POST registra cuenta y acomodo de todos los lotes en una transacción
-    (inventario.recibir_y_ubicar). Sin cuentas (reescaneo o reingreso ya
-    contado) ofrece acomodar lo que ya estaba en recepción."""
-    from apps.inventario.services import _suma  # lazy por contrato
+def recepcion_tarima_confirmar(request, pk, tarima_pk):
+    """Confirmar una tarima tras pegar etiquetas (Chema 2026-10-13): "Cuadró"
+    la recibe; "Faltaron etiquetas" vuelve al escáner en esa tarima (cada
+    caja nueva se cuenta ahí); "Sobraron etiquetas" resta una caja por cada
+    etiqueta sobrante escaneada (o las que se tecleen por lote)."""
+    from apps.inventario.services import (  # lazy por contrato
+        anular_escaneo, confirmar_tarima, escaneos_vivos, resolver_escaneo, tarimas_de_orden,
+    )
 
     orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
-    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
-    sku_id = request.POST.get("sku_id") or request.GET.get("sku")
-    lineas = [l for l in orden.lineas.select_related("sku") if str(l.sku_id) == str(sku_id)]
-    if not lineas:
-        messages.error(request, "Escanea un producto de la orden para ubicarlo.")
-        return volver
-    sku = lineas[0].sku
-    if request.method == "POST" and request.POST.get("accion") == "nueva_tarima":
-        return _recepcion_nueva_tarima(request, orden, sku)
+    tarima = get_object_or_404(Ubicacion, pk=tarima_pk)
+    detalle = redirect("piso:recepcion_detalle", pk=orden.pk)
+    volver = redirect("piso:recepcion_tarima_confirmar", pk=orden.pk, tarima_pk=tarima.pk)
+    if orden.estado == OrdenEntrada.CERRADA:
+        messages.error(request, f"La orden {orden.folio} ya está cerrada.")
+        return detalle
     if request.method == "POST":
-        return _recepcion_confirmar_acomodo(request, orden, sku, lineas)
+        accion = request.POST.get("accion")
+        try:
+            if accion == "cuadro":
+                r = confirmar_tarima(orden, tarima, request.user)
+                messages.success(
+                    request,
+                    f"{tarima.codigo} confirmada: {r['cajas']} caja(s) recibidas"
+                    + (f" y {r['danadas']} dañada(s) a cuarentena" if r["danadas"] else "") + ".",
+                )
+                return detalle
+            if accion == "faltaron":
+                request.session[_clave_tarima(orden)] = tarima.codigo
+                messages.info(request, f"Escanea cada caja sin etiqueta: se cuenta en {tarima.codigo}. Al terminar, vuelve a confirmar la tarima.")
+                return detalle
+            if accion == "sobrante":
+                r = resolver_escaneo(orden, request.POST.get("codigo"))
+                if r["lote_qr"] is None and r["sku"].requiere_lote:
+                    raise ValueError("Escanea el QR de la etiqueta que sobró, no el código de barras de la caja.")
+                lote = r["lote_qr"] or ""
+                linea = next((l for l in r["lineas"] if (l.lote_codigo or "").strip() == lote), None)
+                if linea is None:
+                    raise ValueError(f"Esa etiqueta ({r['sku'].codigo}{' lote ' + lote if lote else ''}) no es de esta orden.")
+                anular_escaneo(orden, linea, tarima, request.user, motivo="Etiqueta sobrante al confirmar la tarima.")
+                messages.success(request, f"{linea.sku.codigo}{' lote ' + lote if lote else ''}: −1 en {tarima.codigo}.")
+                return volver
+            if accion == "sobrante_cantidad":
+                linea = get_object_or_404(LineaASN.objects.select_related("sku"), pk=request.POST.get("linea_id") or 0, orden=orden)
+                n = _entero(request.POST.get("cantidad"), "Captura cuántas etiquetas sobraron.")
+                if n <= 0:
+                    raise ValueError("Captura cuántas etiquetas sobraron.")
+                for _ in range(n):
+                    anular_escaneo(orden, linea, tarima, request.user, motivo="Etiquetas sobrantes al confirmar la tarima (cantidad tecleada).")
+                messages.success(request, f"{linea.sku.codigo}{' lote ' + linea.lote_codigo if linea.lote_codigo else ''}: −{n} en {tarima.codigo}.")
+                return volver
+            raise ValueError("No entendí la acción.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return volver
 
-    previo = _suma(sku, Saldo.EN_PUTAWAY)
-    try:
-        cuentas = _cuentas_de_get(request.GET, lineas)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return redirect(f"{reverse('piso:recepcion_contar', args=[orden.pk])}?sku={sku.pk}")
-    if not cuentas and previo <= 0:
-        messages.info(request, f"No hay piezas de {sku.codigo} en recepción por ubicar.")
-        return volver
-    # Plan de la orden antes de armar filas (se arma una vez; Mesa lo rehace).
-    if not (orden.plan_acomodo or {}).get("pasos"):
-        from apps.inventario.services import planear_acomodo  # lazy por contrato
-        planear_acomodo(orden, request.user)
-        orden.refresh_from_db()
-    lotes = []
-    if cuentas:
-        for i, (linea, lote, caducidad, contadas, danadas) in enumerate(cuentas):
-            lotes.append({
-                "indice": i, "linea_pk": linea.pk if linea else "", "lote": lote,
-                "caducidad": caducidad.isoformat() if caducidad else "", "nuevo": linea is None,
-                "contadas": contadas, "danadas": danadas,
-                "filas": _filas_de_acomodo(orden, sku, lote, contadas, anunciado=linea is not None, actor=request.user),
-            })
-    else:
-        # Solo acomodar lo ya contado (reescaneo, reingreso ya contado): lo que
-        # está en recepción no tiene lote, así que se reparte entre los lotes
-        # con pasos pendientes (primero) y el piso corrige las cantidades. Un
-        # lote sin pasos solo se muestra si ningún otro los tiene.
-        pool, vistos, candidatos = previo, set(), []
-        for linea in lineas:
-            lote = (linea.lote_codigo or "").strip()
-            if lote in vistos:
-                continue
-            vistos.add(lote)
-            candidatos.append((linea, lote, bool(_pasos_pendientes(orden, sku, lote))))
-        candidatos.sort(key=lambda c: not c[2])
-        for linea, lote, con_pasos in candidatos:
-            if not con_pasos and lotes:
-                continue
-            filas = _filas_de_acomodo(orden, sku, lote, pool, actor=request.user)
-            pool -= sum(f["cantidad"] for f in filas)
-            lotes.append({
-                "indice": len(lotes), "linea_pk": linea.pk, "lote": lote,
-                "caducidad": linea.fecha_caducidad.isoformat() if linea.fecha_caducidad else "", "nuevo": False,
-                "contadas": 0, "danadas": 0, "filas": filas,
-            })
-    # Tarima recién creada (o elegida en la URL): va en la primera fila.
-    preseleccionada = (request.GET.get("ubicacion") or "").strip()
-    if preseleccionada and lotes:
-        lotes[0]["filas"][0]["ubicacion"] = preseleccionada
-    # Qué vive en cada posición propuesta (producto, piezas, lotes) para acomodar con información,
-    # y en qué anaqueles ya hay OTRO lote de este producto (aviso, sin bloquear).
-    from apps.inventario.services import contenido_ubicacion, ocupacion, tarimas_activas  # lazy por contrato
-    codigos = sorted({f["ubicacion"] for l in lotes for f in l["filas"] if f["ubicacion"]})
-    anaqueles = {u.codigo: u for u in Ubicacion.objects.filter(codigo__in=codigos)}
-    contenido = {}
-    for codigo, u in anaqueles.items():
-        ocup = ocupacion(u)
-        filas = ocup["por_sku"] or ([] if ocup["estado"] not in ("sin_medidas", "ilimitado") else contenido_ubicacion(u))
-        contenido[codigo] = {
-            "pct": ocup["pct"],
-            "texto": ", ".join(f"{f['sku'].codigo} ×{f['piezas']}" + (f" ({', '.join(f['lotes'])})" if f.get("lotes") else "") for f in filas) or "vacío",
-        }
-    for l in lotes:
-        for f in l["filas"]:
-            f["ya_hay"] = contenido.get(f["ubicacion"])
-    lotes_del_sku = {}
-    for s in Saldo.objects.filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0).select_related("ubicacion", "lote"):
-        lotes_del_sku.setdefault(s.ubicacion.codigo, set()).add(s.lote.codigo if s.lote_id else "")
-    tarimas = []
-    for tarima in tarimas_activas():
-        cont = contenido_ubicacion(tarima)
-        tarimas.append({"codigo": tarima.codigo, "piezas": sum(f["piezas"] for f in cont),
-                        "contenido": ", ".join(f"{f['sku'].codigo} ×{f['piezas']}" for f in cont)})
-    return render(request, "piso/recepcion_ubicar.html", {
-        "seccion": "recepcion", "orden": orden, "sku": sku, "lotes": lotes,
-        "previo": previo, "contenido": contenido,
-        "lotes_del_sku": {k: sorted(v) for k, v in lotes_del_sku.items()},
-        "ubicaciones_destino": Ubicacion.objects.filter(tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA), activo=True).order_by("codigo"),
-        "tarimas": tarimas, "tarima_actual": request.session.get("recepcion_tarima", ""),
-        "query": request.GET.urlencode(),
-        "url_contar": f"{reverse('piso:recepcion_contar', args=[orden.pk])}?sku={sku.pk}",
+    resumen = next((t for t in tarimas_de_orden(orden) if t["tarima"].pk == tarima.pk), None)
+    if resumen is None:
+        messages.info(request, f"No hay cajas de {orden.folio} en {tarima.codigo}.")
+        return detalle
+    por_linea = {}
+    for e in escaneos_vivos(orden).filter(tarima=tarima).select_related("linea__sku").order_by("linea__sku__codigo", "linea__lote_codigo"):
+        r = por_linea.setdefault(e.linea_id, {"linea": e.linea, "contadas": 0, "danadas": 0, "por_confirmar": 0})
+        r["danadas" if e.danada else "contadas"] += 1
+        if e.estado == "contada":
+            r["por_confirmar"] += 1
+    return render(request, "piso/recepcion_tarima_confirmar.html", {
+        "seccion": "recepcion", "orden": orden, "tarima": tarima, "resumen": resumen,
+        "lineas": list(por_linea.values()),
     })
 
 
-def _recepcion_nueva_tarima(request, orden, sku):
-    """POST accion=nueva_tarima desde Acomodar: crea la siguiente TAR-nn y
-    vuelve a la pantalla con las mismas cuentas y esa tarima en la primera fila."""
-    from apps.inventario.services import crear_tarima  # lazy por contrato
+@rol_requerido("piso", "mesa")
+def recepcion_cuadre(request, pk):
+    """Cuadre antes de cerrar: por producto y lote lo anunciado contra lo
+    contado (aquí sí se ven las anunciadas), alarma espejo (cajas idénticas
+    cambiadas), tarimas sin confirmar, etiquetas sin imprimir y tarimas
+    recibidas. Confirmar cierra la orden: todo lo recibido queda vendible."""
+    from apps.inventario.services import cerrar_recepcion, cuadre_recepcion  # lazy por contrato
 
-    tarima = crear_tarima(request.user)
-    request.session["recepcion_tarima"] = tarima.codigo
-    messages.success(request, f"Tarima {tarima.codigo} creada: etiquétala y ubica ahí lo que va en ella.")
-    query = (request.POST.get("query") or "").strip() or f"sku={sku.pk}"
-    return redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?{query}&ubicacion={tarima.codigo}")
-
-
-def _recepcion_confirmar_acomodo(request, orden, sku, lineas):
-    """POST de Acomodar (tras el modal): por lote i, l_<i>_linea / l_<i>_lote /
-    l_<i>_cad / l_<i>_contadas / l_<i>_danadas y filas a_<i>_<j>_ubicacion /
-    a_<i>_<j>_cantidad; todo en una transacción (inventario.recibir_y_ubicar)."""
-    from apps.inventario.services import recibir_y_ubicar  # lazy por contrato
-
-    volver = redirect("piso:recepcion_detalle", pk=orden.pk)
-    reintentar = redirect(f"{reverse('piso:recepcion_ubicar', args=[orden.pk])}?{(request.POST.get('query') or '').strip() or f'sku={sku.pk}'}")
-    por_pk = {str(l.pk): l for l in lineas}
-    try:
-        n = _entero(request.POST.get("n_lotes") or 0, "Formulario incompleto; vuelve a intentar.")
-        renglones = []
-        for i in range(n):
-            linea = por_pk.get(request.POST.get(f"l_{i}_linea") or "")
-            lote = (request.POST.get(f"l_{i}_lote") or "").strip()
-            caducidad = None
-            crudo = (request.POST.get(f"l_{i}_cad") or "").strip()
-            if crudo:
-                try:
-                    caducidad = date.fromisoformat(crudo)
-                except ValueError:
-                    raise ValueError("La fecha de caducidad no es válida. Usa el calendario.") from None
-            if linea is None and lote:
-                linea = next((l for l in lineas if (l.lote_codigo or "").strip() == lote), None)
-            contadas = _entero(request.POST.get(f"l_{i}_contadas") or 0, "Las cuentas van en número entero.")
-            danadas = _entero(request.POST.get(f"l_{i}_danadas") or 0, "Las dañadas van en número entero.")
-            acomodos = []
-            for j in range(_entero(request.POST.get(f"l_{i}_n") or 0, "Formulario incompleto; vuelve a intentar.")):
-                cantidad = _entero(request.POST.get(f"a_{i}_{j}_cantidad") or 0, "Las piezas a acomodar van en número entero.")
-                if cantidad <= 0:
-                    continue
-                codigo = (request.POST.get(f"a_{i}_{j}_ubicacion") or "").strip()
-                ubicacion = None
-                if codigo:
-                    ubicacion = Ubicacion.objects.filter(codigo__iexact=codigo).first()
-                    if ubicacion is None:
-                        raise ValueError(f"No existe la ubicación {codigo}. Escanea la etiqueta del anaquel, no la del producto.")
-                acomodos.append((ubicacion, cantidad))
-            if (contadas or danadas) and not EvidenciaFoto.objects.filter(entidad="asn", entidad_id=orden.folio, tipo="llegada").exists():
-                raise ValueError("Tómale foto al camión/tarimas antes de registrar la primera línea.")
-            renglones.append({"linea": linea, "lote_codigo": lote, "fecha_caducidad": caducidad,
-                              "contadas": contadas, "danadas": danadas, "acomodos": acomodos})
-        acomodado = recibir_y_ubicar(orden, sku, renglones, request.user)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return reintentar
-    partes = []
-    for r in renglones:
-        cuenta = []
-        if r["contadas"]:
-            cuenta.append(f"{r['contadas']} contada{'s' if r['contadas'] != 1 else ''}")
-        if r["danadas"]:
-            cuenta.append(f"{r['danadas']} dañada{'s' if r['danadas'] != 1 else ''} a cuarentena")
-        if cuenta:
-            partes.append((f"lote {r['lote_codigo']}: " if r["lote_codigo"] else "") + ", ".join(cuenta))
-    pedidas = {u.pk for r in renglones for u, _ in r["acomodos"] if u is not None}
-    for _linea, lote, destino, cantidad in acomodado:
-        piezas = "1 pieza" if cantidad == 1 else f"{cantidad} piezas"
-        de_lote = f" (lote {lote.codigo})" if lote else ""
-        if destino is None:
-            partes.append(f"{piezas}{de_lote} a cuarentena (sin anaquel con espacio)")
-        else:
-            if destino.codigo.startswith("TAR-"):
-                request.session["recepcion_tarima"] = destino.codigo
-            zona = " (zona de desborde, vendible)" if destino.pk not in pedidas else ""
-            partes.append(f"{piezas}{de_lote} en {destino.codigo}{zona}")
-    messages.success(request, f"{sku.codigo}: " + "; ".join(partes) + ". Escanea la siguiente.")
-    return volver
-
-
-def _recepcion_recibir(request, orden):
-    """Recibe una línea (buenas + dañadas) y liga la foto de llegada al ASN.
-
-    La foto de llegada es OBLIGATORIA en el primer registro de recepción de la
-    orden (SOP RE-01: foto del camión/tarimas ligada al ASN); después es opcional.
-    """
-    destino = redirect("piso:recepcion_detalle", pk=orden.pk)
-    linea = get_object_or_404(LineaASN, pk=request.POST.get("linea_id"), orden=orden)
-    foto = request.FILES.get("foto_llegada")
-    try:
-        cantidad_ok = _entero(request.POST.get("cantidad_ok") or 0, "Captura la cantidad en buen estado con números enteros.")
-        cantidad_danada = _entero(request.POST.get("cantidad_danada") or 0, "Captura la cantidad dañada con números enteros.")
-        if (
-            foto is None
-            and (cantidad_ok > 0 or cantidad_danada > 0)
-            and not EvidenciaFoto.objects.filter(
-                entidad="asn", entidad_id=orden.folio, tipo="llegada",
-            ).exists()
-        ):
-            raise ValueError("Tómale foto al camión/tarimas antes de registrar la primera línea.")
-        from apps.inventario.services import recibir  # lazy por contrato
-        recibir(linea, cantidad_ok, cantidad_danada, request.user)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return destino
-
-    if foto:
-        EvidenciaFoto.objects.create(
-            entidad="asn", entidad_id=orden.folio, tipo="llegada",
-            archivo=foto, tomada_por=request.user.username,
-        )
-    partes = []
-    if cantidad_ok > 0:
-        partes.append(f"{cantidad_ok} en buen estado")
-    if cantidad_danada > 0:
-        partes.append(f"{cantidad_danada} dañadas (van a cuarentena)")
-    messages.success(
-        request,
-        f"Recibido {linea.sku.codigo}: {' y '.join(partes)}. Ahora ubícalo para que sea vendible.",
-    )
-    return destino
-
-
-def _recepcion_ubicar(request, orden):
-    """Put-away: mueve lo recibido a la ubicación escaneada (ahí se vuelve vendible)."""
-    destino = redirect("piso:recepcion_detalle", pk=orden.pk)
-    sku_ids = set(orden.lineas.values_list("sku_id", flat=True))
-    try:
-        sku_id = _entero(request.POST.get("sku_id"), "Elige el producto que vas a ubicar.")
-        cantidad = _entero(request.POST.get("cantidad"), "Captura cuántas piezas vas a ubicar.")
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return destino
-    if sku_id not in sku_ids:
-        messages.error(request, "Ese producto no es de esta orden. Revisa la etiqueta.")
-        return destino
-    sku = get_object_or_404(SKU, pk=sku_id)
-
-    codigo_ubicacion = (request.POST.get("ubicacion") or "").strip()
-    if not codigo_ubicacion:
-        messages.error(request, "Escanea la etiqueta del anaquel destino antes de ubicar.")
-        return destino
-    ubicacion = Ubicacion.objects.filter(codigo__iexact=codigo_ubicacion).first()
-    if ubicacion is None:
-        messages.error(
-            request,
-            f"No existe la ubicación {codigo_ubicacion}. Escanea la etiqueta del anaquel, no la del producto.",
-        )
-        return destino
-
-    lote = None
-    lote_codigo = (request.POST.get("lote") or "").strip()
-    if lote_codigo:
-        fecha_caducidad = None
-        crudo = (request.POST.get("fecha_caducidad") or "").strip()
-        if crudo:
-            try:
-                fecha_caducidad = date.fromisoformat(crudo)
-            except ValueError:
-                messages.error(request, "La fecha de caducidad no es válida. Usa el calendario.")
-                return destino
-        from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
-        lote = obtener_o_crear_lote(sku, lote_codigo, fecha_caducidad)
-
-    from apps.inventario.services import aviso_capacidad, ubicar  # lazy por contrato
-    aviso = aviso_capacidad(ubicacion, sku, cantidad)  # antes de ubicar: estimado con lo que va a entrar
-    try:
-        ubicar(sku, cantidad, ubicacion, lote, request.user)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return destino
-    messages.success(
-        request,
-        f"{cantidad} × {sku.codigo} ubicadas en {ubicacion.codigo}: ya cuentan como vendibles.",
-    )
-    if aviso:
-        messages.warning(request, aviso)
-    return destino
-
-
-def _recepcion_cerrar(request, orden):
-    """Cierra la orden vía inventario.cerrar_recepcion: valida el put-away,
-    guarda las tarimas recibidas y dispara la confirmación honesta al cliente."""
-    destino = redirect("piso:recepcion_detalle", pk=orden.pk)
-    from apps.inventario.services import cerrar_recepcion  # lazy por contrato
-    try:
-        crudo = (request.POST.get("tarimas_recibidas") or "").strip()
-        tarimas_recibidas = (
-            _entero(crudo, "Captura las tarimas recibidas con números enteros.")
-            if crudo else orden.tarimas
-        )
-        cerrar_recepcion(orden, request.user, tarimas_recibidas=tarimas_recibidas)
-    except ValueError as exc:
-        messages.error(request, str(exc))
-        return destino
-    messages.success(request, f"Orden {orden.folio} cerrada: todo el producto quedó vendible.")
-    return destino
+    orden = get_object_or_404(OrdenEntrada.objects.select_related("cliente"), pk=pk)
+    detalle = redirect("piso:recepcion_detalle", pk=orden.pk)
+    if orden.estado == OrdenEntrada.CERRADA:
+        return detalle
+    if request.method == "POST":
+        try:
+            crudo = (request.POST.get("tarimas_recibidas") or "").strip()
+            tarimas_recibidas = (
+                _entero(crudo, "Captura las tarimas recibidas con números enteros.") if crudo else orden.tarimas
+            )
+            cerrar_recepcion(orden, request.user, tarimas_recibidas=tarimas_recibidas)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("piso:recepcion_cuadre", pk=orden.pk)
+        request.session.pop(_clave_tarima(orden), None)
+        messages.success(request, f"Orden {orden.folio} cerrada: todo lo recibido quedó vendible.")
+        return redirect("piso:recepciones")
+    cuadre = cuadre_recepcion(orden)
+    return render(request, "piso/recepcion_cuadre.html", {
+        "seccion": "recepcion", "orden": orden, "cuadre": cuadre,
+        "puede_cerrar": orden.estado != OrdenEntrada.ANUNCIADA and not cuadre["por_confirmar"],
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3237,7 +3079,7 @@ def _cuarentena_dictamen(request):
 def _cuarentena_ubicar(request):
     """Put-away suelto desde cuarentena: dictámenes revendibles y retornos.
 
-    Espeja _recepcion_ubicar (mismos mensajes): ubicación destino escaneada
+    Como el put-away clásico (mismos mensajes): ubicación destino escaneada
     (el servicio valida picking/reserva) y lote capturado SOLO cuando el SKU
     lo pide y la fila no lo trae; si la fila ya trae lote, se usa directo.
     """

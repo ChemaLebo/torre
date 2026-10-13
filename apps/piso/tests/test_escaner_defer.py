@@ -65,9 +65,11 @@ class EscanerDeferTests(SimpleTestCase):
                 "esperar DOMContentLoaded (escaner.js carga con defer y aún "
                 "no existe durante el parseo).",
             )
-        # Las dos páginas del visor de cámara existen y están cubiertas.
+        # Las páginas del visor de cámara existen y están cubiertas (recepción
+        # usa escáner físico desde 2026-10-13: ya no monta la cámara).
         self.assertIn("picking_pedido.html", con_escaner)
-        self.assertIn("recepcion_detalle.html", con_escaner)
+        self.assertIn("salida_registrar.html", con_escaner)
+        self.assertNotIn("recepcion_detalle.html", con_escaner)
 
     def test_inline_con_feedback_espera_o_guarda(self):
         """Todo uso inline de Feedback.* espera DOMContentLoaded o va guardado
