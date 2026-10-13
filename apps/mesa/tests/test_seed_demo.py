@@ -96,6 +96,24 @@ class SeedDemoTests(TestCase):
         # Nace sin recibir: el piso escanea la caja a una tarima (2026-10-13).
         self.assertEqual((reingreso.estado, reingreso.lineas.get().cantidad_anunciada, reingreso.lineas.get().cantidad_recibida), (OrdenEntrada.EN_RECEPCION, 1, 0))
 
+    def test_recepcion_por_escaneo_lista_y_a_medias(self):
+        from apps.catalogo.models import SKU, Ubicacion
+        from apps.inventario.models import EscaneoRecepcion, OrdenEntrada, Saldo
+
+        cpl24 = SKU.objects.get(codigo="CPL24")
+        self.assertEqual((cpl24.codigo_barras, cpl24.variante, cpl24.requiere_lote), ("7503026716090", "24 Pack · Botella 355 ml", True))
+        anunciada = OrdenEntrada.objects.get(estado=OrdenEntrada.ANUNCIADA, cliente__slug="colima")
+        self.assertTrue(anunciada.lineas.filter(sku=cpl24, lote_codigo="CPL330ABCD", cantidad_anunciada=64).exists())
+        a_medias = OrdenEntrada.objects.get(estado=OrdenEntrada.EN_RECEPCION, cliente__slug="colima", lineas__sku__codigo="PARAMO-C12")
+        vivos = EscaneoRecepcion.objects.filter(orden=a_medias).exclude(estado=EscaneoRecepcion.ANULADA)
+        self.assertEqual(vivos.count(), 15)
+        self.assertEqual(vivos.filter(estado=EscaneoRecepcion.RECIBIDA).count(), 12)
+        self.assertEqual(vivos.filter(impresa_ts__isnull=False).count(), 12)
+        tar1 = Ubicacion.objects.get(codigo="TAR-01")
+        self.assertEqual(Saldo.objects.filter(ubicacion=tar1, estado=Saldo.EN_PUTAWAY).count(), 2)  # PARAMO y TICUS, no vendibles
+        self.assertEqual(Saldo.objects.filter(ubicacion=tar1, estado=Saldo.UBICADO_VENDIBLE).count(), 0)
+        self.assertTrue(a_medias.lineas.filter(sku__codigo="TICUS-C12", lote_codigo="TC-2610", cantidad_anunciada=0).exists())
+
     def test_reporte_del_dia_tiene_casos_de_hoy_y_de_ayer(self):
         from django.utils import timezone
 

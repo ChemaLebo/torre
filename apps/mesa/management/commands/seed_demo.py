@@ -3,9 +3,11 @@
 Crea Cervecería Colima (2 tiendas Shopify demo) + Mezcal Nocturno (segundo
 tenant para probar aislamiento), usuarios de todos los roles, catálogo real de
 cerveza, saldos con kardex vivo (ASN recibida y ubicada vía servicios), una ASN
-anunciada, ~16 pedidos en todos los estados con timestamps escalonados,
-3 incidencias con timeline/compensación/reclamación, plantillas A/B/E, reglas
-de envío, conteos y un ajuste con doble firma.
+anunciada lista para escanear (con el producto de la etiqueta de prueba de
+Chema), una recepción por escaneo a medias (una tarima confirmada con
+etiquetas y otra sin confirmar), ~16 pedidos en todos los estados con
+timestamps escalonados, 3 incidencias con timeline/compensación/reclamación,
+plantillas A/B/E, reglas de envío, conteos y un ajuste con doble firma.
 
 Idempotente: correrlo dos veces no duplica nada (get_or_create + guardas por
 entidad). Usa los servicios de dominio donde es natural para que el kardex y
@@ -406,18 +408,46 @@ class Command(BaseCommand):
             ts_vendible=self._dt(dias_atras, 13, 30),
         )
 
+    def _sku_etiqueta_prueba(self, colima, skus):
+        """El producto de la etiqueta de prueba que Chema imprimió el
+        2026-10-13 (QR `P|7503026716090|CPL330ABCD`): CPL24 "Piedra Lisa · 24
+        Pack · Botella 355 ml". Con él, la etiqueta física ya impresa cuenta
+        directo en la ASN anunciada."""
+        from apps.catalogo.models import SKU, Categoria
+
+        cajas, _ = Categoria.objects.get_or_create(cliente=colima, nombre="Cajas")
+        sku, _ = SKU.objects.get_or_create(
+            cliente=colima, codigo="CPL24",
+            defaults={
+                "descripcion": "Piedra Lisa", "variante": "24 Pack · Botella 355 ml", "peso_gr": 11400,
+                "largo_cm": 40, "ancho_cm": 27, "alto_cm": 25, "requiere_lote": True, "unidad": "caja",
+                "precio_declarado": Decimal("640.00"), "punto_reorden": 6, "codigo_barras": "7503026716090",
+                "activo": True, "categoria": cajas, "empaques_divisibles": 2,
+            },
+        )
+        skus["CPL24"] = sku
+        return sku
+
     def _asn_anunciada(self, colima, skus):
         """ASN anunciada desde el portal para la próxima ventana mar/jue
-        (BLUEPRINT §1.8). Dos renglones traen lote y caducidad; el tercero va
-        sin lote para que el piso vea la sugerencia heredada de la orden.
-        Regresa la orden (la existente si ya estaba sembrada)."""
-        from apps.inventario.models import OrdenEntrada
+        (BLUEPRINT §1.8), lista para escanear en piso: dos renglones con lote
+        y caducidad, el producto de la etiqueta de prueba (CPL24 lote
+        CPL330ABCD) y un renglón sin lote (el piso captura el lote de cada
+        caja con "Otro"). Regresa la orden (la existente si ya estaba sembrada)."""
+        from datetime import date
+
+        from apps.inventario.models import LineaASN, OrdenEntrada
         from apps.inventario.services import anunciar_asn
 
         existente = OrdenEntrada.objects.filter(
             cliente=colima, tipo=OrdenEntrada.TIPO_ASN, estado=OrdenEntrada.ANUNCIADA,
         ).first()
         if existente is not None:
+            if not existente.lineas.filter(sku=skus["CPL24"]).exists():
+                LineaASN.objects.create(
+                    orden=existente, sku=skus["CPL24"], cantidad_anunciada=64,
+                    lote_codigo="CPL330ABCD", fecha_caducidad=date(2027, 4, 22),
+                )
             return existente
         fecha = timezone.localdate() + timedelta(days=1)
         while fecha.weekday() not in (1, 3):
@@ -428,11 +458,54 @@ class Command(BaseCommand):
             [
                 (skus["COLIMITA-SIX"], 120, "LC-2609", caducidad),
                 (skus["PARAMO-SIX"], 60, "LP-2609", caducidad),
+                (skus["CPL24"], 64, "CPL330ABCD", date(2027, 4, 22)),
                 (skus["CAYACO-SIX"], 48, "", None),
             ],
             actor="karina", origen="portal",
             motivo="Resurtido anunciado desde el portal (cita en ventana mar/jue)",
         )
+
+    def _recepcion_por_escaneo(self, colima, skus):
+        """Recepción por escaneo a medias (Chema 2026-10-13): PARAMO-C12 (12
+        anunciadas, lote LP-C12-2610) y TICUS-C12 (10 anunciadas SIN lote).
+        TAR-01: 7 PARAMO y 5 TICUS (una dañada) contadas con el lote TC-2610
+        vía "Otro", etiquetas impresas y tarima confirmada (stock en
+        recepción, no vendible). TAR-02: 3 PARAMO contadas sin confirmar. Así
+        el piso ve Contado, tarimas confirmada y por confirmar, el cuadre con
+        faltantes; Mesa ve el editor; el portal "Dónde quedó". Idempotente."""
+        from apps.core.models import EvidenciaFoto
+        from apps.inventario.models import LineaASN, OrdenEntrada
+        from apps.inventario.services import confirmar_tarima, contar_caja, crear_tarima, marcar_impresas
+
+        existente = OrdenEntrada.objects.filter(
+            cliente=colima, tipo=OrdenEntrada.TIPO_ASN, estado=OrdenEntrada.EN_RECEPCION,
+            lineas__sku=skus["PARAMO-C12"], lineas__cantidad_anunciada=12,
+        ).first()
+        if existente is not None:
+            self._folio_recepcion_escaneo = existente.folio
+            return existente
+        caducidad = timezone.localdate() + timedelta(days=300)
+        orden = OrdenEntrada.objects.create(
+            cliente=colima, fecha_compromiso=timezone.localdate(), tarimas=2,
+        )
+        LineaASN.objects.create(orden=orden, sku=skus["PARAMO-C12"], cantidad_anunciada=12, lote_codigo="LP-C12-2610", fecha_caducidad=caducidad)
+        LineaASN.objects.create(orden=orden, sku=skus["TICUS-C12"], cantidad_anunciada=10)
+        EvidenciaFoto.objects.create(
+            entidad="asn", entidad_id=orden.folio, tipo="llegada",
+            archivo=ContentFile(PNG_1PX, name=f"{orden.folio}-llegada.png"), tomada_por="piso1",
+        )
+        tar1 = crear_tarima("piso1", codigo="TAR-01")
+        tar2 = crear_tarima("piso1", codigo="TAR-02")
+        escaneos = [contar_caja(orden, skus["PARAMO-C12"], "LP-C12-2610", caducidad, tar1, "piso1") for _ in range(7)]
+        escaneos += [contar_caja(orden, skus["TICUS-C12"], "TC-2610", caducidad, tar1, "piso1") for _ in range(4)]
+        escaneos.append(contar_caja(orden, skus["TICUS-C12"], "TC-2610", caducidad, tar1, "piso1", danada=True))
+        marcar_impresas(escaneos)
+        confirmar_tarima(orden, tar1, "piso1")
+        for _ in range(3):
+            contar_caja(orden, skus["PARAMO-C12"], "LP-C12-2610", caducidad, tar2, "piso1")
+        OrdenEntrada.objects.filter(pk=orden.pk).update(creado=self._dt(0, 8, 30))
+        self._folio_recepcion_escaneo = orden.folio
+        return orden
 
     def _recepcion_con_faltante(self, colima, skus):
         """Recepción chica cerrada con faltante (24 anunciadas de PIEDRA-LISA-SIX,
@@ -1251,7 +1324,9 @@ class Command(BaseCommand):
         self._stock_inicial(nocturno, skus, lotes, STOCK_NOCTURNO, dias_atras=7)
         self._lote_extra(colima, skus)
         self._recepcion_con_faltante(colima, skus)
+        self._sku_etiqueta_prueba(colima, skus)
         asn = self._asn_anunciada(colima, skus)
+        self._recepcion_por_escaneo(colima, skus)
         pedidos = self._pedidos(colima, nocturno, tiendas, skus, usuarios)
         self._escenarios_lote_a(colima, tiendas, skus)
         self._incidencias(colima, pedidos, usuarios)
@@ -1316,8 +1391,14 @@ class Command(BaseCommand):
         if getattr(self, "_folios_sep", None):
             w(self.style.MIGRATE_HEADING("Escenarios sep-2026 (reconciliación · lotes · reingreso)"))
             f = self._folios_sep
-            w(f"  ASN anunciada con lotes (piso → Recepciones): {f['asn']} · "
+            w(f"  ASN anunciada lista para escanear (piso → Recepciones): {f['asn']} · "
               "lote extra COLIMITA-SIX LC-2512 en A-02-1 (caduca primero: FEFO)")
+            w("    Códigos para probar con el escáner o Teclear: CPL24 → 7503026716090 (QR de la etiqueta de "
+              "prueba: P|7503026716090|CPL330ABCD) · COLIMITA-SIX → 7500465010011 · PARAMO-SIX → 7500465010035 "
+              "· CAYACO-SIX (sin lote anunciado) → 7500465010073")
+            w(f"  Recepción por escaneo a medias: {getattr(self, '_folio_recepcion_escaneo', 'ya sembrada')} · "
+              "TAR-01 confirmada con etiquetas (PARAMO-C12 ×7; TICUS-C12 ×5 lote TC-2610, 1 dañada) · "
+              "TAR-02 con 3 PARAMO-C12 sin confirmar · PARAMO-C12 → 7500465010042 · TICUS-C12 → 7500465010066")
             w(f"  Reingreso por ubicar en piso (cancelado a medio pick {f['cancelado']}): {f['reingreso']}")
             w(f"  Reingresos por decidir (Mesa → Recepciones): {f['retornado']} retornado · "
               f"{f['tardia']} cancelación tardía")
