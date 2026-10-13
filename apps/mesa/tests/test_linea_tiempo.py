@@ -76,6 +76,54 @@ class LineaTiempoTests(TestCase):
         self.assertEqual(filas[3]["ts"]["picking"], hoy + timedelta(minutes=5))
         self.assertEqual(filas[3]["ts"]["empacado"], hoy + timedelta(minutes=40))
 
+    def test_horas_completas_eventos_sin_fecha_y_relleno_del_paso_anterior(self):
+        """Chema 2026-10-12 (PED-00255): iMile vía envia manda los eventos sin
+        fecha → se usa la hora en que Torre los leyó; un paso que el carrier
+        nunca reportó toma la hora del anterior y se marca ≈; una hora real
+        nunca se pisa; una entrega local no inventa pasos de paquetería."""
+        from apps.pedidos.linea_tiempo import construir
+        from apps.pedidos.models import Pedido
+
+        base = timezone.make_aware(datetime(2026, 9, 24, 12, 0))
+        Pedido.objects.filter(pk=self.pedido.pk).update(ts_picking=base, ts_empacado=base + timedelta(hours=1))
+        guia = Guia.objects.get(numero="6092426140197")
+        visto_ruta = timezone.make_aware(datetime(2026, 9, 26, 8, 45))
+        visto_entrega = timezone.make_aware(datetime(2026, 9, 26, 16, 45))
+        ruta = EventoGuia.objects.create(guia=guia, estado="EN_RUTA", crudo="EN_RUTA", descripcion="Out for Delivery")
+        entrega = EventoGuia.objects.create(guia=guia, estado="ENTREGADO", crudo="ENTREGADO", descripcion="Delivered")
+        EventoGuia.objects.filter(pk=ruta.pk).update(ts_visto=visto_ruta)
+        EventoGuia.objects.filter(pk=entrega.pk).update(ts_visto=visto_entrega)
+        Guia.objects.filter(pk=guia.pk).update(estado=Guia.ENTREGADO)
+        fila = {f["caja"]: f for f in construir(Pedido.objects.filter(pk=self.pedido.pk))}[1]
+        # Sin fecha del carrier: la hora de lectura. "En tránsito" nunca se reportó: toma la de recolección y se marca.
+        self.assertEqual((fila["ts"]["en_ruta"], fila["ts"]["entregado"]), (visto_ruta, visto_entrega))
+        self.assertEqual(fila["ts"]["en_transito"], fila["ts"]["recolectado_carrier"])
+        self.assertEqual(fila["estimados"], {"en_transito"})
+        self.assertIsNone(fila["ts_real"]["en_transito"])
+        self._mesa()
+        html = self.client.get(reverse("mesa:pedido_detalle", args=[self.pedido.pk])).content.decode()
+        self.assertIn("≈ 24/Sep 19:52", html)  # en tránsito rellenado con la recolección
+        self.assertIn("26/Sep 16:45", html)
+        # La caja 2 sigue en bodega: nada después de "guía creada" se rellena.
+        fila2 = {f["caja"]: f for f in construir(Pedido.objects.filter(pk=self.pedido.pk))}[2]
+        self.assertEqual(fila2["estimados"], set())
+        self.assertIsNone(fila2["ts"]["salida"])
+        # Entregada sin ningún evento: "entregado" toma el último movimiento de la guía y el resto se rellena.
+        guia2 = Guia.objects.get(numero="6092426140198")
+        mov = timezone.make_aware(datetime(2026, 9, 27, 10, 0))
+        Guia.objects.filter(pk=guia2.pk).update(estado=Guia.ENTREGADO, ts_ultimo_movimiento=mov)
+        fila2 = {f["caja"]: f for f in construir(Pedido.objects.filter(pk=self.pedido.pk))}[2]
+        self.assertEqual(fila2["ts"]["entregado"], mov)
+        self.assertEqual(fila2["estimados"], {"salida", "recolectado_carrier", "en_transito", "en_ruta"})
+        self.assertEqual(fila2["ts"]["en_ruta"], fila2["ts"]["guia"])
+        # Local entregada: sin pasos de paquetería inventados.
+        local = Paquete.objects.create(pedido=self.pedido, numero=3, peso_kg=4, carrier="local", estado=Paquete.DESPACHADO)
+        Guia.objects.create(pedido=self.pedido, paquete=local, carrier="local", numero="LOCAL-1", proveedor="local", estado=Guia.ENTREGADO, ts_ultimo_movimiento=mov)
+        fila3 = {f["caja"]: f for f in construir(Pedido.objects.filter(pk=self.pedido.pk))}[3]
+        self.assertIsNone(fila3["ts"]["en_transito"])
+        self.assertEqual(fila3["ts"]["entregado"], mov)
+        self.assertNotIn("en_transito", fila3["estimados"])
+
     def test_portal_solo_ve_lo_suyo(self):
         karina = get_user_model().objects.create_user("karina", password="x12345678")
         PerfilUsuario.objects.create(usuario=karina, rol="portal", cliente=self.cliente)

@@ -338,6 +338,15 @@ class MultiGuiaTests(TestCase):
         self.assertEqual(self.g1.estado, Guia.ENTREGADO)
         self.assertEqual(self._poll(self.g2, "ENTREGADO"), "ENTREGADO")
 
+    def test_la_caja_que_regresa_despues_de_que_las_demas_se_entregaron_cierra_el_pedido(self):
+        """PED-00255 (2026-10-12): 3 cajas entregadas y la 4a regresó después;
+        el pedido se quedaba EN_TRANSITO para siempre."""
+        self.pedido.transicionar("RECOLECTADO", motivo="Manifiesto (test)")
+        self.assertEqual(self._poll(self.g1, "ENTREGADO"), "EN_TRANSITO")
+        self.assertEqual(self._poll(self.g2, "RETORNO"), "ENTREGADO")
+        self.pedido.refresh_from_db()
+        self.assertIsNotNone(self.pedido.ts_entregado)
+
     def test_una_caja_regresada_no_retorna_el_pedido(self):
         from apps.incidencias.models import Incidencia
 

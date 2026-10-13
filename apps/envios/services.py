@@ -1213,8 +1213,14 @@ def _aplicar_efectos(guia, estado, descripcion):
         if _abrir_incidencia(pedido, "RF", texto, prioridad="P1"):
             abiertas += 1
     elif estado == Guia.RETORNO:
-        if _estado_por_guias(pedido) == "RETORNADO":
+        por_guias = _estado_por_guias(pedido)
+        if por_guias == "RETORNADO":
             _transicionar_pedido(pedido, "RETORNADO", motivo=descripcion)
+        elif por_guias == "ENTREGADO" and not en_bodega:
+            # Las otras cajas ya se habían entregado (PED-00255, 2026-10-12): el
+            # pedido no se queda en tránsito por la que regresó.
+            _transicionar_pedido(pedido, "ENTREGADO", motivo=f"Las demás cajas ya se entregaron; esta regresó. {descripcion}"[:300])
+            _cerrar_retrasos(pedido, descripcion)
         texto = (
             f"El carrier marcó retorno al remitente en la guía {guia.numero} ({guia.carrier}). "
             f"Último evento: {descripcion or 'sin detalle'}. Requiere reingreso y reexpedición."

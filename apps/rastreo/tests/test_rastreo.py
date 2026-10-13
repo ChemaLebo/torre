@@ -283,6 +283,33 @@ class TestPaquetes(BaseRastreo):
         self.assertIn("Tu paquete llega al día siguiente de que salga.", html)
         self.assertNotIn("Recolectado por la paquetería", html)
 
+    def test_entregado_llena_todos_los_pasos_aunque_el_carrier_no_reporte_alguno(self):
+        """Chema 2026-10-12: paquete entregado = todos los pasos con hora; el
+        evento sin fecha del carrier usa la hora de lectura y "En reparto"
+        sin reporte toma la de "En camino"."""
+        from datetime import datetime
+
+        from django.utils import timezone
+
+        from apps.envios.models import EventoGuia, Guia
+
+        caja = self._caja()
+        guia = self._guia(caja, estado=Guia.ENTREGADO, ts_recolectado_carrier=timezone.make_aware(datetime(2026, 10, 5, 8, 45)))
+        self._salida(caja, guia)
+        transito = EventoGuia.objects.create(guia=guia, estado="EN_TRANSITO", crudo="", descripcion="In transit")
+        entrega = EventoGuia.objects.create(guia=guia, estado="ENTREGADO", crudo="ENTREGADO", descripcion="Delivered")
+        EventoGuia.objects.filter(pk=transito.pk).update(ts_visto=timezone.make_aware(datetime(2026, 10, 5, 9, 0)))
+        EventoGuia.objects.filter(pk=entrega.pk).update(ts_visto=timezone.make_aware(datetime(2026, 10, 5, 16, 45)))
+        html = self._html()
+        pasos = self.client.get(f"/r/{self.token}/").context["paquetes"][0]["pasos"]
+        por_clave = {p["clave"]: p for p in pasos}
+        self.assertTrue(all(p["hecho"] for p in pasos))
+        self.assertTrue(por_clave["entregado"]["actual"])
+        self.assertEqual(por_clave["en_ruta"]["ts"], por_clave["en_transito"]["ts"])  # relleno con el anterior
+        self.assertEqual(timezone.localtime(por_clave["entregado"]["ts"]).hour, 16)
+        self.assertIn("5 Oct, 16:45", html)
+        self.assertNotIn("≈", html)  # el comprador las ve limpias
+
     def test_dos_cajas_cada_una_con_su_estado(self):
         from datetime import date
 

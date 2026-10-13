@@ -18,6 +18,10 @@ from .models import Pedido
 
 DIAS_DEFAULT = 14
 
+# Pasos de la caja en orden; los de paquetería no existen en una entrega local.
+ORDEN_PASOS = ("recibido", "picking", "empacado", "guia", "salida", "recolectado_carrier", "en_transito", "en_ruta", "entregado")
+PASOS_PAQUETERIA = {"recolectado_carrier", "en_transito", "en_ruta"}
+
 
 def filtrar(qs, filtros):
     """Aplica los filtros de la pantalla (fechas de creación, estado, texto)
@@ -42,10 +46,44 @@ def filtrar(qs, filtros):
 
 
 def _primer_evento(guia, estados):
+    """Hora del primer evento del carrier en esos estados: la del carrier o,
+    si lo mandó sin fecha (iMile vía envia, Chema 2026-10-12), la hora en que
+    Torre lo leyó."""
     for e in guia.eventos.all():  # ordenados por hora del carrier
-        if e.estado in estados and e.ts_carrier is not None:
-            return e.ts_carrier
+        if e.estado in estados:
+            return e.ts_carrier or e.ts_visto
     return None
+
+
+def _paso_actual(ts, guia):
+    """Hasta qué paso llegó la caja: lo decide el estado de la guía (entregada =
+    todos los pasos hechos aunque el carrier no haya reportado alguno); sin
+    guía o en un estado sin paso propio, el último paso con hora."""
+    if guia is not None:
+        por_estado = {Guia.ENTREGADO: "entregado", Guia.EN_RUTA: "en_ruta", Guia.EN_TRANSITO: "en_transito", Guia.RECOLECTADO: "recolectado_carrier"}
+        if guia.estado in por_estado:
+            return por_estado[guia.estado]
+    return next((clave for clave in reversed(ORDEN_PASOS) if ts.get(clave)), "recibido")
+
+
+def _completar(ts, guia, local):
+    """Horas completas (Chema 2026-10-12): hasta el paso actual, cada paso sin
+    hora toma la del paso anterior y queda marcado en `estimados` (el carrier
+    nunca mandó ese estatus). Una hora real nunca se pisa; después del paso
+    actual nada se inventa; una entrega local no tiene pasos de paquetería.
+    Regresa (ts completo, estimados)."""
+    actual = _paso_actual(ts, guia)
+    completo, estimados, previa = dict(ts), set(), None
+    for clave in ORDEN_PASOS:
+        if local and clave in PASOS_PAQUETERIA:
+            continue
+        if completo.get(clave) is None and previa is not None:
+            completo[clave] = previa
+            estimados.add(clave)
+        previa = completo.get(clave) or previa
+        if clave == actual:
+            break
+    return completo, estimados
 
 
 def _horas_de_la_ola(pedido, caja, guia, eventos):
@@ -90,8 +128,19 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
         en_transito = pedido.ts_en_transito
     entregado = _primer_evento(guia, {Guia.ENTREGADO}) if guia else None
     if entregado is None and entregada:
-        entregado = pedido.ts_entregado
+        entregado = pedido.ts_entregado or guia.ts_ultimo_movimiento
     compromiso = guia.fecha_compromiso if guia and guia.es_activa and not entregada else None
+    ts_real = {
+        "recibido": pedido.creado, "picking": picking, "empacado": empacado,
+        "guia": guia.creado if guia else None,
+        "salida": salida,
+        "recolectado_carrier": guia.ts_recolectado_carrier if guia else None,
+        "en_transito": en_transito,
+        "en_ruta": _primer_evento(guia, {Guia.EN_RUTA}) if guia else None,
+        "entregado": entregado,
+    }
+    local = (guia.carrier if guia else (caja.carrier if caja else "")) == "local"
+    ts, estimados = _completar(ts_real, guia, local)
     return {
         "pedido": pedido,
         "caja": caja.numero if caja else None, "total_cajas": total_cajas,
@@ -99,15 +148,9 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
         "guia": guia,
         "url_rastreo": url_rastreo_carrier(guia.carrier, guia.numero) if guia else "",
         "manifiesto": linea.manifiesto if linea else None,
-        "ts": {
-            "recibido": pedido.creado, "picking": picking, "empacado": empacado,
-            "guia": guia.creado if guia else None,
-            "salida": salida,
-            "recolectado_carrier": guia.ts_recolectado_carrier if guia else None,
-            "en_transito": en_transito,
-            "en_ruta": _primer_evento(guia, {Guia.EN_RUTA}) if guia else None,
-            "entregado": entregado,
-        },
+        "ts": ts,
+        "ts_real": ts_real,
+        "estimados": estimados,
         "compromiso": compromiso,
         "vencido": bool(compromiso) and compromiso < hoy and not entregada,
         "dias_promesa": guia.dias_promesa if guia else None,
