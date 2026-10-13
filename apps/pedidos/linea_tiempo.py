@@ -111,6 +111,27 @@ def _horas_de_la_ola(pedido, caja, guia, eventos):
     return pick or picking, emp or empacado
 
 
+def _pasos_extra(caja, ts):
+    """Pasos que solo existen cuando pasaron (Chema 2026-10-12): hoy la
+    cancelación por reembolso. Cada uno se coloca por su hora después del
+    último paso con hora anterior (`despues_de`), así aparece donde nació."""
+    if caja is None or not caja.cancelada_por_reembolso:
+        return []
+    momento = caja.cancelada_por_reembolso
+    despues_de = "recibido"
+    for clave in ORDEN_PASOS:
+        if ts.get(clave) is not None and ts[clave] <= momento:
+            despues_de = clave
+    return [{"clave": "reembolso", "nombre": "Cancelada por reembolso", "ts": momento, "despues_de": despues_de}]
+
+
+def _agrupar_extras(extras):
+    por_paso = {}
+    for x in extras:
+        por_paso.setdefault(x["despues_de"], []).append(x)
+    return por_paso
+
+
 def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
     """Una fila de la tabla: la caja (o el envío entero, legacy) con su guía."""
     from apps.envios.services import url_rastreo_carrier  # lazy por contrato
@@ -141,6 +162,7 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
     }
     local = (guia.carrier if guia else (caja.carrier if caja else "")) == "local"
     ts, estimados = _completar(ts_real, guia, local)
+    extras = _pasos_extra(caja, ts)
     return {
         "pedido": pedido,
         "caja": caja.numero if caja else None, "total_cajas": total_cajas,
@@ -151,6 +173,9 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
         "ts": ts,
         "ts_real": ts_real,
         "estimados": estimados,
+        "extras": extras,
+        "extras_por_paso": _agrupar_extras(extras),
+        "caja_cancelada": bool(caja and caja.cancelada_por_reembolso),
         "compromiso": compromiso,
         "vencido": bool(compromiso) and compromiso < hoy and not entregada,
         "dias_promesa": guia.dias_promesa if guia else None,

@@ -863,15 +863,113 @@ def _reducir_lineas(pedido, filas, faltan, liberar_reserva):
     return faltan, quitadas_peso
 
 
-def _aplicar_cambios_cantidades(pedido, payload, origen):
+def _reembolsos_por_sku(payload):
+    """{sku: piezas} reembolsadas según `refunds[].refund_line_items[]` del
+    payload de Shopify (el line item viene anidado con su sku)."""
+    total = {}
+    for refund in payload.get("refunds") or []:
+        for item in refund.get("refund_line_items") or []:
+            sku = str((item.get("line_item") or {}).get("sku") or "").strip()
+            try:
+                piezas = int(item.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+            if sku and piezas > 0:
+                total[sku] = total.get(sku, 0) + piezas
+    return total
+
+
+def _aplicar_reembolsos(pedido, payload, origen):
+    """Reembolsos de Shopify (Chema 2026-10-12, #33909): cada pieza reembolsada
+    cancela una caja que salió y NO se entregó (regresada primero, luego en
+    tránsito, intento fallido…) cuando el reembolso cubre todo su contenido;
+    lo entregado con daño no se registra (se revisa caso por caso). La caja
+    sigue DESPACHADO y gana `cancelada_por_reembolso`; evento
+    `reembolso_aplicado`; una caja cancelada que sigue en tránsito abre la
+    incidencia interna DEV "Pedir regreso al origen" (con su correo); y si las
+    cajas no canceladas ya están entregadas, el pedido pasa a ENTREGADO.
+    Idempotente: las cajas ya canceladas descuentan del reembolso. Regresa
+    {sku: piezas} para que la edición de cantidades no lo tome por conflicto."""
+    reembolsos = _reembolsos_por_sku(payload)
+    if not reembolsos:
+        return reembolsos
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+
+    cajas = list(
+        pedido.paquetes.filter(estado=Paquete.DESPACHADO)
+        .prefetch_related("guias", "lineas__linea_pedido__sku").order_by("numero")
+    )
+
+    def unidades(caja):
+        u = {}
+        for pl in caja.lineas.all():
+            codigo = pl.linea_pedido.sku.codigo
+            u[codigo] = u.get(codigo, 0) + pl.cantidad
+        return u
+
+    restantes = dict(reembolsos)
+    for caja in cajas:
+        if caja.cancelada_por_reembolso:
+            for sku, n in unidades(caja).items():
+                restantes[sku] = restantes.get(sku, 0) - n
+    candidatas = [
+        c for c in cajas
+        if not c.cancelada_por_reembolso and not any(g.estado == Guia.ENTREGADO for g in c.guias.all())
+    ]
+    candidatas.sort(key=lambda c: (0 if any(g.estado == Guia.RETORNO for g in c.guias.all()) else 1, c.numero))
+    ahora = timezone.now()
+    canceladas = []
+    for caja in candidatas:
+        u = unidades(caja)
+        if u and all(restantes.get(sku, 0) >= n for sku, n in u.items()):
+            for sku, n in u.items():
+                restantes[sku] -= n
+            caja.cancelada_por_reembolso = ahora
+            caja.save(update_fields=["cancelada_por_reembolso"])
+            canceladas.append(caja)
+    if not canceladas:
+        return reembolsos
+    registrar_evento(
+        "pedido", pedido.pk, "reembolso_aplicado", actor=origen, cliente=pedido.cliente,
+        delta={"reembolsos": reembolsos, "cajas_canceladas": [c.numero for c in canceladas]},
+        motivo="Reembolso en Shopify: las cajas que salieron y no se entregaron quedan canceladas; "
+               "lo entregado no cambia.",
+    )
+    for caja in canceladas:
+        guia = caja.guia_activa
+        if guia is not None and guia.estado not in (Guia.RETORNO, Guia.CANCELADA, Guia.ENTREGADO):
+            try:
+                from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+                from apps.incidencias.services import abrir_incidencia  # lazy por contrato
+                abrir_incidencia(
+                    pedido.cliente, Incidencia.TIPO_DEV, Incidencia.ORIGEN_AUTO, pedido=pedido, interna=True, pese_a_pausa=True,
+                    texto=(f"La caja {caja.numero} de {pedido.folio} se reembolsó en Shopify y sigue en tránsito "
+                           f"(guía {guia.numero}, {guia.carrier}): pídele a la paquetería que la regrese al origen "
+                           "antes de que la entregue. Si la entrega, el comprador se la queda."),
+                )
+            except Exception:  # noqa: BLE001 — el aviso jamás detiene la ingesta
+                pass
+    try:
+        from apps.envios.services import _estado_por_guias, _transicionar_pedido  # lazy por contrato
+        pedido.refresh_from_db(fields=["estado"])
+        if pedido.estado in (Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.ENTREGA_PRESUNTA) and _estado_por_guias(pedido) == "ENTREGADO":
+            _transicionar_pedido(pedido, "ENTREGADO", motivo="Reembolso: las cajas no entregadas quedaron canceladas; el resto ya se entregó.")
+    except Exception:  # noqa: BLE001 — la re-evaluación jamás detiene la ingesta
+        pass
+    return reembolsos
+
+
+def _aplicar_cambios_cantidades(pedido, payload, origen, reembolsos=None):
     """Refund parcial / edición de orden: ajusta las líneas al current_quantity.
 
     Reducción sin avance físico → encoge y libera reserva; con avance
     (pickeada, empacado o después) → incidencia CAN, cantidades intactas.
     Aumento o línea nueva en PENDIENTE → camino de ingesta (reserva o FAL);
     en estados posteriores → incidencia. Diff-based: repetir el mismo update
-    es no-op.
+    es no-op. `reembolsos` ({sku: piezas}, 2026-10-12): la baja explicada por
+    piezas reembolsadas que ya habían salido no es conflicto.
     """
+    reembolsos = reembolsos or {}
     if pedido.estado in _ESTADOS_EDICION_TERMINAL:
         return
     desconocidos = items_no_registrados(pedido, payload)
@@ -895,7 +993,8 @@ def _aplicar_cambios_cantidades(pedido, payload, origen):
     delta_peso = 0
     for codigo, piezas_objetivo in objetivo.items():
         filas = por_sku.get(codigo, [])
-        delta = piezas_objetivo - sum(l.cantidad for l in filas)
+        explicado = min(reembolsos.get(codigo, 0), sum(l.cantidad_despachada for l in filas))
+        delta = piezas_objetivo + explicado - sum(l.cantidad for l in filas)
         if delta == 0:
             continue
         if delta < 0:
@@ -1116,9 +1215,10 @@ def _actualizar_pedido_existente(pedido, payload, origen, cancelada):
         campos.append("shopify_order_name")
     if campos:
         pedido.save(update_fields=campos + ["actualizado"])
+    reembolsos = {} if cancelada else _aplicar_reembolsos(pedido, payload, origen)
     if not cancelada:
         # Una orden cancelada la gobierna su matriz; lo demás ajusta cantidades.
-        _aplicar_cambios_cantidades(pedido, payload, origen)
+        _aplicar_cambios_cantidades(pedido, payload, origen, reembolsos)
     registrar_evento(
         "pedido", pedido.pk, "ingesta_repetida", actor=origen, cliente=pedido.cliente,
         delta={"origen": origen, "campos": campos},

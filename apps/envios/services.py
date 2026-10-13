@@ -1127,7 +1127,8 @@ def _estado_por_guias(pedido):
     el pedido espere inventario o esté en su segunda ola
     (Pedido.pendiente_de_completar) no se entrega — se entregan todos los
     line items o nada (Chema 2026-09-22)."""
-    guias = list(pedido.guias.all())
+    # Cajas canceladas por reembolso (2026-10-12): no cuentan para entregar ni retornar.
+    guias = [g for g in pedido.guias.all() if not (g.paquete_id and g.paquete.cancelada_por_reembolso)]
     activas = [g for g in guias if g.es_activa]
     if guias and not activas:
         return "RETORNADO"

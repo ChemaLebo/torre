@@ -68,6 +68,7 @@ TIPO_INCIDENCIA_LEGIBLE = {
     "SKU": "producto no registrado",
     "ERR": "producto erróneo",
     "CSS": "caja sin salida",
+    "DEV": "regreso al origen",
 }
 ESTADOS_INCIDENCIA_ABIERTOS = ("ABIERTA", "EN_CURSO", "RESOLUCION_PROPUESTA")
 

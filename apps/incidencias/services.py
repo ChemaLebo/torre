@@ -35,6 +35,7 @@ PRIORIDAD_DEFAULT_POR_TIPO = {
     Incidencia.TIPO_SKU: Incidencia.P1,  # el pedido no puede surtirse: falta dar de alta el producto
     Incidencia.TIPO_ERR: Incidencia.P1,  # el comprador tiene otro producto en la mano: error nuestro, se rehace la entrega
     Incidencia.TIPO_CSS: Incidencia.P1,  # una caja con guía que ningún camión se llevó: puede estar extraviada
+    Incidencia.TIPO_DEV: Incidencia.P1,  # reembolsada en tránsito: pedir al carrier que la regrese antes de que la entregue
 }
 # Tipos que detienen el pedido en piso: al resolverlos o cerrarlos, se reanuda.
 TIPOS_QUE_DETIENEN = (Incidencia.TIPO_DET, Incidencia.TIPO_PAQ, Incidencia.TIPO_SKU)

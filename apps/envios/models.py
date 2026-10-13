@@ -281,6 +281,11 @@ class Paquete(models.Model):
     # producto (PaqueteLinea.sku_real); la caja entra a "Reingresos por
     # decidir" con su contenido REAL (lo pedido no salió y no va a regresar).
     contenido_erroneo = models.BooleanField(default=False)
+    # Reembolso en Shopify (Chema 2026-10-12): la caja salió y no se entregó
+    # (regresó, se perdió, intento fallido) y el cliente reembolsó su contenido.
+    # Sigue siendo DESPACHADO (salió, su guía se cobra, su kardex pasó); deja
+    # de contar para "pedido entregado" y el comprador ya no la ve.
+    cancelada_por_reembolso = models.DateTimeField(null=True, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:
