@@ -8,6 +8,7 @@ queden siempre consistentes. Cross-app: modelos y servicios se importan lazy
 """
 import csv
 import io
+import re
 import secrets
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -315,6 +316,116 @@ def bodega(request):
         "busqueda": busqueda,
         **zonas,
     })
+
+
+
+
+def _orden_posicion(codigo):
+    """Nombres por pasillo primero (letra, número), luego los códigos viejos y al final las tarimas."""
+    m = re.match(r"^([A-Z])-(\d{1,2})$", codigo)
+    if m:
+        return (0, m.group(1), int(m.group(2)), codigo)
+    if codigo.startswith("TAR-"):
+        return (2, "", 0, codigo)
+    return (1, "", 0, codigo)
+
+
+def _entero_positivo(valor, mensaje):
+    try:
+        n = int(str(valor or "").strip())
+    except ValueError:
+        raise ValueError(mensaje) from None
+    if n <= 0:
+        raise ValueError(mensaje)
+    return n
+
+
+@rol_requerido("mesa")
+def bodega_posiciones(request):
+    """Mesa → Bodega → Posiciones (Chema 2026-10-13): todas las posiciones de
+    almacén (racks y tarimas) con lo que hay en cada una y, por posición,
+    **Editar** (cambiar nombre / mover existencias), **Imprimir posición**
+    (QR `U|nombre`) e **Imprimir etiquetas de las cajas** (una por caja de
+    cada producto y lote, cantidades prellenadas con lo que el sistema dice)."""
+    from apps.inventario.services import existencias_de_posicion, ocupaciones  # lazy por contrato
+
+    posiciones = list(_posiciones_almacen())
+    ocupacion = ocupaciones(posiciones)
+    filas = []
+    for p in posiciones:
+        existencias = existencias_de_posicion(p)
+        filas.append({
+            "ubicacion": p, "existencias": existencias, "ocupacion": ocupacion.get(p.codigo, {}),
+            "vendible": sum(e["vendible"] for e in existencias), "apartado": sum(e["apartado"] for e in existencias),
+            "es_tarima": p.codigo.startswith("TAR-"), "datos_id": f"pos-datos-{p.pk}",
+            "datos": {
+                "pk": p.pk, "codigo": p.codigo,
+                "filas": [{
+                    "sku": e["sku"].pk, "sku_codigo": e["sku"].codigo, "descripcion": e["sku"].descripcion,
+                    "lote": e["lote"].pk if e["lote"] else 0, "lote_codigo": e["lote"].codigo if e["lote"] else "",
+                    "vendible": e["vendible"],
+                } for e in existencias],
+            },
+        })
+    filas.sort(key=lambda f: _orden_posicion(f["ubicacion"].codigo))
+    return render(request, "mesa/bodega_posiciones.html", {
+        "seccion": "bodega", "filas": filas, "destinos": sorted(posiciones, key=lambda p: _orden_posicion(p.codigo)),
+        "n_posiciones": len(filas), "n_con_producto": sum(1 for f in filas if f["existencias"]),
+    })
+
+
+@rol_requerido("mesa")
+def bodega_posicion_accion(request, pk):
+    """POST sobre una posición: `renombrar` (nuevo), `mover` (sku_id, lote_id,
+    cantidad, destino, motivo), `imprimir_posicion` e `imprimir_cajas`
+    (`n_<sku>_<lote>` = cuántas etiquetas por renglón). Vuelve a la lista
+    anclada en la posición; los errores van como mensaje."""
+    from apps.catalogo.models import SKU, Lote, Ubicacion  # lazy: modelos de otra app
+    from apps.inventario.services import mover_existencias, renombrar_posicion  # lazy por contrato
+    from apps.piso.etiquetas import imprimir_etiqueta_posicion, imprimir_etiquetas_posicion  # lazy por contrato
+
+    ubicacion = get_object_or_404(Ubicacion, pk=pk, activo=True, tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA))
+    volver = redirect(f"{reverse('mesa:bodega_posiciones')}#pos-{ubicacion.pk}")
+    if request.method != "POST":
+        return volver
+    accion = request.POST.get("accion")
+    try:
+        if accion == "renombrar":
+            anterior = renombrar_posicion(ubicacion, request.POST.get("nuevo"), actor=request.user)
+            messages.success(request, f"{anterior} ahora se llama {ubicacion.codigo}. Imprime y pega su etiqueta nueva.")
+        elif accion == "mover":
+            sku = get_object_or_404(SKU, pk=request.POST.get("sku_id") or 0)
+            lote_pk = (request.POST.get("lote_id") or "0").strip()
+            lote = get_object_or_404(Lote, pk=lote_pk, sku=sku) if lote_pk not in ("", "0") else None
+            destino = _posicion(request.POST.get("destino"))
+            cantidad = _entero_positivo(request.POST.get("cantidad"), "Captura cuántas piezas mover.")
+            r = mover_existencias(sku, lote, ubicacion, destino, cantidad, actor=request.user, motivo=request.POST.get("motivo") or "")
+            messages.success(
+                request,
+                f"{r['cantidad']} × {sku.codigo}{' lote ' + lote.codigo if lote else ''}: de {ubicacion.codigo} a {destino.codigo}"
+                + (f" (con {r['apartadas']} apartada(s))" if r["apartadas"] else "") + ".",
+            )
+        elif accion == "imprimir_posicion":
+            imprimir_etiqueta_posicion(ubicacion, request.user)
+            messages.success(request, f"La etiqueta de {ubicacion.codigo} va a la impresora.")
+        elif accion == "imprimir_cajas":
+            filas = []
+            for clave, valor in request.POST.items():
+                if not clave.startswith("n_") or not str(valor).strip() or str(valor).strip() == "0":
+                    continue
+                _n, sku_pk, lote_pk = clave.split("_")
+                cantidad = _entero_positivo(valor, "Las cantidades deben ser números enteros.")
+                sku = get_object_or_404(SKU, pk=sku_pk)
+                lote = get_object_or_404(Lote, pk=lote_pk, sku=sku) if lote_pk != "0" else None
+                filas.append((sku, lote, cantidad))
+            trabajos = imprimir_etiquetas_posicion(ubicacion, filas, request.user)
+            total = sum(cantidad for _sku, _lote, cantidad in filas)
+            messages.success(request, f"{total} etiqueta(s) de caja de {ubicacion.codigo} van a la impresora en {len(trabajos)} tanda(s).")
+        else:
+            raise ValueError("No entendí la acción.")
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    return volver
 
 
 # ─────────────────────────────────────────────────────────────────────────────

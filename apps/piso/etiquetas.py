@@ -538,13 +538,14 @@ def dibujar_etiqueta_caja(lienzo, *, marca, sku, producto, presentacion, lote, c
         lienzo.setFillGray(0)
 
 
-def dibujar_etiqueta_tarima(lienzo, nombre, qr):
-    """Una etiqueta de tarima 51×51: TORRE · TARIMA, el nombre en grande y el QR."""
+def dibujar_etiqueta_tarima(lienzo, nombre, qr, titulo="TORRE · TARIMA"):
+    """Una etiqueta de tarima o posición 51×51: el título (TORRE · TARIMA o
+    TORRE · POSICIÓN), el nombre en grande y el QR `U|nombre`."""
     clash, inter = _fuente("Clash-700"), _fuente("InterV-700")
     lienzo.setFillGray(0)
     x0 = ETIQUETA_PAD_IZQ
     y = ETIQUETA_LADO - ETIQUETA_PAD_ARRIBA - 5.4
-    _texto_em(lienzo, x0, y, "TORRE · TARIMA", inter, 5.4, 0.14)
+    _texto_em(lienzo, x0, y, titulo, inter, 5.4, 0.14)
     pt = _encoger(str(nombre).upper(), clash, 30, -0.01, ETIQUETA_ANCHO_UTIL, 10)
     y -= 1.4 * mm + pt * 0.95
     _texto_em(lienzo, x0, y + pt * 0.12, str(nombre).upper(), clash, pt, -0.01)
@@ -562,7 +563,7 @@ def generar_pdf_etiquetas(items):
     lienzo.setTitle("Etiquetas de recepción · Torre")
     for item in items:
         if item["tipo"] == "tarima":
-            dibujar_etiqueta_tarima(lienzo, item["nombre"], item["qr"])
+            dibujar_etiqueta_tarima(lienzo, item["nombre"], item["qr"], item.get("titulo", "TORRE · TARIMA"))
         else:
             dibujar_etiqueta_caja(lienzo, **{k: v for k, v in item.items() if k != "tipo"})
         lienzo.showPage()
@@ -865,3 +866,79 @@ def imprimir_etiqueta(guia, interna=False):
         delta={"folio": pedido.folio, "cola": cola},
     )
     return f"Etiqueta de {pedido.folio} enviada a la impresora ({cola})."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mesa → Bodega → Posiciones (Chema 2026-10-13): etiqueta de la posición y
+# etiquetas de las cajas que hay en ella
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _item_posicion(ubicacion):
+    from apps.inventario.services import es_tarima, qr_posicion  # lazy por contrato
+
+    return {"tipo": "tarima", "nombre": ubicacion.codigo, "qr": qr_posicion(ubicacion),
+            "titulo": "TORRE · TARIMA" if es_tarima(ubicacion) else "TORRE · POSICIÓN"}
+
+
+def imprimir_etiqueta_posicion(ubicacion, actor):
+    """La etiqueta QR de una posición o tarima (`U|nombre`) a la térmica de
+    etiquetas. Regresa el trabajo (relay) o None (local)."""
+    from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
+
+    pdf = generar_pdf_etiquetas([_item_posicion(ubicacion)])
+    trabajo = encolar_impresion(
+        pdf, tipo=TrabajoImpresion.TIPO_TARIMA, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS, media=MEDIA_ETIQUETAS,
+        referencia=f"Posición {ubicacion.codigo}", cliente=None, nombre=f"posicion-{ubicacion.codigo}.pdf",
+    )
+    registrar_evento(
+        "ubicacion", ubicacion.codigo, "etiqueta_posicion_impresa", actor=actor,
+        delta={"trabajo": trabajo.pk if trabajo else None}, motivo=f"Etiqueta de la posición {ubicacion.codigo}.",
+    )
+    return trabajo
+
+
+def _item_caja_de_saldo(sku, lote):
+    """El item de etiqueta de una caja que ya está ubicada (sin escaneo): datos
+    del producto, el lote y su caducidad del catálogo, QR `P|barras|lote`."""
+    from apps.inventario.services import qr_producto  # lazy por contrato
+
+    codigo_lote = lote.codigo if lote is not None else ""
+    return {
+        "tipo": "caja", "marca": sku.cliente.nombre, "sku": sku.codigo, "producto": sku.descripcion,
+        "presentacion": sku.variante, "lote": codigo_lote, "caducidad": lote.fecha_caducidad if lote is not None else None,
+        "barras": sku.codigo_barras or sku.codigo, "qr": qr_producto(sku, codigo_lote), "danada": False,
+    }
+
+
+def imprimir_etiquetas_posicion(ubicacion, filas, actor):
+    """Etiquetas de caja (51×51) de lo que hay en una posición: `filas` =
+    [(sku, lote | None, cantidad)]. Salen en trabajos del tamaño de tanda con
+    referencia "<posición> etiquetas a-b"; evento `etiquetas_impresas` en la
+    posición. Regresa [trabajos]."""
+    from apps.configuracion.services import tanda_etiquetas  # lazy por contrato
+    from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
+
+    filas = [(sku, lote, int(cantidad)) for sku, lote, cantidad in filas if int(cantidad) > 0]
+    items = [_item_caja_de_saldo(sku, lote) for sku, lote, cantidad in filas for _ in range(cantidad)]
+    if not items:
+        raise ValueError("Captura cuántas etiquetas quieres de cada producto.")
+    clientes = {sku.cliente for sku, _lote, _cantidad in filas}
+    cliente = clientes.pop() if len(clientes) == 1 else None
+    tamano = tanda_etiquetas()
+    trabajos = []
+    for i in range(0, len(items), tamano):
+        tanda = items[i:i + tamano]
+        desde, hasta = i + 1, i + len(tanda)
+        trabajos.append(encolar_impresion(
+            generar_pdf_etiquetas(tanda), tipo=TrabajoImpresion.TIPO_PRODUCTO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
+            media=MEDIA_ETIQUETAS, referencia=f"{ubicacion.codigo} etiquetas {desde}-{hasta}", cliente=cliente,
+            nombre=f"etiquetas-{ubicacion.codigo}-{desde}-{hasta}.pdf",
+        ))
+    registrar_evento(
+        "ubicacion", ubicacion.codigo, "etiquetas_impresas", actor=actor,
+        delta={"cajas": len(items), "trabajos": [t.pk for t in trabajos if t],
+               "por_producto": [{"sku": sku.codigo, "lote": lote.codigo if lote else None, "cajas": cantidad} for sku, lote, cantidad in filas]},
+        motivo=f"{len(items)} etiqueta(s) de caja de lo que hay en {ubicacion.codigo}.",
+    )
+    return trabajos

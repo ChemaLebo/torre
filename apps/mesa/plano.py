@@ -32,6 +32,18 @@ RACK_Y_FIN = 1960
 COLUMNAS_RACK = {("I", "F"): 0, ("I", "B"): 1, ("D", "F"): 2, ("D", "B"): 3}
 PATRON_RACK_PISO = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
 PATRON_RACK_LADO = re.compile(r"^([A-Z]+)-(\d+)-([ID])-([FB])-(\d+)$")
+# Nombres por pasillo (Chema 2026-10-13): A-1…A-8 un pasillo de una cara,
+# B-1…B-16 uno de dos caras (1–8 la cara del rack de número menor, 9–16 la
+# otra). Dentro de la cara: 1–2 piso 1 (frente, atrás), 3–4 piso 2, 5–6 piso 3,
+# 7–8 piso 4. Se dibuja como el rack doble: cuatro celdas por piso.
+PATRON_PASILLO = re.compile(r"^([A-Z])-(\d{1,2})$")
+
+
+def celda_pasillo(letra, numero):
+    """(grupo, piso, columna) de un nombre por pasillo: la columna es cara × 2 + atrás."""
+    cara = 0 if numero <= 8 else 1
+    k = (numero - 1) % 8
+    return f"Pasillo {letra}", k // 2 + 1, cara * 2 + (k % 2)
 
 
 def racks_bodega(resaltar=None):
@@ -46,6 +58,8 @@ def racks_bodega(resaltar=None):
       atrás (B), piso 1 (formato sep-2026, racks dobles): cada piso es una
       fila con cuatro celdas I-F · I-B · D-F · D-B y el piso de hasta arriba
       (la reserva, RES-1-D-F-4) se dibuja arriba, como en el físico.
+    - A-3 / B-12 (nombres por pasillo, oct-2026): un grupo por pasillo con
+      cuatro celdas por piso (cara 1 frente · atrás · cara 2 frente · atrás).
     La agrupación es POR NÚMERO DE RACK ignorando la letra (la letra es el
     tipo del piso, no el rack). Códigos sin patrón van como bloque de un piso.
     Regresa [{etiqueta, filas: [{x, y, w, h, cx, cy, codigo, mini}]}].
@@ -61,7 +75,10 @@ def racks_bodega(resaltar=None):
     for codigo in [u.codigo for u in ubicaciones]:
         lado = PATRON_RACK_LADO.match(codigo)
         piso_solo = PATRON_RACK_PISO.match(codigo)
-        if lado:
+        pasillo = PATRON_PASILLO.match(codigo)
+        if pasillo:
+            clave, piso, columna = celda_pasillo(pasillo.group(1), int(pasillo.group(2)))
+        elif lado:
             clave, piso = f"Rack {lado.group(2)}", int(lado.group(5))
             columna = COLUMNAS_RACK[(lado.group(3), lado.group(4))]
         elif piso_solo:
@@ -76,7 +93,9 @@ def racks_bodega(resaltar=None):
     def _orden(item):
         clave = item[0]
         num = clave.split(" ")[-1]
-        return (0, int(num)) if num.isdigit() else (1, 0)
+        if num.isdigit():
+            return (0, int(num), "")
+        return (1, 0, clave) if clave.startswith("Pasillo ") else (2, 0, clave)
 
     pitch = (RACK_Y_FIN - RACK_Y0) // max(len(grupos), 1)
     ancho_celda = RACK_ANCHO // len(COLUMNAS_RACK)

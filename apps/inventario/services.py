@@ -2930,3 +2930,91 @@ def realidad_csv_filas(orden):
             if t["danadas"]:
                 filas.append([*base, t["tarima"].codigo, "dañada (cuarentena)", t["danadas"]])
     return filas
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Posiciones desde Bodega (Chema 2026-10-13): renombrar y mover existencias
+# ─────────────────────────────────────────────────────────────────────────────
+
+NOMBRE_POSICION_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]{0,19}$")
+
+
+def validar_nombre_posicion(nuevo):
+    """Nombre de posición: mayúsculas, dígitos y guiones, máximo 20 (A-3,
+    B-12, TAR-07). Regresa el nombre normalizado o levanta ValueError."""
+    nuevo = (nuevo or "").strip().upper()
+    if not NOMBRE_POSICION_RE.match(nuevo):
+        raise ValueError("El nombre lleva solo letras, números y guiones (máximo 20): por ejemplo A-3 o TAR-07.")
+    return nuevo
+
+
+def renombrar_posicion(ubicacion, nuevo, actor=None):
+    """Cambia el nombre de una posición conservando su ficha, su inventario y
+    sus apartados (mover_ubicacion en modo renombrar). El nombre nuevo no
+    puede existir, ni siquiera inactivo. Regresa el nombre anterior."""
+    nuevo = validar_nombre_posicion(nuevo)
+    anterior = ubicacion.codigo
+    if nuevo == anterior:
+        raise ValueError(f"{anterior} ya se llama así.")
+    if Ubicacion.objects.filter(codigo=nuevo).exists():
+        raise ValueError(f"Ya existe una posición {nuevo}; elige otro nombre.")
+    mover_ubicacion(anterior, nuevo, actor=actor)
+    ubicacion.refresh_from_db()
+    return anterior
+
+
+def existencias_de_posicion(ubicacion):
+    """Lo que hay en una posición por producto y lote: [{sku, lote, vendible,
+    apartado}]. Vendible es lo físico; apartado, la capa de reservas encima."""
+    filas = {}
+    saldos = (
+        Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0, estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO])
+        .select_related("sku", "sku__cliente", "lote").order_by("sku__codigo", "lote__codigo")
+    )
+    for s in saldos:
+        fila = filas.setdefault((s.sku_id, s.lote_id), {"sku": s.sku, "lote": s.lote, "vendible": 0, "apartado": 0})
+        fila["vendible" if s.estado == Saldo.UBICADO_VENDIBLE else "apartado"] += s.cantidad
+    return list(filas.values())
+
+
+def mover_existencias(sku, lote, origen, destino, cantidad, actor=None, motivo=""):
+    """Mueve `cantidad` piezas vendibles de un producto y lote de una posición
+    a otra (Mesa → Bodega → Posiciones). El estado no cambia; la capa de
+    apartados que ya no cabe sobre lo que queda en el origen viaja con las
+    piezas. Kardex `traslado` con referencia origen>destino y evento
+    `existencias_movidas`. Regresa {cantidad, apartadas}."""
+    cantidad = _validar_cantidad(cantidad, "mover")
+    if origen.pk == destino.pk:
+        raise ValueError("Elige una posición destino distinta.")
+    if not destino.activo or destino.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA):
+        raise ValueError(f"{destino.codigo} no es una posición de almacén activa.")
+    lote_id = lote.pk if lote is not None else None
+    with transaction.atomic():
+        saldos = list(Saldo.objects.select_for_update().filter(
+            sku=sku, ubicacion=origen, lote_id=lote_id, estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO],
+        ))
+        vendibles = [s for s in saldos if s.estado == Saldo.UBICADO_VENDIBLE]
+        apartadas = [s for s in saldos if s.estado == Saldo.RESERVADO]
+        hay = sum(s.cantidad for s in vendibles)
+        if hay < cantidad:
+            raise ValueError(
+                f"En {origen.codigo} hay {hay} pieza(s) vendible(s) de {sku.codigo}"
+                f"{' lote ' + lote.codigo if lote else ''}; no se pueden mover {cantidad}. Nada se cambió."
+            )
+        _restar(vendibles, cantidad)
+        _incrementar(sku, destino.pk, lote_id, Saldo.UBICADO_VENDIBLE, cantidad)
+        exceso = max(0, sum(s.cantidad for s in apartadas) - (hay - cantidad))
+        if exceso:
+            _restar(apartadas, exceso)
+            _incrementar(sku, destino.pk, lote_id, Saldo.RESERVADO, exceso)
+        _mov(
+            sku, Movimiento.TRASLADO, cantidad, lote=lote, origen=Saldo.UBICADO_VENDIBLE, destino=Saldo.UBICADO_VENDIBLE,
+            referencia=f"{origen.codigo}>{destino.codigo}", actor=actor,
+        )
+        registrar_evento(
+            "ubicacion", origen.codigo, "existencias_movidas", actor=actor, cliente=sku.cliente,
+            delta={"sku": sku.codigo, "lote": lote.codigo if lote else None, "cantidad": cantidad,
+                   "a": destino.codigo, "apartadas": exceso},
+            motivo=(motivo or "").strip()[:300] or f"{cantidad} × {sku.codigo} de {origen.codigo} a {destino.codigo}.",
+        )
+    return {"cantidad": cantidad, "apartadas": exceso}

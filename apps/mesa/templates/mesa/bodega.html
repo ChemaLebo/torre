@@ -8,7 +8,10 @@
     <div class="eyebrow">Mesa de Control</div>
     <h1>Bodega</h1>
   </div>
-  <div class="quien">Actualizado a las <b class="mono">{{ actualizado|time:"H:i" }}</b> · se refresca solo cada 90 s</div>
+  <div class="fila">
+    <a class="btn" href="{% url 'mesa:bodega_posiciones' %}">Posiciones: editar e imprimir</a>
+    <div class="quien">Actualizado a las <b class="mono">{{ actualizado|time:"H:i" }}</b> · se refresca solo cada 90 s</div>
+  </div>
 </div>
 
 {# Buscador (Chema 2026-10-06): producto, lote o posición → dónde está, y los racks se resaltan en el plano. #}

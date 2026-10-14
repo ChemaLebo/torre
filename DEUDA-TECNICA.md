@@ -737,3 +737,31 @@ Ver CONVENTIONS (inventario, piso, envios, configuracion) y SOP-02/03/04.
 - `TrabajoImpresion.transicionar` y la API tratan la guía como opcional;
   los eventos de auditoría viejos siguen leyendo `delta.folio`.
 
+## Racks por pasillo, Posiciones en Bodega y plan de acomodo — hecho 2026-10-13
+
+Pieza 2 del rediseño de racks (Chema 2026-10-13, memoria `torre-plan-racks-fijos`):
+nombres por pasillo (A-1…A-8 una cara, B-1…B-16 dos caras), Mesa → Bodega →
+Posiciones con Editar (renombrar / mover existencias), Imprimir posición e
+Imprimir etiquetas de las cajas; kardex `traslado`. El plan de acomodo salió
+de un script fuera del repo (ventas de Shopify 12 meses + dump de prod) y vive
+en los CSV de Chema.
+
+**Queda:**
+- Pieza 3: asignación producto ↔ posición (1 o 2 por posición, capacidad a
+  mitad de largo), reserva por producto y lote (hoy `reservar` aparta por
+  posición FEFO en toda la bodega), ruta de picking al rack asignado, restock
+  en línea por escaneo (caja → rack → confirmar) y tareas de restock en la cola.
+- Pieza 4: modal de confirmación tras cada escaneo de picking (descarta los
+  escaneos mientras está abierto) y picking por QR con FEFO contra el rack.
+- `Ubicacion.prioridad` sigue siendo el orden de accesibilidad (1 = mejor) y
+  no se recalcula al renombrar: si se mueven racks físicamente hay que
+  capturarlo. El tipo `reserva` del piso 4 (ex RES) se conserva; el picking no
+  depende del tipo.
+- `mover_existencias` solo mueve lo vendible (más su capa de apartados). Lo
+  en recepción (`en_putaway`) se mueve desde el editor de recepción
+  (`mover_cajas`) y la cuarentena desde Cuarentena.
+- La posición legacy `RESERVAS` y los códigos `PIC-n-m` / `PIC-n-I-F-p` siguen
+  soportados en el plano; cuando prod esté 100 % en nombres por pasillo se
+  puede quitar `PATRON_RACK_PISO` / `PATRON_RACK_LADO` y `crear_racks`.
+- Los movimientos del plan se registran a mano desde Posiciones; la pantalla de
+  restock por escaneo (pieza 3) será la forma normal de mover cajas.

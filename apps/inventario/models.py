@@ -79,6 +79,7 @@ class Movimiento(models.Model):
     RETORNO = "retorno"
     MERMA = "merma"
     CONTEO = "conteo"
+    TRASLADO = "traslado"
     TIPOS = [
         (RECEPCION, "Recepción"),
         (PUTAWAY, "Put-away"),
@@ -89,6 +90,7 @@ class Movimiento(models.Model):
         (RETORNO, "Retorno"),
         (MERMA, "Merma"),
         (CONTEO, "Conteo"),
+        (TRASLADO, "Traslado (cambio de posición)"),
     ]
 
     sku = models.ForeignKey("catalogo.SKU", on_delete=models.PROTECT, related_name="movimientos")
@@ -97,7 +99,7 @@ class Movimiento(models.Model):
     delta = models.IntegerField(help_text="Cantidad con signo: negativo = sale físico")
     estado_origen = models.CharField(max_length=20, blank=True)
     estado_destino = models.CharField(max_length=20, blank=True)
-    referencia = models.CharField(max_length=40, blank=True, help_text="PED-x / ASN-x / AJU-x / CON-x")
+    referencia = models.CharField(max_length=40, blank=True, help_text="PED-x / ASN-x / AJU-x / CON-x / origen>destino (traslado)")
     actor = models.CharField(max_length=120, blank=True)
     ts = models.DateTimeField(auto_now_add=True, db_index=True)
 

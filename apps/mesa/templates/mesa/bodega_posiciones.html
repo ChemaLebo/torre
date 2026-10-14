@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Posiciones · Bodega{% endblock %}
+{% block content %}
+{# Mesa → Bodega → Posiciones (Chema 2026-10-13): cada posición con lo que hay; Editar (nombre / mover existencias), Imprimir posición, Imprimir etiquetas de las cajas. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Mesa de Control · Bodega</div>
+    <h1>Posiciones</h1>
+    <div class="small">{{ n_posiciones }} posiciones activas · {{ n_con_producto }} con producto. Racks y tarimas; lo que ves es lo que Torre dice que hay.</div>
+  </div>
+  <a class="btn" href="{% url 'mesa:bodega' %}">← Bodega</a>
+</div>
+
+{% for f in filas %}
+<details class="colapsable" id="pos-{{ f.ubicacion.pk }}">
+  <summary>
+    <span class="mono"><b>{{ f.ubicacion.codigo }}</b></span>
+    <span class="pill">{% if f.es_tarima %}tarima{% else %}{{ f.ubicacion.get_tipo_display|lower }}{% endif %}</span>
+    · {{ f.vendible }} vendible(s) · {{ f.apartado }} apartada(s)
+    {% if f.ocupacion.pct != None %} · <span class="pill {% if f.ocupacion.estado == "lleno" %}crit{% elif f.ocupacion.estado == "medio" %}warn{% else %}ok{% endif %}">{{ f.ocupacion.pct }} %</span>{% endif %}
+    {% if not f.existencias %} · <span class="small muted">vacía</span>{% endif %}
+  </summary>
+  <div class="colapsable-cuerpo">
+    {% if f.existencias %}
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th>Cliente</th><th>SKU</th><th>Producto</th><th>Lote</th><th>Caducidad</th><th class="derecha">Vendibles</th><th class="derecha">Apartadas</th></tr></thead>
+        <tbody>
+          {% for e in f.existencias %}
+          <tr>
+            <td>{{ e.sku.cliente.nombre }}</td>
+            <td class="mono">{{ e.sku.codigo }}</td>
+            <td>{{ e.sku.descripcion }}</td>
+            <td class="mono">{{ e.lote.codigo|default:"—" }}</td>
+            <td class="mono">{% if e.lote and e.lote.fecha_caducidad %}{{ e.lote.fecha_caducidad|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+            <td class="derecha mono">{{ e.vendible }}</td>
+            <td class="derecha mono">{{ e.apartado }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="muted small">Sin producto.</p>
+    {% endif %}
+    {{ f.datos|json_script:f.datos_id }}
+    <div class="fila mt" style="gap:8px;flex-wrap:wrap">
+      <button class="btn" type="button" data-editar="{{ f.ubicacion.pk }}">Editar</button>
+      <form method="post" action="{% url 'mesa:bodega_posicion_accion' f.ubicacion.pk %}">{% csrf_token %}
+        <input type="hidden" name="accion" value="imprimir_posicion">
+        <button class="btn" type="submit">Imprimir {% if f.es_tarima %}tarima{% else %}posición{% endif %}</button>
+      </form>
+      <button class="btn" type="button" data-cajas="{{ f.ubicacion.pk }}" {% if not f.existencias %}disabled{% endif %}>Imprimir etiquetas de las cajas</button>
+    </div>
+  </div>
+</details>
+{% empty %}
+<p class="muted">No hay posiciones de almacén activas.</p>
+{% endfor %}
+
+{# ── Modal Editar: cambiar nombre o mover existencias ── #}
+<dialog class="modal" id="modal-editar" aria-labelledby="editar-titulo">
+  <div class="titulo"><h3 id="editar-titulo">Editar <span class="mono" data-campo="codigo"></span></h3><button class="btn chico" type="button" onclick="document.getElementById('modal-editar').close()">Cerrar</button></div>
+  <div class="grid g2">
+    <form method="post" data-form="renombrar">{% csrf_token %}
+      <input type="hidden" name="accion" value="renombrar">
+      <h4>Cambiar nombre</h4>
+      <label for="ed-nuevo">Nombre nuevo</label>
+      <input type="text" id="ed-nuevo" name="nuevo" class="mono" maxlength="20" required autocapitalize="characters" placeholder="A-3">
+      <p class="small muted">Letras, números y guiones. Conserva inventario y apartados; después imprime y pega la etiqueta nueva.</p>
+      <button class="btn primario" type="submit">Cambiar nombre</button>
+    </form>
+    <form method="post" data-form="mover">{% csrf_token %}
+      <input type="hidden" name="accion" value="mover">
+      <input type="hidden" name="sku_id" data-campo="sku_id">
+      <input type="hidden" name="lote_id" data-campo="lote_id">
+      <h4>Mover existencias</h4>
+      <label for="ed-producto">Producto y lote</label>
+      <select id="ed-producto" required></select>
+      <label for="ed-cantidad">Cuántas piezas</label>
+      <input type="number" id="ed-cantidad" name="cantidad" min="1" inputmode="numeric" required>
+      <label for="ed-destino">A la posición</label>
+      <select id="ed-destino" name="destino" required>
+        {% for d in destinos %}<option value="{{ d.codigo }}">{{ d.codigo }}</option>{% endfor %}
+      </select>
+      <label for="ed-motivo">Motivo (opcional)</label>
+      <input type="text" id="ed-motivo" name="motivo" maxlength="300" placeholder="Plan de acomodo">
+      <button class="btn primario" type="submit">Mover</button>
+    </form>
+  </div>
+</dialog>
+
+{# ── Modal etiquetas de las cajas: cuántas por producto y lote, prellenado con lo que hay ── #}
+<dialog class="modal" id="modal-cajas" aria-labelledby="cajas-titulo">
+  <div class="titulo"><h3 id="cajas-titulo">Etiquetas de las cajas de <span class="mono" data-campo="codigo"></span></h3><button class="btn chico" type="button" onclick="document.getElementById('modal-cajas').close()">Cerrar</button></div>
+  <form method="post" data-form="cajas">{% csrf_token %}
+    <input type="hidden" name="accion" value="imprimir_cajas">
+    <div class="tabla-wrap modal-lista">
+      <table>
+        <thead><tr><th>SKU</th><th>Producto</th><th>Lote</th><th class="derecha">Cuántas</th></tr></thead>
+        <tbody data-renglones></tbody>
+      </table>
+    </div>
+    <p class="small muted">Prellenado con lo que Torre dice que hay. Una etiqueta por caja, en tandas; cada tanda es un trabajo en la impresora de etiquetas.</p>
+    <button class="btn primario" type="submit">Imprimir <span data-campo="total"></span> etiqueta(s)</button>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  var base = "{% url 'mesa:bodega_posicion_accion' 0 %}";
+  function datos(pk) { return JSON.parse(document.getElementById("pos-datos-" + pk).textContent); }
+  function accion(pk) { return base.replace("/0/", "/" + pk + "/"); }
+  function etiquetaFila(f) { return f.sku_codigo + (f.lote_codigo ? " · lote " + f.lote_codigo : "") + " · " + f.vendible + " vendible(s)"; }
+
+  document.querySelectorAll("[data-editar]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var d = datos(b.dataset.editar), modal = document.getElementById("modal-editar");
+      modal.querySelectorAll("[data-campo=codigo]").forEach(function (e) { e.textContent = d.codigo; });
+      modal.querySelector("[data-form=renombrar]").action = accion(d.pk);
+      var fm = modal.querySelector("[data-form=mover]");
+      fm.action = accion(d.pk);
+      var sel = document.getElementById("ed-producto"), cant = document.getElementById("ed-cantidad");
+      sel.innerHTML = "";
+      d.filas.forEach(function (f) {
+        var o = document.createElement("option");
+        o.value = f.sku + "|" + f.lote; o.textContent = etiquetaFila(f); o.dataset.vendible = f.vendible; sel.appendChild(o);
+      });
+      function sincroniza() {
+        var o = sel.options[sel.selectedIndex];
+        if (!o) { return; }
+        var partes = o.value.split("|");
+        fm.querySelector("[data-campo=sku_id]").value = partes[0];
+        fm.querySelector("[data-campo=lote_id]").value = partes[1];
+        cant.max = o.dataset.vendible; cant.value = o.dataset.vendible;
+      }
+      sel.onchange = sincroniza; sincroniza();
+      fm.querySelector("button").disabled = !d.filas.length;
+      Array.prototype.forEach.call(document.getElementById("ed-destino").options, function (o) { o.disabled = (o.value === d.codigo); });
+      document.getElementById("ed-nuevo").value = "";
+      modal.showModal();
+    });
+  });
+
+  document.querySelectorAll("[data-cajas]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var d = datos(b.dataset.cajas), modal = document.getElementById("modal-cajas");
+      modal.querySelectorAll("[data-campo=codigo]").forEach(function (e) { e.textContent = d.codigo; });
+      var fc = modal.querySelector("[data-form=cajas]"), cuerpo = modal.querySelector("[data-renglones]");
+      fc.action = accion(d.pk);
+      cuerpo.innerHTML = "";
+      d.filas.forEach(function (f) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = '<td class="mono"></td><td></td><td class="mono"></td><td class="derecha"><input type="number" min="0" inputmode="numeric" style="width:90px" name="n_' + f.sku + '_' + f.lote + '" value="' + f.vendible + '"></td>';
+        tr.children[0].textContent = f.sku_codigo; tr.children[1].textContent = f.descripcion; tr.children[2].textContent = f.lote_codigo || "—";
+        cuerpo.appendChild(tr);
+      });
+      function total() {
+        var t = 0; cuerpo.querySelectorAll("input").forEach(function (i) { t += parseInt(i.value || "0", 10) || 0; });
+        modal.querySelector("[data-campo=total]").textContent = t;
+      }
+      cuerpo.addEventListener("input", total); total();
+      modal.showModal();
+    });
+  });
+})();
+</script>
+{% endblock %}
