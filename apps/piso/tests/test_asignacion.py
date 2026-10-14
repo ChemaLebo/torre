@@ -127,14 +127,20 @@ class AsignacionTests(PisoTestCase):
         url = reverse("piso:picking_pedido", args=[self.pedido.pk])
         return url, {"codigo": self.sku.codigo_barras, "cantidad": 1}
 
-    def test_tomar_lo_que_solto_otro_reinicia_y_recarga(self):
+    def test_tomar_lo_que_solto_otro_reinicia_al_abrirlo(self):
+        """2026-10-13: el pedido libre se reclama al abrirlo (EMPEZAR o la URL
+        que la cola da), no al primer escaneo; el reinicio del avance viene
+        con el reclamo y se avisa en la misma pantalla."""
         url, datos = self._soltado_con_avance(self.operador)
         self.client.force_login(self.otro)
         pagina = self.client.get(url)
         self.assertContains(pagina, "el avance se reinicia")
         self.assertContains(pagina, "piso1")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.asignado_a, self.otro)  # ya es suyo desde el GET
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 0)
         respuesta = self.client.post(url, datos, HTTP_ACCEPT="application/json")
-        self.assertTrue(respuesta.json()["reiniciado"])
+        self.assertFalse(respuesta.json()["reiniciado"])  # el reinicio ya pasó al abrir
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.asignado_a, self.otro)
         self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)  # 0 + la pieza recién escaneada

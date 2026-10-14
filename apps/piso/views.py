@@ -275,6 +275,31 @@ def _reclamar_si_libre(pedido, request):
     return reiniciado
 
 
+def _tomar_abierto(request, pedido):
+    """EMPEZAR / CONTINUAR sobre un pedido a medias (Chema 2026-10-13: el 444
+    y el 573, sin dueño tras un DET, se abrían en dos tabletas a la vez porque
+    la propiedad se tomaba hasta el primer escaneo o la primera caja). Se
+    vuelve mío AQUÍ, bajo candado: con la misma card en dos tabletas, la
+    primera se lo queda y la segunda recibe False (la cola le da el
+    siguiente). Si ya era mío, True sin tocar nada; Mesa no reclama. Si lo
+    soltó otra persona, el avance del picking se reinicia (misma regla de
+    siempre) y se avisa."""
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        if fresco.asignado_a_id not in (None, request.user.pk):
+            return False
+        if fresco.asignado_a_id is None:
+            quien = _quien_lo_solto(fresco) or "otro operador"
+            if _reclamar_si_libre(fresco, request):
+                messages.warning(
+                    request,
+                    f"{fresco.folio}: lo soltó {quien}; el avance se reinicia y el picking empieza de cero, "
+                    "re-escanea desde el carrito.",
+                )
+    pedido.asignado_a_id = fresco.asignado_a_id
+    return True
+
+
 def _motivos_detener():
     """Motivos del botón Detener (catálogo en pedidos.services, lazy por contrato)."""
     from apps.pedidos.services import MOTIVOS_DETENER
@@ -447,7 +472,8 @@ def _home_siguiente(request):
     EN_PICKING cuenta como TOMADO por el otro operador: si el candidato
     PENDIENTE lo ganó alguien entre el render y el POST, se toma el que sigue
     SIN error visible (select_for_update decide quién ganó — dos empleados
-    jamás agarran el mismo).
+    jamás agarran el mismo). Lo que quedó a medias se reclama aquí mismo
+    (_tomar_abierto), no hasta el primer escaneo o la primera caja.
     """
     from apps.pedidos.services import iniciar_picking  # lazy por contrato
 
@@ -455,12 +481,17 @@ def _home_siguiente(request):
         abierto = Pedido.objects.filter(
             pk=request.POST.get("pedido_id"), estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA),
         ).first()
-        if abierto is not None and _acceso_pedido(request, abierto):
-            return _destino_pedido(abierto)
+        if abierto is not None and _acceso_pedido(request, abierto) and _tomar_abierto(request, abierto):
+            return _destino_pedido(Pedido.objects.get(pk=abierto.pk))  # releído: reclamar pudo reiniciar el picking
 
-    abierto = _abierto_mas_viejo(request.user)
-    if abierto is not None:
-        return _destino_pedido(abierto)
+    # Lo que quedó a medias se reclama al abrirlo; si otro operador lo tomó
+    # entre el render y el POST, se pasa al siguiente sin aviso (como abajo).
+    for _ in range(8):
+        abierto = _abierto_mas_viejo(request.user)
+        if abierto is None:
+            break
+        if _tomar_abierto(request, abierto):
+            return _destino_pedido(Pedido.objects.get(pk=abierto.pk))
 
     for _ in range(8):
         pendientes = _pendientes_por_prioridad()
@@ -1243,6 +1274,8 @@ def picking_pedido(request, pk):
     toca, siguiente = _me_toca(request, pedido)
     if not toca:
         return _no_me_toca(request, pedido, siguiente)
+    if pedido.estado == Pedido.EN_PICKING and not _tomar_abierto(request, pedido):
+        return _no_me_toca(request, pedido, _siguiente_en_cola(request.user))
 
     if request.method == "POST":
         if request.POST.get("accion") == "transferir":
@@ -1496,6 +1529,8 @@ def empaque_pedido(request, pk):
     toca, siguiente = _me_toca(request, pedido)
     if not toca:
         return _no_me_toca(request, pedido, siguiente)
+    if pedido.estado in (Pedido.EN_PICKING, *_ESTADOS_EN_MESA) and not _tomar_abierto(request, pedido):
+        return _no_me_toca(request, pedido, _siguiente_en_cola(request.user))
 
     if request.method == "POST":
         accion = request.POST.get("accion") or "empacar"

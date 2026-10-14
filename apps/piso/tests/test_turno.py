@@ -190,7 +190,8 @@ class OrdenDeEmpezarTests(PisoTestCase):
             respuesta, reverse("piso:picking_pedido", args=[libre.pk]), fetch_redirect_response=False,
         )
         libre.refresh_from_db()
-        self.assertIsNone(libre.asignado_a)  # se vuelve mío al escanear, no antes
+        self.assertEqual(libre.asignado_a, self.operador)  # se vuelve mío al presionar EMPEZAR (2026-10-13), no al escanear
+        self.assertEqual(libre.lineas.get().cantidad_pickeada, 0)  # lo soltó otro: se re-escanea desde el carrito
 
     def test_lo_de_otro_operador_no_se_ofrece(self):
         self._picking_a_medias(self.otro)  # su picking
@@ -260,11 +261,16 @@ class ColaUnicaTests(PisoTestCase):
     def test_empaque_por_url_tambien_sigue_la_cola(self):
         from apps.pedidos.services import confirmar_linea_pick, iniciar_picking
 
+        from apps.pedidos.services import detener_pedido, reanudar_pedido
+
         iniciar_picking(self.nuevo, self.operador)
         confirmar_linea_pick(self.nuevo.lineas.get(), 1, self.operador)
-        Pedido.objects.filter(pk=self.nuevo.pk).update(asignado_a=None)  # listo para empacar, libre
-        # A medias y libre va antes que el pendiente viejo: la cola lo da y se abre.
+        detener_pedido(self.nuevo, self.operador, "Falta producto")  # listo para empacar, libre (lo soltó él mismo)
+        reanudar_pedido(self.nuevo, "mesa")
+        # A medias y libre va antes que el pendiente viejo: la cola lo da, se abre y se vuelve suyo (2026-10-13).
         self.assertEqual(self.client.get(reverse("piso:empaque_pedido", args=[self.nuevo.pk])).status_code, 200)
+        self.assertEqual(Pedido.objects.get(pk=self.nuevo.pk).asignado_a, self.operador)
+        Pedido.objects.filter(pk=self.nuevo.pk).update(asignado_a=None)  # otra vez libre, para probar el orden de la cola
         # Un empacado sin guía más viejo (libre) pasa adelante: el otro ya no se abre.
         empacado = self.dejar_empacado(self.crear_pedido(cantidad=1))
         Pedido.objects.filter(pk=empacado.pk).update(asignado_a=None, ts_picking=self.viejo.creado)
@@ -288,3 +294,102 @@ class ColaUnicaTests(PisoTestCase):
         # El que sí tocaba no deja evento.
         self.client.get(reverse("piso:picking_pedido", args=[self.viejo.pk]))
         self.assertEqual(EventoAuditoria.objects.filter(accion="tomado_fuera_de_orden").count(), 1)
+
+
+class ReclamoAlEmpezarTests(PisoTestCase):
+    """Chema 2026-10-13: tras un DET varios pedidos quedaron sin dueño y la
+    cola se los ofrecía a dos tabletas a la vez (PED-00444 en picking,
+    PED-00573 en empaque); las dos podían abrirlo porque la propiedad se
+    tomaba hasta el primer escaneo o la primera caja. Ahora EMPEZAR /
+    CONTINUAR reclama al abrir: el primero se lo queda y el segundo recibe el
+    siguiente de la cola."""
+
+    def setUp(self):
+        self.login_piso()
+        self.crear_stock(cantidad=50)
+        self.url = reverse("piso:home")
+        self.otro = get_user_model().objects.create_user("piso2", password="x")
+        PerfilUsuario.objects.create(usuario=self.otro, rol=PerfilUsuario.ROL_PISO, pin="2222")
+
+    def _detenido_y_reanudado(self, pedido):
+        from apps.pedidos.services import detener_pedido, reanudar_pedido
+        detener_pedido(pedido, self.operador, "Falta producto")
+        reanudar_pedido(pedido, "mesa")
+        pedido.refresh_from_db()
+        self.assertIsNone(pedido.asignado_a)
+        return pedido
+
+    def _continuar(self, pedido):
+        return self.client.post(self.url, {"accion": "siguiente", "pedido_id": pedido.pk, "empezado": "1"})
+
+    def test_picking_libre_tras_det_solo_lo_abre_el_primero(self):
+        from apps.pedidos.services import confirmar_linea_pick, iniciar_picking
+
+        pedido = self.crear_pedido(cantidad=2)
+        iniciar_picking(pedido, self.operador)
+        confirmar_linea_pick(pedido.lineas.get(), 1, self.operador)
+        self._detenido_y_reanudado(pedido)
+        nuevo = self.crear_pedido(cantidad=1)
+        # Las dos tabletas ven la misma card.
+        self.assertEqual(self.client.get(self.url).context["siguiente"].pk, pedido.pk)
+        self.client.force_login(self.otro)
+        self.assertEqual(self.client.get(self.url).context["siguiente"].pk, pedido.pk)
+        # El primero en presionar se lo queda.
+        self.login_piso()
+        respuesta = self._continuar(pedido)
+        self.assertRedirects(respuesta, reverse("piso:picking_pedido", args=[pedido.pk]), fetch_redirect_response=False)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.asignado_a, self.operador)
+        self.assertEqual(pedido.lineas.get().cantidad_pickeada, 1)  # lo soltó él mismo: conserva su avance
+        # El segundo, con la MISMA card, recibe el siguiente de la cola; el 444 sigue con quien lo tiene.
+        self.client.force_login(self.otro)
+        respuesta = self._continuar(pedido)
+        self.assertRedirects(respuesta, reverse("piso:picking_pedido", args=[nuevo.pk]), fetch_redirect_response=False)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.asignado_a, self.operador)
+        self.assertNotEqual(self.client.get(self.url).context["siguiente"].pk, pedido.pk)
+        # Ni por URL.
+        respuesta = self.client.get(reverse("piso:picking_pedido", args=[pedido.pk]), follow=True)
+        self.assertContains(respuesta, f"{pedido.folio} lo tiene {self.operador.username}")
+
+    def test_empaque_libre_tras_det_solo_lo_abre_el_primero(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=1))  # sin guía: empaque incompleto
+        self._detenido_y_reanudado(pedido)
+        self.client.force_login(self.otro)
+        self.assertEqual(self.client.get(self.url).context["siguiente"].pk, pedido.pk)
+        respuesta = self._continuar(pedido)
+        self.assertRedirects(respuesta, reverse("piso:empaque_pedido", args=[pedido.pk]), fetch_redirect_response=False)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.asignado_a, self.otro)
+        # El otro operador ya no lo ve ni lo abre; sin más cola, "todo al día".
+        self.login_piso()
+        self.assertIsNone(self.client.get(self.url).context["siguiente"])
+        respuesta = self._continuar(pedido)
+        self.assertRedirects(respuesta, self.url, fetch_redirect_response=False)
+        respuesta = self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk]), follow=True)
+        self.assertContains(respuesta, f"{pedido.folio} lo tiene {self.otro.username}")
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.asignado_a, self.otro)
+
+    def test_abrir_por_url_lo_que_la_cola_da_tambien_lo_reclama(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=1))
+        self._detenido_y_reanudado(pedido)
+        self.assertEqual(self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk])).status_code, 200)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.asignado_a, self.operador)
+
+    def test_picking_que_solto_otro_se_reinicia_al_tomarlo(self):
+        from apps.pedidos.services import confirmar_linea_pick, iniciar_picking, soltar_pedido
+
+        pedido = self.crear_pedido(cantidad=2)
+        iniciar_picking(pedido, self.otro)
+        confirmar_linea_pick(pedido.lineas.get(), 1, self.otro)
+        soltar_pedido(pedido, self.otro)
+        respuesta = self._continuar(pedido)
+        self.assertRedirects(respuesta, reverse("piso:picking_pedido", args=[pedido.pk]), fetch_redirect_response=False)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.asignado_a, self.operador)
+        self.assertEqual(pedido.lineas.get().cantidad_pickeada, 0)  # regla de siempre: re-escanea desde el carrito
+        respuesta = self.client.get(reverse("piso:picking_pedido", args=[pedido.pk]))
+        self.assertContains(respuesta, "re-escanea desde el carrito")
+
