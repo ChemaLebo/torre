@@ -1237,23 +1237,41 @@ def _lineas_en_ruta(pedido):
     las faltantes (sin inventario) y lo que ya salió no van en la ruta — la
     vista las lista aparte con su tag.
     """
+    from apps.catalogo.services import rack_de  # lazy por contrato
+
     lineas = [l for l in pedido.lineas.select_related("sku") if l.pendiente > 0]
     for linea in lineas:
         linea.completa = linea.cantidad_pickeada >= linea.con_stock
-        linea.ubicaciones = list(
+        vendibles = list(
             Saldo.objects.filter(sku=linea.sku, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0)
             .select_related("ubicacion", "lote")
-            .order_by("lote__fecha_caducidad", "ubicacion__codigo")[:3]
+            .order_by("lote__fecha_caducidad", "ubicacion__codigo")
         )
+        # Racks con producto fijo (Chema 2026-10-13): la ruta manda al rack del
+        # producto; si no alcanza para lo que falta, se pide restock desde el
+        # lote más viejo fuera del rack (tarimas). Sin rack fijo, FEFO global.
+        linea.rack = rack_de(linea.sku)
+        en_rack = [s for s in vendibles if linea.rack is not None and s.ubicacion_id == linea.rack.pk]
+        fuera = [s for s in vendibles if linea.rack is None or s.ubicacion_id != linea.rack.pk]
+        linea.ubicaciones = (en_rack + fuera)[:3] if linea.rack is not None else vendibles[:3]
         linea.primera_ubicacion = linea.ubicaciones[0] if linea.ubicaciones else None
+        linea.en_rack = sum(s.cantidad for s in en_rack)
+        linea.restock_falta = max(0, linea.por_pickear - linea.en_rack) if linea.rack is not None else 0
+        linea.restock_origen = fuera[0] if (linea.restock_falta and fuera) else None
     lineas.sort(
         key=lambda l: (
             l.primera_ubicacion is None,
-            l.primera_ubicacion.ubicacion.codigo if l.primera_ubicacion else "",
+            _clave_ruta(l.primera_ubicacion.ubicacion.codigo) if l.primera_ubicacion else (),
             l.pk,
         )
     )
     return lineas
+
+
+def _clave_ruta(codigo):
+    """Orden de caminata: A-1 … A-8, B-1 … B-16 (número como número); el resto por texto."""
+    m = re.match(r"^([A-Z])-(\d{1,2})$", codigo)
+    return (0, m.group(1), int(m.group(2))) if m else (1, codigo, 0)
 
 
 def _quiere_json(request):

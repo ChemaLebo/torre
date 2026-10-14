@@ -233,9 +233,37 @@ def liberar_reserva(sku, cantidad, referencia):
     _reintentar_pendientes(sku)
 
 
+def _restar_detallado(saldos_ordenados, cantidad):
+    """Como _restar, pero regresa [(ubicacion_id, lote_id, tomo)] de dónde salió."""
+    restante, origen = cantidad, []
+    for saldo in saldos_ordenados:
+        if restante == 0:
+            break
+        if saldo.cantidad <= 0:
+            continue
+        tomo = min(saldo.cantidad, restante)
+        saldo.cantidad -= tomo
+        if saldo.cantidad == 0:
+            saldo.delete()
+        else:
+            saldo.save(update_fields=["cantidad"])
+        origen.append((saldo.ubicacion_id, saldo.lote_id, tomo))
+        restante -= tomo
+    return origen
+
+
 def confirmar_pick(sku, cantidad, referencia):
-    """Pick confirmado: consume la reserva y mueve el físico vendible → en_empaque."""
+    """Pick confirmado: consume la reserva y mueve el físico vendible → en_empaque.
+
+    Desde 2026-10-13 (racks con producto fijo) el físico sale PRIMERO de la
+    posición fija del producto (FEFO dentro de ella), luego de la posición y
+    lote de la capa de reserva, y al final FEFO en toda la bodega; lo que
+    pasa a en_empaque conserva la posición y el lote de donde salió."""
+    from apps.catalogo.services import rack_de  # lazy por contrato
+
     cantidad = _validar_cantidad(cantidad, "pickear")
+    rack = rack_de(sku)
+    rack_id = rack.pk if rack is not None else None
     with transaction.atomic():
         saldos = list(
             Saldo.objects.select_for_update().filter(
@@ -267,19 +295,24 @@ def confirmar_pick(sku, cantidad, referencia):
                 capa.delete()
             else:
                 capa.save(update_fields=["cantidad"])
-            # 2) baja el físico vendible: primero misma ubicación/lote, luego FEFO
+            # 2) baja el físico vendible: primero el rack fijo del producto (FEFO
+            #    dentro de él), luego misma ubicación/lote de la capa, luego FEFO
+            en_rack = sorted(
+                (v for v in vendibles if v.cantidad > 0 and rack_id is not None and v.ubicacion_id == rack_id),
+                key=lambda s: _clave_fefo(s, caducidades),
+            )
             mismos = [
                 v for v in vendibles
-                if v.cantidad > 0 and (v.ubicacion_id, v.lote_id) == (capa.ubicacion_id, capa.lote_id)
+                if v.cantidad > 0 and v not in en_rack and (v.ubicacion_id, v.lote_id) == (capa.ubicacion_id, capa.lote_id)
             ]
             otros = sorted(
                 (v for v in vendibles
-                 if v.cantidad > 0 and (v.ubicacion_id, v.lote_id) != (capa.ubicacion_id, capa.lote_id)),
+                 if v.cantidad > 0 and v not in en_rack and (v.ubicacion_id, v.lote_id) != (capa.ubicacion_id, capa.lote_id)),
                 key=lambda s: _clave_fefo(s, caducidades),
             )
-            _restar(mismos + otros, tomo)
-            # 3) sube en_empaque conservando ubicación/lote de origen (trazabilidad)
-            _incrementar(sku, capa.ubicacion_id, capa.lote_id, Saldo.EN_EMPAQUE, tomo)
+            # 3) sube en_empaque conservando la posición y el lote de donde salió (trazabilidad)
+            for ubicacion_id, lote_id, salio in _restar_detallado(en_rack + mismos + otros, tomo):
+                _incrementar(sku, ubicacion_id, lote_id, Saldo.EN_EMPAQUE, salio)
             restante -= tomo
 
         _mov(

@@ -94,8 +94,11 @@
          data-barras="{{ linea.sku.codigo_barras|default:'' }}"
          data-codigo="{{ linea.sku.codigo }}" data-descripcion="{{ linea.sku.descripcion }}"
          data-ubicacion="{% if linea.primera_ubicacion %}{{ linea.primera_ubicacion.ubicacion.codigo }}{% endif %}">
+  {% if linea.rack and linea.restock_falta %}
+  <div class="banner warn"><span class="foco"></span>Restock: en {{ linea.rack.codigo }} hay {{ linea.en_rack }} y faltan {{ linea.restock_falta }}.{% if linea.restock_origen %} Trae del lote {{ linea.restock_origen.lote.codigo|default:"sin lote" }} en {{ linea.restock_origen.ubicacion.codigo }} ({{ linea.restock_origen.cantidad }} ahí).{% else %} No hay más en tarimas: avisa a Mesa.{% endif %}</div>
+  {% endif %}
   {% if linea.primera_ubicacion %}
-  <div class="eyebrow">Ve a</div>
+  <div class="eyebrow">{% if linea.rack %}Rack fijo{% else %}Ve a{% endif %}</div>
   {% if linea.cantidad_repuesta %}<span class="pill accent" title="Piezas repuestas de este producto (ya salieron mal en otra caja)">Reposición · {{ linea.cantidad_repuesta }} pza{{ linea.cantidad_repuesta|pluralize }}</span>{% endif %}
   <div class="pick-ubicacion">{{ linea.primera_ubicacion.ubicacion.codigo }}</div>
   <div class="small mono">
