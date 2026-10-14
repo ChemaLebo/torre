@@ -92,7 +92,8 @@
          data-linea-id="{{ linea.pk }}" data-cantidad="{{ linea.con_stock }}"
          data-pickeada="{{ linea.cantidad_pickeada }}"
          data-barras="{{ linea.sku.codigo_barras|default:'' }}"
-         data-codigo="{{ linea.sku.codigo }}">
+         data-codigo="{{ linea.sku.codigo }}" data-descripcion="{{ linea.sku.descripcion }}"
+         data-ubicacion="{% if linea.primera_ubicacion %}{{ linea.primera_ubicacion.ubicacion.codigo }}{% endif %}">
   {% if linea.primera_ubicacion %}
   <div class="eyebrow">Ve a</div>
   {% if linea.cantidad_repuesta %}<span class="pill accent" title="Piezas repuestas de este producto (ya salieron mal en otra caja)">Reposición · {{ linea.cantidad_repuesta }} pza{{ linea.cantidad_repuesta|pluralize }}</span>{% endif %}
@@ -134,6 +135,14 @@
   </div>
 </div>
 
+{# Modal de confirmación tras cada escaneo (Chema 2026-10-13): separa dos lecturas. Mientras está abierto, el teclado (el lector) se descarta y solo Confirmar, por tap, lo cierra. #}
+<dialog class="modal" id="modal-pick" aria-labelledby="pick-titulo" tabindex="-1">
+  <div class="titulo"><h3 id="pick-titulo">Caja <span data-campo="pickeada"></span> de <span data-campo="cantidad"></span></h3></div>
+  <p class="pick-producto"><b class="mono" data-campo="sku"></b><br><span data-campo="descripcion"></span></p>
+  <p class="small">Posición <span class="mono" data-campo="ubicacion"></span>. Toca Confirmar para seguir: hasta entonces ningún escaneo cuenta.</p>
+  <button class="btn primario gigante bloque" type="button" id="pick-confirmar">Confirmar</button>
+</dialog>
+
 <script>
 /* escaner.js carga con defer (corre justo antes de DOMContentLoaded): todo
    inline que use Escaner/Feedback DEBE esperar DOMContentLoaded o muere en
@@ -146,6 +155,44 @@ document.addEventListener("DOMContentLoaded", function () {
   var form = document.getElementById("form-pick");
   var inputCodigo = document.getElementById("codigo");
   var ocupado = false;
+  var modal = document.getElementById("modal-pick");
+  var modalAbierto = false;
+  var despuesDeConfirmar = null;
+
+  // Mientras el modal está abierto, el lector (teclado) no hace nada: ni
+  // cuenta otra caja ni confirma por Enter. Solo el tap en Confirmar cierra.
+  ["keydown", "keypress", "keyup"].forEach(function (tipo) {
+    modal.addEventListener(tipo, function (ev) { ev.preventDefault(); ev.stopPropagation(); });
+  });
+  modal.addEventListener("cancel", function (ev) { ev.preventDefault(); });
+
+  function abrirModal(seccion, r) {
+    var campos = {
+      pickeada: r.pickeada, cantidad: r.cantidad, sku: r.sku,
+      descripcion: seccion ? seccion.dataset.descripcion : "", ubicacion: seccion ? (seccion.dataset.ubicacion || "—") : "—",
+    };
+    Object.keys(campos).forEach(function (k) {
+      modal.querySelector("[data-campo=" + k + "]").textContent = campos[k];
+    });
+    modalAbierto = true;
+    modal.showModal();
+    modal.focus();
+  }
+
+  document.getElementById("pick-confirmar").addEventListener("click", function () {
+    modal.close();
+    modalAbierto = false;
+    var siguiente = despuesDeConfirmar;
+    despuesDeConfirmar = null;
+    if (siguiente) {
+      Escaner.detener();
+      window.location = siguiente;
+      return;
+    }
+    pinta();
+    inputCodigo.value = "";
+    inputCodigo.focus();
+  });
 
   function actual() {
     for (var i = 0; i < secciones.length; i++) {
@@ -174,6 +221,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function confirmar(codigo, cantidad) {
     if (!codigo) return;
+    if (modalAbierto) return;  // el disparo doble del lector se descarta: la caja anterior sigue sin confirmar
     if (ocupado) {
       // Jamás descartar una lectura en silencio: el operador debe saber
       // que su escaneo NO se confirmó todavía.
@@ -209,19 +257,19 @@ document.addEventListener("DOMContentLoaded", function () {
           window.location.reload();
           return;
         }
+        var seccion = null;
         for (var i = 0; i < secciones.length; i++) {
           if (Number(secciones[i].dataset.lineaId) === r.linea_id) {
             secciones[i].dataset.pickeada = r.pickeada;
+            seccion = secciones[i];
           }
         }
         if (avanceEl) avanceEl.textContent = r.avance.pickeadas + " / " + r.avance.total;
         Feedback.ok();
-        if (r.completo && r.siguiente) {
-          Escaner.detener();
-          setTimeout(function () { window.location = r.siguiente; }, 400);
-          return;
-        }
-        pinta();
+        // Chema 2026-10-13: cada escaneo exitoso pide confirmación; el siguiente
+        // escaneo (o el paso a empaque) espera a que el operador toque Confirmar.
+        despuesDeConfirmar = (r.completo && r.siguiente) ? r.siguiente : null;
+        abrirModal(seccion, r);
       });
     }).catch(function (err) {
       ocupado = false;
@@ -241,6 +289,7 @@ document.addEventListener("DOMContentLoaded", function () {
   form.addEventListener("submit", function (ev) {
     if (!window.fetch) return; // sin fetch: POST clásico
     ev.preventDefault();
+    if (modalAbierto) { inputCodigo.value = ""; return; }
     confirmar(inputCodigo.value.trim(), "1");
     inputCodigo.value = "";
     inputCodigo.focus();
