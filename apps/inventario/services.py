@@ -854,15 +854,21 @@ def _agrupar_sin_lote(filas, totales):
     return resultado
 
 
-def resumen_lineas(orden):
+def resumen_lineas(orden, tarima=None):
     """Por línea (producto · lote), la cuenta viva: `contadas` (cajas buenas
     escaneadas), `danadas`, `recibidas` (confirmadas en tarima, buenas),
     `por_confirmar`, `llegaron` (contadas + dañadas), `diferencia` contra lo
     anunciado, `faltante`, `sobrante` y `sin_etiqueta`. Un producto anunciado
     sin lote agrupa sus lotes (ver _agrupar_sin_lote): la madre trae los
-    totales y la diferencia; las hijas, solo su cuenta."""
+    totales y la diferencia; las hijas, solo su cuenta. Con `tarima`, la
+    cuenta es solo de las cajas escaneadas en esa tarima (Chema 2026-10-13:
+    la pantalla de conteo muestra lo de SU tarima); la diferencia contra lo
+    anunciado entonces no significa nada y solo la usa el cuadre sin tarima."""
     vivos = {}
-    for e in escaneos_vivos(orden).values("linea_id", "estado", "danada", "impresa_ts"):
+    escaneos = escaneos_vivos(orden)
+    if tarima is not None:
+        escaneos = escaneos.filter(tarima=tarima)
+    for e in escaneos.values("linea_id", "estado", "danada", "impresa_ts"):
         r = vivos.setdefault(e["linea_id"], {"contadas": 0, "danadas": 0, "por_confirmar": 0, "sin_etiqueta": 0})
         r["danadas" if e["danada"] else "contadas"] += 1
         if e["estado"] == EscaneoRecepcion.CONTADA:

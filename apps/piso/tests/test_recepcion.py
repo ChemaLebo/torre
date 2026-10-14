@@ -129,6 +129,28 @@ class EscaneoTests(RecepcionEscaneoBase):
         self.assertNotContains(r, "Anunciadas")
         self.assertNotContains(r, ">10<")
 
+    def test_contando_se_ve_solo_la_tarima_y_el_total_en_elegir_tarima(self):
+        """Chema 2026-10-13: dentro de la tarima solo lo contado en ella; el
+        total de la recepción (y las demás tarimas) en "¿Dónde estás escaneando?"."""
+        self.en_tarima()  # TAR-01
+        self.contar(2)
+        self.client.post(self.tarima_url, {"accion": "nueva", "codigo": "TAR-02"})
+        self.contar(1, sku=self.sku_b, linea=self.linea_b)
+        self.client.get(self.detalle)  # drena los avisos "+1 en TAR-01" de los conteos anteriores
+        r = self.client.get(self.detalle)
+        self.assertContains(r, "Contado en <span class=\"mono\">TAR-02</span>")
+        self.assertContains(r, "1 caja de esta orden en esta tarima")
+        self.assertContains(r, "CC24LCAR")
+        self.assertNotContains(r, "COLIMITA-SIX")  # lo de TAR-01 no se ve aquí
+        self.assertNotContains(r, "Tarimas de la orden")
+        r = self.client.get(self.tarima_url)
+        self.assertContains(r, "Contado en toda la recepción")
+        self.assertContains(r, "3 cajas")
+        self.assertContains(r, "COLIMITA-SIX")
+        self.assertContains(r, "CC24LCAR")
+        self.assertContains(r, "2 cajas de esta orden")
+        self.assertContains(r, "1 caja de esta orden")
+
     def test_otro_lote_y_danada(self):
         self.en_tarima()
         self.client.post(self.lote_url, {"sku_id": self.sku.pk, "nl_codigo": "L9", "nl_cad": "2027-01-15", "danada": "1"})

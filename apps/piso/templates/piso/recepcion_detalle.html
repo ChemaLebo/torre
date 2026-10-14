@@ -72,13 +72,14 @@
   <p class="small muted">Una caja por escaneo. Torre abre los lotes del producto; con la etiqueta de Torre suma directo.</p>
 </div>
 
+{# Contando, solo lo de ESTA tarima (Chema 2026-10-13); el total de la recepción está en "Cambiar tarima". #}
 <div class="card mt">
-  <div class="titulo"><h2>Contado</h2><span class="pill accent">{{ total_contado }} caja{{ total_contado|pluralize }}</span></div>
+  <div class="titulo"><h2>Contado en <span class="mono">{{ tarima.codigo }}</span></h2><span class="pill accent">{{ tarima_contado }} caja{{ tarima_contado|pluralize }}</span></div>
   <div class="tabla-wrap">
     <table>
       <thead><tr><th>Producto</th><th>Lote</th><th class="derecha">Contadas</th><th class="derecha">Dañadas</th><th class="derecha">Sin etiqueta</th></tr></thead>
       <tbody>
-        {% for l in lineas %}
+        {% for l in lineas_tarima %}
         <tr{% if l.es_hija %} class="fila-posicion"{% endif %}>
           {# Producto anunciado sin lote: la fila del producto trae el total y debajo cuelga cada lote que llegó. #}
           <td>{% if l.es_hija %}<span class="small muted">↳ lote</span>{% else %}<span class="mono">{{ l.sku.codigo }}</span> <span class="small muted">{{ l.sku.descripcion }}</span>{% endif %}</td>
@@ -88,23 +89,12 @@
           <td class="derecha num">{{ l.sin_etiqueta }}</td>
         </tr>
         {% empty %}
-        <tr><td colspan="5" class="muted">Todavía no hay cajas contadas.</td></tr>
+        <tr><td colspan="5" class="muted">Todavía no hay cajas contadas en esta tarima.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-</div>
-
-<div class="card mt">
-  <div class="titulo"><h2>Tarimas de la orden</h2></div>
-  {% for t in tarimas %}
-  <div class="corral-fila">
-    <div class="crece"><span class="mono">{{ t.tarima.codigo }}</span> · {{ t.cajas }} caja{{ t.cajas|pluralize }}{% if t.danadas %} · {{ t.danadas }} dañada{{ t.danadas|pluralize }}{% endif %}</div>
-    {% if t.confirmada %}<span class="pill ok">reetiquetada</span>{% endif %}
-  </div>
-  {% empty %}
-  <p class="small muted">Las tarimas aparecen aquí conforme cuentas cajas en ellas.</p>
-  {% endfor %}
+  <p class="small muted mt">El total de la recepción y lo de las otras tarimas se ve en <a href="{% url 'piso:recepcion_tarima' orden.pk %}">Cambiar tarima</a>.</p>
 </div>
 
 <div class="card mt">

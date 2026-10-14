@@ -715,6 +715,9 @@ def recepcion_detalle(request, pk):
     lineas = resumen_lineas(orden)
     tarimas = tarimas_de_orden(orden)
     actual = next((t for t in tarimas if tarima is not None and t["tarima"].pk == tarima.pk), None)
+    # Contando, la tabla es solo de ESTA tarima (Chema 2026-10-13); el total de
+    # la orden vive en "¿Dónde estás escaneando?" y en el cuadre.
+    lineas_tarima = [l for l in resumen_lineas(orden, tarima) if l["llegaron"]] if tarima is not None else []
     sla_texto, sla_tono = _sla_recepcion(orden)
     contexto = {
         "seccion": "recepcion",
@@ -722,6 +725,8 @@ def recepcion_detalle(request, pk):
         "cerrada": cerrada,
         "contando": contando,
         "lineas": lineas,
+        "lineas_tarima": lineas_tarima,
+        "tarima_contado": sum(l["llegaron"] for l in lineas_tarima),
         "tarima": tarima,
         "tarima_cajas": actual["cajas"] if actual else 0,
         "tarima_por_confirmar": actual["por_confirmar"] if actual else 0,
@@ -870,10 +875,14 @@ def recepcion_tarima(request, pk):
             "cajas_orden": propia["cajas"] if propia else 0,
             "confirmada": bool(propia and propia["confirmada"]),
         })
+    from apps.inventario.services import resumen_lineas  # lazy por contrato
+
+    lineas = resumen_lineas(orden)  # el total de la recepción se ve aquí, no en la tarima (Chema 2026-10-13)
     return render(request, "piso/recepcion_tarima.html", {
         "seccion": "recepcion", "orden": orden, "tarimas": tarimas,
         "propuesto": nombre_tarima_propuesto(), "actual": _tarima_actual(request, orden),
         "tiene_foto": _tiene_foto(orden),
+        "lineas": lineas, "total_contado": sum(l["llegaron"] for l in lineas),
     })
 
 
