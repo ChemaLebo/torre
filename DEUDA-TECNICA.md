@@ -765,3 +765,39 @@ en los CSV de Chema.
   puede quitar `PATRON_RACK_PISO` / `PATRON_RACK_LADO` y `crear_racks`.
 - Los movimientos del plan se registran a mano desde Posiciones; la pantalla de
   restock por escaneo (pieza 3) será la forma normal de mover cajas.
+
+## Salida con hilo, reposiciones cancelables, sustitución de guía e intentos de entrega — hecho 2026-10-14
+
+Lote de la rama `imagenes-y-salida` (memoria `torre-plan-imagenes-salida-sustitucion`):
+fotos en miniatura con modal; Salida en una transacción con las escrituras a
+Shopify encoladas y drenadas por un hilo; "Reintentar todas las vencidas" en
+Sync; reposiciones visibles en Cajas desde que se aprueban y cancelables
+mientras el piso no las tome; "Sustituir guía para esta caja" (PED-00261: el
+carrier entrega con guía nueva en vez de esperar la reposición); intentos de
+entrega por caja.
+
+**Queda:**
+- Regularizar los pedidos que salieron sin manifiesto cuando Salida se
+  trababa: con la evidencia de prod (cola y journal), no a ciegas.
+- Tras el deploy: `manage.py generar_miniaturas` una vez y, en Mesa → Sync,
+  "Reintentar todas las vencidas" (el scope `write_fulfillments` de Colima ya
+  está otorgado).
+- El hilo de escrituras vive en el worker de gunicorn: si el servicio se
+  reinicia a media escritura, la fila queda y el cron la reintenta (hasta
+  `vence`); con cientos de vencidas un solo hilo las recorre en serie. Si
+  algún día estorba, el reemplazo es un servicio systemd que drene cada pocos
+  segundos.
+- Sustitución de guía: la vieja no se cancela con el carrier a propósito (el
+  carrier la reemplaza en su cedis); si un carrier cobrara las dos, Mesa
+  registra el reembolso por guía en Finanzas. La etiqueta de la nueva queda
+  en el detalle (`etiqueta_url`) como apoyo: con el número de guía suele
+  bastar. No hay botón "Descargar etiqueta" propio todavía.
+- Reposiciones: una reposición ya en picking no se cancela (se espera a que
+  salga). El estado anterior se lee del evento `cambio_estado`; para pedidos
+  sin ese evento se infiere de las guías.
+- Intentos de entrega: solo lo que el carrier reporte como intento; un
+  "reingreso a estación" sin intento no cuenta. Candidato para el reporte por
+  carrier (entregas con dos o más intentos, pendiente 58).
+- Texto: "contenido repuesto" sustituye a "sustituida" en las pantallas; la
+  columna sigue siendo `Guia.sustituida_motivo` (sin migración).
+
