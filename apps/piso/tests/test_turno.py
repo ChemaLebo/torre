@@ -393,3 +393,23 @@ class ReclamoAlEmpezarTests(PisoTestCase):
         respuesta = self.client.get(reverse("piso:picking_pedido", args=[pedido.pk]))
         self.assertContains(respuesta, "re-escanea desde el carrito")
 
+    def test_card_vieja_no_reclama_un_detenido(self):
+        """Juan tiene la card CONTINUAR en pantalla, Mesa detiene el pedido
+        (DET) y Juan toca CONTINUAR sin refrescar: no se lo queda ni lo abre;
+        Mi turno le da lo que siga."""
+        from apps.pedidos.services import confirmar_linea_pick, detener_pedido, iniciar_picking
+
+        pedido = self.crear_pedido(cantidad=2)
+        iniciar_picking(pedido, self.operador)
+        confirmar_linea_pick(pedido.lineas.get(), 1, self.operador)
+        detener_pedido(pedido, self.operador, "Falta producto")  # Mesa aún no lo resuelve
+        respuesta = self._continuar(pedido)
+        self.assertRedirects(respuesta, self.url, fetch_redirect_response=False)
+        pedido.refresh_from_db()
+        self.assertTrue(pedido.detenido)
+        self.assertIsNone(pedido.asignado_a)
+        self.assertEqual(pedido.lineas.get().cantidad_pickeada, 1)  # su avance sigue ahí para cuando Mesa lo reanude
+        respuesta = self.client.get(reverse("piso:picking_pedido", args=[pedido.pk]), follow=True)
+        self.assertContains(respuesta, "no está en tu cola")
+        pedido.refresh_from_db()
+        self.assertIsNone(pedido.asignado_a)

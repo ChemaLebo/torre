@@ -283,10 +283,10 @@ def _tomar_abierto(request, pedido):
     primera se lo queda y la segunda recibe False (la cola le da el
     siguiente). Si ya era mío, True sin tocar nada; Mesa no reclama. Si lo
     soltó otra persona, el avance del picking se reinicia (misma regla de
-    siempre) y se avisa."""
+    siempre) y se avisa. Un detenido nunca se reclama: Mesa lo tiene."""
     with transaction.atomic():
         fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
-        if fresco.asignado_a_id not in (None, request.user.pk):
+        if fresco.detenido or fresco.asignado_a_id not in (None, request.user.pk):
             return False
         if fresco.asignado_a_id is None:
             quien = _quien_lo_solto(fresco) or "otro operador"
@@ -478,8 +478,9 @@ def _home_siguiente(request):
     from apps.pedidos.services import iniciar_picking  # lazy por contrato
 
     if request.POST.get("empezado"):
+        # detenido=False: una card vieja (el pedido se detuvo después de pintarla) no lo reclama.
         abierto = Pedido.objects.filter(
-            pk=request.POST.get("pedido_id"), estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA),
+            pk=request.POST.get("pedido_id"), estado__in=(Pedido.EN_PICKING, *_ESTADOS_EN_MESA), detenido=False,
         ).first()
         if abierto is not None and _acceso_pedido(request, abierto) and _tomar_abierto(request, abierto):
             return _destino_pedido(Pedido.objects.get(pk=abierto.pk))  # releído: reclamar pudo reiniciar el picking
