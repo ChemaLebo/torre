@@ -1,6 +1,7 @@
 """Mesa → Sync: las escrituras a Shopify pendientes se ven y, vencidas, se
 reactivan o se descartan (2026-09-30)."""
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -47,3 +48,33 @@ class SyncEscriturasTests(TestCase):
         evento = EventoAuditoria.objects.get(accion="escritura_shopify_descartada")
         self.assertEqual(evento.entidad_id, str(self.pedido.pk))
         self.assertEqual(evento.delta["accion"], "fulfillment")
+
+    def test_reintentar_todas_las_vencidas_las_reactiva_y_las_drena_en_segundo_plano(self):
+        """Chema 2026-10-14: tras otorgar el scope que faltaba, decenas de
+        eventos vencidos se reactivan de un jalón y el hilo los escribe."""
+        otra = EscrituraShopifyPendiente.objects.create(
+            tienda=self.tienda, pedido=self.pedido, clave="evento:fid:gid://shopify/Fulfillment/1:CARRIER_PICKED_UP",
+            accion=EscrituraShopifyPendiente.ACCION_EVENTO, datos={"fid": "gid://shopify/Fulfillment/1", "status": "CARRIER_PICKED_UP"},
+            ultimo_error="Access denied for fulfillmentEventCreate", vence=timezone.now() - timedelta(days=12),
+        )
+        vigente = EscrituraShopifyPendiente.objects.create(
+            tienda=self.tienda, pedido=self.pedido, clave="evento:fid:gid://shopify/Fulfillment/2:CARRIER_PICKED_UP",
+            accion=EscrituraShopifyPendiente.ACCION_EVENTO, datos={"fid": "gid://shopify/Fulfillment/2", "status": "CARRIER_PICKED_UP"},
+            ultimo_error="502", vence=timezone.now() + timedelta(hours=1),
+        )
+        pantalla = self.client.get(reverse("mesa:sync"))
+        self.assertContains(pantalla, "Reintentar todas las vencidas (2)")
+        with patch("apps.integraciones.services.drenar_escrituras_en_segundo_plano") as drenar:
+            respuesta = self.client.post(reverse("mesa:sync"), {"accion": "reintentar_vencidas"}, follow=True)
+        self.assertRedirects(respuesta, reverse("mesa:sync"))
+        self.assertContains(respuesta, "2 escritura(s) vencida(s) reactivada(s)")
+        drenar.assert_called_once_with()
+        for escritura in (self.escritura, otra):
+            escritura.refresh_from_db()
+            self.assertFalse(escritura.vencida)
+        vigente.refresh_from_db()
+        self.assertLess(vigente.vence, timezone.now() + timedelta(hours=2))  # la vigente no se toca
+        self.assertEqual(EventoAuditoria.objects.get(accion="escrituras_reactivadas").delta["reactivadas"], 2)
+        self.assertNotContains(self.client.get(reverse("mesa:sync")), "Reintentar todas las vencidas")
+        respuesta = self.client.post(reverse("mesa:sync"), {"accion": "reintentar_vencidas"}, follow=True)
+        self.assertContains(respuesta, "No hay escrituras vencidas")

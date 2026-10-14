@@ -2710,9 +2710,28 @@ def sync(request):
         EscrituraShopifyPendiente, PushInventarioPendiente, SyncLog, Tienda, WebhookEvento,
     )
 
+    horas = settings.TORRE.get("SHOPIFY_REINTENTOS_HORAS", 24)
+    if request.method == "POST" and request.POST.get("accion") == "reintentar_vencidas":
+        # Chema 2026-10-14: tras otorgar un scope que faltaba (write_fulfillments)
+        # quedaban decenas de vencidas; de un jalón se reactivan y el hilo las
+        # escribe ya (el cron sigue de red).
+        from apps.integraciones.services import drenar_escrituras_en_segundo_plano  # lazy por contrato
+
+        ahora = timezone.now()
+        reactivadas = EscrituraShopifyPendiente.objects.filter(vence__lte=ahora).update(vence=ahora + timedelta(hours=horas))
+        if reactivadas:
+            registrar_evento(
+                "sync", "shopify", "escrituras_reactivadas", actor=request.user,
+                delta={"reactivadas": reactivadas, "horas": horas},
+                motivo="Reintentar todas las vencidas desde Mesa → Sync.",
+            )
+            drenar_escrituras_en_segundo_plano()
+            messages.success(request, f"{reactivadas} escritura(s) vencida(s) reactivada(s): se están escribiendo en segundo plano; lo que no entre lo reintenta el cron hasta {horas} h.")
+        else:
+            messages.info(request, "No hay escrituras vencidas.")
+        return redirect("mesa:sync")
     if request.method == "POST" and request.POST.get("accion") in ("reintentar", "descartar"):
         escritura = get_object_or_404(EscrituraShopifyPendiente, pk=request.POST.get("escritura"))
-        horas = settings.TORRE.get("SHOPIFY_REINTENTOS_HORAS", 24)
         if request.POST["accion"] == "reintentar":
             escritura.vence = timezone.now() + timedelta(hours=horas)
             escritura.save(update_fields=["vence"])
@@ -2764,6 +2783,7 @@ def sync(request):
     for escritura in escrituras:
         escritura.frescura = _frescura(escritura.creado, ahora)
         escritura.frescura_intento = _frescura(escritura.ultimo_intento, ahora)
+    vencidas = sum(1 for e in escrituras if e.vence <= ahora)
 
     return render(request, "mesa/sync.html", {
         "seccion": "sync",
@@ -2771,6 +2791,7 @@ def sync(request):
         "webhooks": webhooks,
         "cola": cola,
         "escrituras": escrituras,
+        "vencidas": vencidas,
     })
 
 

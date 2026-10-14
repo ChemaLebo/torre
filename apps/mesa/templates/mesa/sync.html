@@ -35,7 +35,13 @@
 </div>
 
 <div class="card mb">
-  <div class="titulo"><h3>Escrituras a Shopify pendientes</h3><span class="small">{{ escrituras|length }} · fulfillments, rastreos de reposición y eventos que Shopify rechazó; el cron las reintenta cada 15 min</span></div>
+  <div class="titulo"><h3>Escrituras a Shopify pendientes</h3><span class="small">{{ escrituras|length }} · fulfillments, rastreos de reposición y eventos que Shopify rechazó; las de Salida se escriben en segundo plano al momento y el cron reintenta cada 15 min</span></div>
+  {% if vencidas %}
+  <form method="post" class="mb">{% csrf_token %}
+    <button class="btn chico primario" type="submit" name="accion" value="reintentar_vencidas" onclick="return confirm('¿Reintentar las {{ vencidas }} escritura(s) vencida(s)? Se vuelven a escribir en Shopify en segundo plano; úsalo después de corregir la causa (por ejemplo, un permiso de la app).');">Reintentar todas las vencidas ({{ vencidas }})</button>
+    <span class="small muted">Cada una se reintenta por separado: lo que entra se borra, lo que falla conserva su error.</span>
+  </form>
+  {% endif %}
   {% if escrituras %}
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
