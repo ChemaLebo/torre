@@ -10,4 +10,5 @@ urlpatterns = [
     path("<str:token>/", views.pagina, name="pagina"),
     path("<str:token>/reporte/", views.reporte, name="reporte"),
     path("<str:token>/pod/", views.pod, name="pod"),
+    path("<str:token>/pod/mini/", views.pod, {"mini": True}, name="pod_mini"),
 ]

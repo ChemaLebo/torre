@@ -345,6 +345,11 @@ dialog.modal {
   background: var(--panel); color: var(--ink);
 }
 dialog.modal::backdrop { background: rgba(0, 0, 0, .62); }
+/* Modal de fotos: la imagen al tamaño de la pantalla, sin panel. */
+dialog.modal.foto { width: auto; max-width: calc(100vw - 24px); padding: 0; background: transparent; border: none; }
+dialog.modal.foto img { display: block; max-width: calc(100vw - 24px); max-height: calc(100vh - 80px); border-radius: 12px; background: #000; object-fit: contain; }
+dialog.modal.foto .modal-foto-pie { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 4px; color: #fff; font-size: 13px; }
+a.foto-ampliable { cursor: zoom-in; display: inline-block; }
 dialog.modal.ancho { width: min(1080px, calc(100vw - 32px)); }
 #asn-formato { border: 1px solid var(--hair-2); border-radius: var(--r); background: var(--panel-2); padding: 12px 16px; margin: 14px 0 18px; }
 #asn-formato > summary { cursor: pointer; font-size: 16px; font-weight: 600; color: var(--ink); padding: 4px 0; }

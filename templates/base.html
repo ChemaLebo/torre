@@ -282,6 +282,31 @@ window.addEventListener("load", function () {
 </script>
 {% endif %}
 {% endblock %}
+{# Modal de fotos (Chema 2026-10-14): cualquier <a class="foto-ampliable"> abre su imagen en grande aquí; sin JS el enlace abre el original. #}
+<dialog class="modal foto" id="modal-foto" aria-label="Foto en grande">
+  <img alt="" id="modal-foto-img">
+  <div class="modal-foto-pie"><span id="modal-foto-titulo"></span><button class="btn chico" type="button" id="modal-foto-cerrar">Cerrar</button></div>
+</dialog>
+<script>
+(function () {
+  var modal = document.getElementById("modal-foto");
+  if (!modal || !modal.showModal) return;
+  var img = document.getElementById("modal-foto-img"), titulo = document.getElementById("modal-foto-titulo");
+  document.addEventListener("click", function (ev) {
+    var enlace = ev.target.closest && ev.target.closest("a.foto-ampliable");
+    if (!enlace) return;
+    ev.preventDefault();
+    var mini = enlace.querySelector("img");
+    img.src = enlace.href;
+    img.alt = mini ? mini.alt : "";
+    titulo.textContent = enlace.title || (mini ? mini.alt : "");
+    modal.showModal();
+  });
+  document.getElementById("modal-foto-cerrar").addEventListener("click", function () { modal.close(); });
+  modal.addEventListener("click", function (ev) { if (ev.target === modal) modal.close(); });
+  modal.addEventListener("close", function () { img.removeAttribute("src"); });
+})();
+</script>
 <script>
 // Inputs numéricos: el scroll del trackpad/rueda NO cambia el valor (pedido
 // del piso: básculas y cantidades se alteraban sin querer al desplazarse).

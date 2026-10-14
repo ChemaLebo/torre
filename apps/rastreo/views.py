@@ -323,7 +323,7 @@ def pagina(request, token):
     return render(request, "rastreo/pagina.html", contexto)
 
 
-def pod(request, token):
+def pod(request, token, mini=False):
     """Foto de entrega (POD) del pedido del token — el token ES la credencial.
 
     MEDIA no se sirve público: la foto sale por aquí y solo cuando el pedido
@@ -339,10 +339,9 @@ def pod(request, token):
             .first())
     if foto is None:
         raise Http404
-    try:
-        return FileResponse(foto.archivo.open("rb"))
-    except (FileNotFoundError, ValueError):
-        raise Http404
+    from apps.core.views import respuesta_evidencia  # lazy por contrato
+
+    return respuesta_evidencia(foto, mini=mini)
 
 
 @require_POST

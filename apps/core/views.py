@@ -216,8 +216,8 @@ def _cliente_de_evidencia(foto):
 
 
 @login_required
-def evidencia(request, pk):
-    """Sirve una EvidenciaFoto con autorización por rol y tenant.
+def evidencia(request, pk, mini=False):
+    """Sirve una EvidenciaFoto (o su miniatura con `mini`) con autorización por rol y tenant.
 
     piso/mesa (y superuser) ven todo: la bodega opera a todos los clientes.
     portal SOLO lo de su cliente — foto ajena o irresoluble regresa el mismo
@@ -230,7 +230,17 @@ def evidencia(request, pk):
             raise Http404
         if _cliente_de_evidencia(foto) != request.cliente:
             raise Http404
+    return respuesta_evidencia(foto, mini=mini)
+
+
+def respuesta_evidencia(foto, mini=False):
+    """El archivo de una evidencia (o su miniatura con `mini`, si existe) con
+    caché privada de una semana: el contenido no cambia (va con hash), así
+    que el navegador no lo vuelve a bajar en cada pantalla (Chema 2026-10-14)."""
+    archivo = foto.miniatura if (mini and foto.miniatura) else foto.archivo
     try:
-        return FileResponse(foto.archivo.open("rb"))
+        respuesta = FileResponse(archivo.open("rb"))
     except (FileNotFoundError, ValueError):
         raise Http404
+    respuesta["Cache-Control"] = "private, max-age=604800"
+    return respuesta

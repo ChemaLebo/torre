@@ -75,8 +75,8 @@
         </div>
         <div class="fotos">
           {% for f in e.fotos %}
-          <a href="{% url 'core:evidencia' f.foto.pk %}" target="_blank" rel="noopener" title="{{ f.etiqueta }}">
-            <img src="{% url 'core:evidencia' f.foto.pk %}" alt="{{ f.etiqueta }}" loading="lazy">
+          <a class="foto-ampliable" href="{% url 'core:evidencia' f.foto.pk %}" target="_blank" rel="noopener" title="{{ f.etiqueta }}">
+            <img src="{% url 'core:evidencia_mini' f.foto.pk %}" alt="{{ f.etiqueta }}" loading="lazy">
           </a>
           {% endfor %}
         </div>

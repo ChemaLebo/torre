@@ -18,4 +18,5 @@ urlpatterns = [
     path("olvide/enviado/", views.OlvideEnviadoView.as_view(), name="olvide_enviado"),
     path("restablecer/<uidb64>/<token>/", views.RestablecerView.as_view(), name="restablecer"),
     path("evidencia/<int:pk>/", views.evidencia, name="evidencia"),
+    path("evidencia/<int:pk>/mini/", views.evidencia, {"mini": True}, name="evidencia_mini"),
 ]

@@ -175,6 +175,14 @@ def _ruta_evidencia(instancia, nombre):
     return f"evidencia/{instancia.entidad}/{instancia.entidad_id}/{nombre}"
 
 
+def _ruta_miniatura(instancia, nombre):
+    return f"evidencia/{instancia.entidad}/{instancia.entidad_id}/mini/{nombre}"
+
+
+MINIATURA_LADO_MAX = 640
+MINIATURA_CALIDAD = 72
+
+
 class EvidenciaFoto(models.Model):
     """Foto de evidencia ligada a cualquier entidad (pedido, ASN, incidencia, conteo).
 
@@ -187,6 +195,9 @@ class EvidenciaFoto(models.Model):
     entidad_id = models.CharField(max_length=60, db_index=True)
     tipo = models.CharField(max_length=30, blank=True)          # contenido | caja_cerrada | llegada | dano | pod
     archivo = models.FileField(upload_to=_ruta_evidencia)
+    # Miniatura (Chema 2026-10-14): copia JPEG de 640 px para las listas; el
+    # original (y su hash) no se toca y es lo que abre el modal en grande.
+    miniatura = models.FileField(upload_to=_ruta_miniatura, blank=True)
     hash_sha256 = models.CharField(max_length=64, blank=True)
     tomada_por = models.CharField(max_length=120, blank=True)
     ts = models.DateTimeField(auto_now_add=True)
@@ -202,7 +213,39 @@ class EvidenciaFoto(models.Model):
             for chunk in self.archivo.chunks():
                 h.update(chunk)
             self.hash_sha256 = h.hexdigest()
+        falta_miniatura = bool(self.archivo) and not self.miniatura
         super().save(*args, **kwargs)
+        if falta_miniatura:
+            # Después de guardar: la miniatura se lee del storage, nunca del
+            # archivo recién subido (que ya quedó cerrado al escribirlo).
+            self.generar_miniatura()
+
+    def generar_miniatura(self):
+        """Crea la miniatura JPEG (lado máximo MINIATURA_LADO_MAX) leyendo el
+        archivo ya guardado. Si no es una imagen que Pillow entienda (o falta),
+        no hay miniatura y las pantallas usan el original. Regresa True si la creó."""
+        import os
+        from io import BytesIO
+
+        from django.core.files.base import ContentFile
+
+        try:
+            from PIL import Image, ImageOps
+
+            with self.archivo.storage.open(self.archivo.name, "rb") as f:
+                imagen = Image.open(f)
+                imagen = ImageOps.exif_transpose(imagen)
+                imagen.thumbnail((MINIATURA_LADO_MAX, MINIATURA_LADO_MAX))
+                if imagen.mode not in ("RGB", "L"):
+                    imagen = imagen.convert("RGB")
+                salida = BytesIO()
+                imagen.save(salida, format="JPEG", quality=MINIATURA_CALIDAD, optimize=True)
+        except Exception:  # noqa: BLE001 — sin miniatura se sirve el original
+            return False
+        base = os.path.splitext(os.path.basename(self.archivo.name))[0]
+        self.miniatura.save(f"{base}.jpg", ContentFile(salida.getvalue()), save=False)
+        super().save(update_fields=["miniatura"])
+        return True
 
     def __str__(self):
         return f"{self.entidad}#{self.entidad_id} {self.tipo}"

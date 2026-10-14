@@ -6,8 +6,8 @@
   </div>
   {% if foto %}
   <div class="fotos">
-    <a href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="{{ foto.ts|date:'d/M H:i' }}">
-      <img src="{% url 'core:evidencia' foto.pk %}" alt="Foto de empaque de {{ pedido.folio }}" loading="lazy">
+    <a class="foto-ampliable" href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="{{ foto.ts|date:'d/M H:i' }}">
+      <img src="{% url 'core:evidencia_mini' foto.pk %}" alt="Foto de empaque de {{ pedido.folio }}" loading="lazy">
     </a>
   </div>
   <p class="small muted">{{ foto.ts|date:"d/M H:i" }}{% if foto.tomada_por %} · {{ foto.tomada_por }}{% endif %}</p>

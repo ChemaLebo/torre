@@ -233,7 +233,7 @@
     <div class="titulo"><h3>Fotos de evidencia</h3></div>
     <div class="fotos">
       {% for foto in fotos %}
-        <a href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="{{ foto.tipo|default:'evidencia' }} · {{ foto.ts|date:'d/M H:i' }}{% if foto.tomada_por %} · {{ foto.tomada_por }}{% endif %}"><img src="{% url 'core:evidencia' foto.pk %}" alt="Evidencia {{ foto.tipo|default:'del pedido' }}"></a>
+        <a class="foto-ampliable" href="{% url 'core:evidencia' foto.pk %}" target="_blank" rel="noopener" title="{{ foto.tipo|default:'evidencia' }} · {{ foto.ts|date:'d/M H:i' }}{% if foto.tomada_por %} · {{ foto.tomada_por }}{% endif %}"><img src="{% url 'core:evidencia_mini' foto.pk %}" alt="Evidencia {{ foto.tipo|default:'del pedido' }}" loading="lazy"></a>
       {% empty %}
         <div class="foto-ph">Sin fotos todavía</div>
       {% endfor %}

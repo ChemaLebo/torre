@@ -175,7 +175,7 @@
   {% if pod %}
   <div class="tarjeta pod">
     <h2>Confirmación de entrega</h2>
-    <img src="{% url 'rastreo:pod' token %}" alt="Foto de entrega">
+    <a href="{% url 'rastreo:pod' token %}" target="_blank" rel="noopener"><img src="{% url 'rastreo:pod_mini' token %}" alt="Foto de entrega" loading="lazy"></a>
   </div>
   {% endif %}
 
