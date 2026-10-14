@@ -24,7 +24,7 @@ from apps.core.decorators import rol_requerido
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 from apps.envios.models import Guia, Paquete
-from apps.inventario.models import LineaASN, OrdenEntrada, Saldo, TareaConteo
+from apps.inventario.models import LineaASN, OrdenEntrada, Restock, Saldo, TareaConteo
 from apps.pedidos.models import Pedido
 
 # Corrales de staging (catalogo.Ubicacion tipo=salida): cada corral declara sus
@@ -519,6 +519,17 @@ def home(request):
         accion = request.POST.get("accion")
         if accion == "confirmar_restock":
             return _home_confirmar_restock(request)
+        if accion == "siguiente_restock":
+            # Restock de rack (Chema 2026-10-13): va antes de los pedidos en la cola.
+            from apps.inventario.services import tomar_restock  # lazy por contrato
+
+            tarea = get_object_or_404(Restock, pk=request.POST.get("restock_id"))
+            try:
+                tomar_restock(tarea, request.user)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                return redirect("piso:home")
+            return redirect("piso:restock", pk=tarea.pk)
         if accion == "siguiente":
             return _home_siguiente(request)
         if accion in ("aceptar_transferencia", "rechazar_transferencia"):
@@ -586,6 +597,10 @@ def home(request):
         .select_related("cliente", "asignado_a")
     )
 
+    from apps.inventario.services import restocks_en_cola  # lazy por contrato
+
+    restocks_rack = restocks_en_cola(request.user)
+    restock_siguiente = restocks_rack[0] if restocks_rack else None
     siguiente = _siguiente_en_cola(request.user)
     if siguiente is not None:
         siguiente.total_piezas = _piezas(siguiente)
@@ -598,7 +613,7 @@ def home(request):
     total_picking = len(pendientes) + len(por_pickear)
     corte_hora, corte_texto, corte_tono = _reloj_corte()
     todo_al_dia = (
-        siguiente is None and not recepciones_abiertas and not conteos_pendientes
+        siguiente is None and restock_siguiente is None and not recepciones_abiertas and not conteos_pendientes
         and not restocks and not staging and not por_completar
     )
 
@@ -607,6 +622,8 @@ def home(request):
         "es_mesa": _es_mesa(request),
         "todo_al_dia": todo_al_dia,
         "siguiente": siguiente,
+        "restock_siguiente": restock_siguiente,
+        "restocks_rack": restocks_rack,
         "detenidos": detenidos,
         "transferencias": transferencias,
         "recepciones_abiertas": recepciones_abiertas,
@@ -1314,6 +1331,22 @@ def picking_pedido(request, pk):
             return redirect("piso:picking_pedido", pk=pedido.pk)
         if request.POST.get("accion") == "detener":
             return _pedido_detener(request, pedido, "piso:picking_pedido")
+        if request.POST.get("accion") == "restock":
+            # Restock en línea (Chema 2026-10-13): el rack no alcanza; se abre la
+            # tarea para este pedido y se va a ella; al terminar vuelve aquí.
+            from apps.inventario.services import abrir_restock, tomar_restock  # lazy por contrato
+
+            linea = get_object_or_404(pedido.lineas.select_related("sku"), pk=request.POST.get("linea_id") or 0)
+            tarea = abrir_restock(linea.sku, actor=request.user, pedido=pedido)
+            if tarea is None:
+                messages.error(request, f"No hay {linea.sku.codigo} fuera de su rack: avisa a Mesa.")
+                return redirect("piso:picking_pedido", pk=pedido.pk)
+            try:
+                tomar_restock(tarea, request.user)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                return redirect("piso:picking_pedido", pk=pedido.pk)
+            return redirect("piso:restock", pk=tarea.pk)
         reiniciado = _reclamar_si_libre(pedido, request)
         return _picking_escanear(request, pedido, reiniciado=reiniciado)
 
@@ -3002,6 +3035,96 @@ def _salida_manifiesto(request):
     if hoja is not None and request.POST.get("desde_escaner"):
         return redirect("piso:manifiesto", pk=hoja.pk)
     return redirect("piso:salida")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Restock de rack (Chema 2026-10-13): caja → rack → confirmar, una por una
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@rol_requerido("piso", "mesa")
+def restock(request, pk):
+    """Una tarea de restock en piso. Torre dice rack, producto, lote y tarima
+    y "trae hasta N". Por caja: POST `accion=escanear` con la caja (QR
+    `P|barras|lote`; error si no es el producto o no es el lote que caduca
+    primero fuera del rack) → el mismo POST con el rack (`U|nombre`; error si
+    no es el del restock; ahí vive **Regresar**) → `accion=confirmar` mueve
+    UNA caja (mover_existencias, kardex traslado). `accion=terminar` cierra:
+    las movidas son las que cupieron; vuelve al pedido que lo esperaba o a Mi
+    turno. El paso a medias vive en la sesión del operador."""
+    from apps.catalogo.models import Lote, Ubicacion  # lazy: modelos de otra app
+    from apps.inventario.services import (  # lazy por contrato
+        lote_para_restock, restock_escanear_caja, restock_escanear_rack, restock_mover_caja, terminar_restock,
+        tomar_restock,
+    )
+
+    tarea = get_object_or_404(
+        Restock.objects.select_related("sku", "sku__cliente", "rack", "lote", "origen", "asignado_a", "pedido"), pk=pk,
+    )
+    clave = f"restock_{tarea.pk}"
+    if tarea.pedido_id and tarea.pedido.estado == Pedido.EN_PICKING:
+        volver = redirect("piso:picking_pedido", pk=tarea.pedido_id)
+    else:
+        volver = redirect("piso:home")
+    if tarea.estado not in Restock.ABIERTOS:
+        messages.info(request, f"{tarea.folio} ya está {tarea.get_estado_display().lower()}.")
+        return volver
+    try:
+        tomar_restock(tarea, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("piso:home")
+    paso = dict(request.session.get(clave) or {})
+
+    def guardar(nuevo):
+        if nuevo:
+            request.session[clave] = nuevo
+        else:
+            request.session.pop(clave, None)
+        request.session.modified = True
+
+    if request.method == "POST":
+        accion = request.POST.get("accion")
+        try:
+            if accion == "escanear":
+                valor = request.POST.get("codigo") or ""
+                if not paso.get("lote_ok"):
+                    lote, origen = restock_escanear_caja(tarea, valor)
+                    guardar({"lote_ok": True, "lote": lote.pk if lote else 0, "origen": origen.pk, "rack_ok": False})
+                elif not paso.get("rack_ok"):
+                    restock_escanear_rack(tarea, valor)
+                    paso["rack_ok"] = True
+                    guardar(paso)
+            elif accion == "regresar":
+                guardar(None)
+            elif accion == "confirmar":
+                if not (paso.get("lote_ok") and paso.get("rack_ok")):
+                    raise ValueError("Escanea la caja y el rack antes de confirmar.")
+                lote = Lote.objects.filter(pk=paso.get("lote") or 0).first()
+                origen = get_object_or_404(Ubicacion, pk=paso.get("origen") or 0)
+                restock_mover_caja(tarea, lote, origen, request.user)
+                guardar(None)
+                messages.success(request, f"{tarea.cantidad_movida} caja(s) en {tarea.rack.codigo}; faltan {tarea.faltan}. Escanea la siguiente.")
+            elif accion == "terminar":
+                terminar_restock(tarea, request.user)
+                guardar(None)
+                messages.success(request, f"{tarea.folio} terminado: {tarea.cantidad_movida} caja(s) en {tarea.rack.codigo}.")
+                return volver
+            else:
+                raise ValueError("No entendí la acción.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect("piso:restock", pk=tarea.pk)
+
+    eleccion = lote_para_restock(tarea.sku, tarea.rack)
+    return render(request, "piso/restock.html", {
+        "seccion": "home", "tarea": tarea, "paso": paso,
+        "lote_pendiente": Lote.objects.filter(pk=paso.get("lote") or 0).first(),
+        "origen_pendiente": Ubicacion.objects.filter(pk=paso.get("origen") or 0).first(),
+        "siguiente_lote": eleccion[0] if eleccion else None,
+        "siguiente_origen": eleccion[1].ubicacion if eleccion else None,
+        "siguiente_cantidad": eleccion[1].cantidad if eleccion else 0,
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────

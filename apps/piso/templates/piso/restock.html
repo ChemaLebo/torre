@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Restock · {{ tarea.rack.codigo }}{% endblock %}
+{% block content %}
+{# Restock de rack (Chema 2026-10-13): caja → rack → confirmar, una por una. El lector físico escribe en el campo y manda Enter. #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Restock · {{ tarea.folio }}</div>
+    <h1>{{ tarea.sku.codigo }} → <span class="mono">{{ tarea.rack.codigo }}</span></h1>
+    <div class="small">{{ tarea.sku.descripcion }} · {{ tarea.sku.cliente.nombre }}{% if tarea.pedido %} · lo espera {{ tarea.pedido.folio }}{% endif %}</div>
+  </div>
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="terminar">
+    <button class="btn" type="submit">Terminar restock</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="titulo"><h2>Trae hasta {{ tarea.faltan }}</h2><span class="pill accent">{{ tarea.cantidad_movida }} movida{{ tarea.cantidad_movida|pluralize }} de {{ tarea.cantidad_sugerida }}</span></div>
+  {% if siguiente_lote or siguiente_origen %}
+  <p>Lote <b class="mono">{{ siguiente_lote.codigo|default:"sin lote" }}</b>{% if siguiente_lote.fecha_caducidad %} (caduca {{ siguiente_lote.fecha_caducidad|date:"d/M/Y" }}){% endif %} en <b class="mono">{{ siguiente_origen.codigo }}</b> · {{ siguiente_cantidad }} ahí. Es el que caduca primero: ese sale.</p>
+  {% else %}
+  <p class="muted">Ya no hay {{ tarea.sku.codigo }} fuera de {{ tarea.rack.codigo }}. Termina el restock.</p>
+  {% endif %}
+</div>
+
+{% if not paso.lote_ok %}
+<div class="card mt">
+  <div class="eyebrow">Paso 1</div>
+  <h2>Escanea la caja</h2>
+  <form method="post" class="fila mt">{% csrf_token %}
+    <input type="hidden" name="accion" value="escanear">
+    <input type="text" name="codigo" id="codigo" class="mono crece campo-escaneo" placeholder="QR de la caja" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="none" autofocus aria-label="Código escaneado">
+    <button class="btn" type="button" id="btn-teclear">Teclear</button>
+    <button class="btn primario" type="submit">OK</button>
+  </form>
+</div>
+{% elif not paso.rack_ok %}
+<div class="card mt">
+  <div class="eyebrow">Paso 2</div>
+  <h2>Escanea el rack <span class="mono">{{ tarea.rack.codigo }}</span></h2>
+  <p class="small">Caja de {{ tarea.sku.codigo }} · lote <span class="mono">{{ lote_pendiente.codigo|default:"sin lote" }}</span> tomada de <span class="mono">{{ origen_pendiente.codigo }}</span>.</p>
+  <form method="post" class="fila mt">{% csrf_token %}
+    <input type="hidden" name="accion" value="escanear">
+    <input type="text" name="codigo" id="codigo" class="mono crece campo-escaneo" placeholder="QR del rack" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="none" autofocus aria-label="Código escaneado">
+    <button class="btn" type="button" id="btn-teclear">Teclear</button>
+    <button class="btn primario" type="submit">OK</button>
+  </form>
+  <form method="post" class="mt">{% csrf_token %}
+    <input type="hidden" name="accion" value="regresar">
+    <button class="btn bloque" type="submit">Regresar (esta caja no va)</button>
+  </form>
+</div>
+{% else %}
+<div class="card mt">
+  <div class="eyebrow">Paso 3</div>
+  <h2>¿Confirmar?</h2>
+  <p><b class="mono">1 caja de {{ tarea.sku.codigo }}</b> · lote <span class="mono">{{ lote_pendiente.codigo|default:"sin lote" }}</span> · de <span class="mono">{{ origen_pendiente.codigo }}</span> al rack <span class="mono">{{ tarea.rack.codigo }}</span>.</p>
+  <div class="grid g2 mt">
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="confirmar">
+      <button class="btn primario gigante bloque" type="submit">Confirmar</button>
+    </form>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="regresar">
+      <button class="btn gigante bloque" type="submit">Regresar</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<script>
+/* El campo de escaneo siempre tiene el foco: el lector físico escribe ahí y manda Enter. */
+document.addEventListener("DOMContentLoaded", function () {
+  var input = document.getElementById("codigo");
+  var teclear = document.getElementById("btn-teclear");
+  if (!input) return;
+  function enfocar() { if (document.activeElement !== input) input.focus({ preventScroll: true }); }
+  enfocar();
+  window.addEventListener("focus", enfocar);
+  document.addEventListener("click", function (ev) {
+    if (!ev.target.closest("input, textarea, select, button, a, label, summary, dialog")) enfocar();
+  });
+  if (teclear) {
+    teclear.addEventListener("click", function () { input.setAttribute("inputmode", "text"); input.focus(); });
+  }
+});
+</script>
+{% endblock %}

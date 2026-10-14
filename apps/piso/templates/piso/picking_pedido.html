@@ -96,6 +96,12 @@
          data-ubicacion="{% if linea.primera_ubicacion %}{{ linea.primera_ubicacion.ubicacion.codigo }}{% endif %}">
   {% if linea.rack and linea.restock_falta %}
   <div class="banner warn"><span class="foco"></span>Restock: en {{ linea.rack.codigo }} hay {{ linea.en_rack }} y faltan {{ linea.restock_falta }}.{% if linea.restock_origen %} Trae del lote {{ linea.restock_origen.lote.codigo|default:"sin lote" }} en {{ linea.restock_origen.ubicacion.codigo }} ({{ linea.restock_origen.cantidad }} ahí).{% else %} No hay más en tarimas: avisa a Mesa.{% endif %}</div>
+  {% if linea.restock_origen %}
+  <form method="post" class="mt">{% csrf_token %}
+    <input type="hidden" name="accion" value="restock"><input type="hidden" name="linea_id" value="{{ linea.pk }}">
+    <button class="btn bloque" type="submit">Restockear ahora · {{ linea.rack.codigo }}</button>
+  </form>
+  {% endif %}
   {% endif %}
   {% if linea.primera_ubicacion %}
   <div class="eyebrow">{% if linea.rack %}Rack fijo{% else %}Ve a{% endif %}</div>

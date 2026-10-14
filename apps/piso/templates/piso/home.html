@@ -36,7 +36,28 @@
 </div>
 {% endif %}
 
-{% if siguiente %}
+{% if restock_siguiente %}
+{# Restock de rack (Chema 2026-10-13): va antes de los pedidos; EMPEZAR abre la tarea. #}
+<div class="card">
+  <div class="titulo">
+    <div class="eyebrow">Siguiente</div>
+    <span class="pill accent">restock{% if restock_siguiente.estado == "EN_CURSO" %} — ya empezado{% endif %}</span>
+  </div>
+  <h1 class="mono">{{ restock_siguiente.rack.codigo }}</h1>
+  <p>{{ restock_siguiente.sku.codigo }} · {{ restock_siguiente.sku.descripcion }}</p>
+  <div class="fila">
+    <span class="pill">trae hasta {{ restock_siguiente.faltan }}</span>
+    {% if restock_siguiente.lote %}<span class="pill">lote {{ restock_siguiente.lote.codigo }}</span>{% endif %}
+    {% if restock_siguiente.origen %}<span class="pill">de {{ restock_siguiente.origen.codigo }}</span>{% endif %}
+    {% if restock_siguiente.pedido %}<span class="pill warn">lo espera {{ restock_siguiente.pedido.folio }}</span>{% endif %}
+  </div>
+</div>
+<form method="post" class="accion-fija mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="siguiente_restock">
+  <input type="hidden" name="restock_id" value="{{ restock_siguiente.pk }}">
+  <button class="btn primario gigante" type="submit">EMPEZAR ▶</button>
+</form>
+{% elif siguiente %}
 <div class="card">
   <div class="titulo">
     <div class="eyebrow">Siguiente</div>

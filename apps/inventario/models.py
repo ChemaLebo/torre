@@ -425,3 +425,46 @@ class TareaConteo(models.Model):
 
     def __str__(self):
         return f"{self.fecha} · {self.sku.codigo} · {self.get_estado_display()}"
+
+
+class Restock(models.Model):
+    """Tarea de restock (Chema 2026-10-13): llevar cajas de un producto de la
+    tarima (el lote que caduca primero fuera del rack) a su rack fijo. Nace
+    sola cuando lo apartado del producto rebasa lo que hay en su rack, o desde
+    el picking cuando el rack no alcanza; se hace en piso escaneando caja →
+    rack → confirmar, una por una; las cajas movidas son las que cupieron."""
+
+    PENDIENTE = "PENDIENTE"
+    EN_CURSO = "EN_CURSO"
+    HECHO = "HECHO"
+    CANCELADO = "CANCELADO"
+    ESTADOS = [(PENDIENTE, "Pendiente"), (EN_CURSO, "En curso"), (HECHO, "Hecho"), (CANCELADO, "Cancelado")]
+    ABIERTOS = (PENDIENTE, EN_CURSO)
+
+    sku = models.ForeignKey("catalogo.SKU", on_delete=models.PROTECT, related_name="restocks")
+    rack = models.ForeignKey("catalogo.Ubicacion", on_delete=models.PROTECT, related_name="restocks")
+    lote = models.ForeignKey("catalogo.Lote", null=True, blank=True, on_delete=models.SET_NULL, related_name="restocks")
+    origen = models.ForeignKey("catalogo.Ubicacion", null=True, blank=True, on_delete=models.SET_NULL, related_name="restocks_desde")
+    cantidad_sugerida = models.PositiveIntegerField(default=0, help_text="Trae hasta N (capacidad menos lo que hay en el rack)")
+    cantidad_movida = models.PositiveIntegerField(default=0)
+    estado = models.CharField(max_length=10, choices=ESTADOS, default=PENDIENTE, db_index=True)
+    asignado_a = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="restocks")
+    pedido = models.ForeignKey("pedidos.Pedido", null=True, blank=True, on_delete=models.SET_NULL, related_name="restocks")
+    creado = models.DateTimeField(auto_now_add=True, db_index=True)
+    cerrado = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["creado", "id"]
+        verbose_name = "restock"
+        verbose_name_plural = "restocks"
+
+    @property
+    def folio(self):
+        return f"RS-{self.pk:04d}"
+
+    @property
+    def faltan(self):
+        return max(0, self.cantidad_sugerida - self.cantidad_movida)
+
+    def __str__(self):
+        return f"{self.folio} · {self.sku.codigo} → {self.rack.codigo} · {self.estado}"

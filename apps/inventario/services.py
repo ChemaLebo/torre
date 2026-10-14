@@ -19,7 +19,7 @@ from apps.catalogo.models import Lote, Ubicacion
 from apps.core.fechas import FORMATOS_LEGIBLES, parsear_fecha_csv
 from apps.core.services import registrar_evento
 
-from .models import Ajuste, Conteo, EscaneoRecepcion, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
+from .models import Restock, Ajuste, Conteo, EscaneoRecepcion, LineaASN, Movimiento, OrdenEntrada, Saldo, TareaConteo
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers internos
@@ -202,6 +202,7 @@ def reservar(sku, cantidad, referencia):
             delta={"cantidad": cantidad, "referencia": str(referencia)},
         )
     _notificar_cambio_disponible(sku)
+    _abrir_restock_si_falta(sku)
     return True
 
 
@@ -3071,3 +3072,175 @@ def mover_existencias(sku, lote, origen, destino, cantidad, actor=None, motivo="
             motivo=(motivo or "").strip()[:300] or f"{cantidad} × {sku.codigo} de {origen.codigo} a {destino.codigo}.",
         )
     return {"cantidad": cantidad, "apartadas": exceso}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Restock (Chema 2026-10-13): de la tarima al rack fijo, caja por caja
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _vendibles_fuera_del_rack(sku, rack):
+    """Saldos vendibles del producto fuera de su rack, el lote que caduca primero al frente."""
+    saldos = list(
+        Saldo.objects.filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0).exclude(ubicacion=rack)
+        .select_related("ubicacion", "lote")
+    )
+    caducidades = _caducidades(saldos)
+    return sorted(saldos, key=lambda s: (_clave_fefo(s, caducidades), s.ubicacion.codigo))
+
+
+def lote_para_restock(sku, rack):
+    """El lote que caduca primero entre lo vendible fuera del rack (FEFO global
+    lo hace valer el restock) y el saldo donde está: (lote | None, saldo) o None."""
+    fuera = _vendibles_fuera_del_rack(sku, rack)
+    if not fuera:
+        return None
+    primero = fuera[0]
+    return primero.lote, primero
+
+
+def sugerir_restock(sku):
+    """Qué llevaría un restock del producto ahora: {rack, en_rack, capacidad,
+    lote, origen, cantidad}. None si el producto no tiene rack fijo o no hay
+    nada fuera del rack. `cantidad` = lo que falta para la capacidad (toda la
+    existencia fuera si la capacidad no se puede calcular), tope lo que hay
+    del lote en su origen."""
+    from apps.catalogo.services import rack_de  # lazy por contrato
+
+    rack = rack_de(sku)
+    if rack is None:
+        return None
+    eleccion = lote_para_restock(sku, rack)
+    if eleccion is None:
+        return None
+    lote, origen = eleccion
+    en_rack = Saldo.objects.filter(sku=sku, ubicacion=rack, estado=Saldo.UBICADO_VENDIBLE).aggregate(t=Sum("cantidad"))["t"] or 0
+    capacidad = capacidad_asignada(rack, sku)
+    falta = origen.cantidad if capacidad is None else max(0, capacidad - en_rack)
+    return {"rack": rack, "en_rack": en_rack, "capacidad": capacidad, "lote": lote, "origen": origen.ubicacion,
+            "cantidad": min(falta, origen.cantidad)}
+
+
+def restock_abierto(sku):
+    return Restock.objects.filter(sku=sku, estado__in=Restock.ABIERTOS).select_related("rack", "lote", "origen").first()
+
+
+def restock_necesario(sku):
+    """Regla de Chema: lo apartado del producto rebasa lo que hay en su rack."""
+    from apps.catalogo.services import rack_de  # lazy por contrato
+
+    rack = rack_de(sku)
+    if rack is None:
+        return False
+    apartado = _suma(sku, Saldo.RESERVADO)
+    en_rack = Saldo.objects.filter(sku=sku, ubicacion=rack, estado=Saldo.UBICADO_VENDIBLE).aggregate(t=Sum("cantidad"))["t"] or 0
+    return apartado > en_rack
+
+
+def abrir_restock(sku, actor=None, pedido=None):
+    """La tarea abierta del producto, o una nueva con la sugerencia de ahora.
+    None si no hay rack fijo o nada que traer."""
+    abierto = restock_abierto(sku)
+    if abierto is not None:
+        if pedido is not None and abierto.pedido_id is None:
+            abierto.pedido = pedido
+            abierto.save(update_fields=["pedido"])
+        return abierto
+    sugerencia = sugerir_restock(sku)
+    if sugerencia is None or sugerencia["cantidad"] <= 0:
+        return None
+    restock = Restock.objects.create(
+        sku=sku, rack=sugerencia["rack"], lote=sugerencia["lote"], origen=sugerencia["origen"],
+        cantidad_sugerida=sugerencia["cantidad"], pedido=pedido,
+    )
+    registrar_evento(
+        "restock", restock.folio, "restock_abierto", actor=actor, cliente=sku.cliente,
+        delta={"sku": sku.codigo, "rack": restock.rack.codigo, "lote": restock.lote.codigo if restock.lote else None,
+               "origen": restock.origen.codigo if restock.origen else None, "cantidad": restock.cantidad_sugerida,
+               "pedido": pedido.folio if pedido else None},
+        motivo=f"Restock de {sku.codigo} a {restock.rack.codigo}: trae hasta {restock.cantidad_sugerida}.",
+    )
+    return restock
+
+
+def _abrir_restock_si_falta(sku):
+    """Tras una reserva: si lo apartado rebasa el rack, nace la tarea (best-effort)."""
+    try:
+        if restock_necesario(sku):
+            abrir_restock(sku)
+    except Exception:  # noqa: BLE001 — jamás frena una reserva
+        pass
+
+
+def restocks_en_cola(user=None):
+    """Los restocks que van ANTES de los pedidos en Mi turno: los míos en curso y los pendientes."""
+    qs = Restock.objects.filter(estado__in=Restock.ABIERTOS).select_related("sku", "sku__cliente", "rack", "lote", "origen", "asignado_a")
+    if user is not None:
+        qs = qs.filter(Q(estado=Restock.PENDIENTE) | Q(asignado_a=user))
+    return list(qs)
+
+
+def tomar_restock(restock, user):
+    """EMPEZAR sobre la tarea: pasa a EN_CURSO a nombre del operador (o sigue si ya era suyo)."""
+    if restock.estado not in Restock.ABIERTOS:
+        raise ValueError(f"{restock.folio} ya está {restock.get_estado_display().lower()}.")
+    if restock.estado == Restock.EN_CURSO and restock.asignado_a_id not in (None, user.pk):
+        raise ValueError(f"{restock.folio} lo tiene {restock.asignado_a.username}.")
+    restock.estado, restock.asignado_a = Restock.EN_CURSO, user
+    restock.save(update_fields=["estado", "asignado_a"])
+    return restock
+
+
+def restock_escanear_caja(restock, valor):
+    """La caja escaneada (QR `P|barras|lote` o código de barras): debe ser del
+    producto y del lote que caduca primero fuera del rack. Regresa (lote, origen)."""
+    valor = normalizar_escaneo(valor)
+    sku = restock.sku
+    m = PATRON_QR_PRODUCTO.match(valor)
+    barras, lote_codigo = (m.group(1), (m.group(2) or "").strip()) if m else (valor, None)
+    if barras not in {c for c in (sku.codigo_barras, sku.codigo) if c}:
+        raise ValueError(f"Esa caja no es de {sku.codigo} ({sku.descripcion}). Este restock es de {sku.codigo}.")
+    eleccion = lote_para_restock(sku, restock.rack)
+    if eleccion is None:
+        raise ValueError(f"Ya no hay {sku.codigo} fuera de {restock.rack.codigo}: termina el restock.")
+    lote, origen = eleccion
+    esperado = lote.codigo if lote else ""
+    if lote_codigo is not None and lote_codigo != esperado:
+        raise ValueError(
+            f"Esa caja es del lote {lote_codigo or 'sin lote'}; primero sale el lote {esperado or 'sin lote'}"
+            f" (caduca antes), que está en {origen.ubicacion.codigo}."
+        )
+    return lote, origen.ubicacion
+
+
+def restock_escanear_rack(restock, valor):
+    """El rack escaneado (QR `U|nombre` o el nombre) debe ser el del restock."""
+    valor = normalizar_escaneo(valor)
+    m = PATRON_QR_POSICION.match(valor)
+    codigo = (m.group(1) if m else valor).strip().upper()
+    if codigo != restock.rack.codigo:
+        raise ValueError(f"Ese es {codigo or 'otro rack'}; esta caja va a {restock.rack.codigo}.")
+    return restock.rack
+
+
+def restock_mover_caja(restock, lote, origen, actor):
+    """Confirmación: una caja de la tarima al rack (kardex traslado) y la cuenta de movidas."""
+    mover_existencias(restock.sku, lote, origen, restock.rack, 1, actor=actor, motivo=f"Restock {restock.folio}")
+    Restock.objects.filter(pk=restock.pk).update(cantidad_movida=F("cantidad_movida") + 1)
+    restock.refresh_from_db(fields=["cantidad_movida"])
+    return restock
+
+
+def terminar_restock(restock, actor, cancelar=False):
+    """Cierra la tarea: las cajas movidas son las que cupieron (o se cancela sin mover)."""
+    if restock.estado not in Restock.ABIERTOS:
+        raise ValueError(f"{restock.folio} ya está {restock.get_estado_display().lower()}.")
+    restock.estado = Restock.CANCELADO if cancelar else Restock.HECHO
+    restock.cerrado = timezone.now()
+    restock.save(update_fields=["estado", "cerrado"])
+    registrar_evento(
+        "restock", restock.folio, "restock_cancelado" if cancelar else "restock_hecho", actor=actor, cliente=restock.sku.cliente,
+        delta={"sku": restock.sku.codigo, "rack": restock.rack.codigo, "movidas": restock.cantidad_movida, "sugeridas": restock.cantidad_sugerida},
+        motivo=f"{restock.folio}: {restock.cantidad_movida} de {restock.cantidad_sugerida} caja(s) al rack {restock.rack.codigo}.",
+    )
+    return restock

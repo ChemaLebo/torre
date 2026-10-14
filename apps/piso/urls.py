@@ -16,6 +16,7 @@ urlpatterns = [
     path("picking/<int:pk>/", views.picking_pedido, name="picking_pedido"),
     path("empaque/", views.empaque, name="empaque"),
     path("empaque/<int:pk>/", views.empaque_pedido, name="empaque_pedido"),
+    path("restock/<int:pk>/", views.restock, name="restock"),
     path("salida/", views.salida, name="salida"),
     path("salida/registrar/", views.salida_registrar, name="salida_registrar"),
     path("salida/resumen/", views.salida_resumen, name="salida_resumen"),
