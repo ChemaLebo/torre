@@ -103,6 +103,19 @@
     {% endif %}
   </div>
   {% endfor %}
+  {# Sustituir guía para esta caja (Chema 2026-10-14): modal por caja despachada con guía viva no entregada. #}
+  {% for caja in cajas %}{% if caja.puede_sustituir %}
+  <dialog class="modal" id="modal-sustituir-{{ caja.pk }}" aria-labelledby="sustituir-titulo-{{ caja.pk }}">
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="sustituir_guia_caja"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
+      <h3 id="sustituir-titulo-{{ caja.pk }}">Sustituir guía para la caja {{ caja.numero }}</h3>
+      <p class="small">La guía se cambia para la misma caja; no regresa a picking ni a empaque. La guía actual <span class="mono">{{ caja.guia_sustituible.numero }}</span> ({{ caja.guia_sustituible.carrier }}) queda como sustituida: no se cancela con la paquetería y se cobra igual; la nueva se cobra como reposición, estrena compromiso de entrega y es la que ve el comprador.{% if direccion_pendiente %} La guía nueva va a la dirección pendiente de Shopify: {{ direccion_pendiente }}.{% endif %}</p>
+      <label>Paquetería <select name="carrier" required>{% for clave, nombre in opciones_paqueteria %}{% if clave != 'local' %}<option value="{{ clave }}" {% if clave == caja.guia_sustituible.carrier %}selected{% endif %}>{{ nombre }}</option>{% endif %}{% endfor %}</select></label>
+      <label>Motivo <input type="text" name="motivo" required maxlength="200" placeholder="Lo que dijo la paquetería (p. ej. retorno falso: entrega con guía nueva)"></label>
+      <div class="fila" style="justify-content:flex-end;gap:8px;margin-top:10px"><button class="btn chico" type="button" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn chico primario" type="submit">Comprar guía nueva</button></div>
+    </form>
+  </dialog>
+  {% endif %}{% endfor %}
   {% if cajas %}
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
@@ -115,8 +128,8 @@
           <td class="mono small">{{ caja.peso_kg }} kg{% if caja.peso_real_gr %}<div class="muted">báscula {{ caja.peso_real_gr }} g</div>{% endif %}</td>
           <td class="small">{{ caja.carrier }}{% if caja.carrier_forzado %} <span class="pill warn" title="Paquetería forzada desde Mesa para esta caja">forzada</span>{% endif %}{% if caja.carrier == 'local' %}<div class="muted">entrega propia</div>{% else %}<div class="mono muted">${{ caja.precio_cotizado|floatformat:2 }}{% if caja.estimado_entrega %} · {{ caja.estimado_entrega }}{% endif %}</div>{% endif %}</td>
           <td class="small">
-            {% if caja.guia %}{% if caja.url_rastreo %}<a class="mono" href="{{ caja.url_rastreo }}" target="_blank" rel="noopener">{{ caja.guia.numero }} ↗</a>{% else %}<span class="mono">{{ caja.guia.numero }}</span>{% endif %}<div class="muted">{{ caja.guia.carrier }}{% if caja.guia.proveedor %} · {{ caja.guia.proveedor }}{% endif %}</div>{% else %}<span class="muted">sin guía</span>{% endif %}
-            {% for g in caja.historial %}<div class="muted mono" title="Guía anterior de esta caja">{% if g.url_rastreo %}<a href="{{ g.url_rastreo }}" target="_blank" rel="noopener">{{ g.numero }} ↗</a>{% else %}{{ g.numero }}{% endif %} · {{ g.get_estado_display|lower }}</div>{% endfor %}
+            {% if caja.guia %}{% if caja.url_rastreo %}<a class="mono" href="{{ caja.url_rastreo }}" target="_blank" rel="noopener">{{ caja.guia.numero }} ↗</a>{% else %}<span class="mono">{{ caja.guia.numero }}</span>{% endif %}<div class="muted">{{ caja.guia.carrier }}{% if caja.guia.proveedor %} · {{ caja.guia.proveedor }}{% endif %}</div>{% if caja.guia.sustituye_a_id %}<div class="muted" title="{{ caja.guia.sustitucion_motivo }}">sustituye a <span class="mono">{{ caja.guia.sustituye_a.numero }}</span></div>{% endif %}{% else %}<span class="muted">sin guía</span>{% endif %}
+            {% for g in caja.historial %}<div class="muted mono" title="Guía anterior de esta caja">{% if g.url_rastreo %}<a href="{{ g.url_rastreo }}" target="_blank" rel="noopener">{{ g.numero }} ↗</a>{% else %}{{ g.numero }}{% endif %} · {{ g.get_estado_display|lower }}{% if g.sustituta %} · por {{ g.sustituta.numero }}{% endif %}</div>{% endfor %}
           </td>
           <td>
             {% if caja.guia %}<span class="pill {% if caja.guia.estado == 'ENTREGADO' %}ok{% elif caja.guia.estado == 'RETORNO' or caja.guia.estado == 'INTENTO_FALLIDO' or caja.guia.estado == 'EXCEPCION' %}crit{% elif caja.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ caja.guia.ultimo_evento }}">{{ caja.guia.get_estado_display }}</span>
@@ -155,7 +168,8 @@
               </form>
               {% endif %}
               {% if caja.puede_pod %}<a class="btn chico primario" href="{% url 'mesa:entrega_local_pedido' pedido.pk %}#caja-{{ caja.guia.pk }}" title="Entrega propia en reparto: foto y quién recibió, por caja">Registrar entrega (POD)</a>{% endif %}
-              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida and not caja.puede_pod %}<span class="muted small">—</span>{% endif %}
+              {% if caja.puede_sustituir %}<button class="btn chico" type="button" onclick="document.getElementById('modal-sustituir-{{ caja.pk }}').showModal()" title="Guía nueva para la misma caja, que ya salió: no regresa a picking ni a empaque">Sustituir guía para esta caja</button>{% endif %}
+              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida and not caja.puede_pod and not caja.puede_sustituir %}<span class="muted small">—</span>{% endif %}
             </div>
           </td>
         </tr>

@@ -985,9 +985,28 @@ def _retracking(pedido, tienda, caja, guia, fid, notificar=False):
         "tracking_shopify_actualizado", cliente=pedido.cliente,
         delta={"tienda": tienda.dominio, "pedido": pedido.folio, "caja": caja.numero if caja is not None else None,
                "guia": numero, "carrier": carrier, "fulfillment": fid},
-        motivo="Guía sustituida antes de salir: el fulfillment de Shopify apunta a la guía nueva.",
+        motivo="Guía sustituida (antes de salir o ya en la calle): el fulfillment de Shopify apunta a la guía nueva.",
     )
     return True
+
+
+def encolar_retracking(pedido, caja, guia, notificar=False):
+    """Guía sustituida con la caja ya en la calle (Chema 2026-10-14): el
+    fulfillment de la caja (o del pedido entero) debe apuntar a la guía nueva,
+    pero no en la petición: se encola (ACCION_TRACKING con `fid`, la misma
+    fila que deja _retracking cuando Shopify falla) y
+    drenar_escrituras_en_segundo_plano la escribe. Sin tienda, sin orden o
+    sin fulfillment no hay nada que apuntar. Regresa la fila o None."""
+    tienda = pedido.tienda
+    fid = caja.shopify_fulfillment_id if caja is not None else pedido.shopify_fulfillment_id
+    if tienda is None or not pedido.shopify_order_id or not fid:
+        return None
+    return _encolar_escritura(
+        tienda, pedido, EscrituraShopifyPendiente.ACCION_TRACKING,
+        f"retracking:{pedido.pk}:{caja.pk if caja is not None else 'pedido'}:{fid}",
+        {"caja": caja.pk if caja is not None else None, "fid": fid, "guia": guia.pk, "notificar": notificar},
+        "guía sustituida: se escribe en segundo plano",
+    )
 
 
 def evento_recoleccion(pedido, cajas=None):

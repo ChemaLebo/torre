@@ -239,7 +239,7 @@ def _paquetes(pedido):
         guia = fila["guia"]
         guias_caja = list(caja.guias.all()) if caja is not None else sueltas
         cambiada = any(
-            (g.estado == Guia.CANCELADA or g.sustituida) and (guia is None or g.pk != guia.pk) for g in guias_caja
+            (g.estado in (Guia.CANCELADA, Guia.SUSTITUIDA) or g.sustituida) and (guia is None or g.pk != guia.pk) for g in guias_caja
         )
         if guia is not None and guia.estado == Guia.CANCELADA:
             guia = None  # cancelada en bodega: la caja espera guía nueva

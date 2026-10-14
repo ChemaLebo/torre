@@ -25,6 +25,7 @@ class Guia(models.Model):
     RETORNO = "RETORNO"
     EXCEPCION = "EXCEPCION"
     CANCELADA = "CANCELADA"  # cancelada antes de salir (cambio de dirección, 2026-09-23)
+    SUSTITUIDA = "SUSTITUIDA"  # reemplazada por otra guía de la misma caja ya en la calle (2026-10-14)
 
     ESTADOS = [
         (GUIA_CREADA, "Guía creada"),
@@ -37,28 +38,33 @@ class Guia(models.Model):
         (RETORNO, "Retorno al remitente"),
         (EXCEPCION, "Excepción"),
         (CANCELADA, "Cancelada"),
+        (SUSTITUIDA, "Sustituida por otra guía"),
     ]
 
     # El tracking real es ruidoso: los carriers se saltan estados y rebotan
     # entre EN_TRANSITO/EN_RUTA. Solo ENTREGADO y RETORNO son terminales.
+    # SUSTITUIDA (services.sustituir_guia, 2026-10-14): desde cualquier estado
+    # vivo; la caja ya salió y el carrier necesita otra guía para entregarla.
     TRANSICIONES = {
-        GUIA_CREADA: {RECOLECTADO, EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION, CANCELADA},
-        RECOLECTADO: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
-        EN_TRANSITO: {EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
-        EN_RUTA: {EN_TRANSITO, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION},
-        INTENTO_FALLIDO: {EN_TRANSITO, EN_RUTA, ENTREGADO, RETENIDO, RETORNO, EXCEPCION},
-        RETENIDO: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETORNO, EXCEPCION},
-        EXCEPCION: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO},
+        GUIA_CREADA: {RECOLECTADO, EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION, CANCELADA, SUSTITUIDA},
+        RECOLECTADO: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION, SUSTITUIDA},
+        EN_TRANSITO: {EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION, SUSTITUIDA},
+        EN_RUTA: {EN_TRANSITO, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, EXCEPCION, SUSTITUIDA},
+        INTENTO_FALLIDO: {EN_TRANSITO, EN_RUTA, ENTREGADO, RETENIDO, RETORNO, EXCEPCION, SUSTITUIDA},
+        RETENIDO: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETORNO, EXCEPCION, SUSTITUIDA},
+        EXCEPCION: {EN_TRANSITO, EN_RUTA, ENTREGADO, INTENTO_FALLIDO, RETENIDO, RETORNO, SUSTITUIDA},
         ENTREGADO: set(),
         RETORNO: set(),
         CANCELADA: set(),
+        SUSTITUIDA: set(),
     }
 
-    ESTADOS_TERMINALES = frozenset({ENTREGADO, RETORNO, CANCELADA})
-    # Un RETORNO o una CANCELADA (services.cancelar_guia, antes de salir)
-    # desactivan la guía y permiten comprar otra. Una EXCEPCION sigue viva:
-    # la Mesa la resuelve antes de regenerar nada.
-    ESTADOS_INACTIVOS = frozenset({RETORNO, CANCELADA})
+    ESTADOS_TERMINALES = frozenset({ENTREGADO, RETORNO, CANCELADA, SUSTITUIDA})
+    # Un RETORNO, una CANCELADA (services.cancelar_guia, antes de salir) o una
+    # SUSTITUIDA (otra guía para la misma caja ya en la calle) desactivan la
+    # guía y permiten comprar otra. Una EXCEPCION sigue viva: la Mesa la
+    # resuelve antes de regenerar nada.
+    ESTADOS_INACTIVOS = frozenset({RETORNO, CANCELADA, SUSTITUIDA})
 
     pedido = models.ForeignKey("pedidos.Pedido", on_delete=models.PROTECT, related_name="guias")
     paquete = models.ForeignKey(
@@ -104,6 +110,16 @@ class Guia(models.Model):
     ]
     sustituida_motivo = models.CharField(max_length=20, blank=True, choices=MOTIVOS_SUSTITUCION)
     ts_sustituida = models.DateTimeField(null=True, blank=True)
+    # Sustitución de guía (Chema 2026-10-14): la caja ya salió y el carrier
+    # necesita una guía nueva para entregarla (retorno falso, entrega
+    # fallida). La vieja pasa a SUSTITUIDA (deja de ser vigente y de
+    # consultarse; no se cancela con el carrier; conserva su costo: finanzas
+    # cobra las dos) y la nueva apunta a ella con el motivo que dio Mesa.
+    sustituye_a = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="sustituciones",
+        help_text="Guía de la misma caja a la que esta sustituye",
+    )
+    sustitucion_motivo = models.CharField(max_length=200, blank=True, help_text="Por qué esta guía sustituye a otra")
     raw = models.JSONField(default=dict, blank=True)
     creado = models.DateTimeField(auto_now_add=True)
 
@@ -131,6 +147,11 @@ class Guia(models.Model):
     def es_activa(self):
         """La guía vigente del pedido. Solo un retorno permite generar otra."""
         return self.estado not in self.ESTADOS_INACTIVOS
+
+    @property
+    def sustituida_por(self):
+        """La guía que sustituyó a esta (la última, si hubo varias); None si ninguna."""
+        return self.sustituciones.order_by("-pk").first()
 
     def transicionar(self, nuevo, actor=None, motivo=""):
         """Valida la transición, estampa el movimiento y registra auditoría."""

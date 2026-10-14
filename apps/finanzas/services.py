@@ -307,6 +307,8 @@ def facturar_guias(cliente, inicio, fin):
             notas.append("cancelado")
         if caja is not None and caja.pk in reposiciones:
             notas.append("reposición")
+        if g is not None and g.sustituye_a_id:
+            notas.append("sustitución de guía")  # segunda guía de una caja ya en la calle (2026-10-14): se cobra como reposición
         transporte = Decimal(str(envio_zona.get(zona, 0))) if g is not None else Decimal("0")
         reembolso = sum((r.monto for r in reembolsos.get(g.pk, []) if inicio <= r.fecha < fin), Decimal("0")) if g is not None else Decimal("0")
         if cancelada and not reembolsos.get(g.pk):

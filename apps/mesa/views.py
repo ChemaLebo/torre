@@ -1117,6 +1117,21 @@ def _pedidos_cancelar_reposicion(request):
     return f"Reposición cancelada ({comp.resumen_lineas}): {comp.nota}"
 
 
+def _pedidos_sustituir_guia_caja(request):
+    """"Sustituir guía para esta caja" (Chema 2026-10-14): guía nueva para una
+    caja que ya salió, con la paquetería y el motivo del modal
+    (envios.sustituir_guia); solo Mesa."""
+    from apps.envios.services import etiqueta_paqueteria, sustituir_guia  # lazy por contrato
+
+    pedido, caja = _caja_del_post(request)
+    nueva = sustituir_guia(caja, request.POST.get("carrier", ""), request.POST.get("motivo", ""), request.user)
+    return (
+        f"Caja {caja.numero} de {pedido.folio}: guía nueva {nueva.numero} ({etiqueta_paqueteria(nueva.carrier)}, "
+        f"${nueva.costo_preferencial}); la guía {nueva.sustituye_a.numero} queda sustituida. La caja no regresa a picking "
+        "ni a empaque; el rastreo en Shopify se actualiza en segundo plano."
+    )
+
+
 def _pedidos_quitar_de_salida_caja(request):
     """Botón "Quitar de salida" por caja (Chema 2026-10-05, PED-00319): la
     caja firmó manifiesto pero nunca se fue (guía cancelada, el carrier no la
@@ -1238,6 +1253,7 @@ def _ejecutar_accion_pedido(request):
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
         "quitar_de_salida_caja": _pedidos_quitar_de_salida_caja,
         "cancelar_reposicion": _pedidos_cancelar_reposicion,
+        "sustituir_guia_caja": _pedidos_sustituir_guia_caja,
         "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
         "replanear_cajas": _pedidos_replanear_cajas,
@@ -1417,7 +1433,7 @@ def pedido_detalle(request, pk):
     from django.db.models import Max
 
     from apps.core.models import EvidenciaFoto
-    from apps.envios.services import opciones_paqueteria, url_rastreo_carrier
+    from apps.envios.services import guia_sustituible, opciones_paqueteria, url_rastreo_carrier
     from apps.incidencias.models import Incidencia
     from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
@@ -1428,7 +1444,7 @@ def pedido_detalle(request, pk):
 
     pedido = get_object_or_404(
         Pedido.objects.select_related("cliente", "tienda", "asignado_a")
-        .prefetch_related("lineas__sku", "paquetes__guias", "paquetes__lineas__linea_pedido__sku", "paquetes__lineas__repone_a"),
+        .prefetch_related("lineas__sku", "paquetes__guias__sustituye_a", "paquetes__lineas__linea_pedido__sku", "paquetes__lineas__repone_a"),
         pk=pk,
     )
     if request.method == "POST":
@@ -1467,6 +1483,12 @@ def pedido_detalle(request, pk):
         caja.puede_quitar_de_salida = not motivo_no_quitable_de_salida(pedido, caja)
         # Entrega propia en reparto: su POD (foto + quién recibió) se registra en Entregas locales.
         caja.puede_pod = caja.guia is not None and caja.guia.carrier == "local" and not motivo_sin_pod(caja.guia)
+        # Sustituir guía para esta caja (Chema 2026-10-14): ya salió y el carrier
+        # necesita otra guía para entregarla; la vieja queda sustituida.
+        caja.guia_sustituible = guia_sustituible(caja)
+        caja.puede_sustituir = caja.guia_sustituible is not None
+        for g in caja.historial:  # `sustituta`: la guía que la reemplazó (sin pegarle a la BD por guía)
+            g.sustituta = next((n for n in caja.guias.all() if n.sustituye_a_id == g.pk), None)
     guias_sueltas = [
         (g, url_rastreo_carrier(g.carrier, g.numero))
         for g in sorted(pedido.guias.all(), key=lambda g: g.pk) if g.paquete_id is None

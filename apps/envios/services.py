@@ -465,10 +465,11 @@ def estampar_compromiso(guia, desde=None):
     return guia.fecha_compromiso
 
 
-def _crear_guia(pedido, carrier, servicio, paquete=None):
+def _crear_guia(pedido, carrier, servicio, paquete=None, shopify_en_linea=True):
     """Crea UNA guía (del pedido completo o de un paquete específico). Si el
     carrier rechaza la ciudad, un reintento con el municipio del catálogo
-    (_reintentar_con_municipio) antes de darse por vencido."""
+    (_reintentar_con_municipio) antes de darse por vencido. `shopify_en_linea`
+    = False: quien llama se encarga del fulfillment (sustituir_guia lo encola)."""
     ahora = timezone.now()
     sufijo = f"-{paquete.numero}" if paquete is not None else ""
 
@@ -547,7 +548,8 @@ def _crear_guia(pedido, carrier, servicio, paquete=None):
             fulfillment_en_salida(pedido, paquete, guia)
         except Exception:  # noqa: BLE001, S110 — Shopify jamás frena una guía
             pass
-    transaction.on_commit(_salida)
+    if shopify_en_linea:
+        transaction.on_commit(_salida)
     return guia
 
 
@@ -830,6 +832,128 @@ def guias_del_pedido(pedido):
         }
         for g in pedido.guias.select_related("paquete").order_by("pk")
     ]
+
+
+def guia_sustituible(caja):
+    """La guía que "Sustituir guía para esta caja" reemplazaría, o None si la
+    acción no aplica (la caja no ha salido, se reembolsó, va con entrega
+    propia, su guía ya se entregó o tiene una reposición en curso). Lee
+    `caja.guias.all()` para respetar el prefetch del detalle."""
+    try:
+        return _guia_a_sustituir(caja)
+    except ValueError:
+        return None
+
+
+def _guia_a_sustituir(caja):
+    """Valida que la caja admita una guía nueva y regresa la guía a sustituir:
+    la viva, o la última si está en RETORNO (el carrier dice que la regresa
+    pero la entregaría con otra guía). ValueError con el porqué si no."""
+    pedido = caja.pedido
+    if caja.estado != Paquete.DESPACHADO:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} no ha salido: cámbiale la paquetería en vez de sustituir la guía.")
+    if caja.cancelada_por_reembolso:
+        raise ValueError(f"La caja {caja.numero} se reembolsó en Shopify: no se le compra otra guía.")
+    guias = sorted(caja.guias.all(), key=lambda g: g.pk)
+    vieja = next((g for g in guias if g.es_activa), None)
+    if vieja is None and guias and guias[-1].estado == Guia.RETORNO:
+        vieja = guias[-1]
+    if vieja is None:
+        raise ValueError(f"La caja {caja.numero} no tiene guía viva: si el carrier nunca la registró, usa Cancelar guía.")
+    if vieja.estado == Guia.ENTREGADO:
+        raise ValueError(f"La guía {vieja.numero} ya se entregó: no hay nada que sustituir.")
+    if vieja.carrier == CARRIER_LOCAL:
+        raise ValueError(f"La caja {caja.numero} viaja con entrega propia: no lleva guía de carrier.")
+    if vieja.sustituida_motivo:
+        raise ValueError(
+            f"La caja {caja.numero} tiene una reposición en curso ({vieja.get_sustituida_motivo_display().lower()}): "
+            "cancélala primero en la tarjeta Cajas y luego sustituye la guía."
+        )
+    return vieja
+
+
+def sustituir_guia(caja, carrier, motivo, actor):
+    """Guía nueva para una caja que YA SALIÓ (Chema 2026-10-14; PED-00261: la
+    entrega falló y el carrier la entrega si le damos otra guía, en vez de
+    regresar el paquete y esperar una reposición de 8 días). Solo Mesa.
+    Reglas (_guia_a_sustituir): caja DESPACHADO con guía viva no entregada
+    (o en retorno), de carrier, no reembolsada y sin reposición en curso.
+    Mesa elige la paquetería (se recotiza SOLO esa caja con ella, como
+    cambiar_paqueteria_caja) y el motivo es obligatorio. La dirección
+    pendiente de Shopify se aplica antes de comprar. La vieja pasa a
+    SUSTITUIDA (no se cancela con el carrier; conserva su costo: finanzas
+    cobra las dos, la nueva como reposición), la nueva apunta a ella
+    (`sustituye_a`), estrena compromiso de entrega desde hoy y es la que ve
+    la página de rastreo; la caja sigue DESPACHADO y el pedido no cambia de
+    estado ni regresa a picking o empaque. Shopify: el fulfillment de la
+    caja apunta a la guía nueva, encolado y escrito en segundo plano
+    (integraciones.encolar_retracking). Regresa la guía nueva."""
+    from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+
+    vieja = _guia_a_sustituir(caja)
+    pedido = caja.pedido
+    motivo = (motivo or "").strip()
+    carrier = (carrier or "").strip()
+    if not motivo:
+        raise ValueError("Escribe el motivo de la sustitución (lo que dijo la paquetería).")
+    if carrier == CARRIER_LOCAL or carrier not in dict(opciones_paqueteria()):
+        raise ValueError("Elige una paquetería de la lista.")
+    etiqueta = etiqueta_paqueteria(carrier)
+    with transaction.atomic():
+        pedido = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        caja = Paquete.objects.select_for_update().get(pk=caja.pk)
+        if pedido.direccion_pendiente:
+            # Dirección nueva de Shopify que esperaba "a recomprar la guía".
+            from apps.pedidos.services import _aplicar_direccion  # lazy por contrato
+
+            campos = _aplicar_direccion(pedido, pedido.direccion_pendiente)
+            pedido.direccion_pendiente = None
+            pedido.save(update_fields=[*campos, "direccion_pendiente", "actualizado"])
+        anterior_forzado, anterior_carrier = caja.carrier_forzado, caja.carrier
+        caja.carrier_forzado = carrier
+        caja.save(update_fields=["carrier_forzado"])
+        try:
+            with transaction.atomic():  # savepoint: si no cotiza o no da guía, nada cambia
+                carrier_real, servicio = _replan_paquete(pedido, caja, anterior_carrier)
+                nueva = _crear_guia(pedido, carrier_real, servicio, paquete=caja, shopify_en_linea=False)
+        except (ErrorCarrier, ValueError) as exc:
+            caja.carrier_forzado = anterior_forzado
+            caja.save(update_fields=["carrier_forzado"])
+            registrar_evento(
+                "paquete", caja.pk, "sustitucion_guia_fallida", actor=actor, cliente=pedido.cliente,
+                delta={"pedido": pedido.folio, "caja": caja.numero, "carrier": carrier, "guia": vieja.numero},
+                motivo=str(exc)[:300],
+            )
+            raise ValueError(f"{etiqueta} no pudo dar guía para la caja {caja.numero} de {pedido.folio} (CP {pedido.cp}): {exc}") from exc
+        nueva.sustituye_a = vieja
+        nueva.sustitucion_motivo = motivo[:200]
+        nueva.save(update_fields=["sustituye_a", "sustitucion_motivo"])
+        if vieja.es_activa:
+            vieja.transicionar(Guia.SUSTITUIDA, actor=actor, motivo=f"Sustituida por {nueva.numero} ({nueva.carrier}): {motivo}"[:300])
+        estampar_compromiso(nueva)  # la caja ya está en la calle: el compromiso corre desde hoy
+        registrar_evento(
+            "pedido", pedido.pk, "guia_sustituida", actor=actor, cliente=pedido.cliente,
+            delta={
+                "caja": caja.numero, "anterior": vieja.numero, "carrier_anterior": vieja.carrier,
+                "nueva": nueva.numero, "carrier": nueva.carrier, "costo": str(nueva.costo_preferencial),
+                "compromiso": nueva.fecha_compromiso.isoformat() if nueva.fecha_compromiso else None,
+            },
+            motivo=f"Guía nueva para la caja {caja.numero} (ya en la calle): {motivo}"[:300],
+        )
+        transaction.on_commit(lambda: _retracking_en_segundo_plano(pedido, caja, nueva))
+    return nueva
+
+
+def _retracking_en_segundo_plano(pedido, caja, guia):
+    """Tras el commit de sustituir_guia: encola el retracking del fulfillment y
+    arranca el hilo que lo escribe. Best-effort: Shopify jamás frena una guía."""
+    try:
+        from apps.integraciones.services import drenar_escrituras_en_segundo_plano, encolar_retracking  # lazy por contrato
+
+        if encolar_retracking(pedido, caja, guia) is not None:
+            drenar_escrituras_en_segundo_plano(pedido)
+    except Exception:  # noqa: BLE001, S110 — la guía ya quedó; el cron o Mesa → Sync alcanzan a Shopify
+        pass
 
 
 def cancelar_guia(guia, actor, motivo=""):

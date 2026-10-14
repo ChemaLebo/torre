@@ -374,3 +374,57 @@ class CostoEntregaPropiaTests(PisoTestCase):
         self.assertContains(respuesta, "costo de entrega propia en $0")
         pedido.refresh_from_db()
         self.assertIsNone(pedido.costo_entrega_propia)
+
+
+@override_settings(ENVIA_API_KEY="")
+class SustituirGuiaDesdeMesaTests(PisoTestCase):
+    """"Sustituir guía para esta caja" (Chema 2026-10-14): botón y modal solo
+    en cajas despachadas con guía viva no entregada; la acción compra la guía
+    nueva y la tarjeta Cajas muestra "sustituye a" / "sustituida por"."""
+
+    def setUp(self):
+        MockAdapter.reiniciar()
+        self.crear_stock(cantidad=40)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+        self.client.force_login(self.mesa)
+
+    def test_boton_modal_accion_y_pills(self):
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
+        linea = pedido.lineas.get()
+        c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        c2 = Paquete.objects.create(pedido=pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
+        PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=2)
+        services.generar_guia(pedido)
+        vieja = c1.guia_activa
+        Paquete.objects.filter(pk=c1.pk).update(estado=Paquete.DESPACHADO)
+        Guia.objects.filter(pk=vieja.pk).update(estado=Guia.INTENTO_FALLIDO)
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.PARCIALMENTE_DESPACHADO)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn(f"modal-sustituir-{c1.pk}", html)       # la caja que ya salió
+        self.assertNotIn(f"modal-sustituir-{c2.pk}", html)    # la que sigue en bodega no
+        self.assertIn("Sustituir guía para la caja 1", html)
+        self.assertIn("no regresa a picking ni a empaque", html)
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.client.post(url, {
+                "accion": "sustituir_guia_caja", "folio": pedido.folio, "caja": c1.pk,
+                "carrier": "estafeta", "motivo": "Retorno falso: entrega con guía nueva",
+            }, follow=True)
+        c1.refresh_from_db()
+        vieja.refresh_from_db()
+        nueva = c1.guia_activa
+        self.assertNotEqual(nueva.pk, vieja.pk)
+        self.assertContains(respuesta, f"guía nueva {nueva.numero}")
+        self.assertContains(respuesta, f"la guía {vieja.numero} queda sustituida")
+        html = respuesta.content.decode()
+        self.assertIn(f"sustituye a <span class=\"mono\">{vieja.numero}</span>", html)
+        self.assertIn(f"{vieja.numero} ↗</a> · sustituida por otra guía · por {nueva.numero}", html)
+        self.assertEqual(vieja.estado, Guia.SUSTITUIDA)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
+        # Sin motivo: error claro y nada cambia.
+        respuesta = self.client.post(url, {"accion": "sustituir_guia_caja", "folio": pedido.folio, "caja": c1.pk, "carrier": "estafeta", "motivo": " "}, follow=True)
+        self.assertContains(respuesta, "Escribe el motivo")
+        self.assertEqual(Guia.objects.filter(paquete=c1).count(), 2)

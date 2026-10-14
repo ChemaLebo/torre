@@ -44,7 +44,7 @@ class GuiaSustituidaTests(TestCase):
         caja3 = Paquete.objects.create(pedido=self.pedido, numero=3, peso_kg=Decimal("4"), carrier="local")
         PaqueteLinea.objects.create(paquete=caja3, linea_pedido=self.linea, cantidad=1, repone_a=self.guia.paquete)
         self.assertEqual(self.guia.cajas_reposicion, [3])
-        self.assertEqual(guias_del_pedido(self.pedido)[0]["sustituida"], "sustituida · paquete dañado · por caja 3")
+        self.assertEqual(guias_del_pedido(self.pedido)[0]["sustituida"], "contenido repuesto · paquete dañado · por caja 3")
         self.assertEqual(marcar_guias_sustituidas(self.comp, actor=None), [])  # no se marca dos veces
 
     def test_entrega_tardia_es_duplicada_y_no_mueve_el_pedido(self):
