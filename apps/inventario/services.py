@@ -729,6 +729,8 @@ def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=
     el Lote del catálogo con su caducidad y el escaneo con quién lo hizo. El
     primer escaneo pasa la orden a EN_RECEPCION. Con el conteo terminado solo
     se acepta desde el reetiquetado ("Faltaron X") o desde el editor de Mesa.
+    Una caja de una línea SIN lote no lleva etiqueta (Chema 2026-10-14): nace
+    con `impresa_ts` para que ni cuente como "sin etiqueta" ni se imprima.
     Regresa el EscaneoRecepcion."""
     from apps.catalogo.services import obtener_o_crear_lote  # lazy por contrato
 
@@ -769,8 +771,14 @@ def contar_caja(orden, sku, lote_codigo, fecha_caducidad, tarima, actor, danada=
             orden.transicionar(OrdenEntrada.EN_RECEPCION, actor=actor, motivo="Inicio de descarga")
         escaneo = EscaneoRecepcion.objects.create(
             orden=orden, linea=linea, tarima=tarima, danada=bool(danada), actor=_actor_str(actor),
+            impresa_ts=None if lleva_etiqueta(linea) else timezone.now(),
         )
     return escaneo
+
+
+def lleva_etiqueta(linea):
+    """Solo las cajas con lote llevan etiqueta de recepción (Chema 2026-10-14)."""
+    return bool((linea.lote_codigo or "").strip())
 
 
 def escaneos_vivos(orden):
@@ -2759,6 +2767,7 @@ def ajustar_conteo(orden, linea, tarima, contadas, danadas, actor, motivo):
             for _ in range(max(n, 0)):
                 nuevas.append(EscaneoRecepcion.objects.create(
                     orden=orden, linea=linea, tarima=tarima, danada=danada, actor=_actor_str(actor),
+                    impresa_ts=None if lleva_etiqueta(linea) else timezone.now(),
                 ))
         if nuevas:
             if orden.estado == OrdenEntrada.ANUNCIADA:

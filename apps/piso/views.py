@@ -1062,11 +1062,14 @@ def recepcion_reetiquetado(request, pk):
                 from .etiquetas import imprimir_etiquetas_cajas  # lazy por contrato
 
                 try:
-                    imprimir_etiquetas_cajas(nuevos, request.user)
+                    trabajo = imprimir_etiquetas_cajas(nuevos, request.user)
                 except ValueError as exc:
                     messages.warning(request, f"Las cajas quedaron contadas, pero sus etiquetas no salieron: {exc}")
                 else:
-                    messages.success(request, f"{sku.codigo}{' lote ' + lote if lote else ''}: +{n} en {tarima.codigo}; {n} etiqueta(s) van a la impresora.")
+                    if trabajo is None:
+                        messages.success(request, f"{sku.codigo}: +{n} en {tarima.codigo} (sin lote: no lleva etiqueta).")
+                    else:
+                        messages.success(request, f"{sku.codigo}{' lote ' + lote if lote else ''}: +{n} en {tarima.codigo}; {n} etiqueta(s) van a la impresora.")
                 return volver
             raise ValueError("No entendí la acción.")
         except ValueError as exc:

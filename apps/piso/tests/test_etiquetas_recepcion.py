@@ -109,3 +109,25 @@ class EtiquetasRecepcionTests(PisoTestCase):
         self.assertEqual(EscaneoRecepcion.objects.filter(orden=self.orden, impresa_ts__isnull=False).count(), 0)
         self.orden.refresh_from_db()
         self.assertIsNotNone(self.orden.ts_conteo_fin)
+
+    def test_las_cajas_sin_lote_no_llevan_etiqueta(self):
+        """Chema 2026-10-14: solo se imprimen las cajas con lote; una línea sin
+        lote nace como impresa, no cuenta como sin etiqueta y no sale ni al
+        terminar, ni al reimprimir, ni en Faltaron."""
+        from apps.inventario.services import tarimas_de_orden
+
+        sin_lote = SKU.objects.create(cliente=self.cliente, codigo="MERCH-1", codigo_barras="7500000000099", descripcion="Gorra", requiere_lote=False)
+        LineaASN.objects.create(orden=self.orden, sku=sin_lote, cantidad_anunciada=2, lote_codigo="")
+        gorras = [contar_caja(self.orden, sin_lote, "", None, self.tarima, self.operador) for _ in range(2)]
+        self.assertTrue(all(g.impresa_ts for g in gorras))
+        self.assertEqual(tarimas_de_orden(self.orden)[0]["sin_etiqueta"], 5)  # las 5 con lote, no las gorras
+        r = self.terminar()
+        self.assertContains(r, "Conteo terminado: 5 etiqueta(s) de caja")
+        self.assertEqual(TrabajoImpresion.objects.get().paginas, 6)  # tarima + 5, sin gorras
+        reetiquetado = reverse("piso:recepcion_reetiquetado", args=[self.orden.pk])
+        r = self.client.post(reetiquetado, {"accion": "reimprimir", "tarima_id": self.tarima.pk}, follow=True)
+        self.assertEqual(TrabajoImpresion.objects.latest("pk").paginas, 6)
+        linea_gorra = self.orden.lineas.get(sku=sin_lote)
+        r = self.client.post(reetiquetado, {"accion": "faltaron", "tarima_id": self.tarima.pk, "linea_id": linea_gorra.pk, "cantidad": 1}, follow=True)
+        self.assertContains(r, "MERCH-1: +1 en TAR-01 (sin lote: no lleva etiqueta).")
+        self.assertEqual(TrabajoImpresion.objects.count(), 2)

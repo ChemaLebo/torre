@@ -677,11 +677,11 @@ def imprimir_etiquetas_orden(orden, actor):
     tarima y luego sus cajas en orden inverso al escaneo. Solo las cajas sin
     etiqueta (un segundo Terminar conteo imprime las nuevas) y la etiqueta de
     la tarima solo si ninguna caja suya la tenía. Regresa [tandas]."""
-    from apps.inventario.services import escaneos_lifo, tarimas_de_orden  # lazy por contrato
+    from apps.inventario.services import escaneos_lifo, lleva_etiqueta, tarimas_de_orden  # lazy por contrato
 
     tandas = []
     for t in tarimas_de_orden(orden):
-        lifo = escaneos_lifo(orden, t["tarima"])
+        lifo = [e for e in escaneos_lifo(orden, t["tarima"]) if lleva_etiqueta(e.linea)]  # sin lote no lleva etiqueta
         pendientes = [e for e in lifo if e.impresa_ts is None]
         if not pendientes:
             continue
@@ -694,17 +694,21 @@ def imprimir_etiquetas_orden(orden, actor):
 def reimprimir_tarima(orden, tarima, actor):
     """Todas las etiquetas de la tarima otra vez (la de la tarima y sus cajas
     en orden LIFO), por si el rollo se cortó o se perdieron."""
-    from apps.inventario.services import escaneos_lifo  # lazy por contrato
+    from apps.inventario.services import escaneos_lifo, lleva_etiqueta  # lazy por contrato
 
-    lifo = escaneos_lifo(orden, tarima)
+    lifo = [e for e in escaneos_lifo(orden, tarima) if lleva_etiqueta(e.linea)]  # sin lote no lleva etiqueta
     if not lifo:
-        raise ValueError(f"No hay cajas contadas en {tarima.codigo}.")
+        raise ValueError(f"No hay cajas con lote contadas en {tarima.codigo}: nada que imprimir.")
     return _imprimir_tarima(orden, tarima, lifo, True, actor, len(lifo))
 
 
 def imprimir_etiquetas_cajas(escaneos, actor):
     """Etiquetas de cajas sueltas al momento (las que faltaron en el
-    reetiquetado): un trabajo con una página por caja."""
+    reetiquetado): un trabajo con una página por caja. Las cajas sin lote no
+    llevan etiqueta: se descartan; sin nada que imprimir regresa None."""
+    from apps.inventario.services import lleva_etiqueta  # lazy por contrato
+
+    escaneos = [e for e in escaneos if lleva_etiqueta(e.linea)]
     if not escaneos:
         return None
     orden, tarima = escaneos[0].orden, escaneos[0].tarima
