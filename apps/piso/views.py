@@ -1481,7 +1481,8 @@ def empaque_pedido(request, pk):
     ?caja=N navega entre las cajas del pedido (chips arriba): la pendiente
     se empaca, la que falta cerrar abre su cierre y la cerrada se revisa con
     sus fotos y su báscula, que se pueden cambiar (acciones reemplazar_foto
-    y corregir_peso).
+    y corregir_peso), y reimprime su guía (imprimir_guia, Chema 2026-10-13:
+    por caja, la del carrier y la interna, como salen al empacar).
     """
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=pk)
 
@@ -1507,6 +1508,8 @@ def empaque_pedido(request, pk):
             return _empaque_reemplazar_foto(request, pedido)
         if accion == "corregir_peso":
             return _empaque_corregir_peso(request, pedido)
+        if accion == "imprimir_guia":
+            return _empaque_imprimir_guia(request, pedido)
         _reclamar_si_libre(pedido, request)
         if accion == "generar_guia":
             return _empaque_generar_guia(request, pedido)
@@ -2030,6 +2033,40 @@ def _empaque_corregir_peso(request, pedido):
     messages.success(
         request, f"Caja {paquete.numero}: báscula corregida a {paquete.peso_real_gr} g.",
     )
+    return destino
+
+
+def _empaque_imprimir_guia(request, pedido):
+    """Reimprime la guía de UNA caja ya empacada (Chema 2026-10-13): la del
+    carrier y la interna, las mismas dos que salen solas al empacar la última
+    caja (pedidos.imprimir_guias_activas). Best-effort como allá: una falla
+    de impresora se avisa y no toca nada. Regresa a la revisión de esa caja."""
+    paquete = get_object_or_404(Paquete, pk=request.POST.get("paquete_id"), pedido=pedido)
+    url = reverse("piso:empaque_pedido", args=[pedido.pk])
+    destino = redirect(f"{url}?caja={paquete.numero}")
+    guia = paquete.guia_activa
+    if guia is None:
+        messages.error(
+            request,
+            f"La caja {paquete.numero} todavía no tiene guía: se genera al empacar la última caja del pedido.",
+        )
+        return destino
+    from .etiquetas import imprimir_etiqueta  # lazy por contrato
+
+    errores = []
+    for interna in (False, True):
+        try:
+            imprimir_etiqueta(guia, interna=interna)
+        except ValueError as exc:
+            errores.append(str(exc))
+    if errores:
+        messages.error(request, " ".join(errores))
+    else:
+        messages.success(
+            request,
+            f"Caja {paquete.numero}: guía {guia.numero} ({guia.carrier}) en cola de impresión; "
+            "sale en segundos en la bodega.",
+        )
     return destino
 
 

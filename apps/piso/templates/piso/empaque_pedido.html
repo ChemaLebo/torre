@@ -41,7 +41,15 @@
     <li class="muted">Caja sin desglose.</li>
     {% endfor %}
   </ul>
-  {% if guia %}<p class="small muted">Guía <span class="mono">{{ guia.numero }}</span> ({{ guia.carrier }})</p>{% endif %}
+  {% if guia %}
+  <p class="small muted">Guía <span class="mono">{{ guia.numero }}</span> ({{ guia.carrier }})</p>
+  {# Reimpresión por caja (Chema 2026-10-13): la del carrier y la interna, como al empacar. #}
+  <form method="post" class="mt">{% csrf_token %}
+    <input type="hidden" name="accion" value="imprimir_guia">
+    <input type="hidden" name="paquete_id" value="{{ caja.pk }}">
+    <button class="btn primario" type="submit" title="Vuelve a mandar a la impresora de bodega la guía de esta caja (etiqueta del carrier e interna)">🖨 Imprimir guía de esta caja</button>
+  </form>
+  {% endif %}
 </div>
 {% include "piso/_peso_caja.html" %}
 {% include "piso/_foto_caja.html" with foto=caja.foto_contenido clase="contenido" %}
@@ -64,7 +72,7 @@
   <div>
     <b>🖨 Guía{{ guias|length|pluralize }} lista{{ guias|length|pluralize }} — etiquetas enviadas a la impresora.</b>
     {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if g.paquete_id %} (caja {{ g.paquete.numero }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
-    <div class="small">Si alguna etiqueta no salió, reimprímela desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>.</div>
+    <div class="small">Si alguna etiqueta no salió, reimprímela con el botón de su caja aquí abajo (o desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>).</div>
   </div>
 </div>
 {% endif %}
@@ -107,6 +115,14 @@
     {% if caja_cierre.guia_activa %}(<span class="mono">{{ caja_cierre.guia_activa.numero }}</span>){% endif %}
     y tómale foto con la etiqueta visible.
   </p>
+  {% if caja_cierre.guia_activa %}
+  {# Reimpresión por caja (Chema 2026-10-13): la del carrier y la interna, como al empacar. #}
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="imprimir_guia">
+    <input type="hidden" name="paquete_id" value="{{ caja_cierre.pk }}">
+    <button class="btn chico" type="submit" title="Vuelve a mandar a la impresora de bodega la guía de esta caja (etiqueta del carrier e interna)">🖨 Reimprimir guía de la caja {{ caja_cierre.numero }}</button>
+  </form>
+  {% endif %}
   <form method="post" enctype="multipart/form-data">{% csrf_token %}
     <input type="hidden" name="accion" value="cerrar_caja">
     <input type="hidden" name="paquete_id" value="{{ caja_cierre.pk }}">

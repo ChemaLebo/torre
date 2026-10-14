@@ -236,6 +236,49 @@ class RevisarCajaTests(PisoTestCase):
         self.assertEqual((evento.entidad, evento.entidad_id), ("pedido", str(pedido.pk)))
         self.assertEqual(evento.delta["cajas"], [])
 
+    def test_imprimir_la_guia_de_una_caja_empacada(self):
+        """Botón por caja (Chema 2026-10-13): reimprime la del carrier y la interna de ESA guía."""
+        self._empacar(self.caja1, "12100", "c1.jpg")
+        self._empacar(self.caja2, "8100", "c2.jpg")  # la última genera las guías
+        self.caja1.refresh_from_db()
+        guia = self.caja1.guia_activa
+        self.assertIsNotNone(guia)
+        # Paso de cierre de la caja 1: el botón va junto a SU guía, con su paquete_id.
+        respuesta = self.client.get(self.url + "?caja=1")
+        self.assertContains(respuesta, 'value="imprimir_guia"')
+        self.assertContains(respuesta, f'name="paquete_id" value="{self.caja1.pk}"')
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)") as imprimir:
+            respuesta = self.client.post(self.url, {"accion": "imprimir_guia", "paquete_id": self.caja1.pk}, follow=True)
+        self.assertEqual(imprimir.call_count, 2)
+        self.assertEqual([c.args[0].pk for c in imprimir.call_args_list], [guia.pk, guia.pk])
+        self.assertEqual([c.kwargs["interna"] for c in imprimir.call_args_list], [False, True])
+        self.assertContains(respuesta, f"Caja 1: guía {guia.numero}")
+        self.assertContains(respuesta, f"Caja 1 de 2")  # regresa al cierre de esa caja
+        # Cerrada, la revisión de la caja conserva el botón.
+        self._cerrar(self.caja1, "cc1.jpg")
+        respuesta = self.client.get(self.url + "?caja=1")
+        self.assertContains(respuesta, "Revisar caja")
+        self.assertContains(respuesta, 'value="imprimir_guia"')
+        self.assertContains(respuesta, f'name="paquete_id" value="{self.caja1.pk}"')
+
+    def test_imprimir_guia_falla_de_impresora_avisa_sin_tocar_nada(self):
+        self._empacar(self.caja1, "12100", "c1.jpg")
+        self._empacar(self.caja2, "8100", "c2.jpg")
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", side_effect=ValueError("No hay impresora configurada.")):
+            respuesta = self.client.post(self.url, {"accion": "imprimir_guia", "paquete_id": self.caja2.pk}, follow=True)
+        self.assertContains(respuesta, "No hay impresora configurada.")
+        self.pedido.refresh_from_db()
+        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
+
+    def test_imprimir_guia_de_una_caja_sin_guia_avisa(self):
+        self._empacar(self.caja1, "12100", "c1.jpg")  # falta la caja 2: aún sin guía
+        respuesta = self.client.get(self.url + "?caja=1")
+        self.assertNotContains(respuesta, 'value="imprimir_guia"')
+        with patch("apps.piso.etiquetas.imprimir_etiqueta") as imprimir:
+            respuesta = self.client.post(self.url, {"accion": "imprimir_guia", "paquete_id": self.caja1.pk}, follow=True)
+        imprimir.assert_not_called()
+        self.assertContains(respuesta, "todavía no tiene guía")
+
     def _corregir(self, caja, peso):
         return self.client.post(self.url, {
             "accion": "corregir_peso", "paquete_id": caja.pk, "peso_real_gr": peso,
