@@ -34,13 +34,14 @@ PATRON_RACK_PISO = re.compile(r"^([A-Z]+)-(\d+)-(\d+)$")
 PATRON_RACK_LADO = re.compile(r"^([A-Z]+)-(\d+)-([ID])-([FB])-(\d+)$")
 # Nombres por pasillo (Chema 2026-10-13): A-1…A-8 un pasillo de una cara,
 # B-1…B-16 uno de dos caras (1–8 la cara del rack de número menor, 9–16 la
-# otra). Dentro de la cara: 1–2 piso 1 (frente, atrás), 3–4 piso 2, 5–6 piso 3,
-# 7–8 piso 4. Se dibuja como el rack doble: cuatro celdas por piso.
+# otra). Dentro de la cara, visto de frente, de izquierda a derecha y de abajo
+# hacia arriba: 1–2 piso 1, 3–4 piso 2, 5–6 piso 3, 7–8 piso 4 (impar =
+# izquierda). Se dibuja como el rack doble: cuatro celdas por piso.
 PATRON_PASILLO = re.compile(r"^([A-Z])-(\d{1,2})$")
 
 
 def celda_pasillo(letra, numero):
-    """(grupo, piso, columna) de un nombre por pasillo: la columna es cara × 2 + atrás."""
+    """(grupo, piso, columna) de un nombre por pasillo: la columna es cara × 2 + derecha."""
     cara = 0 if numero <= 8 else 1
     k = (numero - 1) % 8
     return f"Pasillo {letra}", k // 2 + 1, cara * 2 + (k % 2)
@@ -59,7 +60,7 @@ def racks_bodega(resaltar=None):
       fila con cuatro celdas I-F · I-B · D-F · D-B y el piso de hasta arriba
       (la reserva, RES-1-D-F-4) se dibuja arriba, como en el físico.
     - A-3 / B-12 (nombres por pasillo, oct-2026): un grupo por pasillo con
-      cuatro celdas por piso (cara 1 frente · atrás · cara 2 frente · atrás).
+      cuatro celdas por piso (cara 1 izquierda · derecha · cara 2 izquierda · derecha).
     La agrupación es POR NÚMERO DE RACK ignorando la letra (la letra es el
     tipo del piso, no el rack). Códigos sin patrón van como bloque de un piso.
     Regresa [{etiqueta, filas: [{x, y, w, h, cx, cy, codigo, mini}]}].
