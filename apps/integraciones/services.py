@@ -11,11 +11,12 @@
 
 Todo job puede correr dos veces sin duplicar efecto (BLUEPRINT §2.2.7).
 """
+import threading
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.db import IntegrityError
+from django.db import IntegrityError, connection
 from django.db.models import Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -1096,17 +1097,21 @@ def registrar_evento_fulfillment(pedido, guia, estado_guia, descripcion="", ts=N
     return True
 
 
-def reintentar_escrituras_shopify():
+def reintentar_escrituras_shopify(pedido=None):
     """Drena la cola de escrituras de fulfillment que Shopify rechazó
     (EscrituraShopifyPendiente), en orden de llegada: cada una se reproduce
     con la MISMA función que la intentó en línea (idempotentes: caja con id
     guardado no se vuelve a fulfillear, el rastreo se puede volver a fijar, un
     evento repetido es inofensivo) y se borra cuando entra. Las vencidas no se
     tocan: Mesa → Sync las reactiva o descarta. Lo llama sync_shopify (cron
-    cada 15 min). Regresa el resumen."""
+    cada 15 min) y el hilo de Salida (drenar_escrituras_en_segundo_plano,
+    solo las de `pedido`). Regresa el resumen."""
     resumen = {"pendientes": 0, "ok": 0, "error": 0, "vencidas": 0}
     ahora = timezone.now()
-    for escritura in list(EscrituraShopifyPendiente.objects.select_related("tienda", "pedido").order_by("creado")):
+    cola = EscrituraShopifyPendiente.objects.select_related("tienda", "pedido").order_by("creado")
+    if pedido is not None:
+        cola = cola.filter(pedido=pedido)
+    for escritura in list(cola):
         if escritura.vence <= ahora:
             resumen["vencidas"] += 1
             continue
@@ -1128,6 +1133,33 @@ def reintentar_escrituras_shopify():
             escritura.ultimo_error = escritura.ultimo_error or "sin efecto (ver el log de sync)"
             escritura.save(update_fields=["intentos", "ultimo_error", "ultimo_intento"])
     return resumen
+
+
+def drenar_escrituras_en_segundo_plano(pedido=None):
+    """Escribe en Shopify lo encolado (de `pedido`, o toda la cola) sin que la
+    petición espere (Chema 2026-10-14: Salida se trababa esperando a Shopify
+    y el cron de 15 min era demasiado tarde para el comprador). Se llama tras
+    el commit: arranca un hilo daemon con su propia conexión a la BD que
+    corre reintentar_escrituras_shopify y la cierra al terminar. La fila de
+    la cola es el registro durable: si el hilo muere (reinicio del servicio)
+    o Shopify falla, conserva intentos y error y el cron la reintenta hasta
+    `vence`. Con TORRE["SHOPIFY_ESCRITURAS_EN_HILO"] = False (pruebas) corre
+    en línea y regresa el resumen; con hilo regresa el Thread ya arrancado."""
+    if not settings.TORRE.get("SHOPIFY_ESCRITURAS_EN_HILO", True):
+        return reintentar_escrituras_shopify(pedido=pedido)
+
+    def _correr():
+        try:
+            reintentar_escrituras_shopify(pedido=pedido)
+        except Exception:  # noqa: BLE001, S110 — la cola conserva lo que no entró; el cron sigue
+            pass
+        finally:
+            connection.close()
+
+    nombre = f"shopify-escrituras-{pedido.folio if pedido is not None else 'cola'}"
+    hilo = threading.Thread(target=_correr, name=nombre, daemon=True)
+    hilo.start()
+    return hilo
 
 
 def _reintentar_escritura(escritura):
@@ -1502,3 +1534,56 @@ def crear_definicion_link(tienda):
         return "error"
     _log_push(tienda, True, "definición del link al portal " + ("creada" if creada else "ya existía"))
     return "creada" if creada else "existia"
+
+
+def encolar_salida_shopify(pedido, cajas, primer_manifiesto):
+    """Manifiesto firmado (Chema 2026-10-14): Shopify ya NO se llama dentro de
+    la petición de Salida (con muchas cajas rebasaba el tope de gunicorn y el
+    manifiesto no nacía). Se encola en EscrituraShopifyPendiente; la drena el
+    hilo de drenar_escrituras_en_segundo_plano (y el cron sync_shopify de
+    red): el evento CARRIER_PICKED_UP por cada fulfillment
+    de las cajas que salieron, y el fulfillment de respaldo (con ese evento)
+    para las cajas que llegaron sin él; sin cajas, el pedido entero. Regresa
+    cuántas escrituras encoló."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    tienda = pedido.tienda
+    if tienda is None or not pedido.shopify_order_id:
+        return 0
+    ahora = timezone.now()
+    motivo = "salida: se escribe en segundo plano (sync_shopify)"
+    encoladas = 0
+    if cajas:
+        fids = dict(Paquete.objects.filter(pk__in=[c.pk for c in cajas]).values_list("pk", "shopify_fulfillment_id"))
+        sin_fulfillment = [c.pk for c in cajas if not fids.get(c.pk)]
+        if sin_fulfillment:
+            _encolar_escritura(
+                tienda, pedido, EscrituraShopifyPendiente.ACCION_FULFILLMENT,
+                f"fulfillment:{pedido.pk}:{','.join(str(pk) for pk in sin_fulfillment)}",
+                {"cajas": sin_fulfillment, "evento_inicial": "CARRIER_PICKED_UP", "notificar": primer_manifiesto}, motivo,
+            )
+            encoladas += 1
+        vistos = set()
+        for caja in cajas:
+            fid = fids.get(caja.pk)
+            if not fid or fid in vistos:
+                continue
+            vistos.add(fid)
+            _encolar_escritura(
+                tienda, pedido, EscrituraShopifyPendiente.ACCION_EVENTO, f"evento:fid:{fid}:CARRIER_PICKED_UP",
+                {"fid": fid, "status": "CARRIER_PICKED_UP", "ts": ahora.isoformat(), "donde": f"caja {caja.numero}"}, motivo,
+            )
+            encoladas += 1
+        return encoladas
+    fid = type(pedido).objects.filter(pk=pedido.pk).values_list("shopify_fulfillment_id", flat=True).first()
+    if fid:
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_EVENTO, f"evento:fid:{fid}:CARRIER_PICKED_UP",
+            {"fid": fid, "status": "CARRIER_PICKED_UP", "ts": ahora.isoformat(), "donde": "pedido entero"}, motivo,
+        )
+    else:
+        _encolar_escritura(
+            tienda, pedido, EscrituraShopifyPendiente.ACCION_FULFILLMENT, f"fulfillment:{pedido.pk}:pedido",
+            {"cajas": [], "evento_inicial": "CARRIER_PICKED_UP", "notificar": primer_manifiesto}, motivo,
+        )
+    return 1

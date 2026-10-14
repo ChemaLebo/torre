@@ -153,9 +153,12 @@ class LocationScopedTests(BaseFulfillment):
 
 
 class DisparadorEnManifiestoTests(BaseFulfillment):
-    def test_marcar_recolectado_dispara_fulfillment_en_on_commit(self):
-        """El write-back sale del momento canónico (manifiesto) y SOLO tras el
-        commit — jamás dentro del atomic que despacha inventario."""
+    def test_marcar_recolectado_encola_el_fulfillment_y_el_hilo_lo_escribe_tras_el_commit(self):
+        """El write-back sale del momento canónico (manifiesto) SOLO tras el
+        commit y, desde 2026-10-14, nunca en la petición: se ENCOLA y un hilo
+        en segundo plano lo escribe (en pruebas corre en línea). La salida se
+        trababa esperando a Shopify."""
+        from apps.integraciones.models import EscrituraShopifyPendiente
         from apps.pedidos.services import marcar_recolectado
 
         self.pedido.estado = "GUIA_GENERADA"
@@ -166,8 +169,54 @@ class DisparadorEnManifiestoTests(BaseFulfillment):
              patch("apps.mensajeria.services.enviar_en_camino"):
             with self.captureOnCommitCallbacks(execute=True):
                 marcar_recolectado(self.pedido, None)
-                marcar.assert_not_called()  # dentro de la transacción: nada
-        marcar.assert_called_once_with(self.pedido, notificar=True)  # primer manifiesto de la ola
+                self.assertFalse(EscrituraShopifyPendiente.objects.exists())  # dentro de la transacción: nada
+                marcar.assert_not_called()
+        marcar.assert_called_once_with(self.pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", notificar=True)
+        self.assertFalse(EscrituraShopifyPendiente.objects.exists())  # entró: la fila se borra
+
+    def test_si_el_hilo_no_corre_la_fila_queda_y_el_cron_la_escribe(self):
+        """La fila de la cola es el registro durable: con el hilo muerto (o
+        Shopify caído) queda con sus datos y sync_shopify la reintenta."""
+        from apps.integraciones.models import EscrituraShopifyPendiente
+        from apps.integraciones.services import reintentar_escrituras_shopify
+        from apps.pedidos.services import marcar_recolectado
+
+        self.pedido.estado = "GUIA_GENERADA"
+        self.pedido.save(update_fields=["estado"])
+        crear_guia(self.pedido)
+        with patch("apps.integraciones.services.marcar_fulfillment") as marcar, \
+             patch("apps.integraciones.services.drenar_escrituras_en_segundo_plano") as drenar, \
+             patch("apps.mensajeria.services.enviar_en_camino"):
+            with self.captureOnCommitCallbacks(execute=True):
+                marcar_recolectado(self.pedido, None)
+            drenar.assert_called_once_with(self.pedido)
+            marcar.assert_not_called()
+            escritura = EscrituraShopifyPendiente.objects.get()
+            self.assertEqual((escritura.accion, escritura.datos), ("fulfillment", {"cajas": [], "evento_inicial": "CARRIER_PICKED_UP", "notificar": True}))
+            self.assertEqual(reintentar_escrituras_shopify()["ok"], 1)
+        marcar.assert_called_once_with(self.pedido, cajas=None, evento_inicial="CARRIER_PICKED_UP", notificar=True)
+        self.assertFalse(EscrituraShopifyPendiente.objects.exists())
+
+    def test_el_hilo_drena_solo_ese_pedido_con_su_propia_conexion(self):
+        """Con el hilo activo (producción): arranca un Thread daemon que corre
+        reintentar_escrituras_shopify(pedido=…) y cierra su conexión."""
+        from django.conf import settings
+        from django.test import override_settings
+
+        from apps.integraciones.services import drenar_escrituras_en_segundo_plano
+
+        with override_settings(TORRE={**settings.TORRE, "SHOPIFY_ESCRITURAS_EN_HILO": True}), \
+             patch("apps.integraciones.services.reintentar_escrituras_shopify") as reintentar, \
+             patch("apps.integraciones.services.connection") as conexion:
+            hilo = drenar_escrituras_en_segundo_plano(self.pedido)
+            hilo.join(5)
+        self.assertFalse(hilo.is_alive())
+        self.assertTrue(hilo.daemon)
+        self.assertEqual(hilo.name, f"shopify-escrituras-{self.pedido.folio}")
+        reintentar.assert_called_once_with(pedido=self.pedido)
+        conexion.close.assert_called_once()
+        # Sin hilo (pruebas): corre en línea y regresa el resumen de la cola.
+        self.assertEqual(drenar_escrituras_en_segundo_plano(self.pedido)["pendientes"], 0)
 
 
 class FulfillmentPorCajaTests(BaseFulfillment):
@@ -494,7 +543,8 @@ class DisparadorEnSalidaTests(BaseFulfillment):
         api.crear_evento_fulfillment.assert_called_once()
         self.assertEqual(api.crear_evento_fulfillment.call_args.args[:2], ("gid://shopify/Fulfillment/A", "CARRIER_PICKED_UP"))
 
-    def test_manifiesto_con_fulfillment_previo_manda_recogido_y_no_crea_otro(self):
+    def test_manifiesto_con_fulfillment_previo_encola_recogido_y_no_crea_otro(self):
+        from apps.integraciones.models import EscrituraShopifyPendiente
         from apps.pedidos.services import marcar_recolectado
 
         self.pedido.estado = "GUIA_GENERADA"
@@ -502,12 +552,15 @@ class DisparadorEnSalidaTests(BaseFulfillment):
         self.pedido.save(update_fields=["estado", "shopify_fulfillment_id"])
         crear_guia(self.pedido)
         with patch("apps.integraciones.services.marcar_fulfillment") as marcar, \
-             patch("apps.integraciones.services.evento_recoleccion") as evento, \
+             patch("apps.integraciones.services.ShopifyClient") as cliente_cls, \
              patch("apps.mensajeria.services.enviar_en_camino"):
+            api = cliente_cls.return_value
             with self.captureOnCommitCallbacks(execute=True):
                 marcar_recolectado(self.pedido, None)
+                api.crear_evento_fulfillment.assert_not_called()  # en la petición, nada
         marcar.assert_not_called()
-        evento.assert_called_once_with(self.pedido)
+        self.assertEqual(api.crear_evento_fulfillment.call_args.args[:2], ("gid://shopify/Fulfillment/Z", "CARRIER_PICKED_UP"))
+        self.assertFalse(EscrituraShopifyPendiente.objects.exists())
 
     def test_cancelacion_en_bodega_cancela_el_fulfillment_de_la_caja(self):
         from apps.pedidos.services import cancelar

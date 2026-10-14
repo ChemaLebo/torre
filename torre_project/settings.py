@@ -292,6 +292,10 @@ TORRE = {
     # sync_shopify las reintenta durante estas horas; después quedan vencidas
     # y visibles en Mesa → Sync, donde se reactivan o se descartan.
     "SHOPIFY_REINTENTOS_HORAS": 24,
+    # Escrituras encoladas desde Salida (Chema 2026-10-14): tras el commit un
+    # hilo en segundo plano las escribe de inmediato (el cron sync_shopify
+    # queda de red). False = en línea, en el mismo hilo (pruebas).
+    "SHOPIFY_ESCRITURAS_EN_HILO": True,
     "RASTREO_CARRIER_URL": {
         # rastreo3.estafeta.com murió (NXDOMAIN, 2026-10-05). Este abre el estatus
         # directo; sin isShipmentDetail, que pinta una flecha de regreso que no hace nada.
@@ -373,6 +377,7 @@ import sys  # noqa: E402
 
 if "test" in sys.argv:
     ENVIA_MODO = "off"  # los tests jamás tocan la API real
+    TORRE["SHOPIFY_ESCRITURAS_EN_HILO"] = False  # en pruebas las escrituras encoladas corren en línea
 ENVIA_API_BASE = os.environ.get("ENVIA_API_BASE", "https://api.envia.com")
 # Webhook de rastreo de envia.com (2026-09-30; tipo 3 "tracking.simple"):
 # POST hooks/carriers/envia/<ENVIA_WEBHOOK_TOKEN>/. El token en la URL es

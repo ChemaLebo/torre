@@ -6,7 +6,7 @@ El 3PL es invisible: la página es 100% de la marca (branding del Cliente).
 """
 from django.conf import settings
 from django.core.cache import cache
-from django.http import FileResponse, Http404
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 

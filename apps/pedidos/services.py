@@ -3058,36 +3058,30 @@ def marcar_recolectado(pedido, actor, paquetes=None):
         except ImportError:
             pass
         else:
-            enviar_en_camino(pedido)
+            # Tras el commit (de la transacción externa del manifiesto, si la hay):
+            # un aviso lento jamás alarga la transacción ni frena la salida.
+            transaction.on_commit(lambda: enviar_en_camino(pedido))
     # Fulfillment al llegar a Salida (Chema 2026-10-08): normalmente ya existe
     # desde que nació la guía (integraciones.fulfillment_en_salida); aquí solo
     # va el evento "recogido por la paquetería". Las cajas que llegan sin
     # fulfillment (empacadas antes del cambio, o Shopify caído entonces) lo
-    # reciben ahora, como respaldo: UN fulfillment por caja que sube a ESTE
-    # camión; sin cajas, el pedido entero. Best-effort total en on_commit:
-    # Shopify jamás bloquea un manifiesto.
+    # reciben como respaldo: UN fulfillment por caja que sube a ESTE camión;
+    # sin cajas, el pedido entero. Desde 2026-10-14 (Chema: la salida se
+    # trababa) NADA de esto habla con Shopify en la petición: tras el commit
+    # se ENCOLA (integraciones.encolar_salida_shopify) y un hilo en segundo
+    # plano lo escribe de inmediato (integraciones.drenar_escrituras_en_segundo_plano);
+    # el cron sync_shopify queda de red cada 15 min.
     cajas_fuera = list(salen)
 
     def _fulfillment():
         try:
-            from apps.envios.models import Paquete  # lazy: modelo de otra app
-            from apps.integraciones.services import evento_recoleccion, marcar_fulfillment  # lazy
-            if cajas_fuera:
-                fids = dict(Paquete.objects.filter(pk__in=[c.pk for c in cajas_fuera]).values_list("pk", "shopify_fulfillment_id"))
-                for caja in cajas_fuera:
-                    caja.shopify_fulfillment_id = fids.get(caja.pk, caja.shopify_fulfillment_id)
-                sin_fulfillment = [c for c in cajas_fuera if not c.shopify_fulfillment_id]
-                if sin_fulfillment:
-                    marcar_fulfillment(pedido, cajas=sin_fulfillment, notificar=primer_manifiesto)
-                evento_recoleccion(pedido, [c for c in cajas_fuera if c.shopify_fulfillment_id])
-            else:
-                fid = Pedido.objects.filter(pk=pedido.pk).values_list("shopify_fulfillment_id", flat=True).first()
-                if fid:
-                    pedido.shopify_fulfillment_id = fid
-                    evento_recoleccion(pedido)
-                else:
-                    marcar_fulfillment(pedido, notificar=primer_manifiesto)
-        except Exception:
+            from apps.integraciones.services import (  # lazy por contrato
+                drenar_escrituras_en_segundo_plano, encolar_salida_shopify,
+            )
+
+            if encolar_salida_shopify(pedido, cajas_fuera, primer_manifiesto):
+                drenar_escrituras_en_segundo_plano(pedido)
+        except Exception:  # noqa: BLE001, S110 — Shopify jamás frena un manifiesto; la fila queda para el cron
             pass
     transaction.on_commit(_fulfillment)
     return pedido

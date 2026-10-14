@@ -2929,51 +2929,55 @@ def _salida_manifiesto(request):
         return redirect("piso:salida")
 
     from apps.pedidos.services import marcar_recolectado  # lazy por contrato
-    recolectados, errores, salidas = [], [], []
-    for pedido, cajas in listos:
-        try:
-            marcar_recolectado(pedido, request.user, paquetes=cajas)
-            recolectados.append(pedido.folio)
-            salidas.append((pedido, cajas))
-            sin_escaneo = [c.numero for c in (cajas or []) if c.pk in ya_cajas]
-            if pedido.pk in ya_pedidos or sin_escaneo:
-                registrar_evento(
-                    "pedido", pedido.pk, "salida_sin_escaneo", actor=request.user, cliente=pedido.cliente,
-                    delta={"carrier": carrier, "cajas": sin_escaneo or "pedido entero"},
-                    motivo="No estaba en el corral al registrar la salida: el operador confirmó que ya había salido.",
+    # Chema 2026-10-14: todo el dominio de la salida (pedidos recolectados,
+    # manifiesto y firma) va en UNA transacción: o nace todo o nada; lo que
+    # habla con Shopify y WhatsApp corre en on_commit, después y encolado.
+    with transaction.atomic():
+        recolectados, errores, salidas = [], [], []
+        for pedido, cajas in listos:
+            try:
+                marcar_recolectado(pedido, request.user, paquetes=cajas)
+                recolectados.append(pedido.folio)
+                salidas.append((pedido, cajas))
+                sin_escaneo = [c.numero for c in (cajas or []) if c.pk in ya_cajas]
+                if pedido.pk in ya_pedidos or sin_escaneo:
+                    registrar_evento(
+                        "pedido", pedido.pk, "salida_sin_escaneo", actor=request.user, cliente=pedido.cliente,
+                        delta={"carrier": carrier, "cajas": sin_escaneo or "pedido entero"},
+                        motivo="No estaba en el corral al registrar la salida: el operador confirmó que ya había salido.",
+                    )
+            except ValueError as exc:
+                errores.append(f"{pedido.folio}: {exc}")
+                continue
+            pedido.refresh_from_db()
+            if pedido.estado == Pedido.PARCIALMENTE_DESPACHADO:
+                quedan = ", ".join(str(c.numero) for c in cajas_por_salir(pedido))
+                messages.warning(
+                    request,
+                    f"{pedido.folio}: salió la caja {', '.join(str(c.numero) for c in cajas)}; "
+                    f"la caja {quedan} se queda en el corral para la siguiente recolección.",
                 )
-        except ValueError as exc:
-            errores.append(f"{pedido.folio}: {exc}")
-            continue
-        pedido.refresh_from_db()
-        if pedido.estado == Pedido.PARCIALMENTE_DESPACHADO:
-            quedan = ", ".join(str(c.numero) for c in cajas_por_salir(pedido))
-            messages.warning(
-                request,
-                f"{pedido.folio}: salió la caja {', '.join(str(c.numero) for c in cajas)}; "
-                f"la caja {quedan} se queda en el corral para la siguiente recolección.",
-            )
 
-    hoja = None
-    if recolectados:
-        from apps.envios.services import registrar_manifiesto  # lazy por contrato
-        hoja = registrar_manifiesto(
-            carrier, corral, request.user, salidas, chofer=chofer,
-            sin_escaneo={"pedidos": ya_pedidos, "cajas": ya_cajas},
-        )
-        if hoja is not None:
-            _guardar_firma_manifiesto(hoja, firma, chofer, request.user)
-        registrar_evento(
-            "manifiesto", corral, "manifiesto_firmado", actor=request.user,
-            delta={"corral": corral, "carrier": carrier, "pedidos": recolectados,
-                   "manifiesto": hoja.folio if hoja else None},
-            motivo=f"Manifiesto de {carrier} firmado por el chofer: RECOLECTADO en lote.",
-        )
-        messages.success(
-            request,
-            f"Manifiesto {hoja.folio if hoja else ''} de {carrier} en {corral}: {len(recolectados)} pedido(s) "
-            "recolectado(s). Ahora sí, el comprador recibe su \"va en camino\".",
-        )
+        hoja = None
+        if recolectados:
+            from apps.envios.services import registrar_manifiesto  # lazy por contrato
+            hoja = registrar_manifiesto(
+                carrier, corral, request.user, salidas, chofer=chofer,
+                sin_escaneo={"pedidos": ya_pedidos, "cajas": ya_cajas},
+            )
+            if hoja is not None:
+                _guardar_firma_manifiesto(hoja, firma, chofer, request.user)
+            registrar_evento(
+                "manifiesto", corral, "manifiesto_firmado", actor=request.user,
+                delta={"corral": corral, "carrier": carrier, "pedidos": recolectados,
+                       "manifiesto": hoja.folio if hoja else None},
+                motivo=f"Manifiesto de {carrier} firmado por el chofer: RECOLECTADO en lote.",
+            )
+            messages.success(
+                request,
+                f"Manifiesto {hoja.folio if hoja else ''} de {carrier} en {corral}: {len(recolectados)} pedido(s) "
+                "recolectado(s). Ahora sí, el comprador recibe su \"va en camino\".",
+            )
     for error in errores:
         messages.error(request, error)
     _limpiar_escaneo(request, corral, carrier)
