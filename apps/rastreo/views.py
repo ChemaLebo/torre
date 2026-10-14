@@ -138,14 +138,23 @@ def _contenido(caja, pedido):
     return contenido
 
 
-def _pasos(ts, local):
+def _pasos(ts, local, intentos=()):
     """Pasos del paquete con su hora. Un paso sin hora cuenta como hecho si
     uno posterior ya la tiene (el carrier no siempre reporta todos); el último
-    hecho es el actual. "Recibido" siempre está hecho: el pedido existe."""
+    hecho es el actual. "Recibido" siempre está hecho: el pedido existe.
+    `intentos` (Chema 2026-10-14): cada intento de entrega fallido que reportó
+    la paquetería entra como paso propio, con su fecha, después de "En
+    reparto" y antes de "Entregado"."""
     pasos = [
         {"clave": clave, "nombre": nombre, "ts": ts.get(clave), "hecho": False, "actual": False}
         for clave, nombre in PASOS_PAQUETE if not (local and clave in PASOS_SOLO_PAQUETERIA)
     ]
+    if intentos and not local:
+        donde = next(i for i, p in enumerate(pasos) if p["clave"] == "entregado")
+        pasos[donde:donde] = [
+            {"clave": "intento", "nombre": "Intento de entrega", "ts": momento, "hecho": False, "actual": False}
+            for momento, _descripcion in intentos
+        ]
     visto = False
     for paso in reversed(pasos):
         visto = visto or paso["ts"] is not None
@@ -254,7 +263,7 @@ def _paquetes(pedido):
             "guia": numero_guia,
             "url_rastreo": fila["url_rastreo"] if numero_guia else "",
             "estado": estado, "tono": tono, "entregado": tono == "entregado",
-            "pasos": _pasos(fila["ts"], carrier == "local"),
+            "pasos": _pasos(fila["ts"], carrier == "local", fila.get("intentos") or []),
             "fecha_programada": fecha, "retraso": retraso, "promesa": promesa,
             "notas": ["Cambiamos la guía de este paquete; la anterior ya no vale."] if cambiada and guia is not None else [],
         })

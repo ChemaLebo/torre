@@ -148,7 +148,7 @@ def _agrupar_extras(extras):
 
 def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
     """Una fila de la tabla: la caja (o el envío entero, legacy) con su guía."""
-    from apps.envios.services import url_rastreo_carrier  # lazy por contrato
+    from apps.envios.services import intentos_de_entrega, url_rastreo_carrier  # lazy por contrato
 
     linea = manifiestos.get(guia.pk) if guia else None
     picking, empacado = _horas_de_la_ola(pedido, caja, guia, eventos)
@@ -205,6 +205,7 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
         "ultimo_evento": ultimo.descripcion or ultimo.crudo if ultimo else (guia.ultimo_evento if guia else ""),
         "ultimo_evento_ts": (ultimo.ts_carrier or ultimo.ts_visto) if ultimo else None,
         "eventos": len(eventos),
+        "intentos": intentos_de_entrega(guia),
     }
 
 

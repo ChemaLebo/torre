@@ -1433,7 +1433,7 @@ def pedido_detalle(request, pk):
     from django.db.models import Max
 
     from apps.core.models import EvidenciaFoto
-    from apps.envios.services import guia_sustituible, opciones_paqueteria, url_rastreo_carrier
+    from apps.envios.services import guia_sustituible, intentos_de_entrega, opciones_paqueteria, url_rastreo_carrier
     from apps.incidencias.models import Incidencia
     from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
@@ -1444,7 +1444,10 @@ def pedido_detalle(request, pk):
 
     pedido = get_object_or_404(
         Pedido.objects.select_related("cliente", "tienda", "asignado_a")
-        .prefetch_related("lineas__sku", "paquetes__guias__sustituye_a", "paquetes__lineas__linea_pedido__sku", "paquetes__lineas__repone_a"),
+        .prefetch_related(
+            "lineas__sku", "paquetes__guias__sustituye_a", "paquetes__guias__eventos",
+            "paquetes__lineas__linea_pedido__sku", "paquetes__lineas__repone_a",
+        ),
         pk=pk,
     )
     if request.method == "POST":
@@ -1487,6 +1490,7 @@ def pedido_detalle(request, pk):
         # necesita otra guía para entregarla; la vieja queda sustituida.
         caja.guia_sustituible = guia_sustituible(caja)
         caja.puede_sustituir = caja.guia_sustituible is not None
+        caja.intentos = intentos_de_entrega(caja.guia)  # intentos de entrega fallidos que reportó el carrier (2026-10-14)
         for g in caja.historial:  # `sustituta`: la guía que la reemplazó (sin pegarle a la BD por guía)
             g.sustituta = next((n for n in caja.guias.all() if n.sustituye_a_id == g.pk), None)
     guias_sueltas = [

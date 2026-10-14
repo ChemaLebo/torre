@@ -811,6 +811,26 @@ def agendar_recoleccion(carrier, fecha, hora_desde, hora_hasta, guias, actor,
     return recoleccion
 
 
+def intentos_de_entrega(guia):
+    """Intentos de entrega fallidos que reportó el carrier (Chema 2026-10-14):
+    [(hora, descripción)] a partir de los EventoGuia normalizados a
+    INTENTO_FALLIDO, UNO por día del carrier (suele mandar "intento" y luego
+    "no entregado" el mismo día). Vacío si el carrier no reporta intentos: se
+    muestra nada, no un 0 engañoso. Lee `guia.eventos.all()` para respetar
+    el prefetch de las pantallas."""
+    if guia is None:
+        return []
+    por_dia = {}
+    for e in guia.eventos.all():  # ordenados por hora del carrier
+        if e.estado != Guia.INTENTO_FALLIDO:
+            continue
+        ts = e.ts_carrier or e.ts_visto
+        dia = timezone.localtime(ts).date()
+        if dia not in por_dia:
+            por_dia[dia] = (ts, e.descripcion or e.crudo)
+    return list(por_dia.values())
+
+
 def guias_del_pedido(pedido):
     """Todas las guías del pedido para un expediente (Mesa y portal; Chema
     2026-09-23): una por caja cuando el envío va dividido, con carrier, número,
@@ -829,8 +849,9 @@ def guias_del_pedido(pedido):
                 f"contenido repuesto · {g.get_sustituida_motivo_display().lower()}"
                 + (f" · por caja {', '.join(str(n) for n in g.cajas_reposicion)}" if g.cajas_reposicion else "")
             ) if g.sustituida_motivo else "",
+            "intentos": intentos_de_entrega(g),
         }
-        for g in pedido.guias.select_related("paquete").order_by("pk")
+        for g in pedido.guias.select_related("paquete").prefetch_related("eventos").order_by("pk")
     ]
 
 
