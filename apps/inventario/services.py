@@ -3244,3 +3244,18 @@ def terminar_restock(restock, actor, cancelar=False):
         motivo=f"{restock.folio}: {restock.cantidad_movida} de {restock.cantidad_sugerida} caja(s) al rack {restock.rack.codigo}.",
     )
     return restock
+
+
+def lote_que_sale_primero(sku, rack=None):
+    """FEFO para el picking por QR (Chema 2026-10-13): entre lo vendible del
+    rack fijo del producto (si lo tiene y hay algo ahí); si no, entre todo lo
+    vendible. Regresa (lote | None, saldo) o None si no hay nada vendible."""
+    base = Saldo.objects.filter(sku=sku, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0).select_related("ubicacion", "lote")
+    saldos = list(base.filter(ubicacion=rack)) if rack is not None else []
+    if not saldos:
+        saldos = list(base)
+    if not saldos:
+        return None
+    caducidades = _caducidades(saldos)
+    primero = sorted(saldos, key=lambda s: (_clave_fefo(s, caducidades), s.ubicacion.codigo))[0]
+    return primero.lote, primero

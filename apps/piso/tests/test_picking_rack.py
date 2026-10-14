@@ -60,3 +60,29 @@ class PickingConRackFijoTests(PisoTestCase):
         confirmar_pick(self.sku, 3, "PED-Y")
         self.assertEqual(self.saldo(self.tarima, Saldo.UBICADO_VENDIBLE), 17)
         self.assertEqual(self.saldo(self.tarima, Saldo.EN_EMPAQUE, self.viejo), 3)
+
+    def test_picking_por_qr_hace_valer_fefo_contra_el_rack(self):
+        from apps.catalogo.services import desasignar_producto
+
+        pedido = self.crear_pedido(cantidad=5)
+        iniciar_picking(pedido, self.operador)
+        url = reverse("piso:picking_pedido", args=[pedido.pk])
+        barras = self.sku.codigo_barras or self.sku.codigo
+        # En el rack solo hay NUEVO: ese sale, aunque VIEJO (más viejo) viva en la tarima.
+        r = self.client.post(url, {"codigo": f"P|{barras}|VIEJO", "cantidad": "1"}, HTTP_ACCEPT="application/json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("primero sale el lote NUEVO (caduca antes), que está en A-3", r.json()["error"])
+        r = self.client.post(url, {"codigo": f"P]{barras}]NUEVO", "cantidad": "1"}, HTTP_ACCEPT="application/json")  # teclado en español
+        self.assertEqual((r.status_code, r.json()["pickeada"]), (200, 1))
+        # El código de barras a secas sigue contando (cajas sin QR).
+        r = self.client.post(url, {"codigo": barras, "cantidad": "1"}, HTTP_ACCEPT="application/json")
+        self.assertEqual((r.status_code, r.json()["pickeada"]), (200, 2))
+        # Sin rack fijo, FEFO contra toda la bodega: ahora el que sale es VIEJO.
+        desasignar_producto(self.sku)
+        r = self.client.post(url, {"codigo": f"P|{barras}|NUEVO", "cantidad": "1"}, HTTP_ACCEPT="application/json")
+        self.assertIn("primero sale el lote VIEJO", r.json()["error"])
+        r = self.client.post(url, {"codigo": f"P|{barras}|VIEJO", "cantidad": "1"}, HTTP_ACCEPT="application/json")
+        self.assertEqual((r.status_code, r.json()["pickeada"]), (200, 3))
+        # QR de otro producto: código equivocado.
+        r = self.client.post(url, {"codigo": "P|0000000000000|VIEJO", "cantidad": "1"}, HTTP_ACCEPT="application/json")
+        self.assertIn("Código equivocado", r.json()["error"])

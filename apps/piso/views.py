@@ -1409,9 +1409,17 @@ def _picking_escanear(request, pedido, reiniciado=False):
         messages.error(request, mensaje)
         return destino
 
-    codigo = (request.POST.get("codigo") or "").strip()
+    from apps.inventario.services import PATRON_QR_PRODUCTO, normalizar_escaneo  # lazy por contrato
+
+    codigo = normalizar_escaneo(request.POST.get("codigo") or "")
     if not codigo:
         return error("Escanea el código de barras del producto.")
+    # QR de Torre `P|barras|lote` (Chema 2026-10-13): la caja trae su lote y el
+    # picking hace valer FEFO contra el rack fijo del producto.
+    qr = PATRON_QR_PRODUCTO.match(codigo)
+    lote_escaneado = (qr.group("lote") or "").strip() if qr else None
+    if qr:
+        codigo = qr.group("barras").strip()
 
     todas = list(pedido.lineas.select_related("sku"))
     lineas = [l for l in todas if l.pendiente > 0]  # lo que esta ola surte
@@ -1436,6 +1444,20 @@ def _picking_escanear(request, pedido, reiniciado=False):
         return error(
             f"La línea de {candidatas[0].sku.codigo} ya está completa. No pickees de más."
         )
+
+    if lote_escaneado is not None and not linea.sku.es_kit:
+        from apps.catalogo.services import rack_de  # lazy por contrato
+        from apps.inventario.services import lote_que_sale_primero  # lazy por contrato
+
+        eleccion = lote_que_sale_primero(linea.sku, rack_de(linea.sku))
+        if eleccion is not None:
+            lote_fefo, saldo = eleccion
+            esperado = lote_fefo.codigo if lote_fefo else ""
+            if lote_escaneado != esperado:
+                return error(
+                    f"Esa caja es del lote {lote_escaneado or 'sin lote'}; primero sale el lote {esperado or 'sin lote'}"
+                    f" (caduca antes), que está en {saldo.ubicacion.codigo}. Regresa esta caja."
+                )
 
     from apps.pedidos.services import confirmar_linea_pick  # lazy por contrato
     try:
