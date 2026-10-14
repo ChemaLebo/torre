@@ -16,7 +16,7 @@ from apps.core.models import Cliente, EventoAuditoria, PerfilUsuario
 from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.incidencias.models import Compensacion, Incidencia
 from apps.incidencias.services import abrir_incidencia
-from apps.inventario.models import LineaASN, OrdenEntrada
+from apps.inventario.models import LineaASN, OrdenEntrada, Saldo
 from apps.inventario.services import recibir, ubicar
 from apps.pedidos import services
 from apps.pedidos.models import LineaPedido, Pedido
@@ -191,3 +191,63 @@ class ReposicionTests(TestCase):
         self.assertEqual(comp.referencia_pago, f"{pedido.folio} entregado")
         self.assertIsNotNone(comp.fecha_pago)
         self.assertTrue(inc.mensajes.filter(texto__contains="se entregó").exists())
+
+    def reservadas(self, sku):
+        return sum(Saldo.objects.filter(sku=sku, estado=Saldo.RESERVADO).values_list("cantidad", flat=True))
+
+    def test_deshacer_la_reposicion_antes_de_que_el_piso_la_tome(self):
+        """Chema 2026-10-14 (PED-00261): el carrier entrega el paquete original
+        con una guía nueva, así que la reposición sobra: las piezas vuelven a
+        la línea, la reserva se libera, el plan de la caja nueva se tira y el
+        pedido regresa a donde estaba. Nada se mueve en Shopify."""
+        pedido, la, lb = self.pedido_entregado()
+        caja_vieja = Paquete.objects.get(pedido=pedido, numero=1)
+        with self.captureOnCommitCallbacks(execute=True):
+            services.reponer_lineas(pedido, [(la, 1), (lb, 1)], self.mesa)
+        pedido.refresh_from_db()
+        self.assertEqual((pedido.estado, self.reservadas(self.a)), (Pedido.PENDIENTE, 1))
+        self.assertEqual(Paquete.objects.filter(pedido=pedido, estado=Paquete.PLANEADO).count(), 1)
+        with self.captureOnCommitCallbacks(execute=True):
+            destino = services.deshacer_reposicion(pedido, [(la, 1, caja_vieja.pk), (lb, 1, caja_vieja.pk)], self.mesa)
+        pedido.refresh_from_db()
+        la.refresh_from_db()
+        lb.refresh_from_db()
+        self.assertEqual((destino, pedido.estado), (Pedido.ENTREGADO, Pedido.ENTREGADO))
+        self.assertEqual((la.cantidad_repuesta, la.cantidad_repuesta_reservada, la.origen_reposicion, la.pendiente), (0, 0, [], 0))
+        self.assertEqual((lb.cantidad_repuesta, lb.cantidad_repuesta_reservada, lb.origen_reposicion), (0, 0, []))
+        self.assertEqual(self.reservadas(self.a), 0)  # la reserva de la pieza repuesta se liberó
+        self.assertEqual([c.numero for c in Paquete.objects.filter(pedido=pedido)], [1])  # el plan de la reposición se tiró
+        self.assertFalse(pedido.pendiente_de_completar)
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="reposicion_cancelada")
+        self.assertEqual((evento.delta["estado"], evento.delta["lineas"]), ("ENTREGADO", [["A-SIX", 1, 1], ["B-SIX", 1, 1]]))
+        # Con el piso encima (EMPEZAR) ya no se cancela.
+        with self.captureOnCommitCallbacks(execute=True):
+            services.reponer_lineas(pedido, [(la, 1)], self.mesa)
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.EN_PICKING)
+        pedido.refresh_from_db()
+        with self.assertRaises(ValueError) as ctx:
+            services.deshacer_reposicion(pedido, [(la, 1, caja_vieja.pk)], self.mesa)
+        self.assertIn("ya entró a picking", str(ctx.exception))
+        Pedido.objects.filter(pk=pedido.pk).update(estado=Pedido.PENDIENTE, asignado_a=self.mesa)
+        pedido.refresh_from_db()
+        with self.assertRaises(ValueError):
+            services.deshacer_reposicion(pedido, [(la, 1, caja_vieja.pk)], self.mesa)
+        with self.assertRaises(ValueError):  # más de lo repuesto
+            Pedido.objects.filter(pk=pedido.pk).update(asignado_a=None)
+            pedido.refresh_from_db()
+            services.deshacer_reposicion(pedido, [(la, 2, caja_vieja.pk)], self.mesa)
+
+    def test_deshacer_con_otra_ola_pendiente_se_queda_pendiente_y_replanea(self):
+        pedido, la, lb = self.pedido_ola_dos_pendiente()
+        caja = Paquete.objects.get(pedido=pedido, numero=1)
+        with self.captureOnCommitCallbacks(execute=True):
+            services.reponer_lineas(pedido, [(la, 1)], self.mesa)
+        self.assertEqual(Paquete.objects.filter(pedido=pedido, estado=Paquete.PLANEADO).count(), 1)
+        with self.captureOnCommitCallbacks(execute=True):
+            destino = services.deshacer_reposicion(pedido, [(la, 1, caja.pk)], self.mesa)
+        pedido.refresh_from_db()
+        la.refresh_from_db()
+        self.assertEqual((destino, pedido.estado), (Pedido.PENDIENTE, Pedido.PENDIENTE))  # B sigue esperando stock
+        self.assertEqual((la.cantidad_repuesta, la.cantidad_repuesta_reservada, self.reservadas(self.a)), (0, 0, 0))
+        self.assertFalse(Paquete.objects.filter(pedido=pedido, estado=Paquete.PLANEADO).exists())  # nada con stock que planear
+        self.assertFalse(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="cambio_estado").exists())

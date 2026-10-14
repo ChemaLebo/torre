@@ -802,6 +802,10 @@ def _gestionar_incidencia(request, incidencia):
         if nuevo == Compensacion.APROBADA:
             aprobar_compensacion(comp, request.user)
             return resumen_ejecucion(comp)
+        if nuevo == Compensacion.CANCELADA:
+            from apps.incidencias.services import cancelar_reposicion  # lazy por contrato
+            cancelar_reposicion(comp, request.user)
+            return f"Reposición cancelada: {comp.nota}"
         if nuevo == Compensacion.PAGADA:
             referencia = (request.POST.get("referencia_pago") or "").strip()
             if referencia:
@@ -809,6 +813,12 @@ def _gestionar_incidencia(request, incidencia):
                 comp.save(update_fields=["referencia_pago"])
         comp.transicionar(nuevo, actor=request.user, motivo=f"Gestión desde Mesa ({incidencia.folio})")
         return f"Compensación actualizada a {comp.get_estado_display()}."
+    if accion == "compensacion_cancelar":
+        # Cancelar una reposición que el piso no ha tomado (Chema 2026-10-14): no es un reembolso.
+        from apps.incidencias.services import cancelar_reposicion  # lazy por contrato
+        comp = get_object_or_404(Compensacion, pk=request.POST.get("compensacion_id"), incidencia=incidencia)
+        cancelar_reposicion(comp, request.user)
+        return f"Reposición cancelada ({comp.resumen_lineas}): {comp.nota}"
 
     if accion == "reclamacion_crear":
         carrier = (request.POST.get("carrier") or "").strip()
@@ -874,8 +884,11 @@ def incidencia_detalle(request, pk):
     ahora = timezone.now()
     _anotar_reloj_sla(incidencia, ahora)
 
+    from apps.incidencias.services import reposicion_cancelable  # lazy por contrato
+
     compensaciones = list(incidencia.compensaciones.all())
     for comp in compensaciones:
+        comp.cancelable = reposicion_cancelable(comp)
         comp.siguientes = [
             (estado, dict(Compensacion.ESTADOS)[estado])
             for estado in sorted(Compensacion.TRANSICIONES.get(comp.estado, set()))
@@ -1091,6 +1104,19 @@ def _pedidos_cancelar_guia_caja(request):
     return f"Guía {vieja.numero} de la caja {caja.numero} cancelada; {pedido.folio} regresó a empaquetado sin dueño y el piso la recompra."
 
 
+def _pedidos_cancelar_reposicion(request):
+    """Cancelar una reposición desde la tarjeta Cajas del pedido (Chema
+    2026-10-14): mientras el piso no la tome (incidencias.cancelar_reposicion)."""
+    from apps.incidencias.models import Compensacion  # lazy: modelo de otra app
+    from apps.incidencias.services import cancelar_reposicion  # lazy por contrato
+    from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+
+    pedido = get_object_or_404(Pedido, folio=request.POST.get("folio"))
+    comp = get_object_or_404(Compensacion, pk=request.POST.get("compensacion_id"), incidencia__pedido=pedido)
+    cancelar_reposicion(comp, request.user)
+    return f"Reposición cancelada ({comp.resumen_lineas}): {comp.nota}"
+
+
 def _pedidos_quitar_de_salida_caja(request):
     """Botón "Quitar de salida" por caja (Chema 2026-10-05, PED-00319): la
     caja firmó manifiesto pero nunca se fue (guía cancelada, el carrier no la
@@ -1211,6 +1237,7 @@ def _ejecutar_accion_pedido(request):
         "cambiar_paqueteria_caja": _pedidos_cambiar_paqueteria_caja,
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
         "quitar_de_salida_caja": _pedidos_quitar_de_salida_caja,
+        "cancelar_reposicion": _pedidos_cancelar_reposicion,
         "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
         "replanear_cajas": _pedidos_replanear_cajas,
@@ -1327,6 +1354,58 @@ def pedidos(request):
     })
 
 
+def _reposiciones_del_pedido(pedido, compensaciones):
+    """Reposiciones aprobadas del pedido para la tarjeta Cajas (Chema
+    2026-10-14): se ven desde que se aprueban, aunque sin existencias no haya
+    caja planeada; con qué reponen, a qué caja, cuándo se aprobaron, en qué
+    van (en espera de existencias / planeada en la caja N / en manos del
+    piso) y si todavía se pueden cancelar. Lee `paquetes.all()` y
+    `lineas.all()` para respetar el prefetch del detalle."""
+    from apps.incidencias.models import Compensacion  # lazy: modelo de otra app
+    from apps.incidencias.services import reposicion_cancelable  # lazy por contrato
+    from apps.pedidos.services import ESTADOS_OLA_OCUPADA  # lazy por contrato
+
+    aprobadas = [c for c in compensaciones if c.tipo == Compensacion.TIPO_REPOSICION and c.estado == Compensacion.APROBADA]
+    if not aprobadas:
+        return []
+    lineas = {l.pk: l for l in pedido.lineas.all()}
+    aprobada_ts = {
+        e.entidad_id: e.ts
+        for e in EventoAuditoria.objects.filter(
+            entidad="compensacion", entidad_id__in=[str(c.pk) for c in aprobadas], accion="transicion_aprobada",
+        ).order_by("ts")
+    }
+    filas = []
+    for comp in aprobadas:
+        detalle, origen, origen_ids, sin_stock = [], set(), set(), []
+        for x in comp.lineas or []:
+            detalle.append(f"{x.get('cantidad')}× {x.get('sku')}")
+            if x.get("caja"):
+                origen.add(x["caja"])
+            if x.get("caja_id"):
+                origen_ids.add(x["caja_id"])
+            linea = lineas.get(x.get("linea_id"))
+            if linea is not None and linea.repuestas_sin_stock > 0:
+                sin_stock.append(x.get("sku"))
+        planeadas = sorted({
+            c.numero for c in pedido.paquetes.all() if c.estado != "DESPACHADO"
+            for pl in c.lineas.all() if pl.repone_a_id and (not origen_ids or pl.repone_a_id in origen_ids)
+        })
+        partes = []
+        if pedido.estado in ESTADOS_OLA_OCUPADA:
+            partes.append("en manos del piso")
+        elif planeadas:
+            partes.append(f"planeada en la caja {', '.join(str(n) for n in planeadas)} (en bodega, sin picking)")
+        if sin_stock:
+            partes.append(f"en espera de existencias ({', '.join(sin_stock)}): la caja nace cuando entre stock")
+        filas.append({
+            "comp": comp, "detalle": ", ".join(detalle), "origen": sorted(origen),
+            "aprobada": aprobada_ts.get(str(comp.pk)), "estado": " · ".join(partes) or "aprobada",
+            "cancelable": reposicion_cancelable(comp),
+        })
+    return filas
+
+
 @redirigir_rol(portal="portal:pedido_detalle")
 @rol_requerido("mesa")
 def pedido_detalle(request, pk):
@@ -1415,6 +1494,7 @@ def pedido_detalle(request, pk):
     grupos, _ = agrupar_por_pedido([_anotar_reloj_sla(inc, ahora) for inc in incidencias])
     grupo = grupos[0] if grupos else {"pedido": pedido, "incidencias": [], "abiertas": [], "cerradas": 0}
     compensaciones = [c for inc in grupo["incidencias"] for c in inc.compensaciones.all()]
+    reposiciones = _reposiciones_del_pedido(pedido, compensaciones)
     fotos = list(EvidenciaFoto.objects.filter(entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio]).order_by("ts"))
     eventos = list(
         EventoAuditoria.objects.filter(entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio]).order_by("-ts")[:40]
@@ -1427,6 +1507,7 @@ def pedido_detalle(request, pk):
         "direccion": pedido.direccion or {},
         "direccion_pendiente": direccion_en_una_linea(pedido.direccion_pendiente) if pedido.direccion_pendiente else "",
         "cajas": cajas,
+        "reposiciones": reposiciones,
         "guias_sueltas": guias_sueltas,
         "reembolsos_guias": reembolsos_guias,
         # Entrega propia (2026-10-06): el costo se captura por pedido cuando alguna caja o guía es "local".

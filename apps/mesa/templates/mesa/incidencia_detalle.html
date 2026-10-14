@@ -238,7 +238,7 @@
         {% for c in cajas_rehacer %}<a class="btn chico{% if c.pk == caja_prefill %} primario{% endif %}" href="?reponer=1&amp;caja={{ c.pk }}#compensaciones" title="Precarga la reposición con todo lo que llevó la caja {{ c.numero }}">Rehacer la entrega de la caja {{ c.numero }} <span class="muted">· {{ c.contenido|join:", " }}</span></a>{% endfor %}
       </div>
       {% endif %}
-      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>{% if caja_prefill %}Reposición precargada con el contenido de la caja: quita lo que sí llegó bien, revisa el motivo y aprueba. {% endif %}Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan como sustituidas.</div>{% endif %}
+      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>{% if caja_prefill %}Reposición precargada con el contenido de la caja: quita lo que sí llegó bien, revisa el motivo y aprueba. {% endif %}Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan marcadas como "contenido repuesto" (se siguen rastreando aparte).</div>{% endif %}
       {% for comp in compensaciones %}
       <div style="padding:8px 0;border-bottom:1px solid var(--hair)">
         <div class="fila entre">
@@ -249,7 +249,7 @@
             {% if comp.nota %}<div class="small{% if comp.estado != 'PAGADA' %} crit{% endif %}">{{ comp.nota }}</div>{% endif %}
           </div>
           <div class="fila">
-            <span class="pill {% if comp.estado == 'PAGADA' %}ok{% elif comp.estado == 'APROBADA' %}accent{% else %}warn{% endif %}">{{ comp.get_estado_display }}</span>
+            <span class="pill {% if comp.estado == 'PAGADA' %}ok{% elif comp.estado == 'APROBADA' %}accent{% elif comp.estado == 'CANCELADA' %}crit{% else %}warn{% endif %}">{{ comp.get_estado_display }}</span>
             {% if comp.estado == "COTIZADA" %}
             <form method="post">{% csrf_token %}
               <input type="hidden" name="accion" value="compensacion_aprobar">
@@ -271,6 +271,13 @@
                 <input type="text" name="referencia_pago" placeholder="Referencia de pago" style="width:150px">
                 <button class="btn chico" type="submit">→ Pagada</button>
               </form>
+              {% if comp.cancelable %}
+              <form method="post" onsubmit="return confirm('¿Cancelar la reposición ({{ comp.resumen_lineas }})? Las piezas regresan a la línea, la guía original vuelve a mandar sobre el pedido y no se repone nada. No es un reembolso.');">{% csrf_token %}
+                <input type="hidden" name="accion" value="compensacion_cancelar">
+                <input type="hidden" name="compensacion_id" value="{{ comp.pk }}">
+                <button class="btn chico peligro" type="submit" title="Solo mientras el piso no haya tomado la reposición">Cancelar reposición</button>
+              </form>
+              {% endif %}
             {% endif %}
           </div>
         </div>

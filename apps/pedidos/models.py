@@ -49,7 +49,10 @@ class Pedido(models.Model):
     # reingreso) y el piso lo ubica por recepción. CANCELACION_PENDIENTE se
     # conserva para pedidos viejos que quedaron ahí antes de ese cambio.
     TRANSICIONES = {
-        PENDIENTE: {EN_PICKING, CANCELADO},
+        # PENDIENTE → un estado de la calle SOLO al cancelar una reposición que
+        # el piso no tomó (services.deshacer_reposicion, 2026-10-14): el pedido
+        # regresa a donde estaba antes de que la reposición lo trajera aquí.
+        PENDIENTE: {EN_PICKING, CANCELADO, RECOLECTADO, EN_TRANSITO, ENTREGA_PRESUNTA, ENTREGADO, RETORNADO, PARCIALMENTE_DESPACHADO},
         EN_PICKING: {EMPACADO, CANCELACION_PENDIENTE, CANCELADO},
         EMPACADO: {GUIA_GENERADA, CANCELACION_PENDIENTE, CANCELADO},
         # GUIA_GENERADA → EN_TRANSITO cubre el caso raro de guía indexada por el

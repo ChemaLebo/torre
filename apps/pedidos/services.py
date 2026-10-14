@@ -366,6 +366,122 @@ def reponer_lineas(pedido, seleccion, actor, incidencia=None):
     return limpias
 
 
+def deshacer_reposicion(pedido, seleccion, actor, incidencia=None):
+    """Cancela una reposición aprobada (Chema 2026-10-14; PED-00261: el
+    carrier entrega el paquete original con una guía nueva, así que la
+    reposición sobra) mientras el piso no la haya tomado: el pedido debe
+    seguir PENDIENTE y sin dueño (EMPEZAR lo pasa a EN_PICKING). `seleccion`
+    = [(línea, cantidad, caja_origen pk|None)] tal como la aprobó la
+    compensación. Por línea se restan las piezas repuestas, se libera la
+    reserva que les tocaba (liberar_reserva) y se quita su entrada de
+    `origen_reposicion`. Si ya no queda nada por surtir, las cajas planeadas
+    sin guía (el plan de la reposición) se tiran y el pedido regresa al
+    estado en que estaba (_estado_antes_de_reponer); con otra ola pendiente
+    (otra reposición, inventario que faltaba) se queda PENDIENTE y se
+    replanea. Shopify no se toca: la reposición nunca lo tocó. Las guías
+    marcadas como sustituidas las revierte incidencias.cancelar_reposicion.
+    Regresa el estado final del pedido."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.inventario.services import liberar_reserva  # lazy: servicio de otra app
+
+    if pedido.estado != Pedido.PENDIENTE or pedido.asignado_a_id:
+        raise ValueError(
+            f"{pedido.folio} está {pedido.get_estado_display()}"
+            + (" y en manos del piso" if pedido.asignado_a_id else "")
+            + ": la reposición ya entró a picking y no se puede cancelar."
+        )
+    folio_inc = getattr(incidencia, "folio", "") or ""
+    with transaction.atomic():
+        revertidas = []
+        for item in seleccion:
+            linea, cantidad = item[0], int(item[1] or 0)
+            caja = item[2] if len(item) > 2 else None
+            caja_pk = caja.pk if isinstance(caja, Paquete) else caja
+            if cantidad <= 0:
+                continue
+            if linea.pedido_id != pedido.pk:
+                raise ValueError(f"La línea {linea.pk} no es de {pedido.folio}.")
+            linea.refresh_from_db()
+            if cantidad > linea.cantidad_repuesta:
+                raise ValueError(
+                    f"{linea.sku.codigo}: hay {linea.cantidad_repuesta} pieza(s) repuesta(s); no se cancelan {cantidad}."
+                )
+            linea.cantidad_repuesta -= cantidad
+            sobra = linea.cantidad_repuesta_reservada - linea.cantidad_repuesta
+            if sobra > 0:
+                liberar_reserva(linea.sku, sobra, pedido.folio)
+                linea.cantidad_repuesta_reservada = linea.cantidad_repuesta
+            origen = list(linea.origen_reposicion or [])
+            indice = _entrada_de_reposicion(origen, caja_pk, cantidad, folio_inc)
+            if indice is not None:
+                origen.pop(indice)
+            linea.origen_reposicion = origen
+            linea.save(update_fields=["cantidad_repuesta", "cantidad_repuesta_reservada", "origen_reposicion"])
+            numero = Paquete.objects.filter(pk=caja_pk).values_list("numero", flat=True).first() if caja_pk else None
+            revertidas.append((linea, cantidad, numero))
+        if not revertidas:
+            raise ValueError("La compensación no tiene piezas repuestas que cancelar.")
+        queda = any(l.por_surtir - l.cantidad_despachada > 0 for l in pedido.lineas.all())
+        destino = Pedido.PENDIENTE
+        if not queda:
+            destino = _estado_antes_de_reponer(pedido)
+            for caja in pedido.paquetes.prefetch_related("guias"):
+                if caja.estado != Paquete.DESPACHADO and not any(g.es_activa for g in caja.guias.all()):
+                    caja.delete()
+            if destino != Pedido.PENDIENTE:
+                pedido.transicionar(
+                    destino, actor=actor,
+                    motivo=f"Reposición cancelada{f' ({folio_inc})' if folio_inc else ''}: el pedido sigue con lo que ya salió.",
+                )
+        piezas = sum(c for _, c, _ in revertidas)
+        registrar_evento(
+            "pedido", pedido.pk, "reposicion_cancelada", actor=actor, cliente=pedido.cliente,
+            delta={
+                "incidencia": folio_inc, "estado": destino,
+                "lineas": [[l.sku.codigo, c, n] for l, c, n in revertidas],
+            },
+            motivo=f"Se cancela la reposición de {piezas} pieza(s)"
+                   + ("; el pedido sigue pendiente por otra ola." if queda else f"; regresa a {dict(Pedido.ESTADOS)[destino]}."),
+        )
+        if queda:
+            _planificar_best_effort(pedido, force=True)
+    return destino
+
+
+def _entrada_de_reposicion(origen, caja_pk, cantidad, folio_inc):
+    """Índice de la entrada de `origen_reposicion` que corresponde a esa caja
+    y cantidad: primero la de la misma incidencia; si no, cualquiera; None si
+    no hay (reposición anterior al registro del origen)."""
+    for exigir_incidencia in (True, False):
+        for i, entrada in enumerate(origen):
+            if entrada.get("caja") != caja_pk or int(entrada.get("cantidad") or 0) != cantidad:
+                continue
+            if exigir_incidencia and (entrada.get("incidencia") or "") != folio_inc:
+                continue
+            return i
+    return None
+
+
+def _estado_antes_de_reponer(pedido):
+    """Estado al que regresa un pedido cuya reposición se cancela: el `de` del
+    último cambio_estado que lo llevó a PENDIENTE (la reposición); si no está
+    o no es un estado de la calle, lo que digan sus guías (entregado,
+    retornado) o EN_TRANSITO."""
+    from apps.core.models import EventoAuditoria  # lazy: modelo de otra app
+
+    evento = (
+        EventoAuditoria.objects.filter(
+            entidad="pedido", entidad_id__in=[str(pedido.pk), pedido.folio], accion="cambio_estado", delta__a=Pedido.PENDIENTE,
+        ).order_by("-ts", "-pk").first()
+    )
+    anterior = (evento.delta or {}).get("de") if evento is not None else None
+    if anterior in ESTADOS_REPOSICION:
+        return anterior
+    from apps.envios.services import _estado_por_guias  # lazy por contrato
+
+    return _estado_por_guias(pedido) or Pedido.EN_TRANSITO
+
+
 def _tras_reserva(pedido, actor):
     """Qué sigue cuando una línea faltante consigue reserva. PENDIENTE (la ola
     no empezó): se replanean las cajas con la línea nueva (force: aún no hay

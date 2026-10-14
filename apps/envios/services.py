@@ -824,7 +824,7 @@ def guias_del_pedido(pedido):
             "activa": g.es_activa,
             "url": url_rastreo_carrier(g.carrier, g.numero),
             "sustituida": (
-                f"sustituida · {g.get_sustituida_motivo_display().lower()}"
+                f"contenido repuesto · {g.get_sustituida_motivo_display().lower()}"
                 + (f" · por caja {', '.join(str(n) for n in g.cajas_reposicion)}" if g.cajas_reposicion else "")
             ) if g.sustituida_motivo else "",
         }

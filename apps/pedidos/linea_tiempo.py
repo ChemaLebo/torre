@@ -111,18 +111,32 @@ def _horas_de_la_ola(pedido, caja, guia, eventos):
     return pick or picking, emp or empacado
 
 
-def _pasos_extra(caja, ts):
-    """Pasos que solo existen cuando pasaron (Chema 2026-10-12): hoy la
-    cancelación por reembolso. Cada uno se coloca por su hora después del
-    último paso con hora anterior (`despues_de`), así aparece donde nació."""
-    if caja is None or not caja.cancelada_por_reembolso:
-        return []
-    momento = caja.cancelada_por_reembolso
+def _despues_de(ts, momento):
+    """Último paso con hora anterior a `momento`: ahí se cuelga un paso extra."""
     despues_de = "recibido"
     for clave in ORDEN_PASOS:
         if ts.get(clave) is not None and ts[clave] <= momento:
             despues_de = clave
-    return [{"clave": "reembolso", "nombre": "Cancelada por reembolso", "ts": momento, "despues_de": despues_de}]
+    return despues_de
+
+
+def _pasos_extra(caja, ts, guia=None):
+    """Pasos que solo existen cuando pasaron (Chema 2026-10-12): la
+    cancelación por reembolso y, desde 2026-10-14, la reposición aprobada
+    sobre la caja original (su guía quedó marcada como contenido repuesto:
+    "por caja N" si la caja nueva ya se planeó, "en espera de existencias" si
+    no). Cada uno se coloca por su hora después del último paso con hora
+    anterior (`despues_de`), así aparece donde nació."""
+    extras = []
+    if caja is not None and caja.cancelada_por_reembolso:
+        momento = caja.cancelada_por_reembolso
+        extras.append({"clave": "reembolso", "nombre": "Cancelada por reembolso", "ts": momento, "despues_de": _despues_de(ts, momento)})
+    if guia is not None and guia.sustituida_motivo and guia.ts_sustituida:
+        cajas = caja.cajas_de_reposicion if caja is not None else []
+        detalle = f"por caja {', '.join(str(n) for n in cajas)}" if cajas else "en espera de existencias"
+        momento = guia.ts_sustituida
+        extras.append({"clave": "reposicion", "nombre": f"Reposición aprobada · {detalle}", "ts": momento, "despues_de": _despues_de(ts, momento)})
+    return extras
 
 
 def _agrupar_extras(extras):
@@ -138,6 +152,14 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
 
     linea = manifiestos.get(guia.pk) if guia else None
     picking, empacado = _horas_de_la_ola(pedido, caja, guia, eventos)
+    # Caja de reposición (Chema 2026-10-14): "recibido" es cuando se aprobó la
+    # reposición (evento `reposicion` anterior al plan de la caja), no el alta
+    # del pedido; y se dice a qué caja repone.
+    repone_a = sorted({pl.repone_a.numero for pl in caja.lineas.all() if pl.repone_a_id}) if caja is not None else []
+    recibido = pedido.creado
+    if repone_a:
+        tope = caja.creado + timedelta(minutes=1)
+        recibido = next((e.ts for e in reversed(list(eventos)) if e.accion == "reposicion" and e.ts <= tope), None) or recibido
     eventos = list(guia.eventos.all()) if guia else []
     ultimo = eventos[-1] if eventos else None
     entregada = bool(guia and guia.estado == Guia.ENTREGADO)
@@ -152,7 +174,7 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
         entregado = pedido.ts_entregado or guia.ts_ultimo_movimiento
     compromiso = guia.fecha_compromiso if guia and guia.es_activa and not entregada else None
     ts_real = {
-        "recibido": pedido.creado, "picking": picking, "empacado": empacado,
+        "recibido": recibido, "picking": picking, "empacado": empacado,
         "guia": guia.creado if guia else None,
         "salida": salida,
         "recolectado_carrier": guia.ts_recolectado_carrier if guia else None,
@@ -162,10 +184,11 @@ def _fila(pedido, caja, guia, total_cajas, manifiestos, hoy, eventos=()):
     }
     local = (guia.carrier if guia else (caja.carrier if caja else "")) == "local"
     ts, estimados = _completar(ts_real, guia, local)
-    extras = _pasos_extra(caja, ts)
+    extras = _pasos_extra(caja, ts, guia)
     return {
         "pedido": pedido,
         "caja": caja.numero if caja else None, "total_cajas": total_cajas,
+        "repone_a": repone_a,
         "caja_estado": caja.get_estado_display() if caja else "",
         "guia": guia,
         "url_rastreo": url_rastreo_carrier(guia.carrier, guia.numero) if guia else "",
@@ -192,7 +215,7 @@ def construir(pedidos, guia_estado=""):
     guía está en ese estatus (filtro "estatus del paquete")."""
     pedidos = list(
         pedidos.select_related("cliente", "tienda")
-        .prefetch_related("guias__eventos", "paquetes__guias__eventos")
+        .prefetch_related("guias__eventos", "paquetes__guias__eventos", "paquetes__lineas__repone_a")
     )
     # Una caja quitada de salida (no_salio) nunca se fue: su hoja no cuenta.
     lineas = LineaManifiesto.objects.filter(pedido__in=pedidos, no_salio=False).select_related("manifiesto")
@@ -201,7 +224,7 @@ def construir(pedidos, guia_estado=""):
     eventos_por_pedido = {}
     claves = {str(p.pk): p.pk for p in pedidos} | {p.folio: p.pk for p in pedidos}
     for e in EventoAuditoria.objects.filter(
-        entidad="pedido", entidad_id__in=list(claves), accion__in=("cambio_estado", "caja_empacada"),
+        entidad="pedido", entidad_id__in=list(claves), accion__in=("cambio_estado", "caja_empacada", "reposicion"),
     ).order_by("ts"):
         eventos_por_pedido.setdefault(claves[e.entidad_id], []).append(e)
     hoy = timezone.localdate()

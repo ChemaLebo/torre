@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.catalogo.models import SKU
 from apps.incidencias.models import Compensacion, Incidencia, MensajeIncidencia
@@ -153,3 +154,54 @@ class CompensacionesTests(TestCase):
         manual.save(update_fields=["referencia_pago"])
         manual.transicionar(Compensacion.PAGADA)
         self.assertEqual(manual.estado, Compensacion.PAGADA)
+
+    def test_cancelar_la_reposicion_la_deshace_y_libera_la_guia_original(self):
+        """Chema 2026-10-14: no es un reembolso; la reposición se deshace
+        (pedidos.deshacer_reposicion), la guía marcada vuelve a mandar y la
+        compensación queda CANCELADA con mensaje en la incidencia."""
+        from apps.envios.models import Guia, Paquete
+        from apps.incidencias.services import cancelar_reposicion, reposicion_cancelable
+
+        caja = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        guia = Guia.objects.create(pedido=self.pedido, paquete=caja, carrier="estafeta", numero="EST-1", estado=Guia.EN_TRANSITO,
+                                   sustituida_motivo="no_entregada", ts_sustituida=timezone.now())
+        comp = Compensacion.objects.create(
+            incidencia=self.inc, tipo="reposicion", monto=Decimal("300"), estado=Compensacion.APROBADA, motivo="no_entregada",
+            lineas=[{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": caja.pk, "caja": 1}],
+        )
+        self.assertFalse(reposicion_cancelable(comp))  # el pedido sigue ENTREGADO: aquí no hay reposición viva
+        self.pedido.estado = "PENDIENTE"
+        self.pedido.save(update_fields=["estado"])
+        self.assertTrue(reposicion_cancelable(comp))
+        with patch("apps.pedidos.services.deshacer_reposicion", return_value="EN_TRANSITO") as deshacer:
+            cancelar_reposicion(comp, None)
+        args, kwargs = deshacer.call_args
+        self.assertEqual((args[0], args[1], kwargs["incidencia"]), (self.pedido, [(self.l1, 1, caja.pk)], self.inc))
+        comp.refresh_from_db()
+        guia.refresh_from_db()
+        self.assertEqual(comp.estado, Compensacion.CANCELADA)
+        self.assertIn("Reposición cancelada", comp.nota)
+        self.assertEqual((guia.sustituida_motivo, guia.ts_sustituida), ("", None))
+        self.assertFalse(reposicion_cancelable(comp))
+        ultimo = self.inc.mensajes.order_by("-pk").first()
+        self.assertEqual(ultimo.rol_autor, MensajeIncidencia.ROL_MESA)
+        self.assertIn("Canceló la reposición (1× SIX (caja 1)): el pedido sigue con su guía original EST-1.", ultimo.texto)
+        with self.assertRaises(ValueError):
+            cancelar_reposicion(comp, None)  # ya cancelada
+
+    def test_cancelar_no_desmarca_la_guia_si_otra_reposicion_sigue_cubriendo_la_caja(self):
+        from apps.envios.models import Guia, Paquete
+        from apps.incidencias.services import cancelar_reposicion
+
+        caja = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        guia = Guia.objects.create(pedido=self.pedido, paquete=caja, carrier="estafeta", numero="EST-1", estado=Guia.EN_TRANSITO,
+                                   sustituida_motivo="danada", ts_sustituida=timezone.now())
+        lineas = [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": caja.pk, "caja": 1}]
+        comp = Compensacion.objects.create(incidencia=self.inc, tipo="reposicion", monto=Decimal("300"), estado=Compensacion.APROBADA, lineas=lineas)
+        Compensacion.objects.create(incidencia=self.inc, tipo="reposicion", monto=Decimal("300"), estado=Compensacion.APROBADA, lineas=lineas)
+        self.pedido.estado = "PENDIENTE"
+        self.pedido.save(update_fields=["estado"])
+        with patch("apps.pedidos.services.deshacer_reposicion", return_value="PENDIENTE"):
+            cancelar_reposicion(comp, None)
+        guia.refresh_from_db()
+        self.assertEqual(guia.sustituida_motivo, "danada")  # la otra reposición sigue viva

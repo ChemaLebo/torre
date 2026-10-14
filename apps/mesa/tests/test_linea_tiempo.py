@@ -132,3 +132,36 @@ class LineaTiempoTests(TestCase):
         self.assertIn(self.pedido.folio, html)
         self.assertNotIn("MAN-2026-0007", html)  # el manifiesto es interno: el cliente no lo ve (Chema 2026-10-05)
         self.assertNotIn(self.ajeno.folio, html)
+
+    def test_la_caja_de_reposicion_nace_al_aprobarse_y_dice_a_quien_repone(self):
+        """Chema 2026-10-14: "Recibido" de una caja de reposición es la hora en
+        que se aprobó la reposición (evento `reposicion`), no el alta del
+        pedido; la fila dice a qué caja repone y la caja original muestra el
+        paso extra "Reposición aprobada · por caja N"."""
+        from apps.catalogo.models import SKU
+        from apps.core.models import EventoAuditoria
+        from apps.envios.models import PaqueteLinea
+        from apps.pedidos.linea_tiempo import construir
+        from apps.pedidos.models import LineaPedido, Pedido
+
+        sku = SKU.objects.create(cliente=self.cliente, codigo="SIX", descripcion="Six")
+        linea = LineaPedido.objects.create(pedido=self.pedido, sku=sku, cantidad=2)
+        caja1 = Paquete.objects.get(pedido=self.pedido, numero=1)
+        aprobacion = timezone.now() - timedelta(minutes=30)
+        Guia.objects.filter(paquete=caja1).update(sustituida_motivo="no_entregada", ts_sustituida=aprobacion)
+        evento = EventoAuditoria.objects.create(entidad="pedido", entidad_id=str(self.pedido.pk), accion="reposicion",
+                                                delta={"lineas": [["SIX", 1, 1]], "sin_stock": []})
+        EventoAuditoria.objects.filter(pk=evento.pk).update(ts=aprobacion)
+        caja3 = Paquete.objects.create(pedido=self.pedido, numero=3, peso_kg=2, carrier="estafeta", estado=Paquete.PLANEADO)
+        PaqueteLinea.objects.create(paquete=caja3, linea_pedido=linea, cantidad=1, repone_a=caja1)
+        filas = {f["caja"]: f for f in construir(Pedido.objects.filter(pk=self.pedido.pk))}
+        self.assertEqual((filas[3]["ts"]["recibido"], filas[3]["repone_a"]), (aprobacion, [1]))
+        self.assertEqual((filas[1]["ts"]["recibido"], filas[1]["repone_a"]), (self.pedido.creado, []))
+        extras = [(x["nombre"], x["ts"]) for x in filas[1]["extras"]]
+        self.assertEqual(extras, [("Reposición aprobada · por caja 3", aprobacion)])
+        self._mesa()
+        html = self.client.get(reverse("mesa:linea_tiempo")).content.decode()
+        self.assertIn("repone a la caja 1", html)
+        self.assertIn("↳ Reposición aprobada · por caja 3", html)
+        self.assertIn("contenido repuesto · no entregado", html)
+        self.assertNotIn("sustituida ·", html)

@@ -88,6 +88,21 @@
 
 <div class="card mt" id="cajas">
   <div class="titulo"><h3>Cajas</h3><span class="small">{{ cajas|length }} caja{{ cajas|length|pluralize }} · las acciones son por caja y antes de salir; una caja que firmó manifiesto pero nunca se fue (guía cancelada, sin recolección del carrier) se quita de salida</span></div>
+  {# Reposiciones aprobadas (Chema 2026-10-14): se ven desde que se aprueban, aunque sin existencias no haya caja, y se cancelan aquí mientras el piso no las tome. #}
+  {% for r in reposiciones %}
+  <div class="fila entre mb" style="gap:10px;padding:6px 0;border-bottom:1px solid var(--hair)" id="reposicion-{{ r.comp.pk }}">
+    <div>
+      <b>Reposición</b> · {{ r.detalle }}{% for n in r.origen %} <span class="pill accent" title="Repone piezas que viajaron en esa caja">repone a la caja {{ n }}</span>{% endfor %}
+      <div class="small muted">{{ r.comp.incidencia.folio }}{% if r.aprobada %} · aprobada {{ r.aprobada|date:"d/M H:i" }}{% endif %} · {{ r.estado }}</div>
+    </div>
+    {% if r.cancelable %}
+    <form method="post" onsubmit="return confirm('¿Cancelar la reposición de {{ r.detalle }}? Las piezas regresan a la línea, la guía original vuelve a mandar sobre el pedido y no se repone nada. Úsalo si la paquetería va a entregar el paquete original (por ejemplo con una guía nueva).');">{% csrf_token %}
+      <input type="hidden" name="accion" value="cancelar_reposicion"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="compensacion_id" value="{{ r.comp.pk }}">
+      <button class="btn chico peligro" type="submit" title="Deshace la reposición: no es un reembolso">Cancelar reposición</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
   {% if cajas %}
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
@@ -105,7 +120,7 @@
           </td>
           <td>
             {% if caja.guia %}<span class="pill {% if caja.guia.estado == 'ENTREGADO' %}ok{% elif caja.guia.estado == 'RETORNO' or caja.guia.estado == 'INTENTO_FALLIDO' or caja.guia.estado == 'EXCEPCION' %}crit{% elif caja.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}" title="{{ caja.guia.ultimo_evento }}">{{ caja.guia.get_estado_display }}</span>
-            {% if caja.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repuso en otra caja; se sigue rastreando aparte">sustituida · {{ caja.guia.get_sustituida_motivo_display|lower }}{% for n in caja.guia.cajas_reposicion %} · por caja {{ n }}{% endfor %}</span></div>{% endif %}
+            {% if caja.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repone en otra caja; la guía se sigue rastreando aparte y no mueve el pedido">contenido repuesto · {{ caja.guia.get_sustituida_motivo_display|lower }}{% for n in caja.guia.cajas_reposicion %} · por caja {{ n }}{% empty %} · en espera de existencias{% endfor %}</span></div>{% endif %}
             {% if caja.cancelada_por_reembolso %}<div><span class="pill crit" title="Reembolsada en Shopify: salió y no se entregó; ya no cuenta para entregar el pedido y el comprador no la ve">cancelada por reembolso · {{ caja.cancelada_por_reembolso|date:"d/M H:i" }}</span></div>{% endif %}
             {% if caja.sin_escaneo %}<div><span class="pill warn" title="Salió sin pasar por Registrar salida: el carrier la reportó o Mesa la dio por salida">sin escaneo de salida</span></div>{% endif %}
             {% if caja.guia.ultimo_evento %}<div class="small muted">{{ caja.guia.ultimo_evento|truncatechars:70 }}</div>{% endif %}

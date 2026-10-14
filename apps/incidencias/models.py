@@ -311,11 +311,16 @@ class Compensacion(MaquinaEstados):
     COTIZADA = "COTIZADA"
     APROBADA = "APROBADA"
     PAGADA = "PAGADA"
-    ESTADOS = [(COTIZADA, "Cotizada"), (APROBADA, "Aprobada"), (PAGADA, "Pagada")]
+    # CANCELADA (Chema 2026-10-14): una reposición aprobada que se deshace
+    # antes de que el piso la tome (services.cancelar_reposicion). No es un
+    # reembolso: las piezas vuelven a la línea y la guía original sigue.
+    CANCELADA = "CANCELADA"
+    ESTADOS = [(COTIZADA, "Cotizada"), (APROBADA, "Aprobada"), (PAGADA, "Pagada"), (CANCELADA, "Cancelada")]
     TRANSICIONES = {
         COTIZADA: {APROBADA},
-        APROBADA: {PAGADA},
+        APROBADA: {PAGADA, CANCELADA},
         PAGADA: set(),
+        CANCELADA: set(),
     }
 
     ENTIDAD_AUDITORIA = "compensacion"

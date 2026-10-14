@@ -134,7 +134,7 @@
           <td class="small">{% if paq.guia %}{% if paq.url_rastreo %}<a class="mono" href="{{ paq.url_rastreo }}" target="_blank" rel="noopener" title="Rastreo público de la paquetería">{{ paq.guia.numero }} ↗</a>{% else %}<span class="mono">{{ paq.guia.numero }}</span>{% endif %}{% else %}<span class="muted">en preparación</span>{% endif %}</td>
           <td>
             {% if paq.guia %}<span class="pill {% if paq.guia.estado == 'ENTREGADO' %}ok{% elif paq.guia.estado == 'RETORNO' or paq.guia.estado == 'INTENTO_FALLIDO' or paq.guia.estado == 'EXCEPCION' %}crit{% elif paq.guia.estado == 'GUIA_CREADA' %}{% else %}accent{% endif %}">{{ paq.guia.get_estado_display }}</span>
-            {% if paq.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repuso en otro paquete">sustituido · {{ paq.guia.get_sustituida_motivo_display|lower }}{% for n in paq.guia.cajas_reposicion %} · por el paquete {{ n }}{% endfor %}</span></div>{% endif %}
+            {% if paq.guia.sustituida_motivo %}<div><span class="pill warn" title="Su contenido se repuso en otro paquete">contenido repuesto · {{ paq.guia.get_sustituida_motivo_display|lower }}{% for n in paq.guia.cajas_reposicion %} · por el paquete {{ n }}{% endfor %}</span></div>{% endif %}
             {% if paq.guia.ultimo_evento %}<div class="small muted">{{ paq.guia.ultimo_evento|truncatechars:60 }}</div>{% endif %}
             {% else %}<span class="pill">{{ paq.get_estado_display }}</span>{% endif %}
           </td>

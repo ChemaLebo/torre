@@ -746,6 +746,80 @@ def marcar_guias_sustituidas(comp, actor):
     return guias
 
 
+def reposicion_cancelable(comp):
+    """True si la reposición aprobada todavía se puede cancelar (Chema
+    2026-10-14): el pedido sigue PENDIENTE y sin dueño, es decir el piso no
+    la ha tomado con EMPEZAR."""
+    pedido = comp.incidencia.pedido
+    return (
+        comp.tipo == Compensacion.TIPO_REPOSICION and comp.estado == Compensacion.APROBADA
+        and pedido is not None and pedido.estado == "PENDIENTE" and not pedido.asignado_a_id
+    )
+
+
+def cancelar_reposicion(comp, actor):
+    """Deshace una reposición aprobada que el piso no ha tomado (Chema
+    2026-10-14; PED-00261: el carrier entrega el paquete original con una
+    guía nueva y la reposición sobra). No es un reembolso: las piezas
+    repuestas salen de las líneas y el pedido regresa a donde estaba
+    (pedidos.deshacer_reposicion), la guía original deja de estar marcada
+    como "contenido repuesto" y vuelve a mover el pedido, y la compensación
+    queda CANCELADA. Queda en el timeline de la incidencia."""
+    if comp.tipo != Compensacion.TIPO_REPOSICION or comp.estado != Compensacion.APROBADA:
+        raise ValueError("Solo se cancela una reposición aprobada que el piso no haya tomado.")
+    incidencia = comp.incidencia
+    pedido = incidencia.pedido
+    if pedido is None:
+        raise ValueError("La compensación no está ligada a un pedido.")
+    from apps.pedidos.services import deshacer_reposicion  # lazy por contrato
+
+    with transaction.atomic():
+        deshacer_reposicion(pedido, _seleccion_de(comp), actor, incidencia=incidencia)
+        guias = _revertir_guias_sustituidas(comp, actor)
+        pedido.refresh_from_db()
+        comp.nota = f"Reposición cancelada: {pedido.folio} sigue {pedido.get_estado_display().lower()} con su guía original."[:300]
+        comp.save(update_fields=["nota"])
+        comp.transicionar(Compensacion.CANCELADA, actor=actor, motivo=f"Reposición cancelada ({incidencia.folio})")
+    responder(
+        incidencia, _nombre_actor(actor), MensajeIncidencia.ROL_MESA,
+        f"Canceló la reposición ({comp.resumen_lineas}): el pedido sigue con su guía original"
+        + (f" {', '.join(g.numero for g in guias)}" if guias else "") + ".",
+    )
+    return comp
+
+
+def _revertir_guias_sustituidas(comp, actor):
+    """Al cancelar la reposición, las guías que esa compensación marcó
+    (marcar_guias_sustituidas) vuelven a mandar sobre el pedido, salvo que
+    otra reposición aprobada del mismo pedido siga cubriendo la misma caja.
+    Regresa las guías revertidas."""
+    from apps.envios.models import Guia, PaqueteLinea  # lazy: modelos de otra app
+
+    cajas_ids = {x["caja_id"] for x in comp.lineas if x.get("caja_id")}
+    if not cajas_ids:
+        lineas_ids = [x.get("linea_id") for x in comp.lineas if x.get("linea_id")]
+        cajas_ids = set(
+            PaqueteLinea.objects.filter(linea_pedido_id__in=lineas_ids, repone_a__isnull=True, paquete__estado="DESPACHADO")
+            .values_list("paquete_id", flat=True)
+        )
+    otras = Compensacion.objects.filter(
+        incidencia__pedido=comp.incidencia.pedido, tipo=Compensacion.TIPO_REPOSICION, estado=Compensacion.APROBADA,
+    ).exclude(pk=comp.pk)
+    cubiertas = {x.get("caja_id") for otra in otras for x in (otra.lineas or []) if x.get("caja_id")}
+    guias = list(Guia.objects.filter(paquete_id__in=cajas_ids - cubiertas).exclude(sustituida_motivo=""))
+    for g in guias:
+        motivo = g.sustituida_motivo
+        g.sustituida_motivo = ""
+        g.ts_sustituida = None
+        g.save(update_fields=["sustituida_motivo", "ts_sustituida"])
+        registrar_evento(
+            "guia", g.pk, "guia_sustitucion_revertida", actor=actor, cliente=comp.incidencia.cliente,
+            delta={"numero": g.numero, "motivo": motivo, "incidencia": comp.incidencia.folio},
+            motivo="Reposición cancelada: la guía vuelve a mover el pedido.",
+        )
+    return guias
+
+
 def entrega_duplicada(guia, descripcion=""):
     """El carrier entregó una guía ya sustituida: nota en las incidencias
     abiertas del pedido (o en la última) para que el cliente decida si
