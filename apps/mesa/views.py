@@ -347,15 +347,18 @@ def bodega_posiciones(request):
     **Editar** (cambiar nombre / mover existencias), **Imprimir posición**
     (QR `U|nombre`) e **Imprimir etiquetas de las cajas** (una por caja de
     cada producto y lote, cantidades prellenadas con lo que el sistema dice)."""
-    from apps.inventario.services import existencias_de_posicion, ocupaciones  # lazy por contrato
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+    from apps.catalogo.services import asignaciones_de  # lazy por contrato
+    from apps.inventario.services import capacidad_asignada, existencias_de_posicion, ocupaciones  # lazy por contrato
 
     posiciones = list(_posiciones_almacen())
     ocupacion = ocupaciones(posiciones)
     filas = []
     for p in posiciones:
         existencias = existencias_de_posicion(p)
+        fijos = [{"sku": a.sku, "orden": a.orden, "capacidad": capacidad_asignada(p, a.sku)} for a in asignaciones_de(p)]
         filas.append({
-            "ubicacion": p, "existencias": existencias, "ocupacion": ocupacion.get(p.codigo, {}),
+            "ubicacion": p, "existencias": existencias, "ocupacion": ocupacion.get(p.codigo, {}), "fijos": fijos,
             "vendible": sum(e["vendible"] for e in existencias), "apartado": sum(e["apartado"] for e in existencias),
             "es_tarima": p.codigo.startswith("TAR-"), "datos_id": f"pos-datos-{p.pk}",
             "datos": {
@@ -365,12 +368,14 @@ def bodega_posiciones(request):
                     "lote": e["lote"].pk if e["lote"] else 0, "lote_codigo": e["lote"].codigo if e["lote"] else "",
                     "vendible": e["vendible"],
                 } for e in existencias],
+                "fijos": [{"sku_codigo": f["sku"].codigo, "descripcion": f["sku"].descripcion, "capacidad": f["capacidad"]} for f in fijos],
             },
         })
     filas.sort(key=lambda f: _orden_posicion(f["ubicacion"].codigo))
     return render(request, "mesa/bodega_posiciones.html", {
         "seccion": "bodega", "filas": filas, "destinos": sorted(posiciones, key=lambda p: _orden_posicion(p.codigo)),
         "n_posiciones": len(filas), "n_con_producto": sum(1 for f in filas if f["existencias"]),
+        "skus": SKU.objects.filter(activo=True).select_related("cliente").order_by("cliente__nombre", "codigo"),
     })
 
 
@@ -381,6 +386,7 @@ def bodega_posicion_accion(request, pk):
     (`n_<sku>_<lote>` = cuántas etiquetas por renglón). Vuelve a la lista
     anclada en la posición; los errores van como mensaje."""
     from apps.catalogo.models import SKU, Lote, Ubicacion  # lazy: modelos de otra app
+    from apps.catalogo.services import asignar_producto, desasignar_producto  # lazy por contrato
     from apps.inventario.services import mover_existencias, renombrar_posicion  # lazy por contrato
     from apps.piso.etiquetas import imprimir_etiqueta_posicion, imprimir_etiquetas_posicion  # lazy por contrato
 
@@ -405,6 +411,17 @@ def bodega_posicion_accion(request, pk):
                 f"{r['cantidad']} × {sku.codigo}{' lote ' + lote.codigo if lote else ''}: de {ubicacion.codigo} a {destino.codigo}"
                 + (f" (con {r['apartadas']} apartada(s))" if r["apartadas"] else "") + ".",
             )
+        elif accion == "asignar":
+            codigo = (request.POST.get("sku") or "").strip()
+            sku = SKU.objects.filter(codigo__iexact=codigo).first()
+            if sku is None:
+                raise ValueError(f"No existe el producto {codigo or '(vacío)'}.")
+            asignar_producto(ubicacion, sku, actor=request.user)
+            messages.success(request, f"{sku.codigo} queda fijo en {ubicacion.codigo}.")
+        elif accion == "desasignar":
+            sku = get_object_or_404(SKU, codigo=(request.POST.get("sku") or "").strip())
+            desasignar_producto(sku, actor=request.user)
+            messages.success(request, f"{sku.codigo} deja de ser fijo en {ubicacion.codigo}.")
         elif accion == "imprimir_posicion":
             imprimir_etiqueta_posicion(ubicacion, request.user)
             messages.success(request, f"La etiqueta de {ubicacion.codigo} va a la impresora.")

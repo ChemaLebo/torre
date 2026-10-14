@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import SKU, Categoria, Lote, Ubicacion
+from .models import AsignacionPosicion, SKU, Categoria, Lote, Ubicacion
 
 
 @admin.register(Categoria)
@@ -34,3 +34,10 @@ class LoteAdmin(admin.ModelAdmin):
     list_filter = ("sku__cliente",)
     search_fields = ("codigo", "sku__codigo")
     ordering = ("fecha_caducidad",)
+
+
+@admin.register(AsignacionPosicion)
+class AsignacionPosicionAdmin(admin.ModelAdmin):
+    list_display = ("ubicacion", "orden", "sku", "creado")
+    search_fields = ("ubicacion__codigo", "sku__codigo")
+    autocomplete_fields = ("sku",)

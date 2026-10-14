@@ -239,6 +239,31 @@ class Ubicacion(models.Model):
         return [c.strip() for c in (self.carriers or "").split(",") if c.strip()]
 
 
+class AsignacionPosicion(models.Model):
+    """Producto fijo de una posición de picking (Chema 2026-10-13): cada
+    posición lleva uno o dos productos y un producto vive en UNA sola
+    posición. `orden` (1 o 2) es el lugar dentro de la posición cuando son
+    dos; la capacidad de cada uno es la de la posición con el largo entre el
+    número de productos asignados (inventario.capacidad_asignada). Se carga
+    del plan de acomodo (`cargar_asignaciones`) y se edita en Mesa → Bodega
+    → Posiciones."""
+
+    MAXIMO_POR_POSICION = 2
+
+    ubicacion = models.ForeignKey(Ubicacion, on_delete=models.CASCADE, related_name="asignaciones")
+    sku = models.OneToOneField(SKU, on_delete=models.CASCADE, related_name="asignacion")
+    orden = models.PositiveSmallIntegerField(default=1, help_text="1 o 2: lugar dentro de la posición")
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["ubicacion__codigo", "orden"]
+        verbose_name = "asignación de posición"
+        verbose_name_plural = "asignaciones de posición"
+
+    def __str__(self):
+        return f"{self.sku.codigo} en {self.ubicacion.codigo} ({self.orden})"
+
+
 class Lote(models.Model):
     """Lote de producción de un SKU; la caducidad manda el FEFO del picking."""
 

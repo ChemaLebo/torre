@@ -11,12 +11,13 @@ import re
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
 from apps.core.services import registrar_evento
 
-from .models import SKU, Lote
+from .models import SKU, AsignacionPosicion, Lote, Ubicacion
 
 
 def obtener_o_crear_lote(sku, codigo, fecha_caducidad=None):
@@ -272,3 +273,67 @@ def aplicar_medidas(ubicaciones):
             u.save(update_fields=list(valores))
             cambiadas += 1
     return cambiadas
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Producto fijo por posición (Chema 2026-10-13)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def asignaciones_de(ubicacion):
+    """Los productos fijos de una posición, en su orden (1, 2)."""
+    return list(
+        AsignacionPosicion.objects.filter(ubicacion=ubicacion)
+        .select_related("sku", "sku__cliente").order_by("orden", "sku__codigo")
+    )
+
+
+def rack_de(sku):
+    """La posición fija del producto, o None si no tiene."""
+    asignacion = AsignacionPosicion.objects.filter(sku=sku).select_related("ubicacion").first()
+    return asignacion.ubicacion if asignacion else None
+
+
+def asignar_producto(ubicacion, sku, actor=None):
+    """Fija `sku` en `ubicacion` (máximo 2 por posición). Si el producto ya
+    vivía en otra posición, se cambia. Regresa la asignación."""
+    if not ubicacion.activo or ubicacion.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA):
+        raise ValueError(f"{ubicacion.codigo} no es una posición de almacén activa.")
+    with transaction.atomic():
+        otros = list(AsignacionPosicion.objects.select_for_update().filter(ubicacion=ubicacion).exclude(sku=sku).select_related("sku"))
+        if len(otros) >= AsignacionPosicion.MAXIMO_POR_POSICION:
+            raise ValueError(
+                f"{ubicacion.codigo} ya tiene {len(otros)} productos ({', '.join(a.sku.codigo for a in otros)}); quita uno antes."
+            )
+        orden = 1 if 1 not in {a.orden for a in otros} else 2
+        actual = AsignacionPosicion.objects.select_for_update().filter(sku=sku).select_related("ubicacion").first()
+        anterior = None
+        if actual is not None:
+            if actual.ubicacion_id == ubicacion.pk:
+                return actual
+            anterior = actual.ubicacion.codigo
+            actual.ubicacion, actual.orden = ubicacion, orden
+            actual.save(update_fields=["ubicacion", "orden"])
+            asignacion = actual
+        else:
+            asignacion = AsignacionPosicion.objects.create(ubicacion=ubicacion, sku=sku, orden=orden)
+        registrar_evento(
+            "ubicacion", ubicacion.codigo, "producto_asignado", actor=actor, cliente=sku.cliente,
+            delta={"sku": sku.codigo, "orden": orden, "antes": anterior},
+            motivo=f"{sku.codigo} fijo en {ubicacion.codigo}" + (f" (antes en {anterior})" if anterior else "") + ".",
+        )
+    return asignacion
+
+
+def desasignar_producto(sku, actor=None):
+    """Quita la posición fija del producto. Regresa la posición que tenía."""
+    asignacion = AsignacionPosicion.objects.filter(sku=sku).select_related("ubicacion").first()
+    if asignacion is None:
+        raise ValueError(f"{sku.codigo} no tiene posición fija.")
+    ubicacion = asignacion.ubicacion
+    asignacion.delete()
+    registrar_evento(
+        "ubicacion", ubicacion.codigo, "producto_desasignado", actor=actor, cliente=sku.cliente,
+        delta={"sku": sku.codigo}, motivo=f"{sku.codigo} deja de ser fijo en {ubicacion.codigo}.",
+    )
+    return ubicacion

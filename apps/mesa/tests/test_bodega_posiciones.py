@@ -116,6 +116,19 @@ class PosicionesMesaTests(TestCase):
         self.assertEqual(TrabajoImpresion.objects.count(), 3)
 
 
+    def test_productos_fijos_desde_la_lista(self):
+        r = self.client.post(self.accion_a, {"accion": "asignar", "sku": "ccpl24l"}, follow=True)
+        self.assertContains(r, "CCPL24L queda fijo en PIC-1-I-F-2")
+        self.assertContains(r, "fijo: CCPL24L")
+        self.assertContains(r, 'id="lista-skus"')
+        self.assertEqual(r.context["filas"][1]["fijos"][0]["capacidad"], None)  # el SKU de prueba no tiene medidas
+        r = self.client.post(self.accion_a, {"accion": "asignar", "sku": "NOEXISTE"}, follow=True)
+        self.assertContains(r, "No existe el producto NOEXISTE")
+        r = self.client.post(self.accion_a, {"accion": "desasignar", "sku": "CCPL24L"}, follow=True)
+        self.assertContains(r, "CCPL24L deja de ser fijo")
+        self.assertNotContains(r, "fijo: CCPL24L")
+
+
 class PlanoPorPasilloTests(TestCase):
     def test_nombres_por_pasillo_se_dibujan_por_pasillo_con_cuatro_celdas_por_piso(self):
         from apps.mesa.plano import RACK_X, racks_bodega

@@ -2314,24 +2314,35 @@ def buscar_en_bodega(q, cliente=None):
 
 # ── Capacidad y ocupación de anaqueles (producto siempre parado) ──
 
-def capacidad_sku_en(ubicacion, sku):
+def capacidad_sku_en(ubicacion, sku, partes=1):
     """Piezas del SKU que caben PARADAS en la ubicación: huella (largo × ancho
     del anaquel entre las del SKU, o girado 90° sobre el piso, el mayor) por
     niveles (alto del anaquel entre alto del SKU, tope TORRE["APILADO_MAX"]).
-    None = no se puede calcular (anaquel sin medidas, sin tope de alto como la
-    reserva, o SKU sin medidas). 0 = no cabe ni una parada."""
+    `partes` = entre cuántos productos se reparte el largo (posición con dos
+    productos fijos: 2). None = no se puede calcular (anaquel sin medidas, sin
+    tope de alto como la reserva, o SKU sin medidas). 0 = no cabe ni una parada."""
     if not (ubicacion.largo_cm and ubicacion.ancho_cm and ubicacion.alto_cm):
         return None
     if not (sku.largo_cm and sku.ancho_cm and sku.alto_cm):
         return None
     if sku.alto_cm > ubicacion.alto_cm:
         return 0
+    largo = ubicacion.largo_cm // max(1, int(partes))
     niveles = min(ubicacion.alto_cm // sku.alto_cm, int(settings.TORRE.get("APILADO_MAX", 6)))
     huella = max(
-        (ubicacion.largo_cm // sku.largo_cm) * (ubicacion.ancho_cm // sku.ancho_cm),
-        (ubicacion.largo_cm // sku.ancho_cm) * (ubicacion.ancho_cm // sku.largo_cm),
+        (largo // sku.largo_cm) * (ubicacion.ancho_cm // sku.ancho_cm),
+        (largo // sku.ancho_cm) * (ubicacion.ancho_cm // sku.largo_cm),
     )
     return huella * niveles
+
+
+def capacidad_asignada(ubicacion, sku):
+    """Capacidad del producto en su posición fija: la cuenta por medidas con el
+    largo entre el número de productos fijos de la posición (1 o 2)."""
+    from apps.catalogo.models import AsignacionPosicion  # lazy: modelo de otra app
+
+    partes = max(1, AsignacionPosicion.objects.filter(ubicacion=ubicacion).count())
+    return capacidad_sku_en(ubicacion, sku, partes)
 
 
 # Lo que FÍSICAMENTE está en un anaquel (Chema 2026-10-07): el vendible, lo que

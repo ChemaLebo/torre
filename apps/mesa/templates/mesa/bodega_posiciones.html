@@ -16,6 +16,7 @@
   <summary>
     <span class="mono"><b>{{ f.ubicacion.codigo }}</b></span>
     <span class="pill">{% if f.es_tarima %}tarima{% else %}{{ f.ubicacion.get_tipo_display|lower }}{% endif %}</span>
+    {% for fijo in f.fijos %}<span class="pill accent" title="producto fijo{% if fijo.capacidad %} · caben {{ fijo.capacidad }}{% endif %}">fijo: {{ fijo.sku.codigo }}</span>{% endfor %}
     · {{ f.vendible }} vendible(s) · {{ f.apartado }} apartada(s)
     {% if f.ocupacion.pct != None %} · <span class="pill {% if f.ocupacion.estado == "lleno" %}crit{% elif f.ocupacion.estado == "medio" %}warn{% else %}ok{% endif %}">{{ f.ocupacion.pct }} %</span>{% endif %}
     {% if not f.existencias %} · <span class="small muted">vacía</span>{% endif %}
@@ -59,9 +60,20 @@
 {% endfor %}
 
 {# ── Modal Editar: cambiar nombre o mover existencias ── #}
-<dialog class="modal" id="modal-editar" aria-labelledby="editar-titulo">
+<dialog class="modal ancho" id="modal-editar" aria-labelledby="editar-titulo">
   <div class="titulo"><h3 id="editar-titulo">Editar <span class="mono" data-campo="codigo"></span></h3><button class="btn chico" type="button" onclick="document.getElementById('modal-editar').close()">Cerrar</button></div>
   <div class="grid g2">
+    <div>
+      <h4>Productos fijos</h4>
+      <p class="small muted">Uno o dos por posición; un producto vive en una sola posición. Se restockea aquí desde las tarimas.</p>
+      <div data-fijos></div>
+      <form method="post" data-form="asignar" class="fila mt">{% csrf_token %}
+        <input type="hidden" name="accion" value="asignar">
+        <input type="text" name="sku" class="mono" list="lista-skus" autocomplete="off" autocapitalize="characters" placeholder="SKU" required style="flex:1 1 auto">
+        <button class="btn" type="submit">Asignar</button>
+      </form>
+      <datalist id="lista-skus">{% for s in skus %}<option value="{{ s.codigo }}">{{ s.cliente.nombre }} · {{ s.descripcion|truncatechars:40 }}</option>{% endfor %}</datalist>
+    </div>
     <form method="post" data-form="renombrar">{% csrf_token %}
       <input type="hidden" name="accion" value="renombrar">
       <h4>Cambiar nombre</h4>
@@ -109,6 +121,7 @@
 <script>
 (function () {
   var base = "{% url 'mesa:bodega_posicion_accion' 0 %}";
+  var csrf = document.querySelector("[name=csrfmiddlewaretoken]").value;
   function datos(pk) { return JSON.parse(document.getElementById("pos-datos-" + pk).textContent); }
   function accion(pk) { return base.replace("/0/", "/" + pk + "/"); }
   function etiquetaFila(f) { return f.sku_codigo + (f.lote_codigo ? " · lote " + f.lote_codigo : "") + " · " + f.vendible + " vendible(s)"; }
@@ -118,6 +131,19 @@
       var d = datos(b.dataset.editar), modal = document.getElementById("modal-editar");
       modal.querySelectorAll("[data-campo=codigo]").forEach(function (e) { e.textContent = d.codigo; });
       modal.querySelector("[data-form=renombrar]").action = accion(d.pk);
+      modal.querySelector("[data-form=asignar]").action = accion(d.pk);
+      var fijos = modal.querySelector("[data-fijos]");
+      fijos.innerHTML = "";
+      if (!d.fijos.length) { fijos.innerHTML = '<p class="small muted">Sin producto fijo.</p>'; }
+      d.fijos.forEach(function (f) {
+        var form = document.createElement("form");
+        form.method = "post"; form.action = accion(d.pk); form.className = "fila";
+        form.innerHTML = '<input type="hidden" name="csrfmiddlewaretoken" value="' + csrf + '"><input type="hidden" name="accion" value="desasignar"><input type="hidden" name="sku"><span class="crece"><b class="mono"></b> <span class="small"></span>' + (f.capacidad ? ' <span class="pill">caben ' + f.capacidad + '</span>' : '') + '</span><button class="btn chico" type="submit">Quitar</button>';
+        form.querySelector("[name=sku]").value = f.sku_codigo;
+        form.querySelector("b").textContent = f.sku_codigo;
+        form.querySelector("span.small").textContent = f.descripcion;
+        fijos.appendChild(form);
+      });
       var fm = modal.querySelector("[data-form=mover]");
       fm.action = accion(d.pk);
       var sel = document.getElementById("ed-producto"), cant = document.getElementById("ed-cantidad");
