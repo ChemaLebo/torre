@@ -2406,6 +2406,47 @@ def _liberar_reserva_sobrante(sku, actor):
     return liberadas, max(sobra, 0)
 
 
+def crear_posicion(codigo, tipo, largo=0, ancho=0, alto=0, prioridad=None, actor=None):
+    """Posición nueva desde Mesa → Bodega → Posiciones (Chema 2026-10-14):
+    nombre con la misma regla que renombrar (no puede existir, ni inactiva),
+    tipo picking o reserva (tarimas incluidas), medidas en cm (0 = sin dato;
+    alto 0 = sin tope, como las tarimas) y prioridad opcional (orden de
+    acceso de la ruta, 1 = mejor). Nace activa, con evento. Regresa la
+    Ubicacion."""
+    codigo = validar_nombre_posicion(codigo)
+    if Ubicacion.objects.filter(codigo=codigo).exists():
+        raise ValueError(f"Ya existe una posición {codigo} (activa o inactiva); elige otro nombre.")
+    if tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA):
+        raise ValueError("El tipo es rack de picking o reserva / tarima.")
+    medidas = []
+    for nombre, valor in (("largo", largo), ("ancho", ancho), ("alto", alto)):
+        try:
+            n = int(str(valor or 0).strip() or 0)
+        except (TypeError, ValueError):
+            raise ValueError(f"El {nombre} va en centímetros enteros (0 = sin dato).") from None
+        if n < 0:
+            raise ValueError(f"El {nombre} no puede ser negativo.")
+        medidas.append(n)
+    if prioridad in (None, ""):
+        prioridad = None
+    else:
+        try:
+            prioridad = int(str(prioridad).strip())
+        except (TypeError, ValueError):
+            raise ValueError("La prioridad es un número entero (1 = mejor acceso) o vacía.") from None
+        if prioridad < 1:
+            raise ValueError("La prioridad empieza en 1 (mejor acceso).")
+    ubicacion = Ubicacion.objects.create(
+        codigo=codigo, tipo=tipo, largo_cm=medidas[0], ancho_cm=medidas[1], alto_cm=medidas[2], prioridad=prioridad, activo=True,
+    )
+    registrar_evento(
+        "ubicacion", codigo, "ubicacion_creada", actor=actor,
+        delta={"tipo": tipo, "largo_cm": medidas[0], "ancho_cm": medidas[1], "alto_cm": medidas[2], "prioridad": prioridad},
+        motivo="Posición nueva desde Mesa → Bodega → Posiciones.",
+    )
+    return ubicacion
+
+
 ESTADO_LEGIBLE = {
     Saldo.UBICADO_VENDIBLE: "vendible", Saldo.RESERVADO: "apartado (de las vendibles)", Saldo.EN_PUTAWAY: "en recepción",
     Saldo.EN_EMPAQUE: "en empaque (ya salió del anaquel)", Saldo.CUARENTENA: "cuarentena",

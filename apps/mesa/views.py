@@ -344,14 +344,30 @@ def _entero_positivo(valor, mensaje):
 def bodega_posiciones(request):
     """Mesa → Bodega → Posiciones (Chema 2026-10-13): todas las posiciones de
     almacén (racks y tarimas) con lo que hay en cada una y, por posición,
-    **Editar** (cambiar nombre / mover existencias), **Imprimir posición**
-    (QR `U|nombre`) e **Imprimir etiquetas de las cajas** (una por caja de
-    cada producto y lote, cantidades prellenadas con lo que el sistema dice)."""
-    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+    **Editar** (cambiar nombre / mover existencias / ajustar conteo /
+    producto fijo), **Imprimir posición** (QR `U|nombre`) e **Imprimir
+    etiquetas de las cajas** (una por caja de cada producto y lote,
+    cantidades prellenadas con lo que el sistema dice). POST `crear` da de
+    alta una posición nueva (2026-10-14)."""
+    from apps.catalogo.models import SKU, Ubicacion  # lazy: modelos de otra app
     from apps.catalogo.services import asignaciones_de  # lazy por contrato
     from apps.inventario.models import Ajuste  # lazy: modelo de otra app
     from apps.inventario.services import capacidad_asignada, existencias_de_posicion, ocupaciones  # lazy por contrato
 
+    if request.method == "POST" and request.POST.get("accion") == "crear":
+        # Nueva posición (Chema 2026-10-14): nombre, tipo, medidas y prioridad; nace activa.
+        from apps.inventario.services import crear_posicion  # lazy por contrato
+
+        try:
+            nueva = crear_posicion(
+                request.POST.get("codigo"), request.POST.get("tipo"), request.POST.get("largo_cm"), request.POST.get("ancho_cm"),
+                request.POST.get("alto_cm"), request.POST.get("prioridad"), actor=request.user,
+            )
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("mesa:bodega_posiciones")
+        messages.success(request, f"Posición {nueva.codigo} creada ({nueva.get_tipo_display().lower()}). Imprime y pega su etiqueta.")
+        return redirect(f"{reverse('mesa:bodega_posiciones')}#pos-{nueva.pk}")
     posiciones = list(_posiciones_almacen())
     ocupacion = ocupaciones(posiciones)
     filas = []
@@ -380,6 +396,7 @@ def bodega_posiciones(request):
         "n_posiciones": len(filas), "n_con_producto": sum(1 for f in filas if f["existencias"]),
         "skus": SKU.objects.filter(activo=True).select_related("cliente").order_by("cliente__nombre", "codigo"),
         "motivos_ajuste": Ajuste.MOTIVOS,
+        "tipos_posicion": [(Ubicacion.PICKING, "Rack de picking"), (Ubicacion.RESERVA, "Reserva / tarima")],
     })
 
 

@@ -8,8 +8,33 @@
     <h1>Posiciones</h1>
     <div class="small">{{ n_posiciones }} posiciones activas · {{ n_con_producto }} con producto. Racks y tarimas; lo que ves es lo que Torre dice que hay.</div>
   </div>
-  <a class="btn" href="{% url 'mesa:bodega' %}">← Bodega</a>
+  <div class="fila" style="gap:8px">
+    <button class="btn primario" type="button" onclick="document.getElementById('modal-nueva').showModal()">Nueva posición</button>
+    <a class="btn" href="{% url 'mesa:bodega' %}">← Bodega</a>
+  </div>
 </div>
+
+{# ── Modal Nueva posición (Chema 2026-10-14) ── #}
+<dialog class="modal" id="modal-nueva" aria-labelledby="nueva-titulo">
+  <div class="titulo"><h3 id="nueva-titulo">Nueva posición</h3><button class="btn chico" type="button" onclick="document.getElementById('modal-nueva').close()">Cerrar</button></div>
+  <form method="post" action="{% url 'mesa:bodega_posiciones' %}">{% csrf_token %}
+    <input type="hidden" name="accion" value="crear">
+    <label for="nu-codigo">Nombre</label>
+    <input type="text" id="nu-codigo" name="codigo" class="mono" maxlength="20" required autocapitalize="characters" placeholder="A-9 o TAR-11">
+    <p class="small muted">Letras, números y guiones. A-1 … E-16 se dibujan en el plano por pasillo; una tarima u otro nombre existe igual, solo no sale en el croquis.</p>
+    <label for="nu-tipo">Tipo</label>
+    <select id="nu-tipo" name="tipo">{% for clave, nombre in tipos_posicion %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}</select>
+    <div class="grid g3">
+      <label>Largo (cm) <input type="number" name="largo_cm" min="0" inputmode="numeric" value="180"></label>
+      <label>Ancho (cm) <input type="number" name="ancho_cm" min="0" inputmode="numeric" value="58"></label>
+      <label>Alto (cm) <input type="number" name="alto_cm" min="0" inputmode="numeric" value="52"></label>
+    </div>
+    <p class="small muted">Las medidas dan la capacidad por producto; alto 0 = sin tope (tarima).</p>
+    <label for="nu-prioridad">Prioridad (opcional)</label>
+    <input type="number" id="nu-prioridad" name="prioridad" min="1" inputmode="numeric" placeholder="1 = mejor acceso">
+    <button class="btn primario" type="submit">Crear posición</button>
+  </form>
+</dialog>
 
 {% for f in filas %}
 <details class="colapsable" id="pos-{{ f.ubicacion.pk }}">

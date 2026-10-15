@@ -189,6 +189,36 @@ class PosicionesMesaTests(TestCase):
         self.assertEqual(evento.delta, {"sku": "CCPL24L", "piezas": 5})
         self.assertFalse(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(viejo.pk), accion="reserva_liberada_por_conteo").exists())
 
+    def test_crear_posicion_desde_la_lista(self):
+        """Chema 2026-10-14: nueva posición con nombre, tipo, medidas y prioridad; nace activa y con evento."""
+        datos = {"accion": "crear", "codigo": "a-9", "tipo": "picking", "largo_cm": "180", "ancho_cm": "58", "alto_cm": "44", "prioridad": "7"}
+        r = self.client.post(self.lista, datos, follow=True)
+        nueva = Ubicacion.objects.get(codigo="A-9")
+        self.assertRedirects(r, f"{self.lista}#pos-{nueva.pk}", fetch_redirect_response=False)
+        self.assertContains(r, "Posición A-9 creada (picking)")
+        self.assertEqual((nueva.tipo, nueva.largo_cm, nueva.ancho_cm, nueva.alto_cm, nueva.prioridad, nueva.activo), ("picking", 180, 58, 44, 7, True))
+        self.assertIn("A-9", [f["ubicacion"].codigo for f in r.context["filas"]])
+        self.assertContains(r, 'id="modal-nueva"')
+        self.assertEqual(EventoAuditoria.objects.get(entidad="ubicacion", entidad_id="A-9", accion="ubicacion_creada").delta["prioridad"], 7)
+        # Tarima sin tope de alto y sin prioridad.
+        r = self.client.post(self.lista, {"accion": "crear", "codigo": "TAR-11", "tipo": "reserva", "largo_cm": "120", "ancho_cm": "100", "alto_cm": "0"}, follow=True)
+        tarima = Ubicacion.objects.get(codigo="TAR-11")
+        self.assertEqual((tarima.tipo, tarima.alto_cm, tarima.prioridad), ("reserva", 0, None))
+        self.assertContains(r, "Posición TAR-11 creada (reserva)")
+        # Errores: nombre repetido (aunque esté inactiva), tipo inválido, nombre inválido, prioridad 0.
+        Ubicacion.objects.filter(codigo="TAR-11").update(activo=False)
+        for datos_malos, texto in (
+            ({"codigo": "tar-11", "tipo": "reserva"}, "Ya existe una posición TAR-11"),
+            ({"codigo": "A-10", "tipo": "recepcion"}, "rack de picking o reserva"),
+            ({"codigo": "A 10", "tipo": "picking"}, "solo letras, números y guiones"),
+            ({"codigo": "A-10", "tipo": "picking", "prioridad": "0"}, "empieza en 1"),
+        ):
+            r = self.client.post(self.lista, {"accion": "crear", **datos_malos}, follow=True)
+            self.assertContains(r, texto)
+        self.assertFalse(Ubicacion.objects.filter(codigo="A-10").exists())
+        self.client.force_login(self.piso)
+        self.assertEqual(self.client.post(self.lista, datos).status_code, 403)
+
 
 class PlanoPorPasilloTests(TestCase):
     def test_nombres_por_pasillo_se_dibujan_por_pasillo_con_cuatro_celdas_por_piso(self):
