@@ -438,7 +438,13 @@ def bodega_posicion_accion(request, pk):
             # lote) con `contado_<id>`, y opcionalmente un lote nuevo (`nuevo_lote`, `nuevo_caducidad`, `nuevo_contado`).
             from apps.inventario.services import ajustar_conteo_posicion  # lazy por contrato
 
-            sku = get_object_or_404(SKU, pk=request.POST.get("sku_id") or 0)
+            if request.POST.get("sku_id"):
+                sku = get_object_or_404(SKU, pk=request.POST.get("sku_id"))
+            else:
+                codigo = (request.POST.get("sku") or "").strip()
+                sku = SKU.objects.filter(codigo__iexact=codigo).first()
+                if sku is None:
+                    raise ValueError(f"No existe el producto {codigo or '(vacío)'}: elígelo de la lista.")
             renglones = []
             for clave in (request.POST.get("lotes") or "").split(","):
                 clave = clave.strip()
@@ -450,10 +456,9 @@ def bodega_posicion_accion(request, pk):
             nuevo_codigo = (request.POST.get("nuevo_lote") or "").strip()
             nuevo_contado = (request.POST.get("nuevo_contado") or "").strip()
             if nuevo_codigo or nuevo_contado:
-                if not nuevo_codigo:
-                    raise ValueError("Escribe el código del lote nuevo, o deja vacío su conteo.")
                 if nuevo_contado == "":
                     raise ValueError(f"Captura cuántas piezas hay del lote {nuevo_codigo}.")
+                # Sin código: producto sin lote (el servicio lo rechaza si el producto sí lleva lote).
                 renglones.append((nuevo_codigo, nuevo_contado, _fecha_o_none(request.POST.get("nuevo_caducidad"))))
             r = ajustar_conteo_posicion(
                 ubicacion, sku, renglones, request.POST.get("motivo") or "", request.user, nota=request.POST.get("nota") or "",

@@ -2300,8 +2300,9 @@ def ajustar_conteo_posicion(ubicacion, sku, renglones, motivo, actor, nota=""):
     (esperado = vendible de ese lote en esta posición) y, si hay diferencia,
     un Ajuste con lote y posición firmado por el usuario de Mesa (sin doble
     PIN, como la reconciliación; sin incidencia DES: el descuadre ya se está
-    asumiendo). Contado 0 quita el lote de la posición. No agrega productos
-    nuevos a la posición, solo lotes del producto. Si al final lo apartado del
+    asumiendo). Contado 0 quita el lote de la posición; un producto que no
+    estaba en la posición entra con su lote nuevo (o sin lote si no lleva;
+    Chema 2026-10-14 noche). Si al final lo apartado del
     producto rebasa lo vendible en toda la bodega, libera la reserva sobrante
     (_liberar_reserva_sobrante). Regresa {"ajustes": [{lote, esperado,
     contado, delta, folio}], "conteos", "sin_cambio", "liberadas": [(folio,
@@ -2329,6 +2330,8 @@ def ajustar_conteo_posicion(ubicacion, sku, renglones, motivo, actor, nota=""):
             if isinstance(lote, str):
                 codigo = lote.strip().upper()
                 if not codigo:
+                    if sku.requiere_lote:
+                        raise ValueError(f"{sku.codigo} lleva lote: escribe el código del lote que estás contando.")
                     lote = None
                 else:
                     lote, creado = Lote.objects.get_or_create(sku=sku, codigo=codigo, defaults={"fecha_caducidad": caducidad})

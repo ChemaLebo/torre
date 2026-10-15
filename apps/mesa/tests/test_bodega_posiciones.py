@@ -137,7 +137,7 @@ class PosicionesMesaTests(TestCase):
         """Chema 2026-10-14: contar un producto en una posición por lote, con
         lotes nuevos (se crean con su caducidad) y contado 0 para quitar uno."""
         datos = {
-            "accion": "ajustar", "sku_id": self.sku.pk, "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "10",
+            "accion": "ajustar", "sku": "ccpl24l", "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "10",
             "nuevo_lote": "cpl334ab", "nuevo_caducidad": "2027-04-01", "nuevo_contado": "5", "motivo": "conteo", "nota": "Reacomodo",
         }
         r = self.client.post(self.accion_a, datos, follow=True)
@@ -170,6 +170,26 @@ class PosicionesMesaTests(TestCase):
         self.assertEqual(self.saldo(self.a, Saldo.UBICADO_VENDIBLE), 10)
         self.client.force_login(self.piso)
         self.assertEqual(self.client.post(self.accion_a, datos).status_code, 403)
+
+    def test_contar_un_producto_que_no_estaba_en_la_posicion(self):
+        """Chema 2026-10-14 (noche): cualquier producto del catálogo, aunque Torre no lo tenga en la
+        posición; con lote nuevo o, si el producto no lleva lote, solo con el conteo."""
+        otro = SKU.objects.create(cliente=self.cliente, codigo="CC24", codigo_barras="7503026716083", descripcion="Colimita 24", variante="24")
+        sin_lote = SKU.objects.create(cliente=self.cliente, codigo="PINCERVE", descripcion="Pin", requiere_lote=False)
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku": "cc24", "lotes": "", "nuevo_lote": "CC399ABC", "nuevo_caducidad": "2027-02-01", "nuevo_contado": "7", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "CC24 en PIC-1-I-F-2: lote CC399ABC: 0 → 7 (+7, AJU-")
+        self.assertEqual(sum(Saldo.objects.filter(sku=otro, ubicacion=self.a, estado=Saldo.UBICADO_VENDIBLE).values_list("cantidad", flat=True)), 7)
+        self.assertEqual(Lote.objects.get(sku=otro, codigo="CC399ABC").fecha_caducidad.isoformat(), "2027-02-01")
+        # Producto que lleva lote sin código: no pasa. Producto sin lote: entra sin código.
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku": "CC24", "lotes": "", "nuevo_contado": "3", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "CC24 lleva lote")
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku": "pincerve", "lotes": "", "nuevo_contado": "12", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "PINCERVE en PIC-1-I-F-2: lote sin lote: 0 → 12 (+12, AJU-")
+        self.assertEqual(sum(Saldo.objects.filter(sku=sin_lote, ubicacion=self.a, lote=None, estado=Saldo.UBICADO_VENDIBLE).values_list("cantidad", flat=True)), 12)
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku": "NOEXISTE", "lotes": "", "nuevo_contado": "1", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "No existe el producto NOEXISTE")
+        html = self.client.get(self.lista).content.decode()
+        self.assertIn('id="aj-producto" name="sku"', html)
 
     def test_contar_de_menos_libera_la_reserva_del_pedido_mas_reciente(self):
         from apps.pedidos.models import LineaPedido, Pedido
