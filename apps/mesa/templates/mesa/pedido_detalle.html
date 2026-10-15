@@ -31,6 +31,13 @@
     {% if sin_paqueteria %}<p class="small"><a class="pill crit" href="{% url 'mesa:incidencia_detalle' sin_paqueteria.pk %}">Sin paquetería · {{ sin_paqueteria.folio }}</a> ningún carrier cotiza: elige paquetería en la incidencia.</p>{% endif %}
     <p class="small">
       {% if pedido.asignado_a %}En manos de <b>{{ pedido.asignado_a.username }}</b>{% else %}Sin dueño en piso{% endif %}
+      {% if puede_desasignar %}
+      {# Desasignar operador (Chema 2026-10-15): el que lo tiene no vino; vuelve a la cola con su avance. #}
+      <form method="post" class="inline" onsubmit="return confirm('¿Desasignar a {{ operador_asignado }} de {{ pedido.folio }}? Vuelve a la cola de Mi turno con su avance.');">{% csrf_token %}
+        <input type="hidden" name="accion" value="desasignar_operador"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+        <button class="btn chico" type="submit">Desasignar operador</button>
+      </form>
+      {% endif %}
       {% if pedido.carrier_forzado %} · paquetería forzada: <span class="mono">{{ pedido.carrier_forzado }}</span>{% endif %}
       {% if pedido.peso_real_gr %} · báscula <span class="mono">{{ pedido.peso_real_gr }} g</span> (esperado {{ pedido.peso_esperado_gr }} g){% endif %}
     </p>

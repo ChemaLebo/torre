@@ -1883,6 +1883,37 @@ def soltar_pedido(pedido, usuario, motivo=""):
     return pedido
 
 
+# Mesa quita el pedido de las manos de un operador que no está (Chema 2026-10-15).
+ESTADOS_EN_BODEGA = (
+    Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO,
+)
+
+
+def desasignar_operador(pedido, actor, motivo=""):
+    """Mesa desasigna al operador de un pedido en bodega (Chema 2026-10-15:
+    PED-00444 lo tenía alguien que no vino): queda sin dueño ni transferencia
+    pendiente, con su estado y su avance intactos, y vuelve a la cola de Mi
+    turno para quien le toque. Si estaba en picking y lo toma OTRA persona,
+    el avance se reinicia al reclamarlo (reiniciar_picking), como siempre.
+    Evento `pedido_soltado` con por="mesa". ValueError si ya no está en el
+    piso o no tiene a nadie asignado."""
+    if pedido.estado not in ESTADOS_EN_BODEGA:
+        raise ValueError(f"{pedido.folio} está {pedido.get_estado_display()}: ya no está en el piso.")
+    if pedido.asignado_a_id is None and pedido.transferencia_a_id is None:
+        raise ValueError(f"{pedido.folio} no tiene operador asignado.")
+    anterior = pedido.asignado_a
+    nombre = _nombre_usuario(anterior) if anterior else _nombre_usuario(pedido.transferencia_a)
+    pedido.asignado_a = None
+    pedido.transferencia_a = None
+    pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
+    registrar_evento(
+        "pedido", pedido.pk, "pedido_soltado", actor=actor, cliente=pedido.cliente,
+        delta={"de": nombre, "motivo": motivo, "por": "mesa"},
+        motivo=f"Mesa desasignó a {nombre}; vuelve a la cola de Mi turno y lo toma quien le toque."[:300],
+    )
+    return pedido
+
+
 MOTIVOS_DETENER = [
     ("No encuentro el producto", "No encuentro el producto"),
     ("Producto dañado", "Producto dañado"),

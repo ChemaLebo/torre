@@ -428,3 +428,50 @@ class SustituirGuiaDesdeMesaTests(PisoTestCase):
         respuesta = self.client.post(url, {"accion": "sustituir_guia_caja", "folio": pedido.folio, "caja": c1.pk, "carrier": "estafeta", "motivo": " "}, follow=True)
         self.assertContains(respuesta, "Escribe el motivo")
         self.assertEqual(Guia.objects.filter(paquete=c1).count(), 2)
+
+
+class DesasignarOperadorTests(PisoTestCase):
+    """Chema 2026-10-15: Mesa quita el pedido de las manos de un operador que
+    no vino; vuelve a la cola de Mi turno con su avance. Sin "Reasignar a…"."""
+
+    def setUp(self):
+        self.crear_stock(cantidad=40)
+        self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
+        PerfilUsuario.objects.create(usuario=self.mesa, rol="mesa")
+        self.client.force_login(self.mesa)
+        self.pedido = self.crear_pedido(cantidad=2)
+        services.iniciar_picking(self.pedido, self.operador)
+        services.confirmar_linea_pick(self.pedido.lineas.get(), 1, self.operador)
+        self.url = reverse("mesa:pedido_detalle", args=[self.pedido.pk])
+
+    def _desasignar(self):
+        return self.client.post(self.url, {"accion": "desasignar_operador", "folio": self.pedido.folio}, follow=True)
+
+    def test_boton_y_desasignar_conserva_avance(self):
+        r = self.client.get(self.url)
+        self.assertContains(r, 'value="desasignar_operador"')
+        self.assertContains(r, "Desasignar operador")
+        r = self._desasignar()
+        self.assertContains(r, f"piso1 ya no tiene {self.pedido.folio}; vuelve a la cola de Mi turno.")
+        self.pedido.refresh_from_db()
+        self.assertIsNone(self.pedido.asignado_a)
+        self.assertIsNone(self.pedido.transferencia_a)
+        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
+        self.assertEqual(self.pedido.lineas.get().cantidad_pickeada, 1)
+        evento = EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk), accion="pedido_soltado").latest("ts")
+        self.assertEqual((evento.delta["de"], evento.delta["por"]), ("piso1", "mesa"))
+        self.assertNotContains(r, 'value="desasignar_operador"')
+        r = self._desasignar()
+        self.assertContains(r, "no tiene operador asignado")
+
+    def test_fuera_del_piso_no_se_puede(self):
+        Pedido.objects.filter(pk=self.pedido.pk).update(estado=Pedido.ENTREGADO)
+        r = self._desasignar()
+        self.assertContains(r, "ya no está en el piso")
+        self.assertNotContains(r, 'value="desasignar_operador"')
+
+    def test_piso_no_puede(self):
+        self.client.force_login(self.operador)
+        r = self.client.post(self.url, {"accion": "desasignar_operador", "folio": self.pedido.folio})
+        self.assertEqual(r.status_code, 403)
+

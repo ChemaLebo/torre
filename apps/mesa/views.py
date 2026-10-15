@@ -1053,6 +1053,18 @@ def incidencia_detalle(request, pk):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _pedidos_desasignar_operador(request):
+    """Quita el pedido de las manos de su operador (pedidos.desasignar_operador): vuelve a la cola."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import desasignar_operador  # lazy por contrato
+
+    folio = (request.POST.get("folio") or "").strip()
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente", "asignado_a", "transferencia_a"), folio=folio)
+    quien = pedido.asignado_a or pedido.transferencia_a
+    desasignar_operador(pedido, request.user, motivo=(request.POST.get("motivo") or "").strip())
+    return f"{quien.username if quien else 'El operador'} ya no tiene {pedido.folio}; vuelve a la cola de Mi turno."
+
+
 def _pedidos_cancelar(request):
     """Cancela un pedido por folio vía la matriz de pedidos.services.cancelar.
 
@@ -1354,6 +1366,7 @@ def _ejecutar_accion_pedido(request):
     simples = {
         "cancelar_guias": _pedidos_cancelar_guias,
         "cancelar": _pedidos_cancelar,
+        "desasignar_operador": _pedidos_desasignar_operador,
         "cambiar_paqueteria": _pedidos_cambiar_paqueteria,
         "cambiar_paqueteria_caja": _pedidos_cambiar_paqueteria_caja,
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
@@ -1543,7 +1556,7 @@ def pedido_detalle(request, pk):
     from apps.incidencias.models import Incidencia
     from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
-    from apps.pedidos.services import ESTADOS_OLA_OCUPADA, piezas_reponibles
+    from apps.pedidos.services import ESTADOS_EN_BODEGA, ESTADOS_OLA_OCUPADA, piezas_reponibles
     from apps.pedidos.models import Pedido
     from apps.pedidos.reportes import url_orden_shopify
     from apps.pedidos.services import direccion_en_una_linea, motivo_no_quitable_de_salida, motivo_sin_pod
@@ -1661,6 +1674,8 @@ def pedido_detalle(request, pk):
         "sin_paqueteria": sin_paqueteria_abierta(pedido),
         "opciones_paqueteria": opciones_paqueteria(),
         "cancelable": pedido.estado in ESTADOS_CANCELABLES_MESA,
+        "puede_desasignar": pedido.estado in ESTADOS_EN_BODEGA and bool(pedido.asignado_a_id or pedido.transferencia_a_id),
+        "operador_asignado": (pedido.asignado_a or pedido.transferencia_a).username if (pedido.asignado_a_id or pedido.transferencia_a_id) else "",
         "puede_cambiar_paqueteria": puede_cambiar,
         "puede_replanear": puede_cambiar and any(c.estado == "PLANEADO" and c.guia is None for c in cajas),
         "puede_cancelar_guias": (
