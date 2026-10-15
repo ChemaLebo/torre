@@ -201,6 +201,20 @@ class PosicionesMesaTests(TestCase):
         self.client.force_login(self.piso)
         self.assertEqual(self.client.get(reverse("mesa:bodega_lotes_json"), {"sku": "CC24"}).status_code, 403)
 
+    def test_contar_a_cero_muda_las_apartadas_a_donde_si_hay_producto(self):
+        """Chema 2026-10-14: un conteo a cero dejaba la capa de apartadas pegada a la posición vacía."""
+        Saldo.objects.create(sku=self.sku, ubicacion=self.b, lote=self.lote, estado=Saldo.UBICADO_VENDIBLE, cantidad=10)  # también vive en PIC-1-D-B-1
+        self.assertTrue(reservar(self.sku, 4, "PED-00001"))  # FEFO: la reserva cae en la primera posición por código (PIC-1-D-B-1)
+        Saldo.objects.filter(sku=self.sku, estado=Saldo.RESERVADO).update(ubicacion=self.a)  # la dejamos en A para el caso
+        self.assertEqual((self.saldo(self.a, Saldo.RESERVADO), self.saldo(self.b, Saldo.RESERVADO)), (4, 0))
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku": "CCPL24L", "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "0", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "lote CPL333AB: 12 → 0 (-12, AJU-")
+        self.assertContains(r, "Apartadas que ya no tenían físico aquí pasan a PIC-1-D-B-1 (4).")
+        self.assertEqual((self.saldo(self.a, Saldo.UBICADO_VENDIBLE), self.saldo(self.a, Saldo.RESERVADO)), (0, 0))
+        self.assertEqual((self.saldo(self.b, Saldo.UBICADO_VENDIBLE), self.saldo(self.b, Saldo.RESERVADO)), (10, 4))
+        self.assertNotContains(r, "Reserva liberada")  # el pedido sigue apartado: había producto en otra posición
+        self.assertEqual(EventoAuditoria.objects.get(entidad="ubicacion", entidad_id="PIC-1-I-F-2", accion="conteo_posicion").delta["reubicadas"], [["PIC-1-D-B-1", 4]])
+
     def test_contar_de_menos_libera_la_reserva_del_pedido_mas_reciente(self):
         from apps.pedidos.models import LineaPedido, Pedido
 

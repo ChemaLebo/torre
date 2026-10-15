@@ -2304,9 +2304,11 @@ def ajustar_conteo_posicion(ubicacion, sku, renglones, motivo, actor, nota=""):
     estaba en la posición entra con su lote nuevo (o sin lote si no lleva;
     Chema 2026-10-14 noche). Si al final lo apartado del
     producto rebasa lo vendible en toda la bodega, libera la reserva sobrante
-    (_liberar_reserva_sobrante). Regresa {"ajustes": [{lote, esperado,
-    contado, delta, folio}], "conteos", "sin_cambio", "liberadas": [(folio,
-    piezas)], "sin_respaldo"}."""
+    (_liberar_reserva_sobrante); la capa de apartadas que se quede sin físico
+    en ESTA posición se muda a donde sí hay producto (_reubicar_apartadas).
+    Regresa {"ajustes": [{lote, esperado, contado, delta, folio}], "conteos",
+    "sin_cambio", "liberadas": [(folio, piezas)], "sin_respaldo",
+    "reubicadas": [(posición, piezas)]}."""
     if motivo not in dict(Ajuste.MOTIVOS):
         validos = ", ".join(clave for clave, _ in Ajuste.MOTIVOS)
         raise ValueError(f"Motivo '{motivo}' fuera del catálogo. Válidos: {validos}.")
@@ -2359,13 +2361,54 @@ def ajustar_conteo_posicion(ubicacion, sku, renglones, motivo, actor, nota=""):
                 "lote": lote.codigo if lote else "", "esperado": esperado, "contado": contado, "delta": delta, "folio": ajuste.folio,
             })
         resultado["liberadas"], resultado["sin_respaldo"] = _liberar_reserva_sobrante(sku, actor)
+        resultado["reubicadas"] = _reubicar_apartadas(sku, ubicacion)
         registrar_evento(
             "ubicacion", ubicacion.codigo, "conteo_posicion", actor=actor, cliente=sku.cliente,
             delta={"sku": sku.codigo, "motivo": motivo, "ajustes": resultado["ajustes"], "conteos": resultado["conteos"],
-                   "liberadas": resultado["liberadas"], "sin_respaldo": resultado["sin_respaldo"]},
+                   "liberadas": resultado["liberadas"], "sin_respaldo": resultado["sin_respaldo"], "reubicadas": resultado["reubicadas"]},
             motivo=(nota or f"Conteo de {sku.codigo} en {ubicacion.codigo} desde Posiciones.")[:300],
         )
     return resultado
+
+
+def _reubicar_apartadas(sku, ubicacion):
+    """Tras un conteo (Chema 2026-10-14): la capa de apartadas de un producto en
+    una posición no puede rebasar lo vendible que quedó ahí (un conteo a cero
+    la dejaba "pegada" a la posición vacía). El excedente se muda, FEFO, a las
+    posiciones donde el producto sí tiene vendible sin apartar; si no hay
+    dónde, se queda (ya lo cubrió _liberar_reserva_sobrante). Regresa
+    [(posición destino, piezas)]."""
+    aqui = list(Saldo.objects.select_for_update().filter(
+        sku=sku, ubicacion=ubicacion, estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO],
+    ))
+    vendible = sum(x.cantidad for x in aqui if x.estado == Saldo.UBICADO_VENDIBLE)
+    apartadas = [x for x in aqui if x.estado == Saldo.RESERVADO and x.cantidad > 0]
+    exceso = sum(x.cantidad for x in apartadas) - vendible
+    if exceso <= 0:
+        return []
+    fuera = list(Saldo.objects.select_for_update().filter(
+        sku=sku, estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO], cantidad__gt=0,
+    ).exclude(ubicacion=ubicacion).select_related("ubicacion", "lote"))
+    reservado_fuera = {}
+    for x in fuera:
+        if x.estado == Saldo.RESERVADO:
+            reservado_fuera[x.ubicacion_id] = reservado_fuera.get(x.ubicacion_id, 0) + x.cantidad
+    vendibles_fuera = [x for x in fuera if x.estado == Saldo.UBICADO_VENDIBLE]
+    caducidades = _caducidades(vendibles_fuera)
+    reubicadas = []
+    for destino in sorted(vendibles_fuera, key=lambda x: (_clave_fefo(x, caducidades), x.ubicacion.codigo)):
+        if exceso <= 0:
+            break
+        libre = destino.cantidad - reservado_fuera.get(destino.ubicacion_id, 0)
+        if libre <= 0:
+            continue
+        mover = min(libre, exceso)
+        _restar(sorted(apartadas, key=lambda x: -x.cantidad), mover)
+        _incrementar(sku, destino.ubicacion_id, destino.lote_id, Saldo.RESERVADO, mover)
+        reservado_fuera[destino.ubicacion_id] = reservado_fuera.get(destino.ubicacion_id, 0) + mover
+        reubicadas.append((destino.ubicacion.codigo, mover))
+        exceso -= mover
+    return reubicadas
 
 
 def _liberar_reserva_sobrante(sku, actor):

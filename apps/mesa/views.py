@@ -497,6 +497,8 @@ def bodega_posicion_accion(request, pk):
                 texto += " Reserva liberada por falta de físico: " + ", ".join(f"{folio} ({n})" for folio, n in r["liberadas"]) + "; esos pedidos quedan sin inventario hasta que entre stock."
             if r["sin_respaldo"]:
                 texto += f" Ojo: {r['sin_respaldo']} pieza(s) apartadas por pedidos ya en picking siguen sin físico."
+            if r.get("reubicadas"):
+                texto += " Apartadas que ya no tenían físico aquí pasan a " + ", ".join(f"{codigo} ({n})" for codigo, n in r["reubicadas"]) + "."
             (messages.warning if r["liberadas"] or r["sin_respaldo"] else messages.success)(request, texto)
         elif accion == "asignar":
             codigo = (request.POST.get("sku") or "").strip()
