@@ -349,6 +349,7 @@ def bodega_posiciones(request):
     cada producto y lote, cantidades prellenadas con lo que el sistema dice)."""
     from apps.catalogo.models import SKU  # lazy: modelo de otra app
     from apps.catalogo.services import asignaciones_de  # lazy por contrato
+    from apps.inventario.models import Ajuste  # lazy: modelo de otra app
     from apps.inventario.services import capacidad_asignada, existencias_de_posicion, ocupaciones  # lazy por contrato
 
     posiciones = list(_posiciones_almacen())
@@ -365,8 +366,10 @@ def bodega_posiciones(request):
                 "pk": p.pk, "codigo": p.codigo,
                 "filas": [{
                     "sku": e["sku"].pk, "sku_codigo": e["sku"].codigo, "descripcion": e["sku"].descripcion,
+                    "codigo_barras": e["sku"].codigo_barras or "",
                     "lote": e["lote"].pk if e["lote"] else 0, "lote_codigo": e["lote"].codigo if e["lote"] else "",
-                    "vendible": e["vendible"],
+                    "caducidad": e["lote"].fecha_caducidad.isoformat() if e["lote"] and e["lote"].fecha_caducidad else "",
+                    "vendible": e["vendible"], "apartado": e["apartado"],
                 } for e in existencias],
                 "fijos": [{"sku_codigo": f["sku"].codigo, "descripcion": f["sku"].descripcion, "capacidad": f["capacidad"]} for f in fijos],
             },
@@ -376,15 +379,17 @@ def bodega_posiciones(request):
         "seccion": "bodega", "filas": filas, "destinos": sorted(posiciones, key=lambda p: _orden_posicion(p.codigo)),
         "n_posiciones": len(filas), "n_con_producto": sum(1 for f in filas if f["existencias"]),
         "skus": SKU.objects.filter(activo=True).select_related("cliente").order_by("cliente__nombre", "codigo"),
+        "motivos_ajuste": Ajuste.MOTIVOS,
     })
 
 
 @rol_requerido("mesa")
 def bodega_posicion_accion(request, pk):
     """POST sobre una posición: `renombrar` (nuevo), `mover` (sku_id, lote_id,
-    cantidad, destino, motivo), `imprimir_posicion` e `imprimir_cajas`
-    (`n_<sku>_<lote>` = cuántas etiquetas por renglón). Vuelve a la lista
-    anclada en la posición; los errores van como mensaje."""
+    cantidad, destino, motivo), `ajustar` (conteo por lote, 2026-10-14),
+    `asignar` / `desasignar` (producto fijo), `imprimir_posicion` e
+    `imprimir_cajas` (`n_<sku>_<lote>` = cuántas etiquetas por renglón).
+    Vuelve a la lista anclada en la posición; los errores van como mensaje."""
     from apps.catalogo.models import SKU, Lote, Ubicacion  # lazy: modelos de otra app
     from apps.catalogo.services import asignar_producto, desasignar_producto  # lazy por contrato
     from apps.inventario.services import mover_existencias, renombrar_posicion  # lazy por contrato
@@ -411,6 +416,38 @@ def bodega_posicion_accion(request, pk):
                 f"{r['cantidad']} × {sku.codigo}{' lote ' + lote.codigo if lote else ''}: de {ubicacion.codigo} a {destino.codigo}"
                 + (f" (con {r['apartadas']} apartada(s))" if r["apartadas"] else "") + ".",
             )
+        elif accion == "ajustar":
+            # Ajustar conteo por lote (Chema 2026-10-14): `sku_id`, `lotes` (ids separados por coma, 0 = sin
+            # lote) con `contado_<id>`, y opcionalmente un lote nuevo (`nuevo_lote`, `nuevo_caducidad`, `nuevo_contado`).
+            from apps.inventario.services import ajustar_conteo_posicion  # lazy por contrato
+
+            sku = get_object_or_404(SKU, pk=request.POST.get("sku_id") or 0)
+            renglones = []
+            for clave in (request.POST.get("lotes") or "").split(","):
+                clave = clave.strip()
+                valor = (request.POST.get(f"contado_{clave}") or "").strip()
+                if not clave or valor == "":
+                    continue
+                lote = None if clave == "0" else get_object_or_404(Lote, pk=clave, sku=sku)
+                renglones.append((lote, valor, None))
+            nuevo_codigo = (request.POST.get("nuevo_lote") or "").strip()
+            nuevo_contado = (request.POST.get("nuevo_contado") or "").strip()
+            if nuevo_codigo or nuevo_contado:
+                if not nuevo_codigo:
+                    raise ValueError("Escribe el código del lote nuevo, o deja vacío su conteo.")
+                if nuevo_contado == "":
+                    raise ValueError(f"Captura cuántas piezas hay del lote {nuevo_codigo}.")
+                renglones.append((nuevo_codigo, nuevo_contado, _fecha_o_none(request.POST.get("nuevo_caducidad"))))
+            r = ajustar_conteo_posicion(
+                ubicacion, sku, renglones, request.POST.get("motivo") or "", request.user, nota=request.POST.get("nota") or "",
+            )
+            partes = [f"lote {a['lote'] or 'sin lote'}: {a['esperado']} → {a['contado']} ({a['delta']:+d}, {a['folio']})" for a in r["ajustes"]]
+            texto = f"{sku.codigo} en {ubicacion.codigo}: " + ("; ".join(partes) if partes else "sin diferencias") + f" · {r['conteos']} conteo(s)."
+            if r["liberadas"]:
+                texto += " Reserva liberada por falta de físico: " + ", ".join(f"{folio} ({n})" for folio, n in r["liberadas"]) + "; esos pedidos quedan sin inventario hasta que entre stock."
+            if r["sin_respaldo"]:
+                texto += f" Ojo: {r['sin_respaldo']} pieza(s) apartadas por pedidos ya en picking siguen sin físico."
+            (messages.warning if r["liberadas"] or r["sin_respaldo"] else messages.success)(request, texto)
         elif accion == "asignar":
             codigo = (request.POST.get("sku") or "").strip()
             sku = SKU.objects.filter(codigo__iexact=codigo).first()

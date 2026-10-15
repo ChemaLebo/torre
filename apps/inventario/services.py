@@ -2291,6 +2291,121 @@ def mover_ubicacion(codigo_origen, codigo_destino, actor=None):
     return {"modo": modo, "piezas": piezas, "saldos": len(saldos)}
 
 
+def ajustar_conteo_posicion(ubicacion, sku, renglones, motivo, actor, nota=""):
+    """Conteo físico de UN producto en UNA posición, por lote (Mesa → Bodega →
+    Posiciones → Editar → Ajustar conteo; Chema 2026-10-14, reacomodo de
+    racks). `renglones` = [(lote, contado, caducidad)] con `lote` un Lote del
+    producto, None (sin lote) o un código nuevo (str) que se crea con esa
+    caducidad, como en la reconciliación por CSV. Por renglón: un Conteo
+    (esperado = vendible de ese lote en esta posición) y, si hay diferencia,
+    un Ajuste con lote y posición firmado por el usuario de Mesa (sin doble
+    PIN, como la reconciliación; sin incidencia DES: el descuadre ya se está
+    asumiendo). Contado 0 quita el lote de la posición. No agrega productos
+    nuevos a la posición, solo lotes del producto. Si al final lo apartado del
+    producto rebasa lo vendible en toda la bodega, libera la reserva sobrante
+    (_liberar_reserva_sobrante). Regresa {"ajustes": [{lote, esperado,
+    contado, delta, folio}], "conteos", "sin_cambio", "liberadas": [(folio,
+    piezas)], "sin_respaldo"}."""
+    if motivo not in dict(Ajuste.MOTIVOS):
+        validos = ", ".join(clave for clave, _ in Ajuste.MOTIVOS)
+        raise ValueError(f"Motivo '{motivo}' fuera del catálogo. Válidos: {validos}.")
+    if ubicacion.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA) or not ubicacion.activo:
+        raise ValueError(f"{ubicacion.codigo} no es una posición de almacén activa.")
+    if getattr(sku, "es_kit", False):
+        raise ValueError(f"{sku.codigo} es un kit: no tiene stock propio, no se cuenta.")
+    if not renglones:
+        raise ValueError("Captura al menos un lote con su conteo.")
+    firmante = _validar_admin_mesa(actor)
+    resultado = {"ajustes": [], "conteos": 0, "sin_cambio": 0, "liberadas": [], "sin_respaldo": 0}
+    with transaction.atomic():
+        vistos = set()
+        for lote, contado, caducidad in renglones:
+            try:
+                contado = int(str(contado).strip())
+            except (TypeError, ValueError):
+                raise ValueError("El conteo debe ser un número entero de piezas.") from None
+            if contado < 0:
+                raise ValueError("El conteo no puede ser negativo.")
+            if isinstance(lote, str):
+                codigo = lote.strip().upper()
+                if not codigo:
+                    lote = None
+                else:
+                    lote, creado = Lote.objects.get_or_create(sku=sku, codigo=codigo, defaults={"fecha_caducidad": caducidad})
+                    if not creado and lote.fecha_caducidad is None and caducidad:
+                        lote.fecha_caducidad = caducidad
+                        lote.save(update_fields=["fecha_caducidad"])
+            if lote is not None and lote.sku_id != sku.pk:
+                raise ValueError(f"El lote {lote.codigo} no es de {sku.codigo}.")
+            clave = lote.pk if lote is not None else None
+            if clave in vistos:
+                raise ValueError(f"El lote {lote.codigo if lote else 'sin lote'} viene dos veces.")
+            vistos.add(clave)
+            esperado = (
+                Saldo.objects.filter(sku=sku, ubicacion=ubicacion, lote=lote, estado=Saldo.UBICADO_VENDIBLE)
+                .aggregate(t=Sum("cantidad"))["t"] or 0
+            )
+            conteo = _conteo_reconciliacion({"sku": sku, "vendible_actual": esperado, "contado": contado}, actor)
+            resultado["conteos"] += 1
+            delta = contado - esperado
+            if delta == 0:
+                resultado["sin_cambio"] += 1
+                continue
+            ajuste = _aplicar_ajuste_firmado(sku, delta, motivo, firmante, firmante, lote=lote, conteo=conteo, ubicacion=ubicacion)
+            resultado["ajustes"].append({
+                "lote": lote.codigo if lote else "", "esperado": esperado, "contado": contado, "delta": delta, "folio": ajuste.folio,
+            })
+        resultado["liberadas"], resultado["sin_respaldo"] = _liberar_reserva_sobrante(sku, actor)
+        registrar_evento(
+            "ubicacion", ubicacion.codigo, "conteo_posicion", actor=actor, cliente=sku.cliente,
+            delta={"sku": sku.codigo, "motivo": motivo, "ajustes": resultado["ajustes"], "conteos": resultado["conteos"],
+                   "liberadas": resultado["liberadas"], "sin_respaldo": resultado["sin_respaldo"]},
+            motivo=(nota or f"Conteo de {sku.codigo} en {ubicacion.codigo} desde Posiciones.")[:300],
+        )
+    return resultado
+
+
+def _liberar_reserva_sobrante(sku, actor):
+    """Tras un conteo que deja menos físico que apartado (Chema 2026-10-14):
+    libera la reserva sobrante quitándosela a los pedidos PENDIENTES más
+    recientes del producto; cada línea queda sin inventario (como un faltante
+    de ingesta) y se vuelve a apartar sola cuando entre stock. Lo que siga sin
+    respaldo lo tienen pedidos ya en picking y se verá al pickear. Regresa
+    ([(folio, piezas)], sin_respaldo)."""
+    sobra = _suma(sku, Saldo.RESERVADO) - _suma(sku, Saldo.UBICADO_VENDIBLE)
+    if sobra <= 0:
+        return [], 0
+    from apps.pedidos.models import LineaPedido, Pedido  # lazy: modelos de otra app
+    from apps.pedidos.services import _planificar_best_effort  # lazy por contrato
+
+    liberadas = []
+    lineas = (
+        LineaPedido.objects.select_related("pedido", "pedido__cliente")
+        .filter(sku=sku, pedido__estado=Pedido.PENDIENTE)
+        .filter(Q(reservada=True) | Q(cantidad_repuesta_reservada__gt=0))
+        .order_by("-pedido__creado", "-pk")
+    )
+    for linea in lineas:
+        if sobra <= 0:
+            break
+        piezas = (linea.cantidad if linea.reservada else 0) + linea.cantidad_repuesta_reservada
+        if piezas <= 0:
+            continue
+        liberar_reserva(sku, piezas, linea.pedido.folio)
+        linea.reservada = False
+        linea.cantidad_repuesta_reservada = 0
+        linea.save(update_fields=["reservada", "cantidad_repuesta_reservada"])
+        registrar_evento(
+            "pedido", linea.pedido.pk, "reserva_liberada_por_conteo", actor=actor, cliente=linea.pedido.cliente,
+            delta={"sku": sku.codigo, "piezas": piezas},
+            motivo="El conteo dejó menos físico que apartado: la línea queda sin inventario y se vuelve a apartar cuando entre stock.",
+        )
+        _planificar_best_effort(linea.pedido, force=True)
+        liberadas.append((linea.pedido.folio, piezas))
+        sobra -= piezas
+    return liberadas, max(sobra, 0)
+
+
 ESTADO_LEGIBLE = {
     Saldo.UBICADO_VENDIBLE: "vendible", Saldo.RESERVADO: "apartado (de las vendibles)", Saldo.EN_PUTAWAY: "en recepción",
     Saldo.EN_EMPAQUE: "en empaque (ya salió del anaquel)", Saldo.CUARENTENA: "cuarentena",

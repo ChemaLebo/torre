@@ -10,7 +10,7 @@ from apps.catalogo.models import SKU, Lote, Ubicacion
 from apps.configuracion.models import TandaEtiquetas
 from apps.core.models import Cliente, EventoAuditoria, PerfilUsuario
 from apps.envios.models import TrabajoImpresion
-from apps.inventario.models import LineaASN, Movimiento, OrdenEntrada, Saldo
+from apps.inventario.models import Ajuste, Conteo, LineaASN, Movimiento, OrdenEntrada, Saldo
 from apps.inventario.services import recibir, reservar, ubicar
 
 
@@ -127,6 +127,67 @@ class PosicionesMesaTests(TestCase):
         r = self.client.post(self.accion_a, {"accion": "desasignar", "sku": "CCPL24L"}, follow=True)
         self.assertContains(r, "CCPL24L deja de ser fijo")
         self.assertNotContains(r, "fijo: CCPL24L")
+
+    def test_ajustar_conteo_por_lote_agrega_y_quita_lotes(self):
+        """Chema 2026-10-14: contar un producto en una posición por lote, con
+        lotes nuevos (se crean con su caducidad) y contado 0 para quitar uno."""
+        datos = {
+            "accion": "ajustar", "sku_id": self.sku.pk, "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "10",
+            "nuevo_lote": "cpl334ab", "nuevo_caducidad": "2027-04-01", "nuevo_contado": "5", "motivo": "conteo", "nota": "Reacomodo",
+        }
+        r = self.client.post(self.accion_a, datos, follow=True)
+        self.assertRedirects(r, f"{self.lista}#pos-{self.a.pk}", fetch_redirect_response=False)
+        html = r.content.decode()
+        self.assertIn("CCPL24L en PIC-1-I-F-2: lote CPL333AB: 12 → 10 (-2, AJU-", html)
+        self.assertIn("lote CPL334AB: 0 → 5 (+5, AJU-", html)
+        self.assertIn("2 conteo(s)", html)
+        nuevo = Lote.objects.get(sku=self.sku, codigo="CPL334AB")
+        self.assertEqual(str(nuevo.fecha_caducidad), "2027-04-01")
+        self.assertEqual(self.saldo(self.a, Saldo.UBICADO_VENDIBLE), 15)
+        self.assertEqual(sum(Saldo.objects.filter(ubicacion=self.a, lote=nuevo, estado=Saldo.UBICADO_VENDIBLE).values_list("cantidad", flat=True)), 5)
+        self.assertEqual(Conteo.objects.count(), 2)
+        self.assertEqual(sorted(Ajuste.objects.values_list("delta", flat=True)), [-2, 5])
+        self.assertTrue(all(a.lote_id and a.autorizo_1 == "mesa1" == a.autorizo_2 and a.conteo_id for a in Ajuste.objects.all()))
+        self.assertEqual(Movimiento.objects.filter(tipo=Movimiento.AJUSTE).count(), 2)
+        evento = EventoAuditoria.objects.get(entidad="ubicacion", entidad_id="PIC-1-I-F-2", accion="conteo_posicion")
+        self.assertEqual((evento.delta["sku"], evento.delta["conteos"], evento.motivo), ("CCPL24L", 2, "Reacomodo"))
+        # Contado 0 quita el lote nuevo; el que coincide solo deja conteo.
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku_id": self.sku.pk, "lotes": f"{self.lote.pk},{nuevo.pk}",
+                                             f"contado_{self.lote.pk}": "10", f"contado_{nuevo.pk}": "0", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "lote CPL334AB: 5 → 0 (-5, AJU-")
+        self.assertFalse(Saldo.objects.filter(ubicacion=self.a, lote=nuevo).exists())
+        self.assertEqual((self.saldo(self.a, Saldo.UBICADO_VENDIBLE), Conteo.objects.count(), Ajuste.objects.count()), (10, 4, 3))
+        # Sin diferencias: solo conteos. Motivo fuera del catálogo: nada cambia.
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku_id": self.sku.pk, "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "10", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "sin diferencias · 1 conteo(s)")
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku_id": self.sku.pk, "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "3", "motivo": "invento"}, follow=True)
+        self.assertContains(r, "fuera del catálogo")
+        self.assertEqual(self.saldo(self.a, Saldo.UBICADO_VENDIBLE), 10)
+        self.client.force_login(self.piso)
+        self.assertEqual(self.client.post(self.accion_a, datos).status_code, 403)
+
+    def test_contar_de_menos_libera_la_reserva_del_pedido_mas_reciente(self):
+        from apps.pedidos.models import LineaPedido, Pedido
+
+        viejo = Pedido.objects.create(cliente=self.cliente, tienda=None, origen="manual", comprador_nombre="Ana", cp="01780", estado=Pedido.PENDIENTE)
+        lv = LineaPedido.objects.create(pedido=viejo, sku=self.sku, cantidad=4, reservada=True)
+        self.assertTrue(reservar(self.sku, 4, viejo.folio))
+        nuevo = Pedido.objects.create(cliente=self.cliente, tienda=None, origen="manual", comprador_nombre="Beto", cp="01780", estado=Pedido.PENDIENTE)
+        ln = LineaPedido.objects.create(pedido=nuevo, sku=self.sku, cantidad=5, reservada=True)
+        self.assertTrue(reservar(self.sku, 5, nuevo.folio))
+        self.assertEqual(self.saldo(self.a, Saldo.RESERVADO), 9)
+        with self.captureOnCommitCallbacks(execute=True):
+            r = self.client.post(self.accion_a, {"accion": "ajustar", "sku_id": self.sku.pk, "lotes": str(self.lote.pk), f"contado_{self.lote.pk}": "6", "motivo": "conteo"}, follow=True)
+        html = r.content.decode()
+        self.assertIn("lote CPL333AB: 12 → 6 (-6, AJU-", html)
+        self.assertIn(f"Reserva liberada por falta de físico: {nuevo.folio} (5)", html)  # el más reciente pierde su reserva
+        lv.refresh_from_db()
+        ln.refresh_from_db()
+        self.assertEqual((lv.reservada, ln.reservada), (True, False))
+        self.assertEqual((self.saldo(self.a, Saldo.UBICADO_VENDIBLE), self.saldo(self.a, Saldo.RESERVADO)), (6, 4))
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(nuevo.pk), accion="reserva_liberada_por_conteo")
+        self.assertEqual(evento.delta, {"sku": "CCPL24L", "piezas": 5})
+        self.assertFalse(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(viejo.pk), accion="reserva_liberada_por_conteo").exists())
 
 
 class PlanoPorPasilloTests(TestCase):

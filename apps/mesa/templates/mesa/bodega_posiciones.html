@@ -99,6 +99,31 @@
       <input type="text" id="ed-motivo" name="motivo" maxlength="300" placeholder="Plan de acomodo">
       <button class="btn primario" type="submit">Mover</button>
     </form>
+    <form method="post" data-form="ajustar">{% csrf_token %}
+      <input type="hidden" name="accion" value="ajustar">
+      <input type="hidden" name="sku_id" data-campo="aj_sku_id">
+      <input type="hidden" name="lotes" data-campo="aj_lotes">
+      <h4>Ajustar conteo</h4>
+      <p class="small muted">Lo que hay físicamente de un producto en esta posición, por lote. 0 quita el lote; un lote nuevo se agrega con su caducidad. Cada diferencia deja un ajuste firmado por ti y un conteo; si queda menos físico que apartado, la reserva sobrante se libera del pedido más reciente.</p>
+      <label for="aj-producto">Producto</label>
+      <select id="aj-producto"></select>
+      <div class="tabla-wrap modal-lista">
+        <table>
+          <thead><tr><th>Lote</th><th>Caducidad</th><th class="derecha">Torre dice</th><th class="derecha">Contado</th></tr></thead>
+          <tbody data-aj-renglones></tbody>
+        </table>
+      </div>
+      <div class="grid g3">
+        <label>Lote nuevo <input type="text" name="nuevo_lote" class="mono" maxlength="40" autocapitalize="characters" placeholder="CT145AB"></label>
+        <label>Caducidad <input type="date" name="nuevo_caducidad"></label>
+        <label>Contado <input type="number" name="nuevo_contado" min="0" inputmode="numeric"></label>
+      </div>
+      <label for="aj-motivo">Motivo</label>
+      <select id="aj-motivo" name="motivo">{% for clave, nombre in motivos_ajuste %}<option value="{{ clave }}" {% if clave == "conteo" %}selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+      <label for="aj-nota">Nota (opcional)</label>
+      <input type="text" id="aj-nota" name="nota" maxlength="300" placeholder="Reacomodo de racks">
+      <button class="btn primario" type="submit">Aplicar conteo</button>
+    </form>
   </div>
 </dialog>
 
@@ -163,6 +188,33 @@
       sel.onchange = sincroniza; sincroniza();
       fm.querySelector("button").disabled = !d.filas.length;
       Array.prototype.forEach.call(document.getElementById("ed-destino").options, function (o) { o.disabled = (o.value === d.codigo); });
+      // Ajustar conteo: un producto de la posición, sus lotes con lo que Torre dice y la casilla de contado.
+      var fa = modal.querySelector("[data-form=ajustar]"), selAj = document.getElementById("aj-producto"), cuerpoAj = fa.querySelector("[data-aj-renglones]");
+      fa.action = accion(d.pk);
+      fa.reset();
+      selAj.innerHTML = "";
+      var productos = {};
+      d.filas.forEach(function (f) { if (!productos[f.sku]) { productos[f.sku] = f; } });
+      Object.keys(productos).forEach(function (k) {
+        var f = productos[k], o = document.createElement("option");
+        o.value = f.sku; o.textContent = f.sku_codigo + " · " + f.descripcion; selAj.appendChild(o);
+      });
+      function renglonesAj() {
+        var skuId = selAj.value, ids = [];
+        cuerpoAj.innerHTML = "";
+        d.filas.forEach(function (f) {
+          if (String(f.sku) !== String(skuId)) { return; }
+          ids.push(f.lote);
+          var tr = document.createElement("tr");
+          tr.innerHTML = '<td class="mono"></td><td class="mono"></td><td class="derecha mono"></td><td class="derecha"><input type="number" min="0" inputmode="numeric" style="width:90px" name="contado_' + f.lote + '" value="' + f.vendible + '"></td>';
+          tr.children[0].textContent = f.lote_codigo || "sin lote"; tr.children[1].textContent = f.caducidad || "—"; tr.children[2].textContent = f.vendible;
+          cuerpoAj.appendChild(tr);
+        });
+        fa.querySelector("[data-campo=aj_sku_id]").value = skuId;
+        fa.querySelector("[data-campo=aj_lotes]").value = ids.join(",");
+      }
+      selAj.onchange = renglonesAj; renglonesAj();
+      fa.querySelector("button[type=submit]").disabled = !d.filas.length;
       document.getElementById("ed-nuevo").value = "";
       modal.showModal();
     });
