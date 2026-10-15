@@ -99,7 +99,7 @@ class CompensacionesMesaTests(TestCase):
             }, follow=True)
         guia2.refresh_from_db()
         self.assertEqual(guia2.sustituida_motivo, "producto_erroneo")
-        self.assertIn("sustituida · producto erróneo", self.client.get(url).content.decode())
+        self.assertIn("contenido repuesto · producto erróneo", self.client.get(url).content.decode())
 
     def test_contenido_de_las_cajas_solo_en_producto_erroneo_y_corrige_sin_ajuste(self):
         from apps.envios.models import PaqueteLinea
@@ -146,7 +146,7 @@ class CompensacionesMesaTests(TestCase):
         guia.refresh_from_db()
         self.assertEqual((Compensacion.objects.get().motivo, guia.sustituida_motivo), ("extraviada", "extraviada"))
         html = self.client.get(self.url).content.decode()
-        self.assertIn("sustituida · extraviado", html)
+        self.assertIn("contenido repuesto · extraviado", html)
 
     def test_nueva_incidencia_con_reponer_cae_en_la_compensacion(self):
         respuesta = self.client.post(reverse("mesa:incidencia_nueva"), {

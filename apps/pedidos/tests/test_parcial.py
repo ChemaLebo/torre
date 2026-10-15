@@ -18,6 +18,7 @@ from apps.core.models import Cliente, PerfilUsuario
 from apps.core.models import EventoAuditoria
 from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.incidencias.models import Incidencia
+from apps.integraciones.models import Tienda
 from apps.inventario.models import LineaASN, OrdenEntrada, Saldo
 from apps.inventario.services import disponible, recibir, ubicar
 from apps.pedidos import services
@@ -328,6 +329,10 @@ class SegundaOlaTests(BaseParcial):
         self.assertEqual(pedido.estado, Pedido.EMPACADO)
         self.assertEqual(suma(self.a, Saldo.EN_EMPAQUE), 0)  # A no se reconfirma
         pedido.transicionar(Pedido.GUIA_GENERADA)
+        # Con tienda: el fulfillment de la caja se encola al salir y se escribe tras el commit (2026-10-14).
+        tienda = Tienda.objects.create(cliente=self.cliente, plataforma="shopify", dominio="segunda-ola.myshopify.com", token="", location_id="", activo=True)
+        Pedido.objects.filter(pk=pedido.pk).update(tienda=tienda, shopify_order_id="777002")
+        pedido.refresh_from_db()
         with (
             patch("apps.mensajeria.services.enviar_en_camino") as en_camino,
             patch("apps.integraciones.services.marcar_fulfillment") as fulfillment,
@@ -341,7 +346,7 @@ class SegundaOlaTests(BaseParcial):
         self.assertEqual((la.cantidad_despachada, lb.cantidad_despachada), (2, 1))
         self.assertEqual(suma(self.b, Saldo.UBICADO_VENDIBLE), 4)
         en_camino.assert_called_once()  # segundo "va en camino": es otra salida
-        fulfillment.assert_called_once_with(pedido, cajas=[caja], notificar=True)
+        fulfillment.assert_called_once_with(pedido, cajas=[caja], evento_inicial="CARRIER_PICKED_UP", notificar=True)
         self.assertFalse(pedido.pendiente_de_completar)
 
     def test_si_shopify_quita_la_faltante_el_pedido_se_cierra(self):

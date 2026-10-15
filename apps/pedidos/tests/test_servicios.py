@@ -1089,8 +1089,10 @@ class GuiaYSalidaTests(BaseServicios):
             pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2, reservada=True,
         )
         with patch("apps.inventario.services.despachar") as despachar, \
-             patch("apps.mensajeria.services.enviar_en_camino") as en_camino:
+             patch("apps.mensajeria.services.enviar_en_camino") as en_camino, \
+             self.captureOnCommitCallbacks(execute=True):
             services.marcar_recolectado(pedido, actor=None)
+            en_camino.assert_not_called()  # el aviso sale tras el commit (2026-10-14), nunca dentro de la transacción
         pedido.refresh_from_db()
         self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
         self.assertIsNotNone(pedido.ts_recolectado)
@@ -1121,6 +1123,11 @@ class SalidaParcialTests(BaseServicios):
             peso_gr=1000, precio_declarado=Decimal("100"),
         )
         pedido = self.pedido_directo(estado=Pedido.GUIA_GENERADA)
+        # Con tienda y orden de Shopify: el fulfillment se encola al salir y el
+        # hilo (en pruebas, en línea) lo escribe (2026-10-14); sin tienda no hay nada que escribir.
+        tienda = Tienda.objects.create(cliente=self.cliente, plataforma="shopify", dominio="salida-parcial.myshopify.com", token="", location_id="", activo=True)
+        pedido.tienda, pedido.shopify_order_id = tienda, "777001"
+        pedido.save(update_fields=["tienda", "shopify_order_id"])
         l1 = LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=2, cantidad_pickeada=2, reservada=True)
         l2 = LineaPedido.objects.create(pedido=pedido, sku=otro, cantidad=1, cantidad_pickeada=1, reservada=True)
         c1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("2"), carrier="estafeta", estado=Paquete.EMPACADO)
@@ -1151,7 +1158,7 @@ class SalidaParcialTests(BaseServicios):
         despachar.assert_called_once_with(self.sku, 2, pedido.folio)
         en_camino.assert_called_once()
         # Shopify: fulfillment POR CAJA en cada manifiesto (Partially fulfilled).
-        fulfillment.assert_called_once_with(pedido, cajas=[c1], notificar=True)  # primer manifiesto de la ola
+        fulfillment.assert_called_once_with(pedido, cajas=[c1], evento_inicial="CARRIER_PICKED_UP", notificar=True)  # primer manifiesto de la ola
         self.assertEqual(services.cajas_por_salir(pedido), [c2])
 
         despachar, en_camino, fulfillment = self._salida(pedido, [c2])
@@ -1160,7 +1167,7 @@ class SalidaParcialTests(BaseServicios):
         self.assertEqual(c2.estado, Paquete.DESPACHADO)
         despachar.assert_called_once_with(otro, 1, pedido.folio)
         en_camino.assert_not_called()
-        fulfillment.assert_called_once_with(pedido, cajas=[c2], notificar=False)  # misma ola: sin segundo correo
+        fulfillment.assert_called_once_with(pedido, cajas=[c2], evento_inicial="CARRIER_PICKED_UP", notificar=False)  # misma ola: sin segundo correo
 
     def test_todas_las_cajas_de_una_vez_es_recolectado_directo(self):
         pedido, c1, c2, otro = self._pedido_dos_cajas()
@@ -1168,7 +1175,7 @@ class SalidaParcialTests(BaseServicios):
         self.assertEqual(pedido.estado, Pedido.RECOLECTADO)
         self.assertEqual(despachar.call_count, 2)
         en_camino.assert_called_once()
-        fulfillment.assert_called_once_with(pedido, cajas=[c1, c2], notificar=True)
+        fulfillment.assert_called_once_with(pedido, cajas=[c1, c2], evento_inicial="CARRIER_PICKED_UP", notificar=True)
 
     def test_ninguna_caja_pendiente_entre_las_palomeadas_truena(self):
         pedido, c1, c2, _ = self._pedido_dos_cajas()
