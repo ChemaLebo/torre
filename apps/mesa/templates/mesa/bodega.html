@@ -40,7 +40,7 @@
           <td>{{ f.sku.descripcion }} <span class="small muted">{{ f.sku.cliente.nombre }}</span></td>
           <td class="mono">{{ f.lote|default:"—" }}</td>
           <td class="mono">{{ f.caducidad|date:"Y-m-d"|default:"—" }}</td>
-          <td><span class="pill{% if f.estado == 'cuarentena' %} crit{% elif f.estado == 'vendible' %} ok{% elif f.estado == 'apartado' %} accent{% endif %}">{{ f.estado }}</span></td>
+          <td><span class="pill{% if f.estado == 'cuarentena' %} crit{% elif f.estado == 'vendible' %} ok{% endif %}">{{ f.estado }}</span>{% if f.apartado %} <span class="pill accent" title="Apartadas para pedidos: son parte de las vendibles (no se suman); se pueden mover y la reserva viaja con ellas">{{ f.apartado }} apartada{{ f.apartado|pluralize }}</span>{% endif %}</td>
           <td class="derecha mono">{{ f.cantidad }}</td>
         </tr>
         {% endfor %}
@@ -49,6 +49,9 @@
   </div>
   {% else %}
   <p class="muted">{% if busqueda.modo == "posicion" %}Vacía.{% elif busqueda.skus %}Ese producto existe pero no tiene piezas en ninguna posición.{% else %}Nada coincide: ni producto, ni lote, ni posición con ese texto.{% endif %}</p>
+  {% endif %}
+  {% if busqueda.en_empaque %}
+  <p class="small muted mt" title="Ya se pickearon: están en la mesa de empaque o en una caja cerrada esperando salir; el kardex conserva de qué anaquel salieron">Pickeadas, en la mesa de empaque y pendientes de salir (ya no están en ningún anaquel): {% for e in busqueda.en_empaque %}<span class="mono">{{ e.sku.codigo }}</span> × {{ e.cantidad }}{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
   {% endif %}
 </div>
 {% endif %}

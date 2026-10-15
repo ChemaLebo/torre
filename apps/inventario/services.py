@@ -2297,14 +2297,46 @@ ESTADO_LEGIBLE = {
 }
 
 
+def _filas_buscador(saldos):
+    """Renglones del buscador a partir de saldos (Chema 2026-10-14): uno por
+    SKU · lote · posición · estado de lo que está físicamente en el anaquel
+    (vendible, en recepción, cuarentena); la capa de apartados va DENTRO del
+    renglón vendible (`apartado`), no como renglón aparte, y lo que ya se
+    pickeó (en empaque) no aparece en ninguna posición: se regresa aparte,
+    sumado por producto. Regresa (filas, en_empaque)."""
+    filas, en_empaque = {}, {}
+    orden_estado = {Saldo.UBICADO_VENDIBLE: 0, Saldo.EN_PUTAWAY: 1, Saldo.CUARENTENA: 2}
+    for x in saldos:
+        if x.estado == Saldo.EN_EMPAQUE:
+            en_empaque[x.sku] = en_empaque.get(x.sku, 0) + x.cantidad
+            continue
+        estado = Saldo.UBICADO_VENDIBLE if x.estado == Saldo.RESERVADO else x.estado
+        if estado not in orden_estado:
+            continue
+        clave = (x.ubicacion_id, x.sku_id, x.lote_id, estado)
+        fila = filas.setdefault(clave, {
+            "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
+            "ubicacion": x.ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(estado, estado), "cantidad": 0, "apartado": 0,
+            "en_anaquel": True, "_orden": (x.ubicacion.codigo, x.sku.codigo, x.lote.codigo if x.lote_id else "", orden_estado[estado]),
+        })
+        fila["apartado" if x.estado == Saldo.RESERVADO else "cantidad"] += x.cantidad
+    lista = sorted(filas.values(), key=lambda f: f["_orden"])
+    for f in lista:
+        del f["_orden"]
+    return lista, [{"sku": sku, "cantidad": n} for sku, n in sorted(en_empaque.items(), key=lambda kv: kv[0].codigo)]
+
+
 def buscar_en_bodega(q, cliente=None):
     """Buscador de Bodega (Chema 2026-10-06): "¿dónde está X?". `q` puede ser
     una POSICIÓN (código exacto de ubicación: qué hay ahí, con lotes y
     ocupación) o un PRODUCTO / LOTE (código, descripción o código de barras
     del SKU, o código de lote): una fila por SKU · lote · posición · estado con
     sus piezas, ordenada por posición, y los racks donde vive para resaltarlos
-    en el plano. Regresa None sin consulta; {"modo": "posicion"|"producto",
-    "q", "filas", "racks", "ubicacion", "ocupacion", "skus"}."""
+    en el plano. Las apartadas van dentro del renglón vendible y lo pickeado
+    (en empaque) no se lista por posición: va en `en_empaque` por producto
+    (Chema 2026-10-14). Regresa None sin consulta; {"modo":
+    "posicion"|"producto", "q", "filas", "en_empaque", "racks", "ubicacion",
+    "ocupacion", "skus", "piezas"}."""
     from apps.catalogo.models import SKU  # lazy: modelo de otra app
 
     q = (q or "").strip()
@@ -2312,20 +2344,13 @@ def buscar_en_bodega(q, cliente=None):
         return None
     ubicacion = Ubicacion.objects.filter(codigo__iexact=q).first()
     if ubicacion is not None:
-        # Apartado y en empaque se listan al final, como información; lo que hay en la posición es lo demás.
-        saldos = sorted(
-            Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "lote"),
-            key=lambda x: (x.estado not in ESTADOS_EN_ANAQUEL, x.sku.codigo, x.lote.codigo if x.lote_id else "", x.estado),
-        )
+        consulta = Saldo.objects.filter(ubicacion=ubicacion, cantidad__gt=0).select_related("sku", "sku__cliente", "lote", "ubicacion")
         if cliente is not None:
-            saldos = saldos.filter(sku__cliente=cliente)
-        filas = [{
-            "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
-            "ubicacion": ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(x.estado, x.estado), "cantidad": x.cantidad,
-            "en_anaquel": x.estado in ESTADOS_EN_ANAQUEL,
-        } for x in saldos]
-        return {"modo": "posicion", "q": q, "filas": filas, "racks": {ubicacion.codigo}, "ubicacion": ubicacion,
-                "ocupacion": ocupacion(ubicacion), "skus": [], "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
+            consulta = consulta.filter(sku__cliente=cliente)
+        filas, en_empaque = _filas_buscador(consulta)
+        return {"modo": "posicion", "q": q, "filas": filas, "en_empaque": en_empaque, "racks": {ubicacion.codigo},
+                "ubicacion": ubicacion, "ocupacion": ocupacion(ubicacion), "skus": [],
+                "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
     skus = SKU.objects.filter(Q(codigo__icontains=q) | Q(descripcion__icontains=q) | Q(codigo_barras__iexact=q))
     if cliente is not None:
         skus = skus.filter(cliente=cliente)
@@ -2333,17 +2358,10 @@ def buscar_en_bodega(q, cliente=None):
     consulta = Saldo.objects.filter(cantidad__gt=0).filter(Q(sku__in=skus) | Q(lote__codigo__iexact=q))
     if cliente is not None:
         consulta = consulta.filter(sku__cliente=cliente)
-    filas, racks = [], set()
-    for x in consulta.select_related("sku", "lote", "ubicacion").order_by("ubicacion__codigo", "sku__codigo", "lote__codigo", "estado"):
-        filas.append({
-            "sku": x.sku, "lote": x.lote.codigo if x.lote_id else "", "caducidad": x.lote.fecha_caducidad if x.lote_id else None,
-            "ubicacion": x.ubicacion.codigo, "estado": ESTADO_LEGIBLE.get(x.estado, x.estado), "cantidad": x.cantidad,
-            "en_anaquel": x.estado in ESTADOS_EN_ANAQUEL,
-        })
-        if x.estado in ESTADOS_EN_ANAQUEL:
-            racks.add(x.ubicacion.codigo)
-    return {"modo": "producto", "q": q, "filas": filas, "racks": racks, "ubicacion": None, "ocupacion": None, "skus": skus,
-            "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
+    filas, en_empaque = _filas_buscador(consulta.select_related("sku", "sku__cliente", "lote", "ubicacion"))
+    racks = {f["ubicacion"] for f in filas if f["en_anaquel"]}
+    return {"modo": "producto", "q": q, "filas": filas, "en_empaque": en_empaque, "racks": racks, "ubicacion": None,
+            "ocupacion": None, "skus": skus, "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
 
 
 # ── Capacidad y ocupación de anaqueles (producto siempre parado) ──
