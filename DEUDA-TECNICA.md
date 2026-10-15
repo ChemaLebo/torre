@@ -801,3 +801,21 @@ entrega por caja.
 - Texto: "contenido repuesto" sustituye a "sustituida" en las pantallas; la
   columna sigue siendo `Guia.sustituida_motivo` (sin migración).
 
+## Posiciones: ajustar conteo, nueva posición, buscador — hecho 2026-10-14 (noche)
+
+Pedidos de Chema durante el reacomodo físico de racks: contar por lote desde
+Posiciones (con lotes nuevos y liberación de reserva sobrante), crear
+posiciones desde la pantalla, apartadas dentro del renglón vendible, lo
+pickeado fuera de las posiciones y búsqueda por fragmento de código de barras.
+
+**Queda:**
+- Ajustar conteo no agrega un producto que no esté en la posición (se mueve
+  desde donde esté); si hace falta, es un renglón más en el mismo formulario.
+- La reserva sobrante se quita al pedido PENDIENTE más reciente, línea
+  completa; no reparte parcialmente ni toca pedidos en picking (ahí el pick
+  avisa "levanta un conteo").
+- Las piezas "en empaque" huérfanas (bug anterior al 2026-09-09) siguen
+  saliendo con `limpiar_en_empaque` (diagnóstico sin `--aplicar`).
+- El filtro de Posiciones es del lado del navegador (texto de cada tarjeta);
+  con miles de posiciones convendría pasarlo al servidor.
+
