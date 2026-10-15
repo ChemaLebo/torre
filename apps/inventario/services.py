@@ -2386,7 +2386,8 @@ def _reubicar_apartadas(sku, ubicacion):
     exceso = sum(x.cantidad for x in apartadas) - vendible
     if exceso <= 0:
         return []
-    fuera = list(Saldo.objects.select_for_update().filter(
+    # of=("self",): Postgres no permite FOR UPDATE sobre el lado opcional de un join (lote); se bloquean solo los saldos.
+    fuera = list(Saldo.objects.select_for_update(of=("self",)).filter(
         sku=sku, estado__in=[Saldo.UBICADO_VENDIBLE, Saldo.RESERVADO], cantidad__gt=0,
     ).exclude(ubicacion=ubicacion).select_related("ubicacion", "lote"))
     reservado_fuera = {}
