@@ -3,7 +3,7 @@ from importlib import import_module
 
 CLAVES = [
     "existencias", "lotes", "incidencias", "danos", "carriers", "ventas", "tiempos", "costos", "inventario",
-    "reacomodo",
+    "reacomodo", "destinos", "ciudades",
 ]
 
 
