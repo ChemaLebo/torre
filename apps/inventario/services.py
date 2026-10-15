@@ -2485,8 +2485,8 @@ def _filas_buscador(saldos):
 def buscar_en_bodega(q, cliente=None):
     """Buscador de Bodega (Chema 2026-10-06): "¿dónde está X?". `q` puede ser
     una POSICIÓN (código exacto de ubicación: qué hay ahí, con lotes y
-    ocupación) o un PRODUCTO / LOTE (código, descripción o código de barras
-    del SKU, o código de lote): una fila por SKU · lote · posición · estado con
+    ocupación) o un PRODUCTO / LOTE (código, descripción o fragmento del
+    código de barras del SKU, o código de lote): una fila por SKU · lote · posición · estado con
     sus piezas, ordenada por posición, y los racks donde vive para resaltarlos
     en el plano. Las apartadas van dentro del renglón vendible y lo pickeado
     (en empaque) no se lista por posición: va en `en_empaque` por producto
@@ -2507,7 +2507,8 @@ def buscar_en_bodega(q, cliente=None):
         return {"modo": "posicion", "q": q, "filas": filas, "en_empaque": en_empaque, "racks": {ubicacion.codigo},
                 "ubicacion": ubicacion, "ocupacion": ocupacion(ubicacion), "skus": [],
                 "piezas": sum(f["cantidad"] for f in filas if f["en_anaquel"])}
-    skus = SKU.objects.filter(Q(codigo__icontains=q) | Q(descripcion__icontains=q) | Q(codigo_barras__iexact=q))
+    # Código de barras por fragmento (Chema 2026-10-14): se buscan los últimos 4 o 5 dígitos, como con Ctrl+F.
+    skus = SKU.objects.filter(Q(codigo__icontains=q) | Q(descripcion__icontains=q) | Q(codigo_barras__icontains=q))
     if cliente is not None:
         skus = skus.filter(cliente=cliente)
     skus = list(skus.select_related("cliente").order_by("codigo")[:50])

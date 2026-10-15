@@ -36,8 +36,16 @@
   </form>
 </dialog>
 
+<div class="card mb">
+  <label for="filtro-posiciones" class="small">Buscar (posición, SKU, producto, lote o los últimos dígitos del código de barras)</label>
+  <div class="fila" style="gap:8px">
+    <input type="search" id="filtro-posiciones" autocomplete="off" placeholder="A-6, CCPL24L, 7874, CPL333…" style="flex:1 1 auto">
+    <span id="filtro-cuenta" class="small muted"></span>
+  </div>
+</div>
+
 {% for f in filas %}
-<details class="colapsable" id="pos-{{ f.ubicacion.pk }}">
+<details class="colapsable" id="pos-{{ f.ubicacion.pk }}" data-buscar="{{ f.ubicacion.codigo }} {% for e in f.existencias %}{{ e.sku.codigo }} {{ e.sku.codigo_barras }} {{ e.sku.descripcion }} {{ e.lote.codigo|default:'' }} {% endfor %}{% for fijo in f.fijos %}{{ fijo.sku.codigo }} {{ fijo.sku.codigo_barras }} {% endfor %}">
   <summary>
     <span class="mono"><b>{{ f.ubicacion.codigo }}</b></span>
     <span class="pill">{% if f.es_tarima %}tarima{% else %}{{ f.ubicacion.get_tipo_display|lower }}{% endif %}</span>
@@ -50,12 +58,13 @@
     {% if f.existencias %}
     <div class="tabla-wrap">
       <table>
-        <thead><tr><th>Cliente</th><th>SKU</th><th>Producto</th><th>Lote</th><th>Caducidad</th><th class="derecha">Vendibles</th><th class="derecha">Apartadas</th></tr></thead>
+        <thead><tr><th>Cliente</th><th>SKU</th><th>Código de barras</th><th>Producto</th><th>Lote</th><th>Caducidad</th><th class="derecha">Vendibles</th><th class="derecha">Apartadas</th></tr></thead>
         <tbody>
           {% for e in f.existencias %}
           <tr>
             <td>{{ e.sku.cliente.nombre }}</td>
             <td class="mono">{{ e.sku.codigo }}</td>
+            <td class="mono small">{{ e.sku.codigo_barras|default:"—" }}</td>
             <td>{{ e.sku.descripcion }}</td>
             <td class="mono">{{ e.lote.codigo|default:"—" }}</td>
             <td class="mono">{% if e.lote and e.lote.fecha_caducidad %}{{ e.lote.fecha_caducidad|date:"d/m/Y" }}{% else %}—{% endif %}</td>
@@ -170,6 +179,25 @@
 
 <script>
 (function () {
+  // Filtro (Chema 2026-10-14): escribe un fragmento y solo quedan las posiciones que lo contienen
+  // (nombre, SKU, producto, lote o código de barras); con pocas coincidencias se abren solas.
+  var filtro = document.getElementById("filtro-posiciones"), cuenta = document.getElementById("filtro-cuenta");
+  var tarjetas = Array.prototype.slice.call(document.querySelectorAll("details.colapsable[data-buscar]"));
+  function filtrar() {
+    var q = (filtro.value || "").trim().toLowerCase(), n = 0;
+    tarjetas.forEach(function (t) {
+      var ok = !q || t.dataset.buscar.toLowerCase().indexOf(q) !== -1;
+      t.hidden = !ok;
+      if (ok) { n += 1; }
+    });
+    if (q) {
+      cuenta.textContent = n + " posici" + (n === 1 ? "ón" : "ones");
+      if (n && n <= 5) { tarjetas.forEach(function (t) { if (!t.hidden) { t.open = true; } }); }
+    } else {
+      cuenta.textContent = "";
+    }
+  }
+  if (filtro) { filtro.addEventListener("input", filtrar); }
   var base = "{% url 'mesa:bodega_posicion_accion' 0 %}";
   var csrf = document.querySelector("[name=csrfmiddlewaretoken]").value;
   function datos(pk) { return JSON.parse(document.getElementById("pos-datos-" + pk).textContent); }

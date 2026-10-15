@@ -34,6 +34,16 @@ class BuscadorBodegaTests(PisoTestCase):
         self.assertIsNone(buscar_en_bodega("  "))
         self.assertEqual(buscar_en_bodega("nada-de-nada")["filas"], [])
 
+    def test_codigo_de_barras_por_fragmento(self):
+        """Chema 2026-10-14: se busca con los últimos 4 o 5 dígitos del código de barras, como con Ctrl+F."""
+        self.sku.codigo_barras = "7503049667874"
+        self.sku.save(update_fields=["codigo_barras"])
+        for q in ("7874", "67874", "7503049667874"):
+            r = buscar_en_bodega(q)
+            self.assertEqual([s.pk for s in r["skus"]], [self.sku.pk], q)
+            self.assertTrue(r["filas"], q)
+        self.assertEqual(buscar_en_bodega("9999")["skus"], [])
+
     def test_pantalla_resalta_los_racks_y_enlaza(self):
         respuesta = self.client.get(reverse("mesa:bodega"), {"q": "COLIMITA-SIX"})
         self.assertContains(respuesta, "Resultado de «COLIMITA-SIX»")

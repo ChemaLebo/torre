@@ -49,6 +49,11 @@ class PosicionesMesaTests(TestCase):
         self.assertContains(r, f'id="pos-datos-{self.a.pk}"')
         self.assertContains(r, "Imprimir etiquetas de las cajas")
         self.assertContains(r, "Imprimir tarima")
+        # Filtro por fragmento (2026-10-14): cada posición lleva su texto de búsqueda con el código de barras; columna visible.
+        self.assertContains(r, 'id="filtro-posiciones"')
+        self.assertContains(r, "<th>Código de barras</th>")
+        self.assertContains(r, "7500465010011")
+        self.assertContains(r, 'data-buscar="PIC-1-I-F-2 CCPL24L 7500465010011 Piedra Lisa 24 CPL333AB ')
         self.assertContains(r, 'name="destino"')
         self.assertEqual([f["ubicacion"].codigo for f in r.context["filas"]], ["PIC-1-D-B-1", "PIC-1-I-F-2", "TAR-01"])
         r = self.client.get(reverse("mesa:bodega"))
