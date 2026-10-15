@@ -106,7 +106,7 @@
         <input type="text" name="sku" class="mono" list="lista-skus" autocomplete="off" autocapitalize="characters" placeholder="SKU" required style="flex:1 1 auto">
         <button class="btn" type="submit">Asignar</button>
       </form>
-      <datalist id="lista-skus">{% for s in skus %}<option value="{{ s.codigo }}">{{ s.cliente.nombre }} · {{ s.descripcion|truncatechars:40 }}</option>{% endfor %}</datalist>
+      <datalist id="lista-skus">{% for s in skus %}<option value="{{ s.codigo }}">{{ s.descripcion|truncatechars:40 }}{% if s.codigo_barras %} · {{ s.codigo_barras }}{% endif %} · {{ s.cliente.nombre }}</option>{% endfor %}</datalist>
     </div>
     <form method="post" data-form="renombrar">{% csrf_token %}
       <input type="hidden" name="accion" value="renombrar">
@@ -138,8 +138,9 @@
       <input type="hidden" name="lotes" data-campo="aj_lotes">
       <h4>Ajustar conteo</h4>
       <p class="small muted">Lo que hay físicamente de un producto en esta posición, por lote. 0 quita el lote; un lote nuevo se agrega con su caducidad, aunque el producto no estuviera aquí (sin código de lote si el producto no lleva). Cada diferencia deja un ajuste firmado por ti y un conteo; si queda menos físico que apartado, la reserva sobrante se libera del pedido más reciente.</p>
-      <label for="aj-producto">Producto (cualquiera del catálogo)</label>
-      <input type="text" id="aj-producto" name="sku" class="mono" list="lista-skus" autocomplete="off" autocapitalize="characters" placeholder="SKU" required>
+      <label for="aj-producto">Producto (SKU, nombre o código de barras)</label>
+      <input type="text" id="aj-producto" name="sku" class="mono" list="lista-skus" autocomplete="off" autocapitalize="characters" placeholder="SKU o código de barras" required>
+      <div class="small muted" data-aj-producto-nota></div>
       <div class="tabla-wrap modal-lista">
         <table>
           <thead><tr><th>Lote</th><th>Caducidad</th><th class="derecha">Torre dice</th><th class="derecha">Contado</th></tr></thead>
@@ -147,7 +148,7 @@
         </table>
       </div>
       <div class="grid g3">
-        <label>Lote nuevo <input type="text" name="nuevo_lote" class="mono" maxlength="40" autocapitalize="characters" placeholder="CT145AB"></label>
+        <label>Lote nuevo <input type="text" name="nuevo_lote" class="mono" maxlength="40" list="lista-lotes" autocomplete="off" autocapitalize="characters" placeholder="CT145AB"><datalist id="lista-lotes"></datalist></label>
         <label>Caducidad <input type="date" name="nuevo_caducidad"></label>
         <label>Contado <input type="number" name="nuevo_contado" min="0" inputmode="numeric"></label>
       </div>
@@ -262,9 +263,37 @@
         }
         fa.querySelector("[data-campo=aj_lotes]").value = ids.join(",");
       }
-      skuAj.oninput = renglonesAj;
+      // Texto predictivo del lote: los lotes conocidos del producto (JSON) y, al elegir uno, su caducidad.
+      var urlLotes = "{% url 'mesa:bodega_lotes_json' %}", listaLotes = document.getElementById("lista-lotes");
+      var inLote = fa.querySelector("[name=nuevo_lote]"), inCad = fa.querySelector("[name=nuevo_caducidad]"), nota = fa.querySelector("[data-aj-producto-nota]");
+      var lotesConocidos = {}, pendiente = null;
+      function cargarLotes() {
+        var codigo = (skuAj.value || "").trim();
+        clearTimeout(pendiente);
+        if (!codigo) { listaLotes.innerHTML = ""; lotesConocidos = {}; nota.textContent = ""; return; }
+        pendiente = setTimeout(function () {
+          fetch(urlLotes + "?sku=" + encodeURIComponent(codigo), {credentials: "same-origin"}).then(function (r) { return r.json(); }).then(function (data) {
+            if ((skuAj.value || "").trim() !== codigo) { return; }
+            lotesConocidos = {};
+            listaLotes.innerHTML = "";
+            if (!data.sku) { nota.textContent = "Sin coincidencia exacta todavía: elige de la lista."; return; }
+            if (data.sku !== codigo.toUpperCase()) { skuAj.value = data.sku; renglonesAj(); }  // escribió el código de barras
+            nota.textContent = data.descripcion + (data.requiere_lote ? " · lleva lote" : " · no lleva lote: basta el conteo");
+            data.lotes.forEach(function (l) {
+              lotesConocidos[l.codigo] = l.caducidad;
+              var o = document.createElement("option");
+              o.value = l.codigo; o.textContent = l.caducidad ? "caduca " + l.caducidad : "sin caducidad"; listaLotes.appendChild(o);
+            });
+          }).catch(function () {});
+        }, 250);
+      }
+      inLote.oninput = function () {
+        var cad = lotesConocidos[(inLote.value || "").trim().toUpperCase()];
+        if (cad !== undefined) { inCad.value = cad; }
+      };
+      skuAj.oninput = function () { renglonesAj(); cargarLotes(); };
       skuAj.value = d.filas.length ? d.filas[0].sku_codigo : "";
-      renglonesAj();
+      renglonesAj(); cargarLotes();
       document.getElementById("ed-nuevo").value = "";
       modal.showModal();
     });

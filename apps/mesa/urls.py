@@ -9,6 +9,7 @@ urlpatterns = [
     path("bodega/", views.bodega, name="bodega"),
     path("bodega/posiciones/", views.bodega_posiciones, name="bodega_posiciones"),
     path("bodega/posiciones/<int:pk>/", views.bodega_posicion_accion, name="bodega_posicion_accion"),
+    path("bodega/lotes.json", views.bodega_lotes_json, name="bodega_lotes_json"),
     path("incidencias/", views.incidencias, name="incidencias"),
     path("incidencias/nueva/", views.incidencia_nueva, name="incidencia_nueva"),
     path("incidencias/pedido/<int:pk>/", views.incidencias_pedido, name="incidencias_pedido"),

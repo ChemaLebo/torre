@@ -190,6 +190,16 @@ class PosicionesMesaTests(TestCase):
         self.assertContains(r, "No existe el producto NOEXISTE")
         html = self.client.get(self.lista).content.decode()
         self.assertIn('id="aj-producto" name="sku"', html)
+        self.assertIn('list="lista-lotes"', html)
+        self.assertIn('<option value="CC24">Colimita 24 · 7503026716083 · Cervecería Colima</option>', html)
+        # Producto por código de barras y lotes conocidos con su caducidad (texto predictivo).
+        r = self.client.post(self.accion_a, {"accion": "ajustar", "sku": "7503026716083", "lotes": "", "nuevo_lote": "CC399ABC", "nuevo_contado": "9", "motivo": "conteo"}, follow=True)
+        self.assertContains(r, "CC24 en PIC-1-I-F-2: lote CC399ABC: 7 → 9 (+2, AJU-")
+        datos = self.client.get(reverse("mesa:bodega_lotes_json"), {"sku": "7503026716083"}).json()
+        self.assertEqual(datos, {"sku": "CC24", "descripcion": "Colimita 24", "requiere_lote": True, "lotes": [{"codigo": "CC399ABC", "caducidad": "2027-02-01"}]})
+        self.assertEqual(self.client.get(reverse("mesa:bodega_lotes_json"), {"sku": "nadie"}).json()["lotes"], [])
+        self.client.force_login(self.piso)
+        self.assertEqual(self.client.get(reverse("mesa:bodega_lotes_json"), {"sku": "CC24"}).status_code, 403)
 
     def test_contar_de_menos_libera_la_reserva_del_pedido_mas_reciente(self):
         from apps.pedidos.models import LineaPedido, Pedido

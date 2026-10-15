@@ -18,7 +18,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Q, Sum
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -400,6 +400,34 @@ def bodega_posiciones(request):
     })
 
 
+def _sku_por_codigo_o_barras(texto):
+    """SKU por código exacto (sin distinguir mayúsculas) o por código de barras completo; None si no hay."""
+    from apps.catalogo.models import SKU  # lazy: modelo de otra app
+
+    texto = (texto or "").strip()
+    if not texto:
+        return None
+    return SKU.objects.filter(Q(codigo__iexact=texto) | Q(codigo_barras=texto)).select_related("cliente").first()
+
+
+@rol_requerido("mesa")
+def bodega_lotes_json(request):
+    """Lotes conocidos de un producto para el texto predictivo de Ajustar
+    conteo (Chema 2026-10-14): `?sku=` por código o código de barras →
+    {sku, descripcion, requiere_lote, lotes: [{codigo, caducidad}]} ordenados
+    por caducidad; al elegir uno, la pantalla llena su caducidad."""
+    from apps.catalogo.models import Lote  # lazy: modelo de otra app
+
+    sku = _sku_por_codigo_o_barras(request.GET.get("sku"))
+    if sku is None:
+        return JsonResponse({"sku": None, "descripcion": "", "requiere_lote": True, "lotes": []})
+    lotes = [
+        {"codigo": l.codigo, "caducidad": l.fecha_caducidad.isoformat() if l.fecha_caducidad else ""}
+        for l in Lote.objects.filter(sku=sku).order_by("fecha_caducidad", "codigo")
+    ]
+    return JsonResponse({"sku": sku.codigo, "descripcion": sku.descripcion, "requiere_lote": sku.requiere_lote, "lotes": lotes})
+
+
 @rol_requerido("mesa")
 def bodega_posicion_accion(request, pk):
     """POST sobre una posición: `renombrar` (nuevo), `mover` (sku_id, lote_id,
@@ -442,7 +470,7 @@ def bodega_posicion_accion(request, pk):
                 sku = get_object_or_404(SKU, pk=request.POST.get("sku_id"))
             else:
                 codigo = (request.POST.get("sku") or "").strip()
-                sku = SKU.objects.filter(codigo__iexact=codigo).first()
+                sku = _sku_por_codigo_o_barras(codigo)
                 if sku is None:
                     raise ValueError(f"No existe el producto {codigo or '(vacío)'}: elígelo de la lista.")
             renglones = []
