@@ -226,6 +226,7 @@ class PollTrackingTests(TestCase):
         pedido.refresh_from_db()
         c1, c2 = cajas
         c2.refresh_from_db()
+        self._en_empaque(sku, 2)
         with patch("apps.integraciones.services.marcar_fulfillment"), patch("apps.mensajeria.services.enviar_en_camino"), \
              patch("apps.inventario.services.despachar") as despachar, self.captureOnCommitCallbacks(execute=True):
             services._procesar_rastreo(c2.guia_activa, {"estado": "EN_TRANSITO", "descripcion": "In transit", "ts_evento": timezone.now(), "raw": {}}, timezone.now())
@@ -233,7 +234,7 @@ class PollTrackingTests(TestCase):
         c1.refresh_from_db()
         c2.refresh_from_db()
         self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.EMPACADO, Paquete.DESPACHADO, "PARCIALMENTE_DESPACHADO"))
-        despachar.assert_called_once_with(sku, 2, pedido.folio)  # la unidad de venta sale del kardex con la primera caja
+        despachar.assert_called_once_with(sku, 1, pedido.folio)  # Chema 2026-10-15: lo que sigue en la caja 1 (en bodega) no sale del kardex
         salida = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo")
         self.assertEqual((salida.delta["origen"], salida.delta["caja"]), ("carrier", 2))
         self.assertFalse(Movimiento.objects.filter(tipo=Movimiento.SALIDA).exists())  # despachar está parchado: solo se verifica la llamada
@@ -290,6 +291,137 @@ class PollTrackingTests(TestCase):
         self.assertEqual(guia.estado, Guia.EN_TRANSITO)
         self.assertTrue(Incidencia.objects.filter(pedido=pedido, tipo="RET").exists())
 
+    def _caja(self, pedido, numero, linea, carrier, estado, guia_estado=None, ts_carrier=None):
+        """Caja con una unidad de `linea` y, si se pide, su guía."""
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete, PaqueteLinea
+
+        caja = Paquete.objects.create(pedido=pedido, numero=numero, peso_kg=Decimal(7), carrier=carrier, estado=estado)
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=1)
+        if guia_estado is not None:
+            Guia.objects.create(pedido=pedido, paquete=caja, carrier=carrier, numero=f"G-{pedido.pk}-{numero}", proveedor="envia",
+                                estado=guia_estado, ts_recolectado_carrier=ts_carrier)
+        return caja
+
+    def _en_empaque(self, sku, cantidad):
+        """Piezas pickeadas en la mesa de empaque (kardex EN_EMPAQUE)."""
+        from apps.catalogo.models import Ubicacion
+        from apps.inventario.models import Saldo
+
+        mesa = Ubicacion.objects.get_or_create(codigo="SAL-OTRO", defaults={"tipo": Ubicacion.SALIDA})[0]
+        Saldo.objects.create(sku=sku, ubicacion=mesa, lote=None, estado=Saldo.EN_EMPAQUE, cantidad=cantidad)
+
+    def test_una_caja_fantasma_sale_sola_sin_descontar_lo_que_sigue_en_otra_caja(self):
+        """PED-00151 (Chema 2026-10-15): la caja 1 salió en septiembre sin quedar
+        despachada (nació planeada después del empaque) y el pedido volvió por
+        una reposición que vive en la caja 2. El carrier ya tenía la caja 1: en
+        la siguiente pasada sale sola, sin tocar la pieza de la caja 2, y el
+        pedido queda parcial con la caja 2 lista en Salida."""
+        from apps.catalogo.models import SKU
+        from apps.envios.models import Paquete
+        from apps.pedidos.models import LineaPedido, Pedido
+
+        pedido = crear_pedido(self.cliente, self.tienda, estado="GUIA_GENERADA", es_local=False)
+        sku = SKU.objects.create(cliente=self.cliente, codigo="12PKCCL", descripcion="12 pack", peso_gr=7000)
+        linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, reservada=True, cantidad_pickeada=2,
+                                           cantidad_despachada=1, cantidad_repuesta=1, cantidad_repuesta_reservada=1)
+        ts = timezone.now() - timedelta(days=15)
+        c1 = self._caja(pedido, 1, linea, "estafeta", Paquete.PLANEADO, Guia.RECOLECTADO, ts)
+        c2 = self._caja(pedido, 2, linea, "paquetexpress", Paquete.EMPACADO, Guia.GUIA_CREADA)
+        Pedido.objects.filter(pk=pedido.pk).update(ts_recolectado_carrier=ts)
+        g1 = c1.guias.get()
+        with patch("apps.inventario.services.despachar") as despachar, patch("apps.integraciones.services.marcar_fulfillment"), \
+             patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(g1, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": ts, "raw": {}}, timezone.now())
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        pedido.refresh_from_db()
+        linea.refresh_from_db()
+        self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.DESPACHADO, Paquete.EMPACADO, "PARCIALMENTE_DESPACHADO"))
+        despachar.assert_not_called()  # la pieza en empaque es la de la caja 2
+        self.assertEqual(linea.cantidad_despachada, 1)
+        salida = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo")
+        self.assertEqual((salida.delta["origen"], salida.delta["caja"], salida.delta["pedido_movido"]), ("carrier", 1, True))
+        # Segunda pasada: ya no hay nada que sacar y no se repite el evento.
+        with patch("apps.inventario.services.despachar"), patch("apps.integraciones.services.marcar_fulfillment"), \
+             patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(g1, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": ts, "raw": {}}, timezone.now())
+        self.assertEqual(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo").count(), 1)
+
+    def test_con_el_pedido_fuera_de_salida_sale_solo_la_caja(self):
+        """Chema 2026-10-15: si el carrier escaneó la caja, fue error nuestro y la
+        caja sale aunque el pedido no esté en Salida (empacado con guías a
+        medias). Sale solo esa caja; el pedido no se mueve; del kardex sale lo
+        que no sigue en la otra caja."""
+        from apps.catalogo.models import SKU
+        from apps.envios.models import Paquete
+        from apps.pedidos.models import LineaPedido
+
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO", es_local=False)
+        sku = SKU.objects.create(cliente=self.cliente, codigo="SIX-D", descripcion="Six", peso_gr=4000)
+        linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=2, reservada=True, cantidad_pickeada=2)
+        c1 = self._caja(pedido, 1, linea, "estafeta", Paquete.EMPACADO, Guia.GUIA_CREADA)
+        c2 = self._caja(pedido, 2, linea, "estafeta", Paquete.EMPACADO)  # todavía sin guía
+        self._en_empaque(sku, 2)
+        g1 = c1.guias.get()
+        with patch("apps.inventario.services.despachar") as despachar, patch("apps.integraciones.services.marcar_fulfillment"), \
+             patch("apps.mensajeria.services.enviar_en_camino") as en_camino, self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(g1, {"estado": "EN_TRANSITO", "descripcion": "In transit", "ts_evento": timezone.now(), "raw": {}}, timezone.now())
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        pedido.refresh_from_db()
+        linea.refresh_from_db()
+        self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.DESPACHADO, Paquete.EMPACADO, "EMPACADO"))
+        despachar.assert_called_once_with(sku, 1, pedido.folio)
+        self.assertEqual(linea.cantidad_despachada, 1)
+        en_camino.assert_not_called()  # el "va en camino" sale con el manifiesto del pedido, no por una caja suelta
+        salida = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo")
+        self.assertEqual((salida.delta["caja"], salida.delta["pedido_movido"]), (1, False))
+
+    def test_si_la_salida_automatica_truena_se_reintenta_en_la_siguiente_pasada(self):
+        """Chema 2026-10-15: un error no deja la caja adentro para siempre; el
+        rastreo vuelve a intentar en cada pasada mientras el carrier la tenga."""
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO", es_local=True)
+        guia = services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        ts = timezone.now()
+        with patch("apps.pedidos.services.marcar_recolectado", side_effect=RuntimeError("base caída")), \
+             patch("apps.integraciones.services.marcar_fulfillment"), patch("apps.mensajeria.services.enviar_en_camino"), \
+             self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(guia, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": ts, "raw": {}}, timezone.now())
+        pedido.refresh_from_db()
+        guia.refresh_from_db()
+        self.assertEqual((pedido.estado, guia.ts_recolectado_carrier), ("GUIA_GENERADA", ts))
+        fallida = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo_fallida")
+        self.assertEqual((fallida.delta["reintento"], fallida.motivo), (False, "base caída"))
+        with patch("apps.integraciones.services.marcar_fulfillment"), patch("apps.mensajeria.services.enviar_en_camino"), \
+             self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(guia, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": ts, "raw": {}}, timezone.now())
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, "RECOLECTADO")
+        self.assertEqual(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_sin_escaneo").count(), 1)
+
+    def test_con_el_kardex_corto_sale_igual_y_queda_el_evento(self):
+        """Chema 2026-10-15: si en empaque no están todas las piezas, se descuenta
+        lo que hay y el resto solo se marca; la caja no se queda adentro."""
+        from apps.catalogo.models import SKU
+        from apps.pedidos.models import LineaPedido
+
+        pedido = crear_pedido(self.cliente, self.tienda, estado="EMPACADO", es_local=True)
+        sku = SKU.objects.create(cliente=self.cliente, codigo="SIX-K", descripcion="Six", peso_gr=4000)
+        linea = LineaPedido.objects.create(pedido=pedido, sku=sku, cantidad=1, reservada=True, cantidad_pickeada=1)
+        guia = services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        with patch("apps.integraciones.services.marcar_fulfillment"), patch("apps.mensajeria.services.enviar_en_camino"), \
+             self.captureOnCommitCallbacks(execute=True):
+            services._procesar_rastreo(guia, {"estado": "RECOLECTADO", "descripcion": "Picked Up", "ts_evento": timezone.now(), "raw": {}}, timezone.now())
+        pedido.refresh_from_db()
+        linea.refresh_from_db()
+        self.assertEqual((pedido.estado, linea.cantidad_despachada), ("RECOLECTADO", 1))
+        corto = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="salida_kardex_corto")
+        self.assertEqual((corto.delta["sku"], corto.delta["kardex"], corto.delta["solo_marcadas"]), ("SIX-K", 0, 1))
+
 
 # La lista blanca de producción cambia con el negocio (2026-09-20: solo imile);
 # estas pruebas ejercitan el mecanismo con los carriers que conoce la tabla mock.
@@ -297,6 +429,7 @@ TORRE_CARRIERS_CLASICOS = {
     **settings.TORRE,
     "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
 }
+
 
 
 @override_settings(TORRE=TORRE_CARRIERS_CLASICOS)

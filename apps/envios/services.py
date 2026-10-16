@@ -1187,8 +1187,13 @@ def _procesar_rastreo(guia, info, ahora):
         guia.save(update_fields=sorted(set(campos)))
 
     _guardar_eventos(guia, info, estado_nuevo if cambio else "", hubo_movimiento, ahora)
-    if guia.estado in _ESTADOS_YA_RECOLECTADA and guia.ts_recolectado_carrier is None:
-        _registrar_recoleccion_carrier(guia, info.get("ts_evento") or ahora, descripcion)
+    if guia.estado in _ESTADOS_YA_RECOLECTADA:
+        if guia.ts_recolectado_carrier is None:
+            _registrar_recoleccion_carrier(guia, info.get("ts_evento") or ahora, descripcion)
+        elif _sigue_en_bodega(guia):
+            # Reintento en cada pasada (Chema 2026-10-15): el carrier ya la tiene
+            # y Torre aún la ve adentro (la salida automática falló o no aplicó).
+            _salida_automatica(guia, guia.ts_recolectado_carrier, descripcion)
 
     if cambio:
         resultado["actualizada"] = 1
@@ -1231,10 +1236,7 @@ def _registrar_recoleccion_carrier(guia, ts, descripcion=""):
     if primera:
         pedido.ts_recolectado_carrier = ts
         pedido.save(update_fields=["ts_recolectado_carrier"])
-    if guia.paquete_id is not None:
-        en_bodega = guia.paquete.estado != Paquete.DESPACHADO
-    else:
-        en_bodega = pedido.estado in ("EMPACADO", "GUIA_GENERADA")
+    en_bodega = _sigue_en_bodega(guia)
     registrar_evento(
         "pedido", pedido.pk, "recolectado_por_carrier", cliente=pedido.cliente,
         delta={"guia": guia.numero, "carrier": guia.carrier,
@@ -1243,25 +1245,47 @@ def _registrar_recoleccion_carrier(guia, ts, descripcion=""):
         motivo=(descripcion or "El carrier reportó la recolección")[:300],
     )
     if en_bodega:
-        # Salida automática sin escaneo (Chema 2026-10-12): si el carrier ya la
-        # tiene, la caja sale como con el manifiesto (kardex, fulfillment y
-        # aviso incluidos). Si no aplica o falla, el aviso de siempre.
-        salio = False
+        _salida_automatica(guia, ts, descripcion, avisar=primera)
+
+
+def _sigue_en_bodega(guia):
+    """True si Torre aún ve en bodega lo que viaja con esta guía: su caja no
+    está DESPACHADO o, con guía del pedido entero, alguna caja sigue adentro
+    (sin cajas: el pedido sigue empacado o con guía lista)."""
+    pedido = guia.pedido
+    if guia.paquete_id is not None:
+        return guia.paquete.estado != Paquete.DESPACHADO
+    cajas = list(pedido.paquetes.all())
+    if cajas:
+        return any(c.estado != Paquete.DESPACHADO for c in cajas)
+    return pedido.estado in ("EMPACADO", "GUIA_GENERADA")
+
+
+def _salida_automatica(guia, ts, descripcion, avisar=None):
+    """Salida sin escaneo porque el carrier ya la tiene (Chema 2026-10-12, sin
+    condiciones desde 2026-10-15): la caja sale como con el manifiesto
+    (pedidos.salida_por_carrier). Si truena, evento `salida_sin_escaneo_fallida`
+    y el rastreo lo reintenta en la siguiente pasada; si no aplica y es la
+    primera vez (`avisar` no es None), el aviso de siempre al comprador y a
+    Shopify. Regresa True si salió."""
+    pedido = guia.pedido
+    salio = False
+    try:
+        from apps.pedidos.services import salida_por_carrier  # lazy por contrato
+        salio = salida_por_carrier(pedido, guia, ts, descripcion)
+    except Exception as exc:  # noqa: BLE001 — la salida automática jamás detiene el rastreo
+        registrar_evento(
+            "pedido", pedido.pk, "salida_sin_escaneo_fallida", cliente=pedido.cliente,
+            delta={"guia": guia.numero, "caja": guia.paquete.numero if guia.paquete_id else None, "reintento": avisar is None},
+            motivo=str(exc)[:300],
+        )
+    if not salio and avisar is not None:
         try:
-            from apps.pedidos.services import salida_por_carrier  # lazy por contrato
-            salio = salida_por_carrier(pedido, guia, ts, descripcion)
-        except Exception as exc:  # noqa: BLE001 — la salida automática jamás detiene el rastreo
-            registrar_evento(
-                "pedido", pedido.pk, "salida_sin_escaneo_fallida", cliente=pedido.cliente,
-                delta={"guia": guia.numero, "caja": guia.paquete.numero if guia.paquete_id else None},
-                motivo=str(exc)[:300],
-            )
-        if not salio:
-            try:
-                from apps.pedidos.services import avisar_recoleccion_carrier  # lazy por contrato
-                avisar_recoleccion_carrier(pedido, guia, notificar=primera)
-            except Exception:  # noqa: BLE001 — el aviso jamás detiene el rastreo
-                pass
+            from apps.pedidos.services import avisar_recoleccion_carrier  # lazy por contrato
+            avisar_recoleccion_carrier(pedido, guia, notificar=avisar)
+        except Exception:  # noqa: BLE001 — el aviso jamás detiene el rastreo
+            pass
+    return salio
 
 
 def _estado_por_guias(pedido):

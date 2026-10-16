@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import F, Q, Sum
 from django.utils import timezone
 
 from apps.core.models import EvidenciaFoto
@@ -2894,6 +2894,47 @@ def _lineas_de_cajas(cajas):
     return lineas
 
 
+def _unidades_en_otras_cajas(pedido, salen):
+    """{linea_pk: unidades de venta} que siguen en OTRAS cajas del pedido aún
+    en bodega (no despachadas y fuera de `salen`), fracciones redondeadas
+    hacia arriba. Eso NO sale del kardex con estas cajas (Chema 2026-10-15,
+    PED-00151: la pieza de reposición vivía en la caja 2 cuando el carrier
+    dio por salida la caja 1)."""
+    import math
+    from fractions import Fraction
+
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    fuera = {c.pk for c in salen}
+    acumulado = {}
+    for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).prefetch_related("lineas"):
+        if caja.pk in fuera:
+            continue
+        for pl in caja.lineas.all():
+            acumulado[pl.linea_pedido_id] = acumulado.get(pl.linea_pedido_id, Fraction(0)) + Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+    return {pk: math.ceil(v) for pk, v in acumulado.items()}
+
+
+def _despachar_lo_que_haya(linea, por_despachar, pedido):
+    """Salida por carrier con el kardex corto (Chema 2026-10-15): descuenta lo
+    que haya en empaque de ese producto y deja evento `salida_kardex_corto`
+    con lo que solo se marcó; nunca truena por eso."""
+    from apps.inventario.models import Saldo  # lazy: modelo de otra app
+    from apps.inventario.services import despachar  # lazy por contrato
+
+    disponible = Saldo.objects.filter(sku=linea.sku, estado=Saldo.EN_EMPAQUE).aggregate(t=Sum("cantidad"))["t"] or 0
+    del_kardex = min(por_despachar, disponible)
+    if del_kardex > 0:
+        despachar(linea.sku, del_kardex, pedido.folio)
+    if del_kardex < por_despachar:
+        registrar_evento(
+            "pedido", pedido.pk, "salida_kardex_corto", cliente=pedido.cliente,
+            delta={"sku": linea.sku.codigo, "por_despachar": por_despachar, "kardex": del_kardex, "solo_marcadas": por_despachar - del_kardex},
+            motivo="Salida por carrier: el kardex no tenía todas las piezas en empaque; se descontó lo que había y el resto solo se marcó.",
+        )
+    return del_kardex
+
+
 def cajas_por_salir(pedido):
     """Cajas EMPACADO del pedido (aún en bodega) cuando se empacó POR CAJA;
     [] si el pedido se empacó entero (legacy: sin plan o plan sin empacar por
@@ -2907,34 +2948,53 @@ def cajas_por_salir(pedido):
 
 
 def salida_por_carrier(pedido, guia, ts, descripcion=""):
-    """Salida automática "sin escaneo" (Chema 2026-10-12): el carrier reportó
-    que ya tiene una caja que Torre todavía veía lista en el corral
-    (recolección o tránsito sin manifiesto). La caja sale igual que con el
-    manifiesto (marcar_recolectado: DESPACHADO, kardex, compromiso, aviso al
-    comprador y fulfillment, una sola vez) y queda el evento
-    `salida_sin_escaneo` con origen "carrier": el pedido no se queda colgado
-    en Salida ni su inventario "en empaque" (las piezas fantasma de PED-00166
-    y PED-00205). Solo con el pedido con guía lista y la caja aún por salir;
-    si no aplica regresa False y el rastreo avisa como antes. Si el carrier se
-    equivocó, Mesa lo revierte con "Quitar de salida"."""
-    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
-        return False
-    pendientes = cajas_por_salir(pedido)
+    """Salida automática "sin escaneo" (Chema 2026-10-12; sin condiciones
+    desde 2026-10-15): el carrier reportó que ya tiene una caja que Torre
+    todavía ve en bodega, así que fue error nuestro no escanearla y la caja
+    SALE. Pasa a DESPACHADO (una caja aún planeada o en empaque con guía se
+    cierra primero); del kardex se descuenta solo lo que no esté en otra caja
+    del mismo pedido que siga en bodega, y si el kardex no alcanza se
+    descuenta lo que hay y el resto solo se marca. Con el pedido con guía
+    lista o parcial, el pedido sigue a sus cajas como con el manifiesto
+    (parcial / recolectado, compromiso, fulfillment y aviso); en cualquier
+    otro estado (empacado con guías a medias, pendiente por una reposición,
+    cancelación pendiente, o ya en la calle con una caja fantasma como la
+    caja 1 del PED-00151) sale SOLO la caja y el pedido no se mueve. Una
+    guía del pedido entero saca todo lo que siga en bodega. Regresa False
+    solo si no hay nada que sacar; lo que truene lo reintenta el rastreo en
+    la siguiente pasada. Evento `salida_sin_escaneo` con origen "carrier".
+    Si el carrier se equivocó, Mesa lo revierte con "Quitar de salida"."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
     if guia.paquete_id:
-        cajas = [c for c in pendientes if c.pk == guia.paquete_id]
-        if not cajas:
+        if guia.paquete.estado == Paquete.DESPACHADO:
             return False
-    elif pendientes:
-        return False  # guía del pedido entero con cajas por caja: no se adivina cuál salió
+        cajas = [guia.paquete]
     else:
-        cajas = None
-    marcar_recolectado(pedido, None, paquetes=cajas)
-    registrar_evento(
-        "pedido", pedido.pk, "salida_sin_escaneo", cliente=pedido.cliente,
-        delta={"origen": "carrier", "caja": guia.paquete.numero if guia.paquete_id else None,
-               "guia": guia.numero, "carrier": guia.carrier, "ts_carrier": ts.isoformat() if ts else None},
-        motivo=f"El carrier reportó la caja antes de registrar su salida ({descripcion or 'recolección'}): salió sin escaneo."[:300],
-    )
+        cajas = [c for c in pedido.paquetes.all() if c.estado != Paquete.DESPACHADO]
+        if not cajas and pedido.paquetes.exists():
+            return False
+    listo = pedido.estado in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO)
+    if not cajas and not listo:
+        return False  # pedido viejo sin cajas que no está en Salida: nada que sacar
+    with transaction.atomic():
+        for caja in cajas:
+            if caja.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE):
+                caja.transicionar(
+                    Paquete.EMPACADO,
+                    motivo=f"El carrier ya tiene la caja {caja.numero} de {pedido.folio}: se cierra para darle salida.",
+                )
+        marcar_recolectado(
+            pedido, None, paquetes=cajas or None,
+            respetar_otras_cajas=True, tolerar_kardex=True, mover_pedido=listo,
+        )
+        registrar_evento(
+            "pedido", pedido.pk, "salida_sin_escaneo", cliente=pedido.cliente,
+            delta={"origen": "carrier", "caja": guia.paquete.numero if guia.paquete_id else None,
+                   "cajas": [c.numero for c in cajas], "guia": guia.numero, "carrier": guia.carrier,
+                   "ts_carrier": ts.isoformat() if ts else None, "pedido_movido": listo},
+            motivo=f"El carrier reportó la caja antes de registrar su salida ({descripcion or 'recolección'}): salió sin escaneo."[:300],
+        )
     return True
 
 
@@ -3089,7 +3149,7 @@ def avisar_recoleccion_carrier(pedido, guia, notificar=True):
     transaction.on_commit(_fulfillment)
 
 
-def marcar_recolectado(pedido, actor, paquetes=None):
+def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False, tolerar_kardex=False, mover_pedido=True):
     """GUIA_GENERADA / PARCIALMENTE_DESPACHADO → RECOLECTADO (o
     PARCIALMENTE_DESPACHADO si solo salieron algunas cajas): escaneo de
     salida + manifiesto.
@@ -3114,8 +3174,19 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     CAJA en cada manifiesto (Partially fulfilled hasta la última), o entero
     cuando no hay cajas; el comprador recibe el correo de envío de Shopify
     una vez por ola (`notificar`).
+
+    Banderas de la salida automática por carrier (Chema 2026-10-15):
+    `respetar_otras_cajas` descuenta del kardex solo lo que no esté en otra
+    caja del pedido que siga en bodega, y la línea avanza solo lo de estas
+    cajas; `tolerar_kardex` descuenta lo que haya en empaque y solo marca el
+    resto (evento `salida_kardex_corto`) en vez de tronar; `mover_pedido=False`
+    saca SOLO las cajas dadas (DESPACHADO, kardex, compromiso y fulfillment)
+    sin tocar el estado del pedido, para pedidos que no están en Salida.
+    Salida del pedido entero (sin cajas por caja): también salen los
+    registros de cajas que no estaban empacadas (planeadas después del
+    empaque, PED-00151) para que ninguna se quede viva.
     """
-    if pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+    if mover_pedido and pedido.estado not in (Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         raise ValueError(
             f"El pedido {pedido.folio} no tiene guía lista (está {pedido.get_estado_display()}); "
             "no se puede marcar recolectado."
@@ -3123,40 +3194,63 @@ def marcar_recolectado(pedido, actor, paquetes=None):
     from apps.envios.models import Paquete  # lazy: modelo de otra app
     from apps.inventario.services import despachar  # lazy
 
-    primer_manifiesto = pedido.estado == Pedido.GUIA_GENERADA
+    primer_manifiesto = mover_pedido and pedido.estado == Pedido.GUIA_GENERADA
     with transaction.atomic():
         Pedido.objects.select_for_update().get(pk=pedido.pk)
-        pendientes = cajas_por_salir(pedido)
-        if pendientes and paquetes is not None:
-            ids = {c.pk for c in paquetes}
-            salen = [c for c in pendientes if c.pk in ids]
+        if mover_pedido:
+            pendientes = cajas_por_salir(pedido)
+            if pendientes and paquetes is not None:
+                ids = {c.pk for c in paquetes}
+                salen = [c for c in pendientes if c.pk in ids]
+            else:
+                salen = pendientes
+            if pendientes and not salen:
+                raise ValueError(
+                    f"{pedido.folio}: ninguna de las cajas palomeadas sigue pendiente de salir."
+                )
         else:
-            salen = pendientes
-        if pendientes and not salen:
-            raise ValueError(
-                f"{pedido.folio}: ninguna de las cajas palomeadas sigue pendiente de salir."
-            )
+            # Solo cajas (salida por carrier con el pedido fuera de Salida): las dadas que sigan en bodega.
+            pendientes = []
+            salen = [c for c in (paquetes or []) if c.estado != Paquete.DESPACHADO]
+            if not salen:
+                raise ValueError(f"{pedido.folio}: ninguna de esas cajas sigue en bodega.")
         if salen:
             lineas = list(_lineas_de_cajas(salen).values())
         else:
             lineas = list(pedido.lineas.select_related("sku"))
+        en_otras = _unidades_en_otras_cajas(pedido, salen) if respetar_otras_cajas else {}
         for linea in lineas:
             # Sale del kardex lo pickeado que aún no ha salido: una línea
             # repartida en dos cajas sale entera con la primera (la unidad de
             # venta ya se abrió) y en una segunda ola lo de la primera ya se
-            # fue (cantidad_despachada): nada se despacha dos veces.
-            por_despachar = linea.cantidad_pickeada - linea.cantidad_despachada
+            # fue (cantidad_despachada): nada se despacha dos veces. Con
+            # `respetar_otras_cajas` lo que siga en otra caja en bodega se queda.
+            por_despachar = linea.cantidad_pickeada - linea.cantidad_despachada - en_otras.get(linea.pk, 0)
             if por_despachar <= 0:
                 continue
             if not linea.sku.es_kit:
-                despachar(linea.sku, por_despachar, pedido.folio)
-            linea.cantidad_despachada = linea.cantidad_pickeada
+                if tolerar_kardex:
+                    _despachar_lo_que_haya(linea, por_despachar, pedido)
+                else:
+                    despachar(linea.sku, por_despachar, pedido.folio)
+            if respetar_otras_cajas:
+                linea.cantidad_despachada = min(linea.cantidad_pickeada, linea.cantidad_despachada + por_despachar)
+            else:
+                linea.cantidad_despachada = linea.cantidad_pickeada
             linea.save(update_fields=["cantidad_despachada"])
         for caja in salen:
             caja.transicionar(
                 Paquete.DESPACHADO, actor=actor,
                 motivo=f"Caja {caja.numero} de {pedido.folio} subió al camión (manifiesto firmado).",
             )
+        if mover_pedido and not salen:
+            # Pedido entero (Chema 2026-10-15, PED-00151): los registros de cajas
+            # que no estaban empacadas (planeadas después del empaque) también
+            # salen; si no, se quedan vivos y una reposición los vuelve a ofrecer.
+            for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero"):
+                if caja.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE):
+                    caja.transicionar(Paquete.EMPACADO, actor=actor, motivo=f"Salida del pedido entero {pedido.folio}: la caja {caja.numero} se cierra para salir.")
+                caja.transicionar(Paquete.DESPACHADO, actor=actor, motivo=f"Salida del pedido entero {pedido.folio}: la caja {caja.numero} también salió.")
         # Compromiso de entrega (Chema 2026-09-25): la fecha límite corre
         # desde que la caja sale; el carrier puede haberla estampado antes
         # (recolección primero), y entonces no se mueve.
@@ -3165,9 +3259,16 @@ def marcar_recolectado(pedido, actor, paquetes=None):
         for guia in pedido.guias.all():
             if guia.es_activa and (guia.paquete_id is None or guia.paquete_id in pks_salen):
                 estampar_compromiso(guia)
-        quedan = [c for c in pendientes if c not in salen]
+        if respetar_otras_cajas:
+            # Salida por carrier: cualquier caja no despachada (aunque siga planeada o en empaque) sigue en bodega.
+            fuera = {c.pk for c in salen}
+            quedan = [c for c in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero") if c.pk not in fuera]
+        else:
+            quedan = [c for c in pendientes if c not in salen]
         sin_inventario = sorted({l.sku.codigo for l in pedido.lineas_faltantes})
-        if quedan:
+        if not mover_pedido:
+            pass  # solo salieron cajas: el estado del pedido no se toca (salida por carrier fuera de Salida)
+        elif quedan:
             numeros = ", ".join(str(c.numero) for c in salen)
             faltan = ", ".join(str(c.numero) for c in quedan)
             motivo = f"Manifiesto por caja: salió la caja {numeros}; la caja {faltan} sigue en bodega."
