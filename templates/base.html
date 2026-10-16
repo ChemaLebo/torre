@@ -216,6 +216,10 @@ window.addEventListener("load", function () {
     if (a.origin !== location.origin) return;
     mostrar();
   }, true);
+  // En fase de burbuja, no de captura (Chema 2026-10-15, Salida "trabada"): las
+  // validaciones propias del formulario corren antes y, si cancelan el envío,
+  // aquí ya se ve defaultPrevented y no se enciende el spinner ni se bloquea el
+  // botón (antes quedaban encendidos para siempre sin que nada viajara).
   document.addEventListener("submit", function (ev) {
     if (ev.defaultPrevented) return;
     var boton = ev.submitter || ev.target.querySelector("button[type=submit], input[type=submit]");
@@ -224,7 +228,7 @@ window.addEventListener("load", function () {
       setTimeout(function () { boton.disabled = true; }, 0); // después de que el navegador lea el botón
     }
     mostrar();
-  }, true);
+  }, false);
   window.addEventListener("pageshow", ocultar);
   window.addEventListener("beforeunload", function () {}); // el estado se limpia en pageshow
 })();

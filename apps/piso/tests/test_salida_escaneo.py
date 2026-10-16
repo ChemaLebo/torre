@@ -117,6 +117,7 @@ class RegistrarSalidaTests(PisoTestCase):
         self.assertNotContains(resumen, f'value="{c2.pk}"')  # lo no escaneado no se puede palomear
         self.assertContains(resumen, "Se quedan en el corral")
         self.assertContains(resumen, "caja 2")
+        self.assertContains(resumen, "trazos < 1 || puntos < 8")  # un solo trazo basta (Chema 2026-10-15)
         with self.captureOnCommitCallbacks(execute=True):
             r = self.client.post(reverse("piso:salida"), {
                 "accion": "manifiesto", "firma_png": FIRMA_PNG, "chofer": "Chofer Prueba", "corral": "SAL-OTRO", "carrier": "puntopost",

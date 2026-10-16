@@ -79,7 +79,8 @@
 
 <script>
 /* Firma con trazo simple: líneas rectas entre puntos, PNG al confirmar. La
-   decisión "trazo simple basta" es de Chema (2026-09-30, probado en celular). */
+   decisión "trazo simple basta" es de Chema (2026-09-30, probado en celular);
+   desde 2026-10-15 un solo trazo con suficientes puntos ya es firma válida. */
 (function () {
   var canvas = document.getElementById("firma"), ctx = canvas.getContext("2d");
   var estado = document.getElementById("firma-estado"), oculto = document.getElementById("firma_png");
@@ -94,7 +95,14 @@
   }
   function punto(e) { var r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
   function pintarEstado() {
+    estado.style.color = "";
     estado.textContent = trazos ? (trazos + " trazo" + (trazos === 1 ? "" : "s") + " · lista para confirmar") : "Sin firma todavía.";
+  }
+  function avisar(texto) {
+    // Visible aunque el botón fijo tape el renglón (Chema 2026-10-15): en rojo y a la vista.
+    estado.style.color = "var(--crit)"; estado.textContent = texto;
+    estado.scrollIntoView({ block: "center" });
+    if (window.Feedback) { Feedback.error(texto); }
   }
   canvas.addEventListener("pointerdown", function (e) {
     canvas.setPointerCapture(e.pointerId); trazando = true; trazos++;
@@ -115,15 +123,14 @@
     var nombre = document.getElementById("chofer");
     if (!nombre.value.trim()) {
       e.preventDefault(); nombre.focus();
-      estado.textContent = "Falta el nombre del chofer.";
-      if (window.Feedback) { Feedback.error("Falta el nombre del chofer."); }
+      avisar("Falta el nombre del chofer.");
       return;
     }
-    if (trazos < 2 || puntos < 8) {
+    // Un solo trazo basta (Chema 2026-10-15: las firmas reales son un trazo continuo;
+    // exigir dos dejaba la pantalla "trabada" con el spinner encendido y nada viajaba).
+    if (trazos < 1 || puntos < 8) {
       e.preventDefault();
-      estado.textContent = "Falta la firma del chofer: pídele que firme en el recuadro.";
-      canvas.scrollIntoView({ block: "center" });
-      if (window.Feedback) { Feedback.error("Falta la firma del chofer."); }
+      avisar("Falta la firma del chofer: pídele que firme en el recuadro.");
       return;
     }
     // Fondo blanco: la evidencia se guarda igual aunque el piso esté en tema claro u oscuro.
