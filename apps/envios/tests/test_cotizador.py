@@ -216,6 +216,35 @@ class TestPlanParcial(BaseCotizador):
         cancelada.refresh_from_db()
         self.assertIsNone(cancelada.paquete)
 
+    def test_sin_force_planea_lo_que_ninguna_caja_cubre_y_conserva_las_planeadas(self):
+        """PED-00606 (2026-10-19): una línea que entró por edición después del
+        plan no tiene caja; sin force se conservan las cajas planeadas y se
+        agregan las que faltan; con todo cubierto no se inventa nada."""
+        pedido = self.pedido_con("06600", [(self.six, 1)])
+        primera = cotizador.planificar_envio(pedido)[0]
+        nueva = LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1, reservada=True)
+        self.assertEqual([u[0].pk for u in cotizador.unidades_sin_caja(pedido)], [nueva.pk])
+        plan = cotizador.planificar_envio(pedido)
+        self.assertEqual([p.pk for p in plan][0], primera.pk)  # la planeada se conserva
+        self.assertEqual([p.numero for p in plan], [1, 2])
+        self.assertEqual([(pl.linea_pedido_id, pl.cantidad) for pl in plan[1].lineas.all()], [(nueva.pk, 1)])
+        self.assertEqual(cotizador.unidades_sin_caja(pedido), [])
+        self.assertEqual([p.pk for p in cotizador.planificar_envio(pedido)], [p.pk for p in plan])  # idempotente
+
+    def test_force_no_deshace_una_caja_ya_empacada(self):
+        """Una caja física (empacada) es fija aunque no tenga guía: el replaneo
+        forzado solo planea lo que ella no lleva (2026-10-19)."""
+        pedido = self.pedido_con("06600", [(self.six, 1)])
+        caja = cotizador.planificar_envio(pedido)[0]
+        caja.estado = Paquete.EMPACADO
+        caja.save(update_fields=["estado"])
+        nueva = LineaPedido.objects.create(pedido=pedido, sku=self.caja12, cantidad=1, reservada=True)
+        plan = cotizador.planificar_envio(pedido, force=True)
+        self.assertEqual([p.pk for p in plan][0], caja.pk)
+        self.assertTrue(Paquete.objects.filter(pk=caja.pk).exists())
+        self.assertEqual([p.numero for p in plan], [1, 2])
+        self.assertEqual([pl.linea_pedido_id for pl in plan[1].lineas.all()], [nueva.pk])
+
     def test_particiones_prueban_capacidades_intermedias(self):
         """Cinco unidades de 6 kg con tope de 20: además de una por caja (9 kg)
         y de 3+2 (19 kg), se evalúa 2+2+1 (12 kg) para carriers que no cotizan

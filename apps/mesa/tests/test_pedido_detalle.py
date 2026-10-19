@@ -15,7 +15,7 @@ from apps.core.models import EventoAuditoria, PerfilUsuario
 from apps.envios.adapters import MockAdapter
 from apps.envios.models import Guia, Paquete, PaqueteLinea
 from apps.pedidos import services
-from apps.pedidos.models import Pedido
+from apps.pedidos.models import LineaPedido, Pedido
 from apps.piso.tests.base import PisoTestCase
 
 
@@ -206,10 +206,51 @@ class ReplanearYGuiaPerdidaTests(PisoTestCase):
         self.assertContains(respuesta, "replaneado")
         self.assertFalse(viejas & {c.pk for c in pedido.paquetes.all()})  # plan nuevo
         self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="replaneo_cajas").exists())
-        # Una caja ya empacada frena el replaneo con mensaje.
+        # Con todo empacado y sin líneas fuera de caja no hay nada que replanear (2026-10-19).
         Paquete.objects.filter(pedido=pedido).update(estado=Paquete.EMPACADO)
         respuesta = self.client.post(url, {"accion": "replanear_cajas", "folio": pedido.folio}, follow=True)
-        self.assertContains(respuesta, "ya está empacada")
+        self.assertContains(respuesta, "no tiene nada que replanear")
+
+    def test_replanear_planea_lo_que_no_tiene_caja_y_regresa_a_empaque(self):
+        """PED-00606 (2026-10-19): caja 1 empacada y con guía; una línea que
+        entró después del plan sin caja. Replanear crea la caja 2 sin tocar la
+        caja 1 ni su guía y regresa el pedido a EMPACADO sin dueño; el piso lo
+        retoma en el wizard con la caja 2 por pesar."""
+        from apps.catalogo.models import SKU
+
+        pedido = self.dejar_empacado(self.crear_pedido(cantidad=2))
+        linea = pedido.lineas.get()
+        caja1 = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=caja1, linea_pedido=linea, cantidad=2)
+        services.generar_guia(pedido)
+        pedido.refresh_from_db()
+        self.assertEqual(pedido.estado, Pedido.GUIA_GENERADA)
+        Pedido.objects.filter(pk=pedido.pk).update(asignado_a=self.operador)
+        caja1.refresh_from_db()
+        guia = caja1.guia_activa
+        otro = SKU.objects.create(
+            cliente=self.cliente, codigo="OTRO-12", codigo_barras="7500000000012", descripcion="Otro doce",
+            peso_gr=7000, requiere_lote=False, precio_declarado=Decimal("500.00"),
+        )
+        extra = LineaPedido.objects.create(pedido=pedido, sku=otro, cantidad=1, reservada=True, cantidad_pickeada=1)
+        url = reverse("mesa:pedido_detalle", args=[pedido.pk])
+        self.assertIn('value="replanear_cajas"', self.client.get(url).content.decode())
+        respuesta = self.client.post(url, {"accion": "replanear_cajas", "folio": pedido.folio}, follow=True)
+        self.assertContains(respuesta, "replaneado")
+        self.assertContains(respuesta, "Regresó a empaquetado sin dueño")
+        pedido.refresh_from_db()
+        caja1.refresh_from_db()
+        self.assertEqual((pedido.estado, pedido.asignado_a), (Pedido.EMPACADO, None))
+        self.assertEqual((caja1.estado, caja1.guia_activa.pk), (Paquete.EMPACADO, guia.pk))
+        nuevas = list(pedido.paquetes.exclude(pk=caja1.pk))
+        self.assertEqual([(c.numero, c.estado) for c in nuevas], [(2, Paquete.PLANEADO)])
+        self.assertEqual([(pl.linea_pedido_id, pl.cantidad) for pl in nuevas[0].lineas.all()], [(extra.pk, 1)])
+        # El piso lo retoma: el wizard pide la caja 2.
+        self.client.force_login(self.operador)
+        respuesta = self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.context["paso"], "caja")
+        self.assertEqual(respuesta.context["caja"].numero, 2)
 
 
 @override_settings(ENVIA_API_KEY="")

@@ -440,25 +440,30 @@ def planificar_envio(pedido, force=False):
 
 @transaction.atomic
 def _planificar(pedido, force, carriers, preferido=None):
-    """El plan en sí (ver planificar_envio). Las cajas ya despachadas o con
-    guía son FIJAS (la ola anterior) y no se tocan; un plan vivo (sin guía)
-    se conserva salvo `force`. Fulfillment parcial: se planean cajas nuevas
-    solo con lo pendiente (lo que ya viaja en las fijas queda fuera),
-    numeradas después de las que salieron; regresa fijas + nuevas."""
+    """El plan en sí (ver planificar_envio). Cajas FIJAS = ya despachadas,
+    con guía VIVA o ya físicas (en empaque / empacadas): no se tocan nunca
+    (Chema 2026-10-19: una caja pesada y con foto no se deshace). Un plan
+    vivo (PLANEADO sin guía) se conserva salvo `force`, que lo reparte de
+    nuevo. Con o sin force, lo que NINGUNA caja cubre se planea en cajas
+    nuevas numeradas después de las existentes: fulfillment parcial (lo que
+    ya viaja en las fijas queda fuera) y líneas que entraron por edición
+    después del plan (PED-00606). Regresa las cajas que quedan, por número."""
     existentes = list(pedido.paquetes.prefetch_related("lineas", "guias"))
-    # Fija = ya salió o tiene guía VIVA; una caja cuya guía se canceló vuelve
-    # a ser viva y se replanea (2026-09-24: con guías cancelables, contar
-    # cualquier guía dejaba las cajas clavadas para siempre).
-    fijas = [p for p in existentes if p.estado == Paquete.DESPACHADO or any(g.es_activa for g in p.guias.all())]
+    # Fija = ya salió, tiene guía VIVA o ya es física. Una caja PLANEADA cuya
+    # guía se canceló vuelve a ser viva y se replanea (2026-09-24: con guías
+    # cancelables, contar cualquier guía dejaba las cajas clavadas).
+    fijas = [p for p in existentes if p.estado != Paquete.PLANEADO or any(g.es_activa for g in p.guias.all())]
     vivas = [p for p in existentes if p not in fijas]
-    if vivas and not force:
-        return existentes
-    for paquete in vivas:  # replanear: solo se tiran planes sin guía
-        paquete.delete()
-    desde = max((p.numero for p in fijas), default=0) + 1
-    unidades = _unidades(pedido, _unidades_cubiertas(fijas))
+    if force:
+        for paquete in vivas:  # replanear: solo se tiran planes sin guía ni caja física
+            paquete.delete()
+        base = fijas
+    else:
+        base = fijas + vivas  # el plan vivo se conserva; solo se completa
+    desde = max((p.numero for p in base), default=0) + 1
+    unidades = _unidades(pedido, _unidades_cubiertas(base))
     if not unidades:
-        return fijas
+        return sorted(base, key=lambda p: p.numero)
 
     max_kg = Decimal(str(settings.TORRE["MAX_PESO_ENVIO_KG"]))
     meta = Decimal(str(settings.TORRE["TARIFA_OBJETIVO_MXN"]))
@@ -488,11 +493,11 @@ def _planificar(pedido, force, carriers, preferido=None):
         registrar_evento(
             "pedido", pedido.pk, "plan_envio", cliente=pedido.cliente,
             delta={"paquetes": len(paquetes), "costo_total": float(tarifa_local * len(paquetes)),
-                   "modalidad": "entrega_local_flat", "cajas_previas": [p.numero for p in fijas]},
+                   "modalidad": "entrega_local_flat", "cajas_previas": [p.numero for p in base]},
             motivo=f"Entrega local: {len(paquetes)} paquete(s) × ${tarifa_local} flat",
         )
-        _marcar_reposiciones(pedido, fijas, paquetes)
-        return fijas + paquetes
+        _marcar_reposiciones(pedido, base, paquetes)
+        return sorted(base + paquetes, key=lambda p: p.numero)
 
     candidatas = _particiones_candidatas(unidades, max_kg)
     evaluadas, viables = [], []
@@ -546,12 +551,20 @@ def _planificar(pedido, force, carriers, preferido=None):
             "ahorro_vs_entero": float(ahorro),
             "particiones_evaluadas": evaluadas,
             "fuera_de_meta": [p.numero for p in paquetes if p.fuera_de_meta],
-            "cajas_previas": [p.numero for p in fijas],
+            "cajas_previas": [p.numero for p in base],
         },
         motivo=f"División de envío: {len(paquetes)} paquete(s), total ${costo_elegido}",
     )
-    _marcar_reposiciones(pedido, fijas, paquetes)
-    return fijas + paquetes
+    _marcar_reposiciones(pedido, base, paquetes)
+    return sorted(base + paquetes, key=lambda p: p.numero)
+
+
+def unidades_sin_caja(pedido):
+    """Unidades de venta de la ola en bodega que NINGUNA caja del pedido lleva
+    (ver _unidades): líneas que entraron por edición después del plan
+    (PED-00606, 2026-10-19). [] si el plan cubre todo lo que se surte."""
+    cajas = list(pedido.paquetes.prefetch_related("lineas"))
+    return _unidades(pedido, _unidades_cubiertas(cajas))
 
 
 def _marcar_reposiciones(pedido, fijas, nuevas):

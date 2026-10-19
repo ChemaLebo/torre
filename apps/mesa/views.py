@@ -1340,9 +1340,13 @@ def _pedidos_replanear_cajas(request):
 
     folio = (request.POST.get("folio") or "").strip()
     pedido = get_object_or_404(Pedido.objects.select_related("cliente"), folio=folio)
+    estado_antes = pedido.estado
     nuevas = replanear_cajas(pedido, request.user)
     detalle = ", ".join(f"caja {c.numero} {c.carrier} {_precio_caja(c)}" for c in nuevas)
-    return f"{pedido.folio} replaneado: {len(nuevas)} caja{'s' if len(nuevas) != 1 else ''} ({detalle})."
+    mensaje = f"{pedido.folio} replaneado: {len(nuevas)} caja{'s' if len(nuevas) != 1 else ''} ({detalle})."
+    if estado_antes != pedido.estado:
+        mensaje += " Regresó a empaquetado sin dueño: el piso empaca las cajas nuevas y su guía se compra al terminar."
+    return mensaje
 
 
 def _pedidos_reimprimir_caja(request):
@@ -1556,6 +1560,7 @@ def pedido_detalle(request, pk):
     from apps.incidencias.models import Incidencia
     from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
+    from apps.envios.cotizador import unidades_sin_caja  # lazy por contrato
     from apps.pedidos.services import ESTADOS_EN_BODEGA, ESTADOS_OLA_OCUPADA, piezas_reponibles
     from apps.pedidos.models import Pedido
     from apps.pedidos.reportes import url_orden_shopify
@@ -1677,7 +1682,10 @@ def pedido_detalle(request, pk):
         "puede_desasignar": pedido.estado in ESTADOS_EN_BODEGA and bool(pedido.asignado_a_id or pedido.transferencia_a_id),
         "operador_asignado": (pedido.asignado_a or pedido.transferencia_a).username if (pedido.asignado_a_id or pedido.transferencia_a_id) else "",
         "puede_cambiar_paqueteria": puede_cambiar,
-        "puede_replanear": puede_cambiar and any(c.estado == "PLANEADO" and c.guia is None for c in cajas),
+        # Replanear (2026-10-19, PED-00606): también cuando alguna línea no va en ninguna caja.
+        "puede_replanear": puede_cambiar and (
+            any(c.estado == "PLANEADO" and c.guia is None for c in cajas) or bool(unidades_sin_caja(pedido))
+        ),
         "puede_cancelar_guias": (
             pedido.estado == Pedido.GUIA_GENERADA and not pedido.tiene_despachadas
             and not any(c.estado == "DESPACHADO" for c in cajas)

@@ -71,7 +71,7 @@
       {% if puede_replanear %}
       <form method="post" onsubmit="return confirm('¿Rehacer el plan de cajas de {{ pedido.folio }}? Solo se reparten las cajas planeadas sin guía; las empacadas y las que ya salieron no se tocan.');">{% csrf_token %}
         <input type="hidden" name="accion" value="replanear_cajas"><input type="hidden" name="folio" value="{{ pedido.folio }}">
-        <button class="btn chico" type="submit" title="Tira las cajas planeadas sin guía y arma el plan otra vez con las reglas vigentes">Replanear cajas</button>
+        <button class="btn chico" type="submit" title="Reparte de nuevo las cajas planeadas sin guía y planea lo que no va en ninguna caja; lo empacado o con guía no se toca">Replanear cajas</button>
       </form>
       {% endif %}
       {% if puede_cambiar_paqueteria %}

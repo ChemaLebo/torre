@@ -678,14 +678,18 @@ def replanear_con_carrier(pedido, carrier, actor, incidencia=None):
 
 
 def replanear_cajas(pedido, actor):
-    """Mesa rehace el plan de cajas de la ola en bodega (Chema 2026-09-30:
-    botón "Replanear cajas" en el detalle). Solo tira cajas PLANEADAS sin
-    guía; las despachadas o con guía viva son fijas y una caja ya en empaque
-    o empacada (física) frena el replaneo con ValueError: eso se resuelve
-    con "Cambiar paquetería" (recotiza sin repartir) o reiniciando. Usa las
-    reglas vigentes (paquetería forzada del pedido incluida). Regresa las
-    cajas nuevas."""
-    from apps.envios.cotizador import planificar_envio  # lazy por contrato
+    """Mesa rehace el plan de cajas de la ola en bodega (Chema 2026-09-30,
+    botón "Replanear cajas"; 2026-10-19, PED-00606): reparte de nuevo las
+    cajas PLANEADAS sin guía y planea lo que NINGUNA caja cubre (líneas que
+    entraron por edición después del plan). Las despachadas, las que tienen
+    guía viva y las ya empacadas (físicas) son fijas y no se tocan. Si el
+    pedido estaba en GUIA_GENERADA y nacieron cajas nuevas, regresa a EMPACADO
+    sin dueño: cae a "Completar empaquetado" en Mi turno, el wizard pide
+    pesar y fotografiar las nuevas y su guía se compra al terminar; las guías
+    de las otras cajas no cambian. Usa las reglas vigentes (paquetería
+    forzada incluida). ValueError sin nada que replanear. Regresa las cajas
+    nuevas."""
+    from apps.envios.cotizador import planificar_envio, unidades_sin_caja  # lazy por contrato
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
     if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA):
@@ -693,12 +697,11 @@ def replanear_cajas(pedido, actor):
             f"{pedido.folio} está {pedido.get_estado_display().lower()}: el plan solo se rehace antes de salir."
         )
     cajas = list(pedido.paquetes.prefetch_related("guias"))
-    vivas = [c for c in cajas if c.estado != Paquete.DESPACHADO and not any(g.es_activa for g in c.guias.all())]
-    fisicas = [c.numero for c in vivas if c.estado != Paquete.PLANEADO]
-    if fisicas:
+    vivas = [c for c in cajas if c.estado == Paquete.PLANEADO and not any(g.es_activa for g in c.guias.all())]
+    sin_caja = unidades_sin_caja(pedido)
+    if not vivas and not sin_caja:
         raise ValueError(
-            f"La caja {', '.join(str(n) for n in fisicas)} de {pedido.folio} ya está empacada: no se reparte de nuevo. "
-            "Cambia la paquetería (recotiza esa caja) o reinicia el pedido."
+            f"{pedido.folio} no tiene nada que replanear: todo lo pendiente ya va en una caja empacada o con guía."
         )
     if not pedido.lineas_por_surtir:
         raise ValueError(f"{pedido.folio} no tiene nada en bodega que planear.")
@@ -708,13 +711,25 @@ def replanear_cajas(pedido, actor):
             resultado = planificar_envio(pedido, force=True)
         except ValueError as exc:
             raise ValueError(f"Ningún carrier cotiza el plan de {pedido.folio} (CP {pedido.cp}): {exc}") from exc
-    fijas = {c.pk for c in cajas if c not in vivas}
-    nuevas = [c for c in resultado if c.pk not in fijas]
-    registrar_evento(
-        "pedido", pedido.pk, "replaneo_cajas", actor=actor, cliente=pedido.cliente,
-        delta={"antes": antes, "ahora": [(c.numero, c.carrier, float(c.precio_cotizado or 0)) for c in nuevas]},
-        motivo=f"Mesa rehizo el plan: {len(antes)} caja(s) → {len(nuevas)}.",
-    )
+        fijas = {c.pk for c in cajas if c not in vivas}
+        nuevas = [c for c in resultado if c.pk not in fijas]
+        if nuevas and pedido.estado == Pedido.GUIA_GENERADA:
+            pedido.asignado_a = None
+            pedido.transferencia_a = None
+            pedido.save(update_fields=["asignado_a", "transferencia_a", "actualizado"])
+            pedido.transicionar(
+                Pedido.EMPACADO, actor=actor,
+                motivo="Replaneo con cajas nuevas por empacar; las guías de las demás cajas no cambian.",
+            )
+        registrar_evento(
+            "pedido", pedido.pk, "replaneo_cajas", actor=actor, cliente=pedido.cliente,
+            delta={
+                "antes": antes, "ahora": [(c.numero, c.carrier, float(c.precio_cotizado or 0)) for c in nuevas],
+                "sin_caja": sorted({u[0].sku.codigo for u in sin_caja}),
+            },
+            motivo=f"Mesa rehizo el plan: {len(antes)} caja(s) → {len(nuevas)}"
+                   + (f"; {len(sin_caja)} unidad(es) sin caja planeadas." if sin_caja else "."),
+        )
     return nuevas
 
 
@@ -1141,6 +1156,11 @@ def _aplicar_cambios_cantidades(pedido, payload, origen, reembolsos=None):
     )
     _abrir_incidencia_edicion(pedido, faltantes_stock, conflictos)
     _cerrar_espera_si_nada_pendiente(pedido, origen)
+    if pedido.estado == Pedido.PENDIENTE and (reducidas or aumentadas):
+        # Chema 2026-10-19 (PED-00606): el plan de cajas se hizo con las
+        # líneas de la ingesta; lo que entra o sale después, aún sin nada
+        # físico, se replanea. De picking en adelante la edición no agrega.
+        _planificar_best_effort(pedido, force=True)
 
 
 def _cerrar_espera_si_nada_pendiente(pedido, actor):
@@ -1824,7 +1844,30 @@ def iniciar_picking(pedido, actor):
         pedido.asignado_a = actor
         pedido.save(update_fields=["asignado_a", "actualizado"])
     pedido.transicionar(Pedido.EN_PICKING, actor=actor, motivo="Inicio de picking")
+    _completar_plan_si_falta(pedido, actor)
     return pedido
+
+
+def _completar_plan_si_falta(pedido, actor):
+    """Red al iniciar picking (Chema 2026-10-19, PED-00606): si alguna unidad
+    de la ola no tiene caja (cotizador.unidades_sin_caja: líneas que entraron
+    después del plan), se replanea el plan vivo antes de que el piso lo use;
+    aún no hay nada físico, así que con force. Best-effort en on_commit como
+    la ingesta; queda el evento `plan_incompleto`. True si faltaba algo."""
+    try:
+        from apps.envios.cotizador import unidades_sin_caja  # lazy por contrato
+    except ImportError:
+        return False
+    sin_caja = unidades_sin_caja(pedido)
+    if not sin_caja:
+        return False
+    registrar_evento(
+        "pedido", pedido.pk, "plan_incompleto", actor=actor, cliente=pedido.cliente,
+        delta={"sin_caja": sorted({u[0].sku.codigo for u in sin_caja}), "unidades": len(sin_caja)},
+        motivo=f"{len(sin_caja)} unidad(es) sin caja al iniciar picking: se completa el plan.",
+    )
+    _planificar_best_effort(pedido, force=True)
+    return True
 
 
 def _nombre_usuario(u):

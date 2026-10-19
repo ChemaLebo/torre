@@ -813,6 +813,18 @@ class EdicionOrdenTests(BaseServicios):
         liberar.assert_not_called()
         abrir.assert_not_called()
 
+    def test_aumento_en_pendiente_replanea_las_cajas(self):
+        """PED-00606 (2026-10-19): la línea que entra por edición después del
+        plan se replanea sola mientras el pedido sigue PENDIENTE."""
+        pedido = self._ingerido(7016, cantidad=2)
+        self.assertEqual(sum(pl.cantidad for c in pedido.paquetes.all() for pl in c.lineas.all()), 2)
+        self._actualizar(pedido, self._payload_con(7016, 4))
+        self.assertEqual(pedido.estado, Pedido.PENDIENTE)
+        self.assertEqual(sum(pl.cantidad for c in pedido.paquetes.all() for pl in c.lineas.all()), 4)
+        self.assertEqual(
+            EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(pedido.pk), accion="plan_envio").count(), 2,
+        )
+
     def test_aumento_sin_stock_abre_fal(self):
         pedido = self._ingerido(7005)
         _, _, abrir = self._actualizar(pedido, self._payload_con(7005, 4), reservar_ok=False)
