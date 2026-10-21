@@ -67,11 +67,20 @@ class Command(BaseCommand):
                 piso = User.objects.create_user("seed-piso", password="seed-piso")
                 PerfilUsuario.objects.create(usuario=piso, rol="piso", pin="9999")
             # Limpieza de una siembra anterior (la guía protege al pedido: primero ella).
+            # Limpieza de una siembra anterior, en el orden que exigen las llaves protegidas:
+            # lo que las pruebas van colgando de los pedidos seed (manifiestos firmados,
+            # reembolsos de guías canceladas, reingresos, incidencias) y al final el pedido.
+            from apps.envios.models import LineaManifiesto
+            from apps.finanzas.models import ReembolsoGuia
             from apps.incidencias.models import Compensacion
+            seed = {"folio__startswith": "SEED-CAJAS-"}
+            ReembolsoGuia.objects.filter(guia__pedido__folio__startswith="SEED-CAJAS-").delete()
+            LineaManifiesto.objects.filter(pedido__folio__startswith="SEED-CAJAS-").delete()
+            OrdenEntrada.objects.filter(pedido__folio__startswith="SEED-CAJAS-").delete()
             Compensacion.objects.filter(incidencia__pedido__folio__startswith="SEED-CAJAS-").delete()
             Incidencia.objects.filter(pedido__folio__startswith="SEED-CAJAS-").delete()
             Guia.objects.filter(pedido__folio__startswith="SEED-CAJAS-").delete()
-            Pedido.objects.filter(folio__startswith="SEED-CAJAS-").delete()
+            Pedido.objects.filter(**seed).delete()
             if not Ubicacion.objects.filter(tipo=Ubicacion.RECEPCION, activo=True).exists():
                 Ubicacion.objects.create(codigo="REC-01", tipo=Ubicacion.RECEPCION)
             rack, _ = Ubicacion.objects.get_or_create(codigo="SEED-A3", defaults={"tipo": Ubicacion.PICKING, "largo_cm": 180, "ancho_cm": 58, "alto_cm": 52})

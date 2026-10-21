@@ -107,7 +107,17 @@ class SeedEscenarioCajasTests(PisoTestCase):
         self.assertContains(self.client.get(reverse("piso:salida")), "SEED-CAJAS-A")
         home = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
         self.assertRedirects(home, reverse("piso:picking_pedido", args=[c.pk]), fetch_redirect_response=False)
+        # Se vuelve a sembrar aunque la prueba haya firmado un manifiesto y cancelado una guía (reembolso).
+        from unittest.mock import patch
+
+        from apps.envios.services import cancelar_guia, registrar_manifiesto
+        cajas = list(a.paquetes.order_by("numero")[:2])
+        with patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
+            services.marcar_recolectado(a, self.operador, paquetes=cajas, kardex_por_caja=True)
+        registrar_manifiesto("estafeta", "SAL-OTRO", self.operador, [(a, cajas)], chofer="Chofer Seed")
+        cancelar_guia(a.paquetes.get(numero=3).guia_activa, self.operador, motivo="prueba")
         call_command("seed_escenario_cajas", verbosity=0)  # idempotente
         self.assertEqual(Pedido.objects.filter(folio__startswith="SEED-CAJAS-").count(), 4)
+        self.assertEqual(Pedido.objects.get(folio="SEED-CAJAS-A").paquetes.filter(estado="EMPACADO").count(), 3)
         with override_settings(DEBUG=False), self.assertRaises(Exception):
             call_command("seed_escenario_cajas", verbosity=0)
