@@ -53,14 +53,18 @@ class Pedido(models.Model):
         # el piso no tomó (services.deshacer_reposicion, 2026-10-14): el pedido
         # regresa a donde estaba antes de que la reposición lo trajera aquí.
         PENDIENTE: {EN_PICKING, CANCELADO, RECOLECTADO, EN_TRANSITO, ENTREGA_PRESUNTA, ENTREGADO, RETORNADO, PARCIALMENTE_DESPACHADO},
-        EN_PICKING: {EMPACADO, CANCELACION_PENDIENTE, CANCELADO},
-        EMPACADO: {GUIA_GENERADA, CANCELACION_PENDIENTE, CANCELADO},
+        # EN_PICKING / EMPACADO / GUIA_GENERADA → un estado de la calle SOLO al
+        # cancelar una reposición ya pickeada o empacada (services.
+        # deshacer_reposicion_empacada, 2026-10-22): no queda nada por surtir
+        # ni cajas vivas en bodega y el pedido regresa a donde estaba.
+        EN_PICKING: {EMPACADO, CANCELACION_PENDIENTE, CANCELADO, RECOLECTADO, EN_TRANSITO, ENTREGA_PRESUNTA, ENTREGADO, RETORNADO, PARCIALMENTE_DESPACHADO},
+        EMPACADO: {GUIA_GENERADA, CANCELACION_PENDIENTE, CANCELADO, RECOLECTADO, EN_TRANSITO, ENTREGA_PRESUNTA, ENTREGADO, RETORNADO, PARCIALMENTE_DESPACHADO},
         # GUIA_GENERADA → EN_TRANSITO cubre el caso raro de guía indexada por el
         # carrier antes de nuestro escaneo de salida; RECOLECTADO sigue siendo el
         # paso autoritativo del flujo normal (escaneo + manifiesto).
         # GUIA_GENERADA → EMPACADO: guías canceladas antes de salir por cambio
         # de dirección (services.regresar_a_empaque); se compra guía nueva.
-        GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO, EMPACADO},
+        GUIA_GENERADA: {RECOLECTADO, PARCIALMENTE_DESPACHADO, EN_TRANSITO, CANCELACION_PENDIENTE, CANCELADO, EMPACADO, ENTREGA_PRESUNTA, ENTREGADO, RETORNADO},
         # → CANCELADO desde la calle solo lo hace el cierre de una cancelación
         # tardía (Mesa decide el reingreso o resuelve la incidencia CAN).
         # → PENDIENTE desde la calle o ya entregado SOLO por una reposición de

@@ -808,6 +808,132 @@ def cancelar_reposicion(comp, actor):
     return comp
 
 
+def cajas_cancelables_de(comp):
+    """Cajas de reposición de esa compensación aprobada que ya se pickearon o
+    empacaron y siguen en bodega (Chema 2026-10-20, PED-00281): planeadas con
+    el pedido fuera de PENDIENTE, en empaque o empacadas, con renglones que
+    reponen a las cajas origen de la compensación y a sus líneas. Una
+    despachada primero se quita de salida."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    pedido = comp.incidencia.pedido
+    if comp.tipo != Compensacion.TIPO_REPOSICION or comp.estado != Compensacion.APROBADA or pedido is None:
+        return []
+    origen_ids = {x.get("caja_id") for x in (comp.lineas or []) if x.get("caja_id")}
+    lineas_ids = {x.get("linea_id") for x in (comp.lineas or []) if x.get("linea_id")}
+    cajas = []
+    for caja in sorted(pedido.paquetes.all(), key=lambda c: c.numero):
+        if caja.estado not in (Paquete.PLANEADO, Paquete.EN_EMPAQUE, Paquete.EMPACADO):
+            continue
+        if caja.estado == Paquete.PLANEADO and pedido.estado == "PENDIENTE":
+            continue  # todavía no la toma el piso: ese camino es cancelar_reposicion (sin modal)
+        if any(
+            pl.repone_a_id and (not origen_ids or pl.repone_a_id in origen_ids) and pl.linea_pedido_id in lineas_ids
+            for pl in caja.lineas.all()
+        ):
+            cajas.append(caja)
+    return cajas
+
+
+def compensaciones_de_caja(caja):
+    """Compensaciones aprobadas (reposición) que pudieron crear esa caja: las
+    que reponen a la misma caja origen y a las mismas líneas; la más reciente
+    primero (al cancelar la caja sin más datos se cancela esa). Varias con
+    incidencias distintas = Mesa elige en el modal."""
+    pedido = caja.pedido
+    origen_ids = {pl.repone_a_id for pl in caja.lineas.all() if pl.repone_a_id}
+    lineas_ids = {pl.linea_pedido_id for pl in caja.lineas.all() if pl.repone_a_id}
+    if not origen_ids:
+        return []
+    candidatas = []
+    for comp in Compensacion.objects.filter(
+        incidencia__pedido=pedido, tipo=Compensacion.TIPO_REPOSICION, estado=Compensacion.APROBADA,
+    ).select_related("incidencia").order_by("-pk"):
+        cajas_comp = {x.get("caja_id") for x in (comp.lineas or []) if x.get("caja_id")}
+        lineas_comp = {x.get("linea_id") for x in (comp.lineas or []) if x.get("linea_id")}
+        if (not cajas_comp or cajas_comp & origen_ids) and lineas_comp & lineas_ids:
+            candidatas.append(comp)
+    return candidatas
+
+
+def cancelar_reposicion_empacada(comp, caja, actor, *, decisiones=None, motivo="", generar_reingreso=False):
+    """Cancela la reposición de una caja ya pickeada o empacada (Chema
+    2026-10-20, PED-00281): la caja queda cancelada en el expediente
+    (pedidos.deshacer_reposicion_empacada); las piezas de reposición que
+    viajan en ella se descuentan de `comp` primero y, si la caja llevaba
+    piezas de otras reposiciones aprobadas sobre la misma caja original
+    (el planeador las juntó), también de esas, la más reciente primero. Cada
+    compensación cuyas piezas quedaron todas canceladas pasa a CANCELADA y
+    sus guías marcadas como sustituidas vuelven a mandar si ya no queda otra
+    reposición que cubra esa caja; una cubierta a medias sigue aprobada por
+    el resto. El contenido de la caja: con `decisiones` (pieza por pieza) se
+    resuelve aquí mismo (pedidos.resolver_contenido_caja); con
+    `generar_reingreso` se queda por decidir en Reingresos."""
+    if comp.tipo != Compensacion.TIPO_REPOSICION or comp.estado != Compensacion.APROBADA:
+        raise ValueError("Solo se cancela una reposición aprobada.")
+    if caja.pk not in {c.pk for c in cajas_cancelables_de(comp)}:
+        raise ValueError(f"La caja {caja.numero} no es una reposición de {comp.incidencia.folio} que siga en bodega.")
+    if not generar_reingreso and not decisiones:
+        raise ValueError("Decide a dónde va cada pieza de la caja, o déjala en Reingresos para decidir después.")
+    incidencia = comp.incidencia
+    pedido = incidencia.pedido
+    from apps.pedidos.services import deshacer_reposicion_empacada, resolver_contenido_caja  # lazy por contrato
+
+    # Piezas de reposición que viajan en ESTA caja, por línea, y qué compensación las cubre.
+    en_caja = {}
+    for pl in caja.lineas.select_related("linea_pedido__sku"):
+        if pl.repone_a_id:
+            fila = en_caja.setdefault(pl.linea_pedido_id, [pl.linea_pedido, 0, pl.repone_a_id])
+            fila[1] += max(1, pl.cantidad // max(pl.fraccion_de, 1))
+    seleccion, cubren = [], []
+    for c in [comp] + [x for x in compensaciones_de_caja(caja) if x.pk != comp.pk]:
+        cubierto = {}
+        for x in c.lineas or []:
+            if x.get("linea_id"):
+                cubierto[x["linea_id"]] = cubierto.get(x["linea_id"], 0) + int(x.get("cantidad") or 0)
+        tomado = 0
+        for linea_id, fila in en_caja.items():
+            linea, unidades, origen = fila
+            if unidades <= 0 or linea_id not in cubierto:
+                continue
+            n = min(unidades, cubierto[linea_id])
+            seleccion.append((linea, n, origen, c.incidencia.folio))
+            fila[1] -= n
+            tomado += n
+        if tomado:
+            cubren.append((c, tomado, sum(cubierto.values())))
+        if all(fila[1] <= 0 for fila in en_caja.values()):
+            break
+    if not cubren:
+        raise ValueError(f"La caja {caja.numero} no lleva piezas de la reposición {incidencia.folio}.")
+    with transaction.atomic():
+        deshacer_reposicion_empacada(pedido, caja, seleccion, actor, incidencia=incidencia, motivo=motivo)
+        if not generar_reingreso:
+            resolver_contenido_caja(pedido, caja, decisiones, actor, motivo=motivo)
+        pedido.refresh_from_db()
+        for c, tomado, total in cubren:
+            if tomado >= total:
+                c.nota = f"Reposición cancelada (caja {caja.numero} ya pickeada): {pedido.folio} sigue {pedido.get_estado_display().lower()}."[:300]
+                c.save(update_fields=["nota"])
+                c.transicionar(Compensacion.CANCELADA, actor=actor, motivo=f"Reposición cancelada ({c.incidencia.folio}), caja {caja.numero}")
+            else:
+                c.nota = f"Cancelada parcialmente: {tomado} pieza(s) en la caja {caja.numero}; sigue aprobada por el resto."[:300]
+                c.save(update_fields=["nota"])
+        guias = []
+        for c, tomado, total in cubren:
+            if tomado >= total:
+                guias += _revertir_guias_sustituidas(c, actor)
+    for c, tomado, total in cubren:
+        responder(
+            c.incidencia, _nombre_actor(actor), MensajeIncidencia.ROL_MESA,
+            f"Canceló la reposición de la caja {caja.numero} ({tomado} pieza(s) de {c.resumen_lineas}): "
+            + ("su contenido se decidió pieza por pieza" if not generar_reingreso else "su contenido queda por decidir en Reingresos")
+            + (f"; la guía original vuelve a mandar ({', '.join(g.numero for g in guias)})" if guias and tomado >= total else "")
+            + "." + (f" Motivo: {motivo}" if motivo else ""),
+        )
+    return comp
+
+
 def _revertir_guias_sustituidas(comp, actor):
     """Al cancelar la reposición, las guías que esa compensación marcó
     (marcar_guias_sustituidas) vuelven a mandar sobre el pedido, salvo que

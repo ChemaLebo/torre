@@ -38,6 +38,7 @@
 <script defer src="{% static 'js/escaner.js' %}" data-zxing="{% static 'js/zxing.min.js' %}"></script>
 {# Toda tabla con encabezado se ordena por columna y, con 8 renglones o más, trae buscador (Chema 2026-09-28). #}
 <script defer src="{% static 'js/tablas.js' %}"></script>
+<script defer src="{% static 'js/piezas.js' %}"></script>
 {% if user.is_authenticated %}
 {# PWA: el SW se registra SOLO en páginas autenticadas — rastreo público y etiquetas QR jamás. #}
 <script defer src="{% static 'js/push.js' %}"></script>

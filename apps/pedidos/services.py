@@ -4417,11 +4417,19 @@ def cajas_por_reingresar(pedido):
 
     cajas = []
     for caja in sorted(pedido.paquetes.all(), key=lambda c: c.numero):
-        if caja.estado != Paquete.DESPACHADO or caja.reingreso_estado != Paquete.REINGRESO_PENDIENTE:
+        if caja.reingreso_estado != Paquete.REINGRESO_PENDIENTE:
+            continue
+        # Reposición cancelada ya pickeada/empacada (2026-10-20): la caja
+        # cancelada guarda su contenido por decidir aunque nunca haya salido.
+        if caja.estado == Paquete.CANCELADO:
+            cajas.append(caja)
+            continue
+        if caja.estado != Paquete.DESPACHADO:
             continue
         # Contenido erróneo (2026-10-10): salió otro producto; la caja se
         # decide con su contenido real aunque el carrier no la haya regresado.
-        if pedido.cancelacion_tardia or caja.regresada or caja.contenido_erroneo:
+        # Regreso reportado (2026-10-21): envia "Redirected" o Mesa lo marcó.
+        if pedido.cancelacion_tardia or caja.regresada or caja.contenido_erroneo or caja.regreso_reportado:
             cajas.append(caja)
     return cajas
 
@@ -4436,7 +4444,10 @@ def reingresos_por_decidir():
     pedido esté CANCELADO: la mercancía sigue por decidir)."""
     por_caja = Q(paquetes__estado="DESPACHADO", paquetes__reingreso_estado="") & (
         Q(paquetes__guias__estado="RETORNO") | Q(cancelacion_tardia=True) | Q(paquetes__contenido_erroneo=True)
+        | Q(paquetes__regreso_reportado__isnull=False)
     )
+    # Reposición cancelada ya empacada (2026-10-20): la caja CANCELADO guarda el contenido por decidir.
+    por_caja = por_caja | Q(paquetes__estado="CANCELADO", paquetes__reingreso_estado="")
     # Sin cajas despachadas (salió entero: sin plan, o plan sin empacar por
     # caja): por pedido, como siempre.
     por_pedido = ~Q(paquetes__estado="DESPACHADO") & Q(reingreso_estado=Pedido.REINGRESO_PENDIENTE) & (
@@ -4523,6 +4534,276 @@ def _cerrar_decision(pedido, cajas, decision, actor, motivo_cierre):
         pedido.save(update_fields=["reingreso_estado", "actualizado"])
         cerrar_cancelacion_tardia(pedido, actor, motivo_cierre)
     return quedan
+
+
+def contenido_caja_por_pieza(caja):
+    """[(linea, sku, unidades)] de lo que viaja en la caja en unidades de venta
+    enteras (una media caja cuenta entera): producto erróneo → el que de
+    verdad salió; un kit → sus componentes (todas si la caja llevaba el kit
+    completo, proporcional si no), nunca el kit virtual."""
+    import math
+    from fractions import Fraction
+
+    acumulado, orden = {}, []
+    def _sumar(linea, sku, unidades):
+        if linea.pk not in acumulado:
+            orden.append(linea.pk)
+            acumulado[linea.pk] = [linea, sku, Fraction(0)]
+        acumulado[linea.pk][2] += unidades
+
+    for pl in caja.lineas.select_related("linea_pedido__sku", "sku_real"):
+        linea = pl.linea_pedido
+        unidades = Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+        if linea.sku.es_kit:
+            enteras = int(unidades)
+            for hija in linea.componentes.select_related("sku"):
+                _sumar(hija, hija.sku, Fraction(hija.cantidad if enteras >= linea.cantidad else hija.cantidad * enteras // max(linea.cantidad, 1)))
+            continue
+        _sumar(linea, pl.sku_real or linea.sku, unidades)
+    return [(l, s, math.ceil(u)) for pk in orden for l, s, u in [acumulado[pk]] if u > 0]
+
+
+def sobre_descontadas(linea):
+    """Piezas de la línea que el kardex ya dio por salidas sin que su caja
+    haya salido: `cantidad_despachada` menos lo que viaja en cajas
+    DESPACHADO. El manifiesto por caja de antes restaba la línea entera con la
+    primera caja (PED-00281, PED-00507); 0 cuando cuadra."""
+    import math
+    from fractions import Fraction
+
+    fuera = sum(
+        (Fraction(pl.cantidad, max(pl.fraccion_de, 1)) for pl in linea.en_paquetes.select_related("paquete") if pl.paquete.estado == "DESPACHADO"),
+        Fraction(0),
+    )
+    return max(0, linea.cantidad_despachada - math.ceil(fuera))
+
+
+def _recalcular_contadores(linea):
+    """Contadores físicos desde las cajas que quedan (Chema 2026-10-21): lo
+    despachado es lo que viaja en cajas que salieron; lo pickeado, eso más lo
+    que sigue en cajas en bodega (empacadas o en empaque). Regresa
+    {"antes": [...], "despues": [...]} para el evento."""
+    import math
+    from fractions import Fraction
+
+    fuera = bodega = Fraction(0)
+    for pl in linea.en_paquetes.select_related("paquete"):
+        unidades = Fraction(pl.cantidad, max(pl.fraccion_de, 1))
+        if pl.paquete.estado == "DESPACHADO":
+            fuera += unidades
+        elif pl.paquete.estado in ("EMPACADO", "EN_EMPAQUE"):
+            bodega += unidades
+    antes = [linea.cantidad_pickeada, linea.cantidad_despachada]
+    linea.cantidad_despachada = math.ceil(fuera)
+    linea.cantidad_pickeada = linea.cantidad_despachada + math.ceil(bodega)
+    linea.save(update_fields=["cantidad_pickeada", "cantidad_despachada"])
+    return {"antes": antes, "despues": [linea.cantidad_pickeada, linea.cantidad_despachada]}
+
+
+def _mensaje_en_incidencia_abierta(pedido, texto):
+    """Nota de sistema en la incidencia abierta del pedido (CAN/RET/RF/la que haya), best-effort."""
+    try:
+        from apps.incidencias.models import Incidencia, MensajeIncidencia  # lazy: modelos de otra app
+        from apps.incidencias.services import responder  # lazy por contrato
+    except ImportError:
+        return
+    abierta = (
+        Incidencia.objects.filter(pedido=pedido, estado__in=Incidencia.ESTADOS_ABIERTOS)
+        .order_by("-ts_apertura").first()
+    )
+    if abierta is not None:
+        responder(abierta, "Torre", MensajeIncidencia.ROL_SISTEMA, texto[:1000])
+
+
+def resolver_contenido_caja(pedido, caja, decisiones, actor, motivo=""):
+    """Mesa decidió pieza por pieza qué pasa con el contenido de una caja por
+    decidir (regresada por el carrier, regreso reportado, cancelación tardía,
+    producto erróneo o reposición cancelada; Chema 2026-10-21). `decisiones`
+    = [{"sku", "cantidad", "destino" bodega|cuarentena|merma, "ubicacion",
+    "lote", "descontar", "motivo"}]; por producto deben sumar exactamente lo
+    que viaja en la caja. Torre no adivina: ejecuta eso.
+
+    Fuente por producto: si la caja salió (DESPACHADO) o la pieza ya está
+    descontada de más (sobre_descontadas), reingresa como retorno
+    (inventario.reingresar_piezas); si sigue en empaque se mueve desde
+    empaque (inventario.regresar_piezas_de_empaque) restando primero lo
+    anotado al escanear. Registros PickLinea → regresados; con la caja en
+    bodega los contadores se recalculan desde las cajas que quedan;
+    `reingreso_estado` = reingresado si algo volvió, no recuperado si nada
+    (y, sin más cajas por decidir, el pedido cierra su decisión como hoy).
+    Evento `reingreso_resuelto` y nota en la incidencia abierta."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.inventario.services import (  # lazy por contrato
+        DESTINO_MERMA, regresar_piezas_de_empaque, reingresar_piezas,
+    )
+
+    if caja.pedido_id != pedido.pk:
+        raise ValueError(f"La caja {caja.numero} no es de {pedido.folio}.")
+    if caja.pk not in {c.pk for c in cajas_por_reingresar(pedido)}:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} no está por decidir.")
+    contenido = {}
+    for linea, sku, unidades in contenido_caja_por_pieza(caja):
+        fila = contenido.setdefault(sku.pk, [linea, sku, 0])
+        fila[2] += unidades
+    grupos = {}
+    for d in decisiones:
+        sku = d.get("sku")
+        if sku is None or sku.pk not in contenido:
+            raise ValueError(f"{getattr(sku, 'codigo', 'ese producto')} no viaja en la caja {caja.numero}.")
+        grupos.setdefault(sku.pk, []).append(d)
+    for pk, (linea, sku, unidades) in contenido.items():
+        suma = sum(int(d.get("cantidad") or 0) for d in grupos.get(pk, []))
+        if suma != unidades:
+            raise ValueError(f"{sku.codigo}: la caja {caja.numero} lleva {unidades} pieza(s) y decidiste {suma}. Decide todas, ni una más.")
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        caja = Paquete.objects.select_for_update().get(pk=caja.pk)
+        salio = caja.estado == Paquete.DESPACHADO
+        regreso_algo, detalle = False, []
+        for pk, (linea, sku, unidades) in contenido.items():
+            ds = grupos[pk]
+            fuera_n = unidades if salio else min(unidades, sobre_descontadas(linea))
+            fuera_dec, empaque_dec = [], []
+            restante_fuera = fuera_n
+            for d in ds:
+                n = int(d.get("cantidad") or 0)
+                if restante_fuera > 0 and n > 0:
+                    tomo = min(n, restante_fuera)
+                    fuera_dec.append({**d, "cantidad": tomo})
+                    restante_fuera -= tomo
+                    n -= tomo
+                if n > 0:
+                    empaque_dec.append({**d, "cantidad": n})
+            if fuera_dec:
+                reingresar_piezas(sku, fuera_dec, fresco.folio, actor)
+            if empaque_dec:
+                picks = list(linea.picks.filter(estado=PickLinea.EN_EMPAQUE).order_by("pk"))
+                preferir = [(p.ubicacion_id, p.lote_id, p.cantidad) for p in picks if p.ubicacion_id is not None or p.lote_id is not None]
+                regresar_piezas_de_empaque(sku, empaque_dec, fresco.folio, actor, preferir=preferir)
+                _mover_registros(linea, picks, sum(int(d["cantidad"]) for d in empaque_dec), PickLinea.REGRESADO)
+            if salio:
+                picks_caja = list(linea.picks.filter(estado=PickLinea.DESPACHADO, caja=caja).order_by("pk"))
+                if picks_caja:
+                    _mover_registros(linea, picks_caja, min(unidades, sum(p.cantidad for p in picks_caja)), PickLinea.REGRESADO)
+            regreso_algo = regreso_algo or any(d.get("destino") != DESTINO_MERMA for d in ds)
+            detalle.append({
+                "sku": sku.codigo, "fuera_del_kardex": fuera_n,
+                "decisiones": [
+                    {"cantidad": int(d.get("cantidad") or 0), "destino": d.get("destino"),
+                     "ubicacion": getattr(d.get("ubicacion"), "codigo", None), "lote": getattr(d.get("lote"), "codigo", None),
+                     "descontar": bool(d.get("descontar", True))}
+                    for d in ds
+                ],
+            })
+            if not salio and not linea.sku.es_kit:
+                detalle[-1]["contadores"] = _recalcular_contadores(linea)
+        decision = Paquete.REINGRESADO if regreso_algo else Paquete.NO_RECUPERADO
+        _cerrar_decision(fresco, [caja], decision, actor, "Decisión pieza por pieza tomada en Mesa.")
+        registrar_evento(
+            "pedido", fresco.pk, "reingreso_resuelto", actor=actor, cliente=fresco.cliente,
+            delta={"caja": caja.numero, "decision": decision, "detalle": detalle},
+            motivo=(motivo or f"Caja {caja.numero}: contenido decidido pieza por pieza.")[:300],
+        )
+        resumen = "; ".join(
+            f"{x['sku']}: " + ", ".join(f"{d['cantidad']} {d['destino']}" + (f" en {d['ubicacion']}" if d['ubicacion'] else "") for d in x["decisiones"])
+            for x in detalle
+        )
+        _mensaje_en_incidencia_abierta(fresco, f"Caja {caja.numero} decidida en Mesa: {resumen}." + (f" Motivo: {motivo}" if motivo else ""))
+    pedido.estado = fresco.estado
+    return caja
+
+
+def deshacer_reposicion_empacada(pedido, caja, seleccion, actor, incidencia=None, motivo=""):
+    """Cancela una reposición aprobada cuya caja ya se pickeó o empacó (Chema
+    2026-10-20, PED-00281): la caja pasa a CANCELADO (se queda en el
+    expediente con fotos y guías), su guía comprada se cancela con el carrier
+    y se reabren sus sellos; por línea bajan `cantidad_repuesta` y
+    `cantidad_repuesta_reservada` (sin liberar reserva: las piezas ya se
+    pickearon) y se quita su entrada de `origen_reposicion`; los contadores
+    físicos se recalculan desde las cajas que quedan; si no queda nada por
+    surtir ni cajas vivas en bodega el pedido vuelve al estado anterior a la
+    reposición (_estado_antes_de_reponer). El contenido de la caja queda POR
+    DECIDIR (Reingresos) hasta resolver_contenido_caja. El pedido no puede
+    estar en manos de un operador. `seleccion` = [(línea, cantidad,
+    caja_origen pk|None)] de lo que se cancela. Regresa el estado final."""
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+    from apps.envios.services import cancelar_guia  # lazy por contrato
+
+    folio_inc = getattr(incidencia, "folio", "") or ""
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        caja = Paquete.objects.select_for_update().get(pk=caja.pk)
+        if caja.pedido_id != fresco.pk:
+            raise ValueError(f"La caja {caja.numero} no es de {fresco.folio}.")
+        if caja.estado not in (Paquete.PLANEADO, Paquete.EN_EMPAQUE, Paquete.EMPACADO):
+            raise ValueError(f"La caja {caja.numero} de {fresco.folio} está {caja.get_estado_display().lower()}: una caja que ya salió se quita de salida primero.")
+        if fresco.asignado_a_id and not fresco.detenido:
+            raise ValueError(f"{fresco.folio} está en manos del piso: desasigna al operador o para el pedido antes de cancelar la reposición.")
+        guia = caja.guia_activa
+        canceladas = []
+        if guia is not None:
+            if guia.estado != Guia.GUIA_CREADA:
+                raise ValueError(f"La guía {guia.numero} de la caja {caja.numero} ya salió ({guia.get_estado_display().lower()}).")
+            cancelar_guia(guia, actor, motivo=f"Reposición cancelada: caja {caja.numero} de {fresco.folio}")
+            canceladas.append(guia.numero)
+        _reabrir_cierre(caja)
+        caja.transicionar(
+            Paquete.CANCELADO, actor=actor,
+            motivo=(f"Reposición cancelada{f' ({folio_inc})' if folio_inc else ''}: la caja {caja.numero} se queda en el expediente y su contenido se decide en Reingresos.")[:300],
+        )
+        revertidas = []
+        for item in seleccion:
+            linea, cantidad = item[0], int(item[1] or 0)
+            caja_pk = item[2] if len(item) > 2 else None
+            caja_pk = caja_pk.pk if isinstance(caja_pk, Paquete) else caja_pk
+            folio_item = item[3] if len(item) > 3 and item[3] else folio_inc
+            if cantidad <= 0:
+                continue
+            linea.refresh_from_db()
+            cantidad = min(cantidad, linea.cantidad_repuesta)
+            if cantidad <= 0:
+                continue
+            linea.cantidad_repuesta -= cantidad
+            linea.cantidad_repuesta_reservada = min(linea.cantidad_repuesta_reservada, linea.cantidad_repuesta)
+            origen = list(linea.origen_reposicion or [])
+            indice = _entrada_de_reposicion(origen, caja_pk, cantidad, folio_item)
+            if indice is not None:
+                origen.pop(indice)
+            linea.origen_reposicion = origen
+            linea.save(update_fields=["cantidad_repuesta", "cantidad_repuesta_reservada", "origen_reposicion"])
+            revertidas.append([linea.sku.codigo, cantidad, Paquete.objects.filter(pk=caja_pk).values_list("numero", flat=True).first() if caja_pk else None])
+        contadores = {}
+        for pl in caja.lineas.select_related("linea_pedido__sku"):
+            if not pl.linea_pedido.sku.es_kit:
+                contadores[pl.linea_pedido.sku.codigo] = _recalcular_contadores(pl.linea_pedido)
+        queda = any(l.por_surtir - l.cantidad_despachada > 0 for l in fresco.lineas.all())
+        vivas = fresco.paquetes.filter(estado__in=(Paquete.PLANEADO, Paquete.EN_EMPAQUE, Paquete.EMPACADO)).exists()
+        destino = fresco.estado
+        if not queda and not vivas and fresco.estado in ESTADOS_REPOSICION_CANCELABLE:
+            destino = _estado_antes_de_reponer(fresco)
+            if destino != fresco.estado and destino in Pedido.TRANSICIONES.get(fresco.estado, set()):
+                fresco.asignado_a = None
+                fresco.save(update_fields=["asignado_a", "actualizado"])
+                fresco.transicionar(
+                    destino, actor=actor,
+                    motivo=f"Reposición cancelada{f' ({folio_inc})' if folio_inc else ''}: el pedido sigue con lo que ya salió.",
+                )
+            else:
+                destino = fresco.estado
+        registrar_evento(
+            "pedido", fresco.pk, "reposicion_cancelada", actor=actor, cliente=fresco.cliente,
+            delta={
+                "incidencia": folio_inc, "estado": destino, "caja": caja.numero, "guias_canceladas": canceladas,
+                "lineas": revertidas, "contadores": contadores, "desde": "empacada",
+            },
+            motivo=(motivo or f"Se cancela la reposición de la caja {caja.numero} (ya pickeada); su contenido se decide en Reingresos.")[:300],
+        )
+    pedido.estado = fresco.estado
+    return destino
+
+
+# Estados desde los que un pedido vuelve atrás al cancelar una reposición ya pickeada.
+ESTADOS_REPOSICION_CANCELABLE = ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA", "PARCIALMENTE_DESPACHADO")
 
 
 def registrar_reingreso(pedido, actor, motivo=""):

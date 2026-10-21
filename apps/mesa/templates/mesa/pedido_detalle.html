@@ -123,6 +123,10 @@
     </form>
   </dialog>
   {% endif %}{% endfor %}
+  {# Cancelar reposición ya pickeada/empacada (Chema 2026-10-20): modal pieza por pieza por caja. #}
+  {% for caja in cajas %}{% if caja.puede_cancelar_reposicion %}
+  {% include "mesa/_modal_piezas.html" with modal_id=caja.modal_cancelar_id titulo=caja.modal_cancelar_titulo intro="La caja se queda en el expediente como cancelada; decide a dónde va cada pieza o déjala en Reingresos para decidir después. Torre hace exactamente lo que elijas." accion="cancelar_reposicion_caja" piezas=caja.piezas_modal compensaciones=caja.compensaciones_cancelables permite_generar=True boton="Cancelar reposición" motivo_obligatorio=True %}
+  {% endif %}{% endfor %}
   {% if cajas %}
   <div class="tabla-wrap">
     <table data-sin-tabla-js>
@@ -177,7 +181,8 @@
               {% endif %}
               {% if caja.puede_pod %}<a class="btn chico primario" href="{% url 'mesa:entrega_local_pedido' pedido.pk %}#caja-{{ caja.guia.pk }}" title="Entrega propia en reparto: foto y quién recibió, por caja">Registrar entrega (POD)</a>{% endif %}
               {% if caja.puede_sustituir %}<button class="btn chico" type="button" onclick="document.getElementById('modal-sustituir-{{ caja.pk }}').showModal()" title="Guía nueva para la misma caja, que ya salió: no regresa a picking ni a empaque">Sustituir guía para esta caja</button>{% endif %}
-              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida and not caja.puede_pod and not caja.puede_sustituir %}<span class="muted small">—</span>{% endif %}
+              {% if caja.puede_cancelar_reposicion %}<button class="btn chico peligro" type="button" onclick="document.getElementById('{{ caja.modal_cancelar_id }}').showModal()" title="La reposición de esta caja se cancela aunque ya esté pickeada o empacada: decides pieza por pieza a dónde va su contenido">Cancelar reposición</button>{% endif %}
+              {% if not caja.puede_cambiar and not caja.puede_reimprimir and not caja.puede_cancelar_guia and not caja.puede_quitar_de_salida and not caja.puede_pod and not caja.puede_sustituir and not caja.puede_cancelar_reposicion %}<span class="muted small">—</span>{% endif %}
             </div>
           </td>
         </tr>

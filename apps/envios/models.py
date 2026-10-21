@@ -222,21 +222,29 @@ class Paquete(models.Model):
     EN_EMPAQUE = "EN_EMPAQUE"
     EMPACADO = "EMPACADO"
     DESPACHADO = "DESPACHADO"
+    # CANCELADO (Chema 2026-10-20, PED-00281): la reposición de esta caja se
+    # canceló cuando ya estaba pickeada o empacada. La caja se queda en el
+    # expediente con sus fotos y guías, deja de contar para empaque y Salida,
+    # y su contenido queda "por decidir" en Reingresos hasta que Mesa diga
+    # pieza por pieza a dónde va (pedidos.services.resolver_contenido_caja).
+    CANCELADO = "CANCELADO"
     ESTADOS = [
         (PLANEADO, "Planeado"),
         (EN_EMPAQUE, "En empaque"),
         (EMPACADO, "Empacado"),
         (DESPACHADO, "Despachado"),
+        (CANCELADO, "Cancelada"),
     ]
     # DESPACHADO → EMPACADO solo por "Quitar de salida" en Mesa (Chema
     # 2026-10-05, PED-00319): la caja subió al manifiesto pero nunca se fue
     # (guía cancelada, el carrier no la recogió) y vuelve a bodega
     # (pedidos.services.quitar_de_salida).
     TRANSICIONES = {
-        PLANEADO: {EN_EMPAQUE, EMPACADO},
-        EN_EMPAQUE: {EMPACADO},
-        EMPACADO: {DESPACHADO},
+        PLANEADO: {EN_EMPAQUE, EMPACADO, CANCELADO},
+        EN_EMPAQUE: {EMPACADO, CANCELADO},
+        EMPACADO: {DESPACHADO, CANCELADO},
         DESPACHADO: {EMPACADO},
+        CANCELADO: set(),
     }
 
     pedido = models.ForeignKey("pedidos.Pedido", on_delete=models.CASCADE, related_name="paquetes")
@@ -310,6 +318,11 @@ class Paquete(models.Model):
     # producto (PaqueteLinea.sku_real); la caja entra a "Reingresos por
     # decidir" con su contenido REAL (lo pedido no salió y no va a regresar).
     contenido_erroneo = models.BooleanField(default=False)
+    # Regreso reportado (Chema 2026-10-21): el carrier (envia "Redirected") o
+    # Mesa ("Registrar reingreso") dicen que esta caja despachada regresa.
+    # Entra a "Reingresos por decidir" aunque su guía siga viva; si después
+    # llega "entregado" y nadie decidió, la marca se limpia sola.
+    regreso_reportado = models.DateTimeField(null=True, blank=True)
     # Reembolso en Shopify (Chema 2026-10-12): la caja salió y no se entregó
     # (regresó, se perdió, intento fallido) y el cliente reembolsó su contenido.
     # Sigue siendo DESPACHADO (salió, su guía se cobra, su kardex pasó); deja

@@ -1,0 +1,43 @@
+{# Modal "pieza por pieza" (Chema 2026-10-22): decide a dónde va cada pieza de una caja. Lo usan Cancelar reposición (caja empacada), Registrar reingreso (caja despachada) y la pantalla de Reingresos. Contexto: modal_id, titulo, intro, accion, pedido, caja, piezas, posiciones, compensaciones (opcional), permite_generar, boton, extra_hidden (opcional, "name=value"). #}
+<dialog class="modal modal-piezas" id="{{ modal_id }}" aria-labelledby="{{ modal_id }}-titulo" style="max-width:860px">
+  <form method="post" data-piezas>{% csrf_token %}
+    <input type="hidden" name="accion" value="{{ accion }}"><input type="hidden" name="folio" value="{{ pedido.folio }}"><input type="hidden" name="caja" value="{{ caja.pk }}">
+    <h3 id="{{ modal_id }}-titulo">{{ titulo }}</h3>
+    {% if intro %}<p class="small">{{ intro }}</p>{% endif %}
+    {% if compensaciones|length > 1 %}
+    <label>Reposición que se cancela <select name="compensacion_id">{% for c in compensaciones %}<option value="{{ c.pk }}">{{ c.incidencia.folio }} · {{ c.resumen_lineas }}{% if forloop.first %} (la más reciente){% endif %}</option>{% endfor %}</select></label>
+    <p class="small muted">Hay más de una reposición aprobada sobre la misma caja original y no hay forma de saber cuál creó esta caja: elige la que se cancela.</p>
+    {% elif compensaciones %}<input type="hidden" name="compensacion_id" value="{{ compensaciones.0.pk }}">{% endif %}
+    <div class="piezas">
+      {% for p in piezas %}
+      <div class="pieza-grupo" data-sku="{{ p.sku_id }}" style="padding:8px 0;border-top:1px solid var(--hair)">
+        <div class="fila entre"><b>{{ p.codigo }}</b> <span class="small muted">{{ p.descripcion }} · {{ p.unidades }} pieza{{ p.unidades|pluralize }} en la caja</span></div>
+        <p class="small muted" style="margin:4px 0">{{ p.kardex }}</p>
+        <div class="renglones">
+          <div class="pieza-renglon fila" style="gap:8px;align-items:flex-end;flex-wrap:wrap;padding:4px 0">
+            <input type="hidden" name="pieza-{{ p.sku_id }}-0-sku" value="{{ p.sku_id }}">
+            <label class="small">Piezas <input type="number" name="pieza-{{ p.sku_id }}-0-cantidad" min="1" max="{{ p.unidades }}" value="{{ p.unidades }}" required style="width:70px"></label>
+            <label class="small">Destino <select name="pieza-{{ p.sku_id }}-0-destino" data-destino>
+              <option value="bodega">Regresa a bodega</option>
+              <option value="cuarentena">Cuarentena</option>
+              <option value="merma">No regresa</option>
+            </select></label>
+            <label class="small" data-solo="bodega">Posición <select name="pieza-{{ p.sku_id }}-0-ubicacion">{% for u in posiciones %}<option value="{{ u }}" {% if u == p.prefill_ubicacion %}selected{% endif %}>{{ u }}</option>{% endfor %}</select></label>
+            <label class="small" data-solo="bodega cuarentena">Lote <select name="pieza-{{ p.sku_id }}-0-lote"><option value="">— sin lote —</option>{% for l in p.lotes %}<option value="{{ l }}" {% if l == p.prefill_lote %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+            <label class="small" data-solo="bodega cuarentena">QR <input type="text" data-qr placeholder="pega el QR de la etiqueta" style="width:170px" autocomplete="off"></label>
+            {% if p.en_empaque %}<label class="small" data-solo="merma"><input type="checkbox" name="pieza-{{ p.sku_id }}-0-descontar" value="1" {% if p.descontar_default %}checked{% endif %}> descontar del kardex</label>{% endif %}
+            <button class="btn chico" type="button" data-dividir title="Decidir una parte de estas piezas por separado">Dividir</button>
+            <button class="btn chico" type="button" data-quitar title="Quitar este renglón">×</button>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <label>Motivo <input type="text" name="motivo" maxlength="200" {% if motivo_obligatorio %}required{% endif %} placeholder="Por qué" style="width:100%"></label>
+    <div class="fila" style="justify-content:flex-end;gap:8px;margin-top:10px">
+      <button class="btn chico" type="button" onclick="this.closest('dialog').close()">Cerrar</button>
+      {% if permite_generar %}<button class="btn chico" type="submit" name="generar_reingreso" value="1" title="No decidir ahora: la caja queda en Reingresos por decidir">Generar reingreso (decidir después)</button>{% endif %}
+      <button class="btn chico primario" type="submit">{{ boton }}</button>
+    </div>
+  </form>
+</dialog>

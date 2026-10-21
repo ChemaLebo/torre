@@ -1251,6 +1251,32 @@ def _pedidos_cancelar_reposicion(request):
     return f"Reposición cancelada ({comp.resumen_lineas}): {comp.nota}"
 
 
+def _pedidos_cancelar_reposicion_caja(request):
+    """Cancelar una reposición ya pickeada o empacada, por caja y pieza por
+    pieza (Chema 2026-10-20, PED-00281): la caja queda cancelada en el
+    expediente y su contenido va a donde Mesa decidió, o a Reingresos por
+    decidir con "Generar reingreso" (incidencias.cancelar_reposicion_empacada)."""
+    from apps.incidencias.models import Compensacion  # lazy: modelo de otra app
+    from apps.incidencias.services import cancelar_reposicion_empacada, compensaciones_de_caja  # lazy por contrato
+
+    pedido, caja = _caja_del_post(request)
+    if request.POST.get("compensacion_id"):
+        comp = get_object_or_404(Compensacion, pk=request.POST.get("compensacion_id"), incidencia__pedido=pedido)
+    else:
+        candidatas = compensaciones_de_caja(caja)
+        if not candidatas:
+            raise ValueError(f"La caja {caja.numero} no tiene una reposición aprobada que cancelar.")
+        comp = candidatas[0]
+    generar = request.POST.get("generar_reingreso") == "1"
+    motivo = (request.POST.get("motivo") or "").strip()[:300]
+    decisiones = [] if generar else _decisiones_del_post(request, pedido)
+    cancelar_reposicion_empacada(comp, caja, request.user, decisiones=decisiones, motivo=motivo, generar_reingreso=generar)
+    return (
+        f"Reposición cancelada ({comp.incidencia.folio}, caja {caja.numero}): "
+        + ("su contenido queda en Reingresos por decidir." if generar else "cada pieza quedó donde decidiste.")
+    )
+
+
 def _pedidos_sustituir_guia_caja(request):
     """"Sustituir guía para esta caja" (Chema 2026-10-14): guía nueva para una
     caja que ya salió, con la paquetería y el motivo del modal
@@ -1392,6 +1418,7 @@ def _ejecutar_accion_pedido(request):
         "cancelar_guia_caja": _pedidos_cancelar_guia_caja,
         "quitar_de_salida_caja": _pedidos_quitar_de_salida_caja,
         "cancelar_reposicion": _pedidos_cancelar_reposicion,
+        "cancelar_reposicion_caja": _pedidos_cancelar_reposicion_caja,
         "sustituir_guia_caja": _pedidos_sustituir_guia_caja,
         "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
@@ -1509,6 +1536,102 @@ def pedidos(request):
     })
 
 
+def _posiciones_para_modal():
+    """Códigos de las posiciones activas donde vive producto vendible (picking y reserva), para el modal por pieza."""
+    from apps.catalogo.models import Ubicacion  # lazy: modelo de otra app
+
+    return list(
+        Ubicacion.objects.filter(activo=True, tipo__in=(Ubicacion.PICKING, Ubicacion.RESERVA))
+        .order_by("codigo").values_list("codigo", flat=True)
+    )
+
+
+def _piezas_para_modal(pedido, caja):
+    """Renglones del modal pieza por pieza (Chema 2026-10-22): por producto de
+    la caja, cuántas piezas viajan, qué dice el kardex de ellas (en empaque y
+    de dónde se tomaron / ya descontadas de más / ya salieron), la posición y
+    el lote prellenados (lo anotado al escanear, o el rack fijo) y los lotes
+    del producto para elegir."""
+    from django.db.models import Sum
+
+    from apps.catalogo.services import rack_de  # lazy por contrato
+    from apps.inventario.models import Saldo  # lazy: modelo de otra app
+    from apps.pedidos.models import PickLinea  # lazy: modelo de otra app
+    from apps.pedidos.services import contenido_caja_por_pieza, sobre_descontadas  # lazy por contrato
+
+    salio = caja.estado == "DESPACHADO"
+    piezas = []
+    for linea, sku, unidades in contenido_caja_por_pieza(caja):
+        estado_pick = PickLinea.DESPACHADO if salio else PickLinea.EN_EMPAQUE
+        picks = list(PickLinea.objects.filter(linea=linea, estado=estado_pick).select_related("ubicacion", "lote").order_by("pk"))
+        if salio:
+            picks = [p for p in picks if p.caja_id == caja.pk] or picks
+        anotado = [p for p in picks if p.ubicacion_id is not None or p.lote_id is not None]
+        prefill = anotado[0] if anotado else None
+        rack = rack_de(sku)
+        en_empaque = Saldo.objects.filter(sku=sku, estado=Saldo.EN_EMPAQUE).aggregate(t=Sum("cantidad"))["t"] or 0
+        fuera = unidades if salio else min(unidades, sobre_descontadas(linea))
+        origen = ", ".join(
+            f"{p.cantidad} de {p.ubicacion.codigo if p.ubicacion_id else 'posición sin registro'}" + (f" lote {p.lote.codigo}" if p.lote_id else "")
+            for p in anotado
+        )
+        if salio:
+            kardex = "Ya salió del kardex: lo que regrese entra como retorno a la posición y lote que elijas."
+        elif fuera >= unidades:
+            kardex = f"Ya descontada{'s' if unidades > 1 else ''} del kardex: su salida se registró de más (manifiesto anterior). Si regresa, entra como retorno; si no regresa, no hay nada que descontar."
+        elif fuera:
+            kardex = f"{fuera} de {unidades} ya descontada{'s' if fuera > 1 else ''} del kardex (salida registrada de más); el resto sigue en empaque" + (f", tomada de {origen}" if origen else "") + f". En empaque de este producto: {en_empaque}."
+        else:
+            kardex = "En empaque, no descontada" + ("s" if unidades > 1 else "") + (f": tomada{'s' if unidades > 1 else ''} de {origen}" if origen else " (sin registro de posición)") + f". En empaque de este producto: {en_empaque}."
+        piezas.append({
+            "sku_id": sku.pk, "codigo": sku.codigo, "descripcion": sku.descripcion, "unidades": unidades,
+            "requiere_lote": sku.requiere_lote, "kardex": kardex, "en_empaque": not salio and fuera < unidades,
+            "descontar_default": not salio and fuera < unidades,
+            "prefill_ubicacion": (prefill.ubicacion.codigo if prefill is not None and prefill.ubicacion_id else (rack.codigo if rack is not None else "")),
+            "prefill_lote": (prefill.lote.codigo if prefill is not None and prefill.lote_id else ""),
+            "lotes": list(sku.lotes.order_by("fecha_caducidad", "codigo").values_list("codigo", flat=True)),
+        })
+    return piezas
+
+
+def _decisiones_del_post(request, pedido):
+    """[{"sku", "cantidad", "destino", "ubicacion", "lote", "descontar", "motivo"}]
+    a partir de los renglones del modal pieza por pieza (pieza-<sku>-<n>-*)."""
+    import re
+
+    from apps.catalogo.models import SKU, Lote, Ubicacion  # lazy: modelos de otra app
+
+    patron = re.compile(r"^pieza-(\d+)-(\d+)-cantidad$")
+    motivo = (request.POST.get("motivo") or "").strip()[:300]
+    decisiones = []
+    for clave in sorted(request.POST, key=lambda k: tuple(int(x) for x in patron.match(k).groups()) if patron.match(k) else (0, 0)):
+        m = patron.match(clave)
+        if not m:
+            continue
+        pre = f"pieza-{m.group(1)}-{m.group(2)}-"
+        sku = get_object_or_404(SKU, pk=m.group(1), cliente=pedido.cliente)
+        destino = (request.POST.get(pre + "destino") or "").strip()
+        try:
+            cantidad = int(request.POST.get(pre + "cantidad") or 0)
+        except ValueError:
+            raise ValueError("Captura las piezas como número entero.") from None
+        codigo_ubic = (request.POST.get(pre + "ubicacion") or "").strip()
+        codigo_lote = (request.POST.get(pre + "lote") or "").strip()
+        ubicacion = Ubicacion.objects.filter(codigo=codigo_ubic).first() if destino == "bodega" and codigo_ubic else None
+        if destino == "bodega" and codigo_ubic and ubicacion is None:
+            raise ValueError(f"La posición {codigo_ubic} no existe.")
+        lote = Lote.objects.filter(sku=sku, codigo=codigo_lote).first() if destino != "merma" and codigo_lote else None
+        if destino != "merma" and codigo_lote and lote is None:
+            raise ValueError(f"El lote {codigo_lote} no existe para {sku.codigo}.")
+        decisiones.append({
+            "sku": sku, "cantidad": cantidad, "destino": destino, "ubicacion": ubicacion, "lote": lote,
+            "descontar": request.POST.get(pre + "descontar") == "1", "motivo": motivo,
+        })
+    if not decisiones:
+        raise ValueError("No llegó ninguna decisión por pieza: vuelve a abrir el modal.")
+    return decisiones
+
+
 def _lineas_con_lotes(pedido):
     """Líneas del pedido con `.lotes`: resumen de sus registros de pick (lote
     por pedido, Chema 2026-10-22): de qué posición y lote salió cada pieza y
@@ -1575,11 +1698,27 @@ def _reposiciones_del_pedido(pedido, compensaciones):
             c.numero for c in pedido.paquetes.all() if c.estado != "DESPACHADO"
             for pl in c.lineas.all() if pl.repone_a_id and (not origen_ids or pl.repone_a_id in origen_ids)
         })
+        # Estado real por caja (2026-10-22): planeada / empacada / en el corral / salió / cancelada.
+        por_caja = {}
+        for c in pedido.paquetes.all():
+            if any(pl.repone_a_id and (not origen_ids or pl.repone_a_id in origen_ids) for pl in c.lineas.all()):
+                por_caja[c.numero] = c
         partes = []
-        if pedido.estado in ESTADOS_OLA_OCUPADA:
+        if pedido.estado in ESTADOS_OLA_OCUPADA and pedido.asignado_a_id:
             partes.append("en manos del piso")
-        elif planeadas:
+        elif pedido.estado in ESTADOS_OLA_OCUPADA and not por_caja:
+            partes.append("en manos del piso")
+        if planeadas and pedido.estado not in ESTADOS_OLA_OCUPADA:
             partes.append(f"planeada en la caja {', '.join(str(n) for n in planeadas)} (en bodega, sin picking)")
+        for numero, c in sorted(por_caja.items()):
+            if c.estado == "EMPACADO":
+                partes.append(f"caja {numero} empacada" + (" en el corral" if c.ts_listo_salida else ", en bodega"))
+            elif c.estado == "EN_EMPAQUE":
+                partes.append(f"caja {numero} en empaque")
+            elif c.estado == "DESPACHADO":
+                partes.append(f"caja {numero} salió")
+            elif c.estado == "CANCELADO":
+                partes.append(f"caja {numero} cancelada")
         if sin_stock:
             partes.append(f"en espera de existencias ({', '.join(sin_stock)}): la caja nace cuando entre stock")
         filas.append({
@@ -1603,7 +1742,7 @@ def pedido_detalle(request, pk):
     from apps.core.models import EvidenciaFoto
     from apps.envios.services import guia_sustituible, intentos_de_entrega, opciones_paqueteria, url_rastreo_carrier
     from apps.incidencias.models import Incidencia
-    from apps.incidencias.services import agrupar_por_pedido, sin_paqueteria_abierta
+    from apps.incidencias.services import agrupar_por_pedido, cajas_cancelables_de, compensaciones_de_caja, sin_paqueteria_abierta
     from apps.pedidos.linea_tiempo import construir
     from apps.envios.cotizador import unidades_sin_caja  # lazy por contrato
     from apps.pedidos.services import ESTADOS_EN_BODEGA, ESTADOS_OLA_OCUPADA, piezas_reponibles
@@ -1660,6 +1799,15 @@ def pedido_detalle(request, pk):
         caja.guia_sustituible = guia_sustituible(caja)
         caja.puede_sustituir = caja.guia_sustituible is not None
         caja.intentos = intentos_de_entrega(caja.guia)  # intentos de entrega fallidos que reportó el carrier (2026-10-14)
+        # Cancelar reposición ya pickeada/empacada (Chema 2026-10-20): por caja, con el modal pieza por pieza.
+        caja.compensaciones_cancelables = (
+            [c for c in compensaciones_de_caja(caja) if caja.pk in {x.pk for x in cajas_cancelables_de(c)}]
+            if caja.estado in ("PLANEADO", "EN_EMPAQUE", "EMPACADO") else []
+        )
+        caja.puede_cancelar_reposicion = bool(caja.compensaciones_cancelables) and not (pedido.asignado_a_id and not pedido.detenido)
+        caja.modal_cancelar_id = f"modal-cancelar-reposicion-{caja.pk}"
+        caja.modal_cancelar_titulo = f"Cancelar la reposición de la caja {caja.numero}"
+        caja.piezas_modal = _piezas_para_modal(pedido, caja) if caja.puede_cancelar_reposicion else []
         for g in caja.historial:  # `sustituta`: la guía que la reemplazó (sin pegarle a la BD por guía)
             g.sustituta = next((n for n in caja.guias.all() if n.sustituye_a_id == g.pk), None)
     guias_sueltas = [
@@ -1709,6 +1857,7 @@ def pedido_detalle(request, pk):
         "entrega_propia": any(c.carrier == "local" for c in cajas) or any(g.carrier == "local" for g in pedido.guias.all()),
         "hoy": timezone.localdate().isoformat(),
         "lineas": _lineas_con_lotes(pedido),
+        "posiciones": _posiciones_para_modal(),
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
         # "Rehacer entrega" (2026-10-10): misma regla que reponer_lineas: hay piezas que ya
         # salieron en una caja y ninguna ola en manos del piso (un PENDIENTE que espera
