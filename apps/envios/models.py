@@ -458,10 +458,14 @@ class TrabajoImpresion(models.Model):
     TIPO_GUIA = "guia"
     TIPO_PRODUCTO = "producto"
     TIPO_TARIMA = "tarima"
+    TIPO_INTERNA = "interna"  # etiqueta interna 51×51 + sus etiquetas de manejo (2026-10-20)
+    TIPO_MANEJO = "manejo"  # etiquetas de manejo sueltas desde Salida
     TIPOS = [
         (TIPO_GUIA, "Etiqueta de guía"),
         (TIPO_PRODUCTO, "Etiquetas de cajas (recepción)"),
         (TIPO_TARIMA, "Etiqueta de tarima"),
+        (TIPO_INTERNA, "Etiqueta interna 51×51"),
+        (TIPO_MANEJO, "Etiquetas de manejo"),
     ]
     IMPRESORA_ENVIOS = "envios"
     IMPRESORA_ETIQUETAS = "etiquetas"

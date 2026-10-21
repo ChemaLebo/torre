@@ -2738,6 +2738,8 @@ def salida(request):
             return _salida_manifiesto(request)
         if accion == "recoleccion":
             return _salida_recoleccion(request)
+        if accion == "imprimir_manejo":
+            return _salida_imprimir_manejo(request)
         messages.error(request, "No entendí la acción. Intenta de nuevo.")
         return redirect("piso:salida")
 
@@ -2802,6 +2804,34 @@ def salida(request):
 
         contexto["sin_salida"] = cajas_sin_salida()
     return render(request, "piso/salida.html", contexto)
+
+
+def _salida_imprimir_manejo(request):
+    """Botones de Salida (Chema 2026-10-20): N etiquetas FRÁGIL o de
+    orientación sueltas a la térmica de etiquetas (relay o lp, según el modo)."""
+    from apps.envios.models import TrabajoImpresion  # lazy: modelo de otra app
+
+    from .etiquetas import MANEJO_FRAGIL, MEDIA_ETIQUETAS, encolar_impresion, generar_pdf_manejo
+
+    tipo = (request.POST.get("tipo") or "").strip()
+    cantidad = (request.POST.get("cantidad") or "").strip()
+    nombre = "FRÁGIL" if tipo == MANEJO_FRAGIL else "de orientación"
+    try:
+        pdf = generar_pdf_manejo(tipo, cantidad)
+        trabajo = encolar_impresion(
+            pdf, tipo=TrabajoImpresion.TIPO_MANEJO, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
+            media=MEDIA_ETIQUETAS, referencia=f"manejo {tipo} x{int(cantidad)}", cliente=None,
+            nombre=f"manejo-{tipo}-x{int(cantidad)}.pdf",
+        )
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("piso:salida")
+    registrar_evento(
+        "etiqueta", f"manejo-{tipo}", "encolada_impresion", actor=request.user,
+        delta={"tipo": tipo, "cantidad": int(cantidad), "trabajo": trabajo.pk if trabajo is not None else None},
+    )
+    messages.success(request, f"{int(cantidad)} etiqueta(s) {nombre} en cola de impresión; salen en segundos en la bodega.")
+    return redirect("piso:salida")
 
 
 def _salida_recoleccion(request):
@@ -3156,10 +3186,11 @@ def restock(request, pk):
 
 @rol_requerido("piso", "mesa")
 def etiqueta(request, guia_pk):
-    """Etiqueta imprimible de una guía: datos de la paquetería + QR que lleva
-    a la página pública del repartidor (/r/e/<token>/: ubicación exacta +
-    botón de auxilio). Renderizar crea el token de la guía si no existe;
-    la lógica de maps vive en la página pública (apps.rastreo).
+    """Etiqueta interna imprimible de una guía: la 51×51 (folio, paquete n de
+    m, paquetería y QR del repartidor) para pedidos foráneos; la 10×15 con
+    dirección y referencias para pedidos locales. Renderizar crea el token de
+    la guía si no existe; la lógica de maps vive en la página pública
+    (apps.rastreo).
 
     POST accion=imprimir → manda la etiqueta directo a la térmica de bodega
     (lp desde el servidor, apps.piso.etiquetas.imprimir_etiqueta)."""
@@ -3178,8 +3209,11 @@ def etiqueta(request, guia_pk):
     else:
         paquete_n = paquete_m = 1
 
-    # Peso del bulto: el del paquete; legacy → peso real (o esperado) del pedido.
-    if guia.paquete is not None:
+    # Peso del bulto: la báscula si la caja ya se pesó (Chema 2026-10-20), si
+    # no el plan; legacy → peso real (o esperado) del pedido.
+    if guia.paquete is not None and guia.paquete.peso_real_gr:
+        peso_kg = (Decimal(guia.paquete.peso_real_gr) / 1000).quantize(Decimal("0.01"))
+    elif guia.paquete is not None:
         peso_kg = guia.paquete.peso_kg
     else:
         gramos = pedido.peso_real_gr or pedido.peso_esperado_gr
@@ -3202,7 +3236,21 @@ def etiqueta(request, guia_pk):
     }
     from apps.piso.etiquetas import marcas_de_manejo  # lazy: misma regla que el PDF
     contexto["fragil"], contexto["este_lado_arriba"] = marcas_de_manejo(guia)
-    return render(request, "piso/etiqueta.html", contexto)
+    if pedido.es_local:
+        return render(request, "piso/etiqueta.html", contexto)
+    # Pedido foráneo (Chema 2026-10-20): la interna es la 51×51 de la Munbyn,
+    # sin dirección ni peso; las etiquetas de manejo salen aparte en el mismo trabajo.
+    from apps.configuracion.services import etiquetas_manejo  # lazy por contrato
+    from apps.piso.etiquetas import LEYENDA_INTERNA_51, MARCA_ETIQUETA  # lazy: mismo texto que el PDF
+
+    n_fragil, n_orientacion = etiquetas_manejo()
+    contexto.update({
+        "leyenda": LEYENDA_INTERNA_51,
+        "marca_etiqueta": MARCA_ETIQUETA,
+        "n_fragil": n_fragil if contexto["fragil"] else 0,
+        "n_orientacion": n_orientacion if contexto["este_lado_arriba"] else 0,
+    })
+    return render(request, "piso/etiqueta_51.html", contexto)
 
 
 def _etiqueta_imprimir(request, guia):

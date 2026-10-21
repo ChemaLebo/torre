@@ -35,11 +35,12 @@ class EtiquetaTestCase(PisoTestCase):
 
     # ── Helpers ──
 
-    def crear_guia(self, pedido=None, paquete=None, direccion=None):
-        """Pedido GUIA_GENERADA + guía activa, sin tocar inventario (la etiqueta es lectura)."""
+    def crear_guia(self, pedido=None, paquete=None, direccion=None, es_local=False):
+        """Pedido GUIA_GENERADA + guía activa, sin tocar inventario (la etiqueta es lectura).
+        es_local=True → la interna sigue siendo la 10×15 con dirección (Chema 2026-10-20)."""
         if pedido is None:
             pedido = self.crear_pedido(
-                estado=Pedido.GUIA_GENERADA, reservar_stock=False,
+                estado=Pedido.GUIA_GENERADA, reservar_stock=False, es_local=es_local,
                 direccion=dict(direccion if direccion is not None else DIRECCION_BASE),
             )
         return Guia.objects.create(
@@ -105,10 +106,10 @@ class QREtiquetaTests(EtiquetaTestCase):
         self.assertIn(f"/r/e/{token}/", primera)
         self.assertIn(f"/r/e/{token}/", segunda)
 
-    def test_la_leyenda_menciona_el_boton_de_ayuda(self):
-        guia = self.crear_guia()
-        respuesta = self.get_etiqueta(guia)
-        self.assertContains(respuesta, "Escanea para ayuda al repartidor")  # leyenda corta (Chema 2026-10-01)
+    def test_la_leyenda_segun_el_formato(self):
+        # Foráneo: la 51×51 con la leyenda B (Chema 2026-10-20); local: la 10×15 con la leyenda corta de 2026-10-01.
+        self.assertContains(self.get_etiqueta(self.crear_guia()), "Escanea la ubicación de entrega")
+        self.assertContains(self.get_etiqueta(self.crear_guia(es_local=True)), "Escanea para ayuda al repartidor")
 
 
 class ContenidoEtiquetaTests(EtiquetaTestCase):
@@ -117,19 +118,19 @@ class ContenidoEtiquetaTests(EtiquetaTestCase):
 
     def test_con_address2_las_referencias_aparecen(self):
         direccion = dict(DIRECCION_BASE, address2="Depto 4B, portón negro")
-        guia = self.crear_guia(direccion=direccion)
+        guia = self.crear_guia(direccion=direccion, es_local=True)
         respuesta = self.get_etiqueta(guia)
         self.assertContains(respuesta, "Depto 4B, portón negro")
         self.assertNotContains(respuesta, "Sin referencias")
 
     def test_sin_referencias_manda_al_qr(self):
-        guia = self.crear_guia(direccion=DIRECCION_BASE)
+        guia = self.crear_guia(direccion=DIRECCION_BASE, es_local=True)
         respuesta = self.get_etiqueta(guia)
         self.assertContains(respuesta, "Sin referencias — usa el QR")
 
     def test_paquete_1_de_2_con_plan_de_dos_bultos(self):
         pedido = self.crear_pedido(
-            estado=Pedido.GUIA_GENERADA, reservar_stock=False,
+            estado=Pedido.GUIA_GENERADA, reservar_stock=False, es_local=True,
             direccion=dict(DIRECCION_BASE),
         )
         paquete_1 = Paquete.objects.create(
@@ -152,7 +153,7 @@ class ContenidoEtiquetaTests(EtiquetaTestCase):
         """Chema 2026-09-29: FRÁGIL y THIS SIDE UP salen del SKU (banderas), no siempre."""
         from apps.piso.etiquetas import generar_pdf_etiqueta, marcas_de_manejo
 
-        guia = self.crear_guia()
+        guia = self.crear_guia(es_local=True)  # la banda de manejo vive en la 10×15 de locales
         respuesta = self.get_etiqueta(guia)
         self.assertNotContains(respuesta, "FRÁGIL")
         self.assertNotContains(respuesta, "ESTE LADO ARRIBA")

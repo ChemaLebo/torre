@@ -6,7 +6,41 @@
     <div class="eyebrow">Piso · Salida</div>
     <h1>Staging por corral</h1>
   </div>
+  {# Etiquetas de manejo sueltas (Chema 2026-10-20): N FRÁGIL o de orientación a la térmica de etiquetas. #}
+  <div class="fila">
+    <button class="btn chico" type="button" data-manejo="fragil" data-nombre="FRÁGIL">Imprimir etiquetas FRÁGIL</button>
+    <button class="btn chico" type="button" data-manejo="orientacion" data-nombre="de orientación">Imprimir etiquetas de orientación</button>
+  </div>
 </div>
+
+<dialog class="modal" id="modal-manejo" aria-labelledby="manejo-titulo">
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="imprimir_manejo">
+    <input type="hidden" name="tipo" id="manejo-tipo" value="fragil">
+    <div class="titulo"><h2 id="manejo-titulo">¿Cuántas etiquetas FRÁGIL?</h2></div>
+    <label for="manejo-cantidad">Cantidad</label>
+    <input type="number" name="cantidad" id="manejo-cantidad" min="1" max="50" value="1" inputmode="numeric" required>
+    <div class="fila mt">
+      <button class="btn primario gigante" type="submit">Imprimir</button>
+      <button class="btn gigante" type="button" id="manejo-cancelar">Cancelar</button>
+    </div>
+  </form>
+</dialog>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var modal = document.getElementById("modal-manejo");
+  if (!modal || !modal.showModal) return;
+  document.querySelectorAll("[data-manejo]").forEach(function (boton) {
+    boton.addEventListener("click", function () {
+      document.getElementById("manejo-tipo").value = boton.dataset.manejo;
+      document.getElementById("manejo-titulo").textContent = "¿Cuántas etiquetas " + boton.dataset.nombre + "?";
+      document.getElementById("manejo-cantidad").value = 1;
+      modal.showModal();
+    });
+  });
+  document.getElementById("manejo-cancelar").addEventListener("click", function () { modal.close(); });
+});
+</script>
 
 <div class="banner warn"><span class="foco"></span>
   El “va en camino” al comprador se dispara SOLO al firmar el manifiesto. Nada de avisar antes: si sigue en bodega, no va en camino.

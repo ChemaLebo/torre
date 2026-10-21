@@ -60,7 +60,7 @@ class ImprimirEtiquetaRelayTests(EtiquetaTestCase):
         self.assertEqual(evento.delta["trabajo"], trabajo.pk)
 
     def test_interna_encola_la_dibujada_jamas_la_del_carrier(self):
-        guia = self.crear_guia()
+        guia = self.crear_guia(es_local=True)  # local: la interna sigue siendo la 10×15 (la 51 vive en test_etiquetas_51)
         with mock.patch("apps.piso.etiquetas._pdf_etiqueta") as carrier, \
              mock.patch(
                  "apps.piso.etiquetas.generar_pdf_etiqueta", return_value=b"%PDF-interna"

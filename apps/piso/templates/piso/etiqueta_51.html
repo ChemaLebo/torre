@@ -1,0 +1,102 @@
+{% load static %}<!doctype html>
+{% comment %}
+Etiqueta interna 51×51 mm (Munbyn, pedidos foráneos; Chema 2026-10-20): marca y
+paquetería, folio y PAQUETE n DE m en Clash, una línea y el QR del repartidor
+con la leyenda. Sin dirección, nombre, referencias, número de guía ni peso: eso
+va en la guía del carrier. Página standalone (el chrome se imprimiría encima).
+El QR se genera en el navegador con static/js/qrcode.min.js; la URL vive en
+data-qr para verificarla server-side sin ejecutar JS.
+{% endcomment %}
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Etiqueta {{ guia.numero|default:pedido.folio }} · Torre</title>
+<style>
+  @font-face { font-family: "Clash"; src: url("{% static 'fonts/Clash-700.ttf' %}") format("truetype"); font-weight: 700; }
+  @font-face { font-family: "InterV"; src: url("{% static 'fonts/InterV-700.ttf' %}") format("truetype"); font-weight: 700; }
+  @font-face { font-family: "InterV"; src: url("{% static 'fonts/InterV-800.ttf' %}") format("truetype"); font-weight: 800; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #d9d9d9; color: #000; font-family: "InterV", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+
+  @media screen {
+    body { min-height: 100vh; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .etiqueta { box-shadow: 0 3px 16px rgba(0,0,0,.3); }
+    .pantalla { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    .pantalla .acciones { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .pantalla button { font: inherit; font-size: 17px; font-weight: 700; cursor: pointer; padding: 12px 26px; border: 2px solid #000; border-radius: 8px; background: #fff; }
+    .pantalla .aviso { max-width: 10cm; font-size: 14px; font-weight: 700; padding: 10px 14px; border: 2px solid #000; border-radius: 8px; background: #fff; }
+    .pantalla .aviso.error { background: #000; color: #fff; }
+    .manejo { max-width: 10cm; font-size: 13px; font-weight: 700; text-align: center; }
+  }
+  @page { size: 51mm 51mm; margin: 0; }
+  @media print {
+    html, body { background: #fff; padding: 0; }
+    .pantalla, .manejo { display: none; }
+    .etiqueta { box-shadow: none; page-break-inside: avoid; }
+  }
+
+  /* Misma rejilla que el PDF: 51×51 mm, padding 2.6 / 3 / 2 / 3 mm. */
+  .etiqueta { width: 51mm; height: 51mm; background: #fff; color: #000; padding: 2.6mm 3mm 2mm 3mm; overflow: hidden; display: flex; flex-direction: column; }
+  .cabecera { display: flex; justify-content: space-between; align-items: baseline; font-size: 5.6pt; letter-spacing: .14em; line-height: 1; }
+  .cabecera .carrier { font-weight: 800; text-transform: uppercase; }
+  .folio { font-family: "Clash", "InterV", sans-serif; font-weight: 700; font-size: 24pt; letter-spacing: -.01em; line-height: .95; margin-top: 1.3mm; white-space: nowrap; }
+  .paquete { font-family: "Clash", "InterV", sans-serif; font-weight: 700; font-size: 15pt; letter-spacing: .03em; line-height: .95; margin-top: 1mm; white-space: nowrap; }
+  .linea { border-top: .55mm solid #000; margin-top: 1.4mm; }
+  .zona { display: flex; align-items: center; gap: 2.2mm; flex: 1; min-height: 0; padding-top: .5mm; }
+  .qr { width: 22mm; height: 22mm; flex: none; margin-left: -0.6mm; }
+  .qr svg { width: 100%; height: 100%; display: block; }
+  .leyenda { font-weight: 800; font-size: 6.6pt; letter-spacing: .06em; line-height: 1.25; text-transform: uppercase; }
+</style>
+</head>
+<body>
+
+<div class="pantalla">
+  {% for mensaje in messages %}
+  <div class="aviso {{ mensaje.tags }}">{{ mensaje }}</div>
+  {% endfor %}
+  <div class="acciones">
+    <button type="button" onclick="window.print()">Imprimir etiqueta</button>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="imprimir_interna">
+      <button type="submit">🖨 Imprimir interna en bodega</button>
+    </form>
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="imprimir">
+      <button type="submit">🖨 Imprimir en bodega</button>
+    </form>
+  </div>
+</div>
+
+<div class="etiqueta">
+  <div class="cabecera"><span class="marca">{{ marca_etiqueta }}</span><span class="carrier">{{ guia.carrier }}</span></div>
+  <div class="folio">{{ pedido.folio }}</div>
+  <div class="paquete">PAQUETE {{ paquete_n }} DE {{ paquete_m }}</div>
+  <div class="linea"></div>
+  <div class="zona">
+    <div id="qr" class="qr" data-qr="{{ qr_url }}"></div>
+    <div class="leyenda">{{ leyenda }}</div>
+  </div>
+</div>
+
+{% if n_fragil or n_orientacion %}
+<p class="manejo">Con esta caja salen {% if n_fragil %}{{ n_fragil }} etiqueta{{ n_fragil|pluralize }} FRÁGIL{% endif %}{% if n_fragil and n_orientacion %} y {% endif %}{% if n_orientacion %}{{ n_orientacion }} de orientación{% endif %} en la misma impresión.</p>
+{% endif %}
+
+<script src="{% static 'js/qrcode.min.js' %}"></script>
+<script>
+  (function () {
+    var caja = document.getElementById("qr");
+    if (!caja || typeof qrcode !== "function") return;
+    try {
+      var qr = qrcode(0, "M");
+      qr.addData(caja.getAttribute("data-qr"));
+      qr.make();
+      caja.innerHTML = qr.createSvgTag({ cellSize: 2, margin: 0, scalable: true });
+    } catch (e) {
+      caja.textContent = caja.getAttribute("data-qr");
+    }
+  })();
+</script>
+</body>
+</html>

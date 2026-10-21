@@ -10,6 +10,15 @@ y QR a la página pública del repartidor. `imprimir_etiqueta` la manda directo 
 la cola CUPS del servidor con `lp` — el packer imprime desde la tablet con un
 botón, sin pelearse con diálogos de impresión.
 
+Desde 2026-10-20 (Chema) la etiqueta INTERNA de un pedido foráneo es la de
+51×51 en la Munbyn (`generar_pdf_etiqueta_51`): folio, PAQUETE n DE m,
+paquetería y el QR del repartidor; sin dirección ni peso. En el MISMO trabajo
+salen las etiquetas de manejo que pida la caja: FRÁGIL (copa ISO 780) si algún
+producto trae `fragil`, orientación (flechas ISO 780) si alguno trae
+`este_lado_arriba`, tantas como diga `configuracion.etiquetas_manejo()`.
+La 10×15 de siempre queda para pedidos locales (`Pedido.es_local`). Salida
+imprime etiquetas de manejo sueltas con `generar_pdf_manejo`.
+
 Con `TORRE_MODO_IMPRESION=relay` (Torre en un VPS, la térmica en bodega) la
 etiqueta no va a `lp`: se encola en `envios.TrabajoImpresion` y el agente de
 bodega (deploy/agente_impresion.py) la baja, la imprime y confirma.
@@ -120,8 +129,12 @@ def _paquete_n_de_m(guia):
 
 
 def _peso_kg(guia):
-    """Peso del bulto: el del paquete; legacy → peso real (o esperado) del pedido."""
+    """Peso del bulto: la báscula de la caja si ya se pesó (Chema 2026-10-20,
+    PED-00716: la etiqueta decía el plan de 14.18 kg y la báscula marcó 18.9),
+    si no el del plan; legacy → peso real (o esperado) del pedido."""
     if guia.paquete is not None:
+        if guia.paquete.peso_real_gr:
+            return (Decimal(guia.paquete.peso_real_gr) / 1000).quantize(Decimal("0.01"))
         return guia.paquete.peso_kg
     gramos = guia.pedido.peso_real_gr or guia.pedido.peso_esperado_gr
     return (Decimal(gramos) / 1000).quantize(Decimal("0.01")) if gramos else None
@@ -554,6 +567,259 @@ def dibujar_etiqueta_tarima(lienzo, nombre, qr, titulo="TORRE · TARIMA"):
     renderPDF.draw(dibujo, lienzo, (ETIQUETA_LADO - lado_qr) / 2, ETIQUETA_PAD_ABAJO + (y - ETIQUETA_PAD_ABAJO - lado_qr) / 2)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Etiqueta interna 51×51 + etiquetas de manejo (Chema 2026-10-20)
+# ─────────────────────────────────────────────────────────────────────────────
+# Prototipos aprobados el 2026-10-20: la interna lleva marca y paquetería
+# arriba, folio y PAQUETE n DE m en Clash, una línea y el QR del repartidor
+# con la leyenda a la derecha (módulos de 6 puntos = 0.75 mm, ~22 mm
+# visibles). FRÁGIL y orientación son los símbolos 1 y 13 de ISO 780 en
+# silueta negra con marco de 1.6 mm. Sin Code128: Salida resuelve por QR,
+# número de guía o folio.
+
+QR_PUNTOS_INTERNA = 6  # 0.75 mm por módulo: la URL del repartidor es más larga que P|barras|lote
+LEYENDA_INTERNA_51 = "Escanea la ubicación de entrega"  # opción B (Chema 2026-10-20)
+MARCA_ETIQUETA = "WOP.fulfillment"  # tal cual: WOP mayúsculas, fulfillment minúsculas
+MANEJO_FRAGIL = "fragil"
+MANEJO_ORIENTACION = "orientacion"
+TIPOS_MANEJO = (MANEJO_FRAGIL, MANEJO_ORIENTACION)
+
+
+def _envolver_mayus(texto, fuente, pt, em, ancho):
+    """Renglones en mayúsculas que caben en `ancho` con letter-spacing `em`."""
+    palabras, renglones, actual = texto.upper().split(), [], ""
+    for palabra in palabras:
+        prueba = (actual + " " + palabra).strip()
+        if _ancho_em(prueba, fuente, pt, em) <= ancho or not actual:
+            actual = prueba
+        else:
+            renglones.append(actual)
+            actual = palabra
+    if actual:
+        renglones.append(actual)
+    return renglones
+
+
+def _marco_manejo(lienzo):
+    """Marco negro de 1.6 mm de las etiquetas de manejo; regresa (borde, ancho útil)."""
+    borde = 1.6 * mm
+    lienzo.setLineWidth(borde)
+    lienzo.rect(borde, borde, ETIQUETA_LADO - 2 * borde, ETIQUETA_LADO - 2 * borde, stroke=1, fill=0)
+    return borde, ETIQUETA_LADO - 2 * (borde + 2.5 * mm)
+
+
+def _marca_al_pie(lienzo, borde, marca):
+    inter = _fuente("InterV-700")
+    _texto_em(lienzo, (ETIQUETA_LADO - _ancho_em(marca, inter, 5, 0.14)) / 2, borde + 2 * mm, marca, inter, 5, 0.14)
+
+
+def dibujar_interna_51(lienzo, *, folio, paquete_n, paquete_m, carrier, qr_url, leyenda=LEYENDA_INTERNA_51, marca=MARCA_ETIQUETA):
+    """La etiqueta interna 51×51 de una caja: identidad de la caja y el QR
+    del repartidor. Sin dirección, nombre, referencias, número de guía ni peso."""
+    clash, inter, inter_negra = _fuente("Clash-700"), _fuente("InterV-700"), _fuente("InterV-800")
+    lienzo.setFillGray(0)
+    lienzo.setStrokeGray(0)
+    x0, x1 = ETIQUETA_PAD_IZQ, ETIQUETA_LADO - ETIQUETA_PAD_DER
+    y = ETIQUETA_LADO - ETIQUETA_PAD_ARRIBA
+
+    # 1) Marca a la izquierda, paquetería a la derecha.
+    carrier_txt = str(carrier or "").upper()
+    pt = _encoger(marca + "    " + carrier_txt, inter, 5.6, 0.14, ETIQUETA_ANCHO_UTIL, 4)
+    y -= pt
+    _texto_em(lienzo, x0, y, marca, inter, pt, 0.14)
+    _texto_em(lienzo, x1, y, carrier_txt, inter_negra, pt, 0.14, derecha=True)
+
+    # 2) Folio en grande (Clash), a todo el ancho.
+    pt = _encoger(folio, clash, 24, -0.01, ETIQUETA_ANCHO_UTIL, 12)
+    y -= 1.3 * mm + pt * 0.95
+    _texto_em(lienzo, x0, y + pt * 0.12, folio, clash, pt, -0.01)
+
+    # 3) PAQUETE n DE m y la línea.
+    paquete = f"PAQUETE {paquete_n} DE {paquete_m}"
+    pt = _encoger(paquete, clash, 15, 0.03, ETIQUETA_ANCHO_UTIL, 8)
+    y -= 1.0 * mm + pt * 0.95
+    _texto_em(lienzo, x0, y + pt * 0.12, paquete, clash, pt, 0.03)
+    y -= 1.4 * mm
+    lienzo.setLineWidth(0.55 * mm)
+    lienzo.line(x0, y, x1, y)
+    y_zona = y - 0.55 * mm
+
+    # 4) QR a la izquierda (zona de silencio sobre el margen), leyenda a la derecha.
+    dibujo, lado_qr = _qr_termica(qr_url, QR_PUNTOS_INTERNA)
+    silencio = 4 * QR_PUNTOS_INTERNA * PUNTO_TERMICA
+    x_qr = x0 - silencio + 0.4 * mm
+    visible = lado_qr - 2 * silencio
+    # Centrado en la zona baja; la zona de silencio nunca pisa la línea.
+    centrado = ETIQUETA_PAD_ABAJO + (y_zona - ETIQUETA_PAD_ABAJO - visible) / 2 - silencio
+    y_qr = max(min(centrado, y_zona - 0.3 * mm - lado_qr), ETIQUETA_PAD_ABAJO - silencio + 0.4 * mm)
+    renderPDF.draw(dibujo, lienzo, x_qr, y_qr)
+    x_texto = x_qr + lado_qr - silencio + 2.2 * mm
+    ancho_texto = x1 - x_texto
+    pt = 6.6
+    renglones = _envolver_mayus(leyenda, inter_negra, pt, 0.06, ancho_texto)
+    while len(renglones) > 4 and pt > 5:
+        pt -= 0.25
+        renglones = _envolver_mayus(leyenda, inter_negra, pt, 0.06, ancho_texto)
+    alto = len(renglones) * pt * 1.25
+    y_centro = y_qr + silencio + visible / 2
+    yt = y_centro + alto / 2 - pt
+    for renglon in renglones:
+        _texto_em(lienzo, x_texto, yt, renglon, inter_negra, pt, 0.06)
+        yt -= pt * 1.25
+
+
+def _copa(lienzo, cx, y_base, alto):
+    """Copa de ISO 780 (símbolo 1, "frágil, manejar con cuidado") en silueta
+    negra, sin grieta (Chema 2026-10-20); pie, tallo y cuerpo al alto dado."""
+    ancho = alto * 0.62
+    pie_alto, tallo_alto = alto * 0.07, alto * 0.30
+    cuerpo_alto = alto - pie_alto - tallo_alto
+    pie = lienzo.beginPath()
+    pie.moveTo(cx - ancho * 0.42, y_base)
+    pie.lineTo(cx + ancho * 0.42, y_base)
+    pie.lineTo(cx + ancho * 0.12, y_base + pie_alto)
+    pie.lineTo(cx - ancho * 0.12, y_base + pie_alto)
+    pie.close()
+    lienzo.drawPath(pie, stroke=0, fill=1)
+    lienzo.rect(cx - ancho * 0.06, y_base + pie_alto, ancho * 0.12, tallo_alto + 0.3 * mm, stroke=0, fill=1)
+    y0 = y_base + pie_alto + tallo_alto
+    y1 = y_base + alto
+    cuerpo = lienzo.beginPath()
+    cuerpo.moveTo(cx - ancho / 2, y1)
+    cuerpo.lineTo(cx + ancho / 2, y1)
+    cuerpo.lineTo(cx + ancho / 2, y1 - cuerpo_alto * 0.38)
+    cuerpo.curveTo(cx + ancho / 2, y0 + cuerpo_alto * 0.12, cx + ancho * 0.22, y0, cx, y0)
+    cuerpo.curveTo(cx - ancho * 0.22, y0, cx - ancho / 2, y0 + cuerpo_alto * 0.12, cx - ancho / 2, y1 - cuerpo_alto * 0.38)
+    cuerpo.close()
+    lienzo.drawPath(cuerpo, stroke=0, fill=1)
+
+
+def dibujar_fragil_51(lienzo, marca=MARCA_ETIQUETA):
+    """Etiqueta FRÁGIL 51×51: marco, copa ISO 780, FRÁGIL en Clash, MANEJAR CON CUIDADO y la marca al pie."""
+    clash, inter = _fuente("Clash-700"), _fuente("InterV-700")
+    lienzo.setFillGray(0)
+    lienzo.setStrokeGray(0)
+    borde, ancho = _marco_manejo(lienzo)
+    alto_copa = 15 * mm
+    y_copa = ETIQUETA_LADO - borde - 2.6 * mm - alto_copa
+    _copa(lienzo, ETIQUETA_LADO / 2, y_copa, alto_copa)
+    texto = "FRÁGIL"
+    pt = _encoger(texto, clash, 40, -0.02, ancho, 20)
+    y = y_copa - 2.2 * mm - pt * 0.95
+    _texto_em(lienzo, (ETIQUETA_LADO - _ancho_em(texto, clash, pt, -0.02)) / 2, y + pt * 0.12, texto, clash, pt, -0.02)
+    sub = "MANEJAR CON CUIDADO"
+    spt = _encoger(sub, inter, 7.5, 0.16, ancho, 5)
+    y -= 2.2 * mm + spt
+    _texto_em(lienzo, (ETIQUETA_LADO - _ancho_em(sub, inter, spt, 0.16)) / 2, y, sub, inter, spt, 0.16)
+    _marca_al_pie(lienzo, borde, marca)
+
+
+def _flecha(lienzo, x, y_base, alto, ancho):
+    """Flecha negra hacia arriba: asta gruesa + punta triangular."""
+    asta = ancho * 0.42
+    lienzo.rect(x - asta / 2, y_base, asta, alto * 0.58, stroke=0, fill=1)
+    punta = lienzo.beginPath()
+    punta.moveTo(x - ancho / 2, y_base + alto * 0.55)
+    punta.lineTo(x + ancho / 2, y_base + alto * 0.55)
+    punta.lineTo(x, y_base + alto)
+    punta.close()
+    lienzo.drawPath(punta, stroke=0, fill=1)
+
+
+def dibujar_orientacion_51(lienzo, marca=MARCA_ETIQUETA):
+    """Etiqueta de orientación 51×51: ISO 780 símbolo 13 (dos flechas
+    verticales sobre una barra), FLECHAS / HACIA ARRIBA en Clash y NO VOLTEAR
+    LA CAJA (Chema 2026-10-20: la caja viaja con la orientación de las flechas)."""
+    clash, inter = _fuente("Clash-700"), _fuente("InterV-700")
+    lienzo.setFillGray(0)
+    lienzo.setStrokeGray(0)
+    borde, ancho = _marco_manejo(lienzo)
+    alto_flecha, ancho_flecha, sep = 14.5 * mm, 9.5 * mm, 9 * mm
+    y_tope = ETIQUETA_LADO - borde - 2.8 * mm
+    barra_alto, barra_gap = 2 * mm, 1.4 * mm
+    y_barra = y_tope - alto_flecha - barra_gap - barra_alto
+    y_base = y_barra + barra_alto + barra_gap
+    for x in (ETIQUETA_LADO / 2 - sep, ETIQUETA_LADO / 2 + sep):
+        _flecha(lienzo, x, y_base, alto_flecha, ancho_flecha)
+    lienzo.rect(ETIQUETA_LADO / 2 - sep - ancho_flecha / 2, y_barra, 2 * sep + ancho_flecha, barra_alto, stroke=0, fill=1)
+    y = y_barra - 2.2 * mm
+    for texto in ("FLECHAS", "HACIA ARRIBA"):
+        pt = _encoger(texto, clash, 22, 0.03, ancho, 10)
+        y -= pt * 0.95
+        _texto_em(lienzo, (ETIQUETA_LADO - _ancho_em(texto, clash, pt, 0.03)) / 2, y + pt * 0.12, texto, clash, pt, 0.03)
+        y -= 0.8 * mm
+    sub = "NO VOLTEAR LA CAJA"
+    spt = _encoger(sub, inter, 7, 0.16, ancho, 5)
+    y -= 1.0 * mm + spt
+    _texto_em(lienzo, (ETIQUETA_LADO - _ancho_em(sub, inter, spt, 0.16)) / 2, y, sub, inter, spt, 0.16)
+    _marca_al_pie(lienzo, borde, marca)
+
+
+def _lienzo_51(titulo):
+    buffer = BytesIO()
+    lienzo = canvas.Canvas(buffer, pagesize=(ETIQUETA_LADO, ETIQUETA_LADO), pageCompression=0)
+    lienzo.setTitle(titulo)
+    return buffer, lienzo
+
+
+def _paginas_manejo(lienzo, fragil, orientacion):
+    """Agrega las páginas de manejo que pida la caja, tantas como diga la configuración."""
+    from apps.configuracion.services import etiquetas_manejo  # lazy por contrato
+
+    n_fragil, n_orientacion = etiquetas_manejo()
+    paginas = 0
+    for _ in range(n_fragil if fragil else 0):
+        dibujar_fragil_51(lienzo)
+        lienzo.showPage()
+        paginas += 1
+    for _ in range(n_orientacion if orientacion else 0):
+        dibujar_orientacion_51(lienzo)
+        lienzo.showPage()
+        paginas += 1
+    return paginas
+
+
+def generar_pdf_etiqueta_51(guia):
+    """PDF 51×51 de la etiqueta INTERNA de la caja de esta guía más sus
+    etiquetas de manejo (misma impresión: toda reimpresión saca todas).
+    Regresa los bytes."""
+    from apps.rastreo.services import obtener_o_crear_token_etiqueta, url_publica_etiqueta  # lazy por contrato
+
+    pedido = guia.pedido
+    paquete_n, paquete_m = _paquete_n_de_m(guia)
+    obtener_o_crear_token_etiqueta(guia)  # el QR necesita el token vivo
+    buffer, lienzo = _lienzo_51(f"Etiqueta interna {guia.numero or pedido.folio}")
+    dibujar_interna_51(
+        lienzo, folio=pedido.folio, paquete_n=paquete_n, paquete_m=paquete_m,
+        carrier=guia.carrier, qr_url=url_publica_etiqueta(guia),
+    )
+    lienzo.showPage()
+    fragil, arriba = marcas_de_manejo(guia)
+    _paginas_manejo(lienzo, fragil, arriba)
+    lienzo.save()
+    return buffer.getvalue()
+
+
+def generar_pdf_manejo(tipo, cantidad):
+    """PDF con `cantidad` etiquetas de manejo sueltas de un tipo (Salida:
+    botones "Imprimir etiquetas FRÁGIL" / "de orientación"). Regresa los bytes."""
+    if tipo not in TIPOS_MANEJO:
+        raise ValueError("Tipo de etiqueta de manejo desconocido: usa FRÁGIL u orientación.")
+    try:
+        cantidad = int(cantidad)
+    except (TypeError, ValueError):
+        cantidad = 0
+    if not 1 <= cantidad <= 50:
+        raise ValueError("Dime cuántas etiquetas imprimir, de 1 a 50.")
+    buffer, lienzo = _lienzo_51("Etiquetas de manejo · Torre")
+    dibujar = dibujar_fragil_51 if tipo == MANEJO_FRAGIL else dibujar_orientacion_51
+    for _ in range(cantidad):
+        dibujar(lienzo)
+        lienzo.showPage()
+    lienzo.save()
+    return buffer.getvalue()
+
+
 def generar_pdf_etiquetas(items):
     """PDF de una página 51×51 por item: {"tipo": "tarima", "nombre", "qr"} o
     {"tipo": "caja", marca, sku, producto, presentacion, lote, caducidad,
@@ -807,6 +1073,30 @@ def _encolar_etiqueta(guia, interna=False):
     return f"Etiqueta {cual}de {pedido.folio} en cola de impresión — sale en segundos en la bodega."
 
 
+def _imprimir_interna_51(guia):
+    """La etiqueta interna 51×51 (más sus etiquetas de manejo) de un pedido
+    foráneo va a la térmica de etiquetas: encolada para el agente en relay,
+    `lp` con TORRE_IMPRESORA_ETIQUETAS_51 en local (encolar_impresion decide).
+    Regresa el mensaje de éxito; una falla es ValueError con qué hacer."""
+    from apps.envios.models import TrabajoImpresion  # lazy: evita ciclos entre apps
+
+    pedido = guia.pedido
+    pdf = generar_pdf_etiqueta_51(guia)
+    trabajo = encolar_impresion(
+        pdf, tipo=TrabajoImpresion.TIPO_INTERNA, impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS,
+        media=MEDIA_ETIQUETAS, referencia=pedido.folio, cliente=pedido.cliente,
+        nombre=f"etiqueta-{pedido.folio}-g{guia.pk}-interna51.pdf", guia=guia,
+    )
+    registrar_evento(
+        "etiqueta", guia.numero, "encolada_impresion" if trabajo is not None else "impresa_en_bodega",
+        delta={"folio": pedido.folio, "interna": True, "formato": "51", "paginas": max(paginas_pdf(pdf), 1),
+               "trabajo": trabajo.pk if trabajo is not None else None},
+    )
+    if trabajo is not None:
+        return f"Etiqueta interna de {pedido.folio} en cola de impresión — sale en segundos en la bodega."
+    return f"Etiqueta interna de {pedido.folio} enviada a la impresora de etiquetas."
+
+
 def imprimir_etiqueta(guia, interna=False):
     """Imprime la etiqueta según TORRE_MODO_IMPRESION. Regresa el mensaje de éxito.
 
@@ -815,10 +1105,14 @@ def imprimir_etiqueta(guia, interna=False):
     para el agente de bodega. Cualquier falla se traduce a ValueError con qué
     pasó y qué hacer, para el flash del piso.
 
-    interna=True imprime la etiqueta DIBUJADA de Torre (QR + Code128 + token
-    del repartidor) bajo demanda. El default sigue la decisión 2026-08-10:
-    la etiqueta del carrier — sus códigos son los que rutean en su red.
+    interna=True imprime la etiqueta DIBUJADA de Torre bajo demanda: la de
+    51×51 en la térmica de etiquetas para pedidos foráneos (_imprimir_interna_51),
+    la de 10×15 en la de guías para pedidos locales. El default sigue la
+    decisión 2026-08-10: la etiqueta del carrier — sus códigos son los que
+    rutean en su red.
     """
+    if interna and not guia.pedido.es_local:
+        return _imprimir_interna_51(guia)
     if getattr(settings, "TORRE_MODO_IMPRESION", "local") == "relay":
         return _encolar_etiqueta(guia, interna=interna)
     cola = os.environ.get("TORRE_IMPRESORA_ETIQUETAS", "").strip()
