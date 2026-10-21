@@ -122,7 +122,7 @@ class CompensacionesMesaTests(TestCase):
         self.assertIn("contenido erróneo · por decidir", html)
         self.assertIn("1 × Caja 12 (salió en lugar de Six)", html)
         self.assertIn("1 × Caja 12 (salió en lugar de Six)", self.client.get(reverse("mesa:pedido_detalle", args=[self.pedido.pk])).content.decode())
-        self.assertContains(self.client.get(reverse("mesa:recepciones")), "producto erróneo: salió otro producto")
+        self.assertContains(self.client.get(reverse("mesa:reingresos")), "producto erróneo: salió otro producto")  # desde 2026-10-22 en Reingresos
         # Ajustar sin firmas se niega y no cambia nada más.
         respuesta = self.client.post(url, {
             "accion": "corregir_caja", "caja_id": c2.pk, "linea_id": self.linea.pk, "piezas": "1", "sku_real": "C12", "ajustar": "1",
