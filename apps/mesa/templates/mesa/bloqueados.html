@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Bloqueados · Mesa{% endblock %}
+{% block content %}
+{# Bloqueados (Chema 2026-10-21): pedidos detenidos del más viejo al más nuevo con lo que los detiene. "Reanudar" resuelve solo la DET. #}
+<div class="topbar">
+  <div>
+    <h1>Bloqueados</h1>
+    <div class="small muted">Pedidos detenidos, del más viejo al más nuevo. Reanudar resuelve únicamente la DET; lo demás se resuelve en su incidencia (elegir paquetería, dar de alta el producto) o esperando inventario.</div>
+  </div>
+</div>
+{% if filas %}
+<div class="card">
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Lo detiene</th><th>Desde</th><th>Reloj SLA</th><th class="derecha"></th></tr></thead>
+      <tbody>
+        {% for f in filas %}
+        <tr>
+          <td class="mono"><a href="{% url 'mesa:pedido_detalle' f.pedido.pk %}">{{ f.pedido.folio }}</a></td>
+          <td>{{ f.pedido.cliente.nombre }}</td>
+          <td><span class="pill warn">{{ f.pedido.get_estado_display }}</span></td>
+          <td class="small">{% for b in f.bloqueos %}<div>{{ b.texto }}{% if b.incidencia %} · <a class="mono" href="{% url 'mesa:incidencia_detalle' b.incidencia.pk %}">{{ b.incidencia.folio }}</a>{% endif %}</div>{% empty %}<span class="muted">detenido sin incidencia abierta</span>{% endfor %}</td>
+          <td class="mono small">{{ f.desde|date:"d/M H:i" }}</td>
+          <td>{% if f.det %}<span class="pill {{ f.det.reloj_pill }}">{{ f.det.reloj_texto }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td class="derecha">
+            {% if f.reanudable %}
+            <form method="post" class="inline" onsubmit="return confirm('¿Reanudar {{ f.pedido.folio }}? Se resuelve su DET con el motivo \'pedido reanudado\' y vuelve a la cola del piso.');">{% csrf_token %}
+              <input type="hidden" name="accion" value="reanudar_det"><input type="hidden" name="folio" value="{{ f.pedido.folio }}">
+              <button class="btn chico primario" type="submit">Reanudar</button>
+            </form>
+            {% elif f.det %}
+            <form method="post" class="inline" onsubmit="return confirm('{{ f.pedido.folio }}: se resuelve su DET, pero seguirá detenido por lo demás. ¿Continuar?');">{% csrf_token %}
+              <input type="hidden" name="accion" value="reanudar_det"><input type="hidden" name="folio" value="{{ f.pedido.folio }}">
+              <button class="btn chico" type="submit" title="Resuelve solo la DET; lo demás sigue bloqueando">Resolver DET</button>
+            </form>
+            {% else %}<span class="small muted">se resuelve en su incidencia</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card"><p class="muted">Ningún pedido detenido.</p></div>
+{% endif %}
+{% endblock %}

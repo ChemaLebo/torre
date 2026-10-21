@@ -25,6 +25,17 @@ def _reingresos_pendientes(request):
     return reingresos_por_decidir().count()
 
 
+def _pedidos_bloqueados(request):
+    """Pedidos detenidos (Mesa): badge de Bloqueados en el menú (2026-10-22)."""
+    if getattr(request, "rol", None) != "mesa" and not getattr(getattr(request, "user", None), "is_superuser", False):
+        return 0
+    try:
+        from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+    except ImportError:
+        return 0
+    return Pedido.objects.filter(detenido=True).count()
+
+
 def _incidencias_abiertas(request):
     """Incidencias sin cerrar para el badge de Incidencias en el menú (Chema
     2026-09-23: "abiertas" = todo lo que no está CERRADA, incluidas las
@@ -50,6 +61,7 @@ def _incidencias_abiertas(request):
 def torre(request):
     return {
         "reingresos_pendientes": _reingresos_pendientes(request),
+        "pedidos_bloqueados": _pedidos_bloqueados(request),
         "badge_incidencias": _incidencias_abiertas(request),  # nombre propio: el dashboard del portal usa incidencias_abiertas
         "TORRE": {
             clave: settings.TORRE[clave]

@@ -1421,6 +1421,7 @@ def _ejecutar_accion_pedido(request):
         "cancelar_reposicion_caja": _pedidos_cancelar_reposicion_caja,
         "reingreso_caja": _pedidos_reingreso_caja,
         "parar_en_piso": _pedidos_parar_en_piso,
+        "reanudar_det": _pedidos_reanudar_det,
         "sustituir_guia_caja": _pedidos_sustituir_guia_caja,
         "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
@@ -1904,6 +1905,9 @@ def pedido_detalle(request, pk):
         Incidencia.objects.filter(pedido=pedido).select_related("cliente", "sku")
         .prefetch_related("compensaciones").annotate(ultimo_mensaje=Max("mensajes__ts"))
     )
+    from apps.incidencias.services import bloqueos_de  # lazy por contrato
+    bloqueos_pedido = bloqueos_de(pedido) if pedido.detenido else []
+    det_abierta = next((b["incidencia"] for b in bloqueos_pedido if b["reanudable"]), None)
     grupos, _ = agrupar_por_pedido([_anotar_reloj_sla(inc, ahora) for inc in incidencias])
     grupo = grupos[0] if grupos else {"pedido": pedido, "incidencias": [], "abiertas": [], "cerradas": 0}
     compensaciones = [c for inc in grupo["incidencias"] for c in inc.compensaciones.all()]
@@ -1932,6 +1936,10 @@ def pedido_detalle(request, pk):
         "puede_parar": pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA", "PARCIALMENTE_DESPACHADO") and not pedido.detenido,
         "motivos_detener": __import__("apps.pedidos.services", fromlist=["MOTIVOS_DETENER"]).MOTIVOS_DETENER,
         "cajas_parar": _cajas_para_parar(pedido, cajas),
+        # Reanudar DET desde el pedido (Chema 2026-10-20): solo con una DET abierta; el modal avisa qué seguirá bloqueando.
+        "bloqueos": bloqueos_pedido,
+        "det_abierta": det_abierta,
+        "bloqueos_restantes": [b for b in bloqueos_pedido if not b["reanudable"]],
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
         # "Rehacer entrega" (2026-10-10): misma regla que reponer_lineas: hay piezas que ya
         # salieron en una caja y ninguna ola en manos del piso (un PENDIENTE que espera
@@ -3179,6 +3187,44 @@ def _recepciones_decidir_reingreso(request):
     except ValueError as exc:
         messages.error(request, str(exc))
     return redirect("mesa:recepciones")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bloqueados (Chema 2026-10-21): pedidos detenidos con lo que los detiene; Reanudar resuelve solo las DET
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _pedidos_reanudar_det(request):
+    """"Reanudar pedido" desde el pedido o desde Bloqueados: resuelve SOLO las
+    DET abiertas con el motivo fijo "pedido reanudado" (incidencias.
+    reanudar_det_desde_pedido); si otra cosa lo detiene, lo dice."""
+    from apps.incidencias.services import reanudar_det_desde_pedido  # lazy por contrato
+    from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+
+    pedido = get_object_or_404(Pedido, folio=request.POST.get("folio"))
+    reanudado, bloqueos = reanudar_det_desde_pedido(pedido, request.user)
+    if reanudado:
+        return f"{pedido.folio} reanudado: vuelve a la cola del piso, el primero por antigüedad."
+    restantes = "; ".join(b["texto"] + (f" ({b['incidencia'].folio})" if b["incidencia"] else "") for b in bloqueos)
+    return f"DET resuelta, pero {pedido.folio} sigue detenido por: {restantes}."
+
+
+@rol_requerido("mesa")
+def bloqueados(request):
+    """Pedidos detenidos del más viejo al más nuevo con lo que los detiene
+    (DET, sin paquetería, producto no registrado, sin plan, sin inventario,
+    cancelación pendiente) y "Reanudar" cuando el único bloqueo es la DET."""
+    from apps.incidencias.services import pedidos_bloqueados  # lazy por contrato
+
+    if request.method == "POST":
+        _ejecutar_accion_pedido(request)
+        return redirect("mesa:bloqueados")
+    ahora = timezone.now()
+    filas = pedidos_bloqueados()
+    for fila in filas:
+        if fila["det"] is not None:
+            _anotar_reloj_sla(fila["det"], ahora)
+    return render(request, "mesa/bloqueados.html", {"seccion": "bloqueados", "filas": filas})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

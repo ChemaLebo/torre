@@ -14,9 +14,28 @@
     {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener">Orden en Shopify ↗</a>{% endif %}
     {% if puede_rehacer %}<a class="btn" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}&amp;reponer=1" title="Reponer producto que ya salió: eliges el tipo de incidencia (daño, producto erróneo…) y te deja en la reposición por producto y caja">Rehacer entrega</a>{% endif %}
     {% if puede_parar %}<button class="btn peligro" type="button" onclick="document.getElementById('modal-parar').showModal()" title="Saca el pedido de la cola del piso como un DET: el operador lo pierde, el avance se conserva y Reanudar lo regresa">Parar en piso</button>{% endif %}
+    {% if det_abierta %}<button class="btn primario" type="button" onclick="document.getElementById('modal-reanudar').showModal()" title="Resuelve solo la DET con el motivo 'pedido reanudado'; el pedido vuelve a la cola si nada más lo detiene">Reanudar pedido</button>{% endif %}
     <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}">Levantar incidencia</a>
   </div>
 </div>
+{% if det_abierta %}
+{# Reanudar DET desde el pedido (Chema 2026-10-20): solo resuelve la DET; avisa qué seguirá bloqueando. #}
+<dialog class="modal" id="modal-reanudar" aria-labelledby="modal-reanudar-titulo">
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="reanudar_det"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+    <h3 id="modal-reanudar-titulo">Reanudar {{ pedido.folio }}</h3>
+    <p class="small">Se resuelve la DET <a class="mono" href="{% url 'mesa:incidencia_detalle' det_abierta.pk %}">{{ det_abierta.folio }}</a> con el motivo "pedido reanudado". Ninguna otra incidencia se toca.</p>
+    {% if bloqueos_restantes %}
+    <p class="small"><b>Al reanudar, el pedido seguirá detenido por:</b></p>
+    <ul class="small">{% for b in bloqueos_restantes %}<li>{{ b.texto }}{% if b.incidencia %} · <a class="mono" href="{% url 'mesa:incidencia_detalle' b.incidencia.pk %}">{{ b.incidencia.folio }}</a>{% endif %}</li>{% endfor %}</ul>
+    {% else %}<p class="small">Nada más lo detiene: vuelve a la cola del piso, el primero por antigüedad.</p>{% endif %}
+    <div class="fila" style="justify-content:flex-end;gap:8px;margin-top:10px">
+      <button class="btn chico" type="button" onclick="this.closest('dialog').close()">Cerrar</button>
+      <button class="btn chico primario" type="submit">{% if bloqueos_restantes %}Resolver la DET{% else %}Reanudar pedido{% endif %}</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
 {% if puede_parar %}
 {# Parar en piso (Chema 2026-10-20/21): motivo obligatorio y tarjetas por caja; sin seleccionar cajas solo se detiene. #}
 <dialog class="modal" id="modal-parar" aria-labelledby="modal-parar-titulo" style="max-width:760px">

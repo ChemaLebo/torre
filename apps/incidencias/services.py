@@ -373,6 +373,75 @@ def pedido_sin_plan(pedido):
     return not pedido.paquetes.exists() and bool(pedido.lineas_por_surtir)
 
 
+def bloqueos_de(pedido, *, sin=None):
+    """Qué detiene al pedido (Chema 2026-10-21): incidencias abiertas que lo
+    detienen (DET, PAQ sin paquetería, SKU no registrado), sin plan de cajas,
+    líneas sin inventario y cancelación pendiente. [{"tipo", "texto",
+    "incidencia", "reanudable"}]; `sin` = incidencia que se va a resolver
+    (se omite para mostrar lo que SEGUIRÁ bloqueando). `reanudable` = True
+    solo en las DET: es lo único que "Reanudar" resuelve."""
+    bloqueos = []
+    abiertas = Incidencia.objects.filter(
+        pedido=pedido, tipo__in=TIPOS_QUE_DETIENEN, estado__in=Incidencia.ESTADOS_ABIERTOS,
+    ).order_by("ts_apertura")
+    if sin is not None:
+        abiertas = abiertas.exclude(pk=sin.pk)
+    for inc in abiertas:
+        if inc.tipo == Incidencia.TIPO_DET:
+            texto = "detenido en piso"
+        elif inc.tipo == Incidencia.TIPO_PAQ:
+            texto = "sin paquetería que cotice: elige paquetería en la incidencia"
+            if pedido_sin_plan(pedido):
+                texto += " (sigue sin plan de cajas)"
+        else:
+            texto = "producto no registrado: vuelve a leer la orden cuando exista"
+        bloqueos.append({"tipo": inc.tipo, "texto": texto, "incidencia": inc, "reanudable": inc.tipo == Incidencia.TIPO_DET})
+    faltantes = sorted({l.sku.codigo for l in pedido.lineas_faltantes}) if hasattr(pedido, "lineas_faltantes") else []
+    if faltantes:
+        bloqueos.append({"tipo": "STOCK", "texto": f"sin inventario: {', '.join(faltantes)}", "incidencia": None, "reanudable": False})
+    if pedido.estado == "CANCELACION_PENDIENTE":
+        bloqueos.append({"tipo": "CAN", "texto": "cancelación pendiente", "incidencia": None, "reanudable": False})
+    return bloqueos
+
+
+def reanudar_det_desde_pedido(pedido, actor):
+    """"Reanudar pedido" desde Mesa (Chema 2026-10-20): resuelve SOLO las
+    incidencias DET abiertas del pedido con el motivo fijo "pedido reanudado";
+    el pedido vuelve a la cola si nada más lo detiene (_reanudar_si_detenia
+    decide: una PAQ o SKU abierta, o un pedido sin plan, lo dejan detenido).
+    Ninguna otra incidencia se toca. Regresa (reanudado, bloqueos restantes)."""
+    dets = list(Incidencia.objects.filter(pedido=pedido, tipo=Incidencia.TIPO_DET, estado__in=Incidencia.ESTADOS_ABIERTOS))
+    if not dets:
+        raise ValueError(f"{pedido.folio} no tiene una incidencia DET abierta que reanudar.")
+    with transaction.atomic():
+        for det in dets:
+            resolver(det, "pedido reanudado", actor)
+    pedido.refresh_from_db(fields=["detenido", "estado"])
+    registrar_evento(
+        "pedido", pedido.pk, "det_resuelta_desde_pedido", actor=actor, cliente=pedido.cliente,
+        delta={"incidencias": [d.folio for d in dets], "reanudado": not pedido.detenido},
+        motivo="Mesa resolvió la DET desde el pedido: pedido reanudado." if not pedido.detenido else "DET resuelta; el pedido sigue detenido por otro bloqueo.",
+    )
+    return not pedido.detenido, bloqueos_de(pedido)
+
+
+def pedidos_bloqueados():
+    """Pedidos detenidos del más viejo al más nuevo con sus bloqueos (vista
+    "Bloqueados" de Mesa, Chema 2026-10-21)."""
+    from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+
+    filas = []
+    for pedido in Pedido.objects.filter(detenido=True).select_related("cliente", "asignado_a").order_by("creado", "pk"):
+        bloqueos = bloqueos_de(pedido)
+        filas.append({
+            "pedido": pedido, "bloqueos": bloqueos,
+            "reanudable": any(b["reanudable"] for b in bloqueos) and all(b["reanudable"] for b in bloqueos),
+            "det": next((b["incidencia"] for b in bloqueos if b["reanudable"]), None),
+            "desde": min((b["incidencia"].ts_apertura for b in bloqueos if b["incidencia"] is not None), default=pedido.actualizado),
+        })
+    return filas
+
+
 def _reanudar_si_detenia(incidencia, actor):
     """Resolver o cerrar una DET/PAQ reanuda el pedido detenido (Chema
     2026-10-06): vuelve a la cola de Mi turno, el primero por antigüedad, y

@@ -103,7 +103,7 @@
       </tbody>
     </table>
   </div>
-  <p class="small muted mt">Resolver (o cerrar) la incidencia reanuda el pedido: vuelve a la cola del piso, el primero por antigüedad.</p>
+  <p class="small muted mt">Resolver (o cerrar) la incidencia reanuda el pedido: vuelve a la cola del piso, el primero por antigüedad. La lista completa, con lo que detiene a cada uno y el botón Reanudar, está en <a href="{% url 'mesa:bloqueados' %}">Bloqueados</a>.</p>
   {% else %}
   <p class="muted">Ningún pedido detenido en el piso.</p>
   {% endif %}

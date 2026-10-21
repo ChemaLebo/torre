@@ -111,6 +111,7 @@ window.addEventListener("load", function () {
         <a class="nav-link {% if seccion == 'recepciones' %}activo{% endif %}" href="{% url 'mesa:recepciones' %}">Recepciones</a>
         <a class="nav-link {% if seccion == 'reingresos' %}activo{% endif %}" href="{% url 'mesa:reingresos' %}" title="Cajas cuyo contenido hay que acomodar o dar por perdido: regresadas por el carrier, regreso reportado, cancelación tardía, producto erróneo o reposición cancelada">Reingresos{% if reingresos_pendientes %} <span class="pill warn">{{ reingresos_pendientes }}</span>{% endif %}</a>
         <a class="nav-link {% if seccion == 'incidencias' %}activo{% endif %}" href="{% url 'mesa:incidencias' %}">Incidencias{% if badge_incidencias %} <span class="pill warn">{{ badge_incidencias }}</span>{% endif %}</a>
+        <a class="nav-link {% if seccion == 'bloqueados' %}activo{% endif %}" href="{% url 'mesa:bloqueados' %}" title="Pedidos detenidos, del más viejo al más nuevo, con lo que los detiene">Bloqueados{% if pedidos_bloqueados %} <span class="pill crit">{{ pedidos_bloqueados }}</span>{% endif %}</a>
         <a class="nav-link {% if seccion == 'bodega' %}activo{% endif %}" href="{% url 'mesa:bodega' %}">Bodega</a>
       </details>
       <details class="nav-grupo" data-grupo="mesa-inventario">
