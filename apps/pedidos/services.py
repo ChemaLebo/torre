@@ -2019,7 +2019,7 @@ MOTIVOS_DETENER = [
 ]
 
 
-def detener_pedido(pedido, usuario, motivo, origen="manual", tipo="DET", texto=None):
+def detener_pedido(pedido, usuario, motivo, origen="manual", tipo="DET", texto=None, *, regresar_a_racks=False):
     """Detenido en piso (Chema 2026-10-06): el pedido sale de la cola de Mi
     turno (detenido=True, sin dueño, con su avance), queda la incidencia
     interna DET con el motivo (una por pedido: un segundo motivo se suma al
@@ -2028,7 +2028,11 @@ def detener_pedido(pedido, usuario, motivo, origen="manual", tipo="DET", texto=N
     guía fallida con el carrier). Mesa lo reanuda al resolver la incidencia.
     Sustituye a "Soltar pedido": un bloqueo ya no es invisible para Mesa.
     `tipo`/`texto`: la incidencia interna que lo detiene (DET por default;
-    "SKU" con su texto para un producto no registrado, 2026-10-07)."""
+    "SKU" con su texto para un producto no registrado, 2026-10-07).
+    `regresar_a_racks` (Chema 2026-10-21): antes de detener, lo escaneado o
+    empacado de ESTA ola vuelve a sus racks (_regresar_a_racks; evento
+    `regresado_a_racks` con qué pieza fue a dónde) y al reanudar se pickea de
+    nuevo; nunca toca cajas en salida, despachadas ni canceladas."""
     motivo = (motivo or "").strip()
     if not motivo:
         raise ValueError("Di por qué se detiene el pedido.")
@@ -2039,11 +2043,17 @@ def detener_pedido(pedido, usuario, motivo, origen="manual", tipo="DET", texto=N
     if pedido.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
         raise ValueError(f"{pedido.folio} está {pedido.get_estado_display()}: ya no está en el piso.")
     with transaction.atomic():
+        regresado = _regresar_a_racks(pedido, usuario, motivo) if regresar_a_racks else None
         anterior = pedido.asignado_a
         pedido.detenido = True
         pedido.asignado_a = None
         pedido.transferencia_a = None
         pedido.save(update_fields=["detenido", "asignado_a", "transferencia_a", "actualizado"])
+        if regresado is not None:
+            registrar_evento(
+                "pedido", pedido.pk, "regresado_a_racks", actor=usuario, cliente=pedido.cliente,
+                delta=regresado, motivo=f"Al detener: {motivo}"[:300],
+            )
         if anterior is not None:
             registrar_evento(
                 "pedido", pedido.pk, "pedido_soltado", actor=usuario, cliente=pedido.cliente,
@@ -2138,6 +2148,163 @@ def _desarmar_caja_al_parar(pedido, caja, actor, motivo):
     return regresado
 
 
+def _estado_tras_desarmar(pedido, actor, motivo, canceladas, desarmadas):
+    """Estado del pedido después de cancelar guías o desarmar cajas al pararlo
+    (Mesa o piso): con guía y algo tocado vuelve a EMPACADO; con alguna caja
+    desarmada, a picking (EN_PICKING, o PENDIENTE si algo ya salió en otra ola)."""
+    if pedido.estado == Pedido.GUIA_GENERADA and (canceladas or desarmadas):
+        pedido.transicionar(Pedido.EMPACADO, actor=actor, motivo=f"Parar en piso: guía cancelada o caja desarmada ({motivo})"[:300])
+    if desarmadas:
+        if pedido.estado == Pedido.EMPACADO:
+            pedido.transicionar(Pedido.EN_PICKING, actor=actor, motivo=f"Parar en piso: hay piezas por volver a pickear ({motivo})"[:300])
+        elif pedido.estado == Pedido.PARCIALMENTE_DESPACHADO:
+            pedido.transicionar(Pedido.PENDIENTE, actor=actor, motivo=f"Parar en piso: hay piezas por volver a pickear ({motivo})"[:300])
+
+
+def _cajas_de_la_ola_en_mesa(pedido):
+    """(en_mesa, en_salida) de las cajas de ESTA ola: en empaque o empacadas
+    que siguen frente al operador, y las que ya están en salida (lista en
+    salida confirmada, o guía que ya se movió con el carrier). Despachadas y
+    canceladas no entran en ninguna."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    en_mesa, en_salida = [], []
+    for caja in pedido.paquetes.prefetch_related("guias").order_by("numero"):
+        if caja.estado not in (Paquete.EN_EMPAQUE, Paquete.EMPACADO):
+            continue
+        if caja.ts_listo_salida is not None or caja.ya_salio:
+            en_salida.append(caja)
+        else:
+            en_mesa.append(caja)
+    return en_mesa, en_salida
+
+
+def regreso_al_detener(pedido):
+    """Qué regresaría a sus racks si el PISO detiene el pedido con "Regresar a
+    racks" (Chema 2026-10-21): en picking, lo escaneado de esta ola según el
+    registro (PickLinea pickeada; sin registro, el rack fijo del producto);
+    con el pick físico hecho (empacado, con guía o parcialmente despachado),
+    el contenido de las cajas que siguen en la mesa (contenido_que_regresa).
+    Desde el piso NUNCA entran las cajas en salida, las que ya salieron con
+    el carrier, las despachadas ni las canceladas: con una caja de la ola en
+    salida no se regresa nada (eso solo lo decide Mesa con Parar en piso).
+    Regresa {piezas: [{sku, piezas, donde, lote, de}], cajas: las que se
+    desarmarían, en_salida, puede, motivo_no}."""
+    from apps.catalogo.services import rack_de  # lazy por contrato
+
+    en_mesa, en_salida = _cajas_de_la_ola_en_mesa(pedido)
+    piezas, sin_posicion, sin_lote = [], [], []
+
+    def _fila(sku, n, ubicacion, lote, de):
+        if ubicacion is None:
+            sin_posicion.append(sku.codigo)
+        if sku.requiere_lote and lote is None:
+            sin_lote.append(sku.codigo)
+        piezas.append({
+            "sku": sku.codigo, "piezas": n, "de": de,
+            "donde": ubicacion.codigo if ubicacion is not None else None,
+            "lote": lote.codigo if lote is not None else None,
+        })
+
+    en_picking = pedido.estado == Pedido.EN_PICKING
+    if en_picking:
+        for linea in pedido.lineas.select_related("sku").filter(parte_de_kit__isnull=True):
+            if linea.sku.es_kit:
+                continue
+            restante = max(linea.cantidad_pickeada - linea.cantidad_despachada, 0)
+            for p in linea.picks.filter(estado=PickLinea.PICKEADO).select_related("ubicacion", "lote").order_by("pk"):
+                if restante <= 0:
+                    break
+                tomo = min(p.cantidad, restante)
+                _fila(linea.sku, tomo, p.ubicacion, p.lote, "picking")
+                restante -= tomo
+            if restante > 0:
+                _fila(linea.sku, restante, rack_de(linea.sku), None, "picking")
+    elif pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+        for caja in en_mesa:
+            for _, sku, n, ubicacion, lote in contenido_que_regresa(pedido, caja):
+                _fila(sku, n, ubicacion, lote, f"caja {caja.numero}")
+    motivo_no = ""
+    if en_salida:
+        motivo_no = "Hay cajas en salida: regresarlas solo se decide desde Mesa."
+    elif sin_posicion:
+        motivo_no = f"{', '.join(sorted(set(sin_posicion)))}: sin posición conocida a dónde volver; avísale a Mesa."
+    elif sin_lote:
+        motivo_no = f"{', '.join(sorted(set(sin_lote)))}: lleva lote y no hay registro de cuál; avísale a Mesa."
+    return {
+        "piezas": piezas, "cajas": [] if en_picking else en_mesa, "en_salida": en_salida,
+        "puede": bool(piezas) and not motivo_no, "motivo_no": motivo_no,
+    }
+
+
+def _regresar_picking_a_racks(pedido, actor, motivo):
+    """Lo escaneado en picking vuelve a sus racks (Chema 2026-10-21). El
+    kardex no se mueve: el pick físico corre hasta pesar la última caja, así
+    que las piezas siguen contadas en sus posiciones con la reserva encima.
+    Solo se anota: los registros pickeados pasan a regresados, el avance de
+    cada línea vuelve a lo que ya salió (cantidad_despachada) y las cajas de
+    esta ola que ya se habían pesado vuelven a planeadas (sin sellos). Las
+    cajas de olas anteriores no se tocan. Regresa el detalle
+    [{sku, piezas, a: [[posición, lote, n]]}] para el evento."""
+    from apps.catalogo.services import rack_de  # lazy por contrato
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    detalle = []
+    for linea in pedido.lineas.select_for_update().select_related("sku").filter(parte_de_kit__isnull=True):
+        ola = max(linea.cantidad_pickeada - linea.cantidad_despachada, 0)
+        if ola <= 0:
+            continue
+        picks = list(linea.picks.filter(estado=PickLinea.PICKEADO).select_related("ubicacion", "lote").order_by("pk"))
+        a, restante = [], ola
+        for p in picks:
+            tomo = min(p.cantidad, restante)
+            if tomo > 0:
+                a.append([p.ubicacion.codigo if p.ubicacion_id else None, p.lote.codigo if p.lote_id else None, tomo])
+            restante -= tomo
+        if restante > 0 and not linea.sku.es_kit:
+            rack = rack_de(linea.sku)
+            a.append([rack.codigo if rack is not None else None, None, restante])
+        if picks:
+            _mover_registros(linea, picks, sum(p.cantidad for p in picks), PickLinea.REGRESADO)
+        linea.cantidad_pickeada = linea.cantidad_despachada
+        linea.save(update_fields=["cantidad_pickeada"])
+        detalle.append({"sku": linea.sku.codigo, "piezas": ola, "a": a})
+    en_mesa, _ = _cajas_de_la_ola_en_mesa(pedido)
+    for caja in en_mesa:
+        _reabrir_cierre(caja)
+        caja.transicionar(Paquete.PLANEADO, actor=actor, motivo=f"Regresa a racks: la caja {caja.numero} vuelve a planeada ({motivo})"[:300])
+    return detalle
+
+
+def _regresar_a_racks(pedido, actor, motivo):
+    """"Regresar a racks" al detener desde el piso (Chema 2026-10-21): aplica
+    lo que regreso_al_detener describe. En picking solo se anota
+    (_regresar_picking_a_racks); con el pick físico hecho, cada caja que sigue
+    en la mesa pierde su guía (cancelada) y sus sellos y se desarma
+    (_desarmar_caja_al_parar), y el pedido vuelve a picking. Las cajas en
+    salida, despachadas, canceladas o que ya salieron con el carrier nunca se
+    tocan desde aquí: ValueError si algo lo impide, sin tocar nada. Regresa
+    {piezas, cajas_desarmadas, guias_canceladas} para el evento."""
+    from apps.envios.models import Guia  # lazy: modelo de otra app
+    from apps.envios.services import cancelar_guia  # lazy por contrato
+
+    info = regreso_al_detener(pedido)
+    if not info["puede"]:
+        raise ValueError(info["motivo_no"] or f"{pedido.folio}: no hay nada escaneado ni empacado que regresar.")
+    if pedido.estado == Pedido.EN_PICKING:
+        return {"piezas": _regresar_picking_a_racks(pedido, actor, motivo), "cajas_desarmadas": [], "guias_canceladas": []}
+    canceladas, desarmadas = [], []
+    for caja in info["cajas"]:
+        guia = caja.guia_activa
+        if guia is not None and guia.estado == Guia.GUIA_CREADA:
+            cancelar_guia(guia, actor, motivo=f"Regresa a racks al detener: caja {caja.numero} de {pedido.folio}")
+            canceladas.append(guia.numero)
+        _reabrir_cierre(caja)
+        desarmadas.append({"caja": caja.numero, "regreso": _desarmar_caja_al_parar(pedido, caja, actor, motivo)})
+    _estado_tras_desarmar(pedido, actor, motivo, canceladas, desarmadas)
+    return {"piezas": [], "cajas_desarmadas": desarmadas, "guias_canceladas": canceladas}
+
+
 def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=()):
     """"Parar en piso" desde Mesa (Chema 2026-10-20/21): el pedido sale de la
     cola del piso como un DET del operador (detener_pedido con origen mesa).
@@ -2182,13 +2349,7 @@ def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=()):
                 _reabrir_cierre(caja)
             if pk in pks_contenido:
                 desarmadas.append({"caja": caja.numero, "regreso": _desarmar_caja_al_parar(fresco, caja, actor, motivo)})
-        if fresco.estado == Pedido.GUIA_GENERADA and (canceladas or desarmadas):
-            fresco.transicionar(Pedido.EMPACADO, actor=actor, motivo=f"Parar en piso: guía cancelada o caja desarmada ({motivo})"[:300])
-        if desarmadas:
-            if fresco.estado == Pedido.EMPACADO:
-                fresco.transicionar(Pedido.EN_PICKING, actor=actor, motivo=f"Parar en piso: hay piezas por volver a pickear ({motivo})"[:300])
-            elif fresco.estado == Pedido.PARCIALMENTE_DESPACHADO:
-                fresco.transicionar(Pedido.PENDIENTE, actor=actor, motivo=f"Parar en piso: hay piezas por volver a pickear ({motivo})"[:300])
+        _estado_tras_desarmar(fresco, actor, motivo, canceladas, desarmadas)
         registrar_evento(
             "pedido", fresco.pk, "parado_en_piso", actor=actor, cliente=fresco.cliente,
             delta={"guias_canceladas": canceladas, "cajas_desarmadas": desarmadas, "estado": fresco.estado},

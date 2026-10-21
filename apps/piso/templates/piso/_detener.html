@@ -1,0 +1,58 @@
+{# Detener (Chema 2026-10-06, sustituye a Soltar): sale de la cola con su avance y abre una incidencia interna con el motivo; Mesa lo reanuda al resolver.
+   Al confirmar (Chema 2026-10-21) un modal pregunta si lo escaneado o empacado de ESTA ola regresa a sus racks, con la lista de a dónde va cada pieza
+   (regreso_detener, pedidos.regreso_al_detener); las cajas en salida, despachadas o que ya salieron nunca se tocan desde aquí: eso lo decide Mesa. #}
+<details class="colapsable mt">
+  <summary>Detener este pedido · algo no deja seguir</summary>
+  <form method="post" class="colapsable-cuerpo" id="form-detener">{% csrf_token %}
+    <input type="hidden" name="accion" value="detener">
+    <input type="hidden" name="regresar" value="0" id="detener-regresar">
+    <div class="fila">
+      <select name="motivo" class="crece" aria-label="Motivo">
+        {% for valor, nombre in motivos_detener %}<option value="{{ valor }}">{{ nombre }}</option>{% endfor %}
+      </select>
+      <input type="text" name="detalle" class="crece" maxlength="300" placeholder="Detalle (qué producto, qué pasó)" aria-label="Detalle">
+      <button class="btn chico peligro" type="submit">Detener</button>
+    </div>
+  </form>
+</details>
+<dialog class="modal" id="modal-detener" aria-labelledby="modal-detener-titulo">
+  <h3 id="modal-detener-titulo">¿Detener {{ pedido.folio }}?</h3>
+  <p class="small">Sale de la cola y Mesa recibe la incidencia; tú tomas el que sigue.</p>
+  {% if regreso_detener.puede %}
+  <p><b>¿Regresas el pedido a sus racks?</b> Cada pieza vuelve a su lugar y al reanudar se pickea de nuevo:</p>
+  <ul class="timeline">
+    {% for r in regreso_detener.piezas %}<li>{{ r.piezas }} × <span class="mono">{{ r.sku }}</span> → <span class="mono">{{ r.donde }}</span>{% if r.lote %} · lote <span class="mono">{{ r.lote }}</span>{% endif %}{% if r.de != "picking" %} · {{ r.de }}{% endif %}</li>{% endfor %}
+  </ul>
+  <div class="fila" style="flex-direction:column;gap:8px">
+    <button class="btn primario bloque" type="button" data-detener="1">Regresar a racks y detener</button>
+    <button class="btn bloque" type="button" data-detener="0">Detener sin regresar · se queda como está</button>
+    <button class="btn chico bloque" type="button" data-detener="cerrar">Cancelar</button>
+  </div>
+  {% else %}
+  {% if regreso_detener.motivo_no %}<p class="small muted">{{ regreso_detener.motivo_no }}</p>{% endif %}
+  <div class="fila" style="flex-direction:column;gap:8px">
+    <button class="btn bloque peligro" type="button" data-detener="0">Detener</button>
+    <button class="btn chico bloque" type="button" data-detener="cerrar">Cancelar</button>
+  </div>
+  {% endif %}
+</dialog>
+<script>
+(function () {
+  var form = document.getElementById("form-detener"), modal = document.getElementById("modal-detener");
+  var regresar = document.getElementById("detener-regresar");
+  if (!form || !modal) return;
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    if (modal.showModal) { modal.showModal(); return; }
+    if (confirm("¿Detener {{ pedido.folio }}? Sale de la cola y Mesa recibe la incidencia; tú tomas el que sigue.")) { form.submit(); }
+  });
+  modal.addEventListener("click", function (ev) {
+    var boton = ev.target.closest && ev.target.closest("[data-detener]");
+    if (!boton) return;
+    if (boton.dataset.detener === "cerrar") { modal.close(); return; }
+    regresar.value = boton.dataset.detener;
+    modal.close();
+    form.submit();
+  });
+})();
+</script>

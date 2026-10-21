@@ -321,8 +321,13 @@ def _motivos_detener():
 def _render_empaque(request, contexto):
     """Todos los pasos del wizard de empaque pintan la misma plantilla y todos
     llevan el botón Detener: aquí entra su catálogo de motivos (Chema
-    2026-10-07: el dropdown salía vacío en los pasos de cierre y revisión)."""
+    2026-10-07: el dropdown salía vacío en los pasos de cierre y revisión) y
+    lo que regresaría a racks al detener (modal, Chema 2026-10-21)."""
+    from apps.pedidos.services import regreso_al_detener  # lazy por contrato
+
     contexto.setdefault("motivos_detener", _motivos_detener())
+    if contexto.get("paso") not in ("en_salida", "final"):
+        contexto.setdefault("regreso_detener", regreso_al_detener(contexto["pedido"]))
     return render(request, "piso/empaque_pedido.html", contexto)
 
 
@@ -338,7 +343,9 @@ def _pedido_detener(request, pedido, volver):
     """Detener el pedido (Chema 2026-10-06, sustituye a "Soltar"): sale de la
     cola con su avance y una incidencia interna DET con el motivo; Mesa se
     entera (push + correo) y lo reanuda al resolver. Quien lo detuvo vuelve
-    a Mi turno a tomar el que sigue."""
+    a Mi turno a tomar el que sigue. Con `regresar=1` (modal "Regresar a
+    racks", Chema 2026-10-21) lo escaneado o empacado de esta ola vuelve a sus
+    racks antes de detener; las cajas en salida solo las decide Mesa."""
     from apps.pedidos.services import detener_pedido  # lazy por contrato
 
     motivo = (request.POST.get("motivo") or "").strip()[:120]
@@ -347,15 +354,17 @@ def _pedido_detener(request, pedido, volver):
         motivo = detalle or motivo
     elif detalle:
         motivo = f"{motivo}: {detalle}"
+    regresar = request.POST.get("regresar") == "1"
     try:
-        incidencia = detener_pedido(pedido, request.user, motivo)
+        incidencia = detener_pedido(pedido, request.user, motivo, regresar_a_racks=regresar)
     except ValueError as exc:
         messages.error(request, str(exc))
         return redirect(volver, pk=pedido.pk)
     folio = f" ({incidencia.folio})" if incidencia is not None else ""
+    regreso = " Lo escaneado y empacado volvió a sus racks: al reanudar se pickea de nuevo." if regresar else ""
     messages.success(
         request,
-        f"{pedido.folio} detenido{folio}: Mesa ya lo sabe; cuando lo resuelva vuelve a la cola. Toma el que sigue.",
+        f"{pedido.folio} detenido{folio}: Mesa ya lo sabe; cuando lo resuelva vuelve a la cola.{regreso} Toma el que sigue.",
     )
     return redirect("piso:home")
 
@@ -1371,11 +1380,14 @@ def picking_pedido(request, pk):
         reiniciado = _reclamar_si_libre(pedido, request)
         return _picking_escanear(request, pedido, reiniciado=reiniciado)
 
+    from apps.pedidos.services import regreso_al_detener  # lazy por contrato
+
     lineas = _lineas_en_ruta(pedido)
     pickeadas, total, _ = _avance(pedido)
     contexto = {
         "reinicia_al_tomar": _reinicia_al_tomar(pedido, request) and pickeadas > 0,
         "motivos_detener": _motivos_detener(),
+        "regreso_detener": regreso_al_detener(pedido),
         "quien_lo_solto": _quien_lo_solto(pedido),
         "operadores": _operadores_piso(request),
         "paquetes": _cajas_en_mesa(_paquetes_con_lineas(pedido)),  # la caja que ya salió no se pinta
