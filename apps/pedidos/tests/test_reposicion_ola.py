@@ -149,7 +149,9 @@ class OlaDeReposicionTests(PisoTestCase):
         self.assertEqual(pedido.estado, Pedido.CANCELADO)
         self.assertEqual((linea.cantidad_repuesta, linea.cantidad_repuesta_reservada, disponible(self.sku)), (2, 0, 6))
 
-    def test_el_piso_ve_la_reposicion_en_la_linea_y_el_json_del_escaneo_usa_el_tope_con_stock(self):
+    def test_el_piso_ve_la_reposicion_en_la_linea_y_cuenta_solo_la_ola(self):
+        """La pantalla cuenta la ola de reposición (0 de 2), no el total de la
+        línea con lo que ya salió (4 de 6) — Chema 2026-10-22."""
         pedido, linea, (c1, c2) = self.pedido_entregado_en_dos_cajas()
         with self.captureOnCommitCallbacks(execute=True):
             services.reponer_lineas(pedido, [(linea, 2, c2)], self.mesa)
@@ -157,8 +159,9 @@ class OlaDeReposicionTests(PisoTestCase):
         self.login_piso()
         html = self.client.get(reverse("piso:picking_pedido", args=[pedido.pk])).content.decode()
         self.assertIn("Reposición · 2 pzas", html)
-        self.assertIn("4 de 6", html)
-        self.assertIn('data-cantidad="6"', html)
+        self.assertIn("0 de 2", html)
+        self.assertIn('data-cantidad="2"', html)
+        self.assertNotIn("4 de 6", html)
 
 
 @override_settings(ENVIA_API_KEY="")
