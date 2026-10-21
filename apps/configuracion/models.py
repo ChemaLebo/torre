@@ -45,3 +45,22 @@ class TandaEtiquetas(models.Model):
 
     def __str__(self):
         return f"{self.cajas} etiquetas por tanda"
+
+
+class EtiquetasManejo(models.Model):
+    """Cuántas etiquetas de manejo salen con la etiqueta interna 51×51 de
+    cada caja que lo pide (Chema 2026-10-20): FRÁGIL cuando algún producto de
+    la caja trae la bandera `fragil`, orientación ("flechas hacia arriba")
+    cuando alguno trae `este_lado_arriba`. Un solo renglón, solo admin; sin
+    renglón aplica `services.ETIQUETAS_MANEJO_DEFAULT`; 0 apaga ese tipo."""
+
+    fragil = models.PositiveIntegerField(default=4, help_text="Etiquetas FRÁGIL por caja marcada (0 = no imprimir)")
+    orientacion = models.PositiveIntegerField(default=3, help_text="Etiquetas de orientación por caja marcada (0 = no imprimir)")
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "etiquetas de manejo"
+        verbose_name_plural = "etiquetas de manejo"
+
+    def __str__(self):
+        return f"{self.fragil} FRÁGIL · {self.orientacion} de orientación por caja"

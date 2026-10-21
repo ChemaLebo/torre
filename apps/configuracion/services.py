@@ -5,15 +5,19 @@
   la lista del cliente desde su ficha de Mesa (la fija solo se toca en el admin).
 - tanda_etiquetas() -> int: etiquetas de caja por tanda al imprimir una tarima
   (modelo TandaEtiquetas, un renglón; sin renglón, TANDA_ETIQUETAS_DEFAULT).
+- etiquetas_manejo() -> (fragil, orientacion): cuántas etiquetas FRÁGIL y de
+  orientación salen con la interna 51×51 de una caja marcada (modelo
+  EtiquetasManejo, un renglón; sin renglón, ETIQUETAS_MANEJO_DEFAULT; 0 apaga).
 """
 from django.core.validators import validate_email
 from django.db.models import Q
 
 from apps.core.services import registrar_evento
 
-from .models import CorreoIncidencias, TandaEtiquetas
+from .models import CorreoIncidencias, EtiquetasManejo, TandaEtiquetas
 
 TANDA_ETIQUETAS_DEFAULT = 50
+ETIQUETAS_MANEJO_DEFAULT = (4, 3)
 
 
 def correos_incidencias(cliente):
@@ -69,3 +73,11 @@ def tanda_etiquetas():
     """Etiquetas de caja por tanda al imprimir una tarima en recepción."""
     fila = TandaEtiquetas.objects.order_by("pk").first()
     return fila.cajas if fila is not None and fila.cajas > 0 else TANDA_ETIQUETAS_DEFAULT
+
+
+def etiquetas_manejo():
+    """(FRÁGIL, orientación) por caja marcada al imprimir la etiqueta interna 51×51."""
+    fila = EtiquetasManejo.objects.order_by("pk").first()
+    if fila is None:
+        return ETIQUETAS_MANEJO_DEFAULT
+    return fila.fragil, fila.orientacion

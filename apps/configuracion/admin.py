@@ -1,7 +1,8 @@
-"""Admin de las configuraciones de sistema: la lista fija de correos y la tanda de etiquetas viven aquí."""
+"""Admin de las configuraciones de sistema: la lista fija de correos, la tanda
+de etiquetas y las cantidades de etiquetas de manejo viven aquí."""
 from django.contrib import admin
 
-from .models import CorreoIncidencias, TandaEtiquetas
+from .models import CorreoIncidencias, EtiquetasManejo, TandaEtiquetas
 
 
 @admin.register(CorreoIncidencias)
@@ -14,3 +15,8 @@ class CorreoIncidenciasAdmin(admin.ModelAdmin):
 @admin.register(TandaEtiquetas)
 class TandaEtiquetasAdmin(admin.ModelAdmin):
     list_display = ("cajas", "actualizado")
+
+
+@admin.register(EtiquetasManejo)
+class EtiquetasManejoAdmin(admin.ModelAdmin):
+    list_display = ("fragil", "orientacion", "actualizado")
