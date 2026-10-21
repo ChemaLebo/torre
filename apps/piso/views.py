@@ -3085,7 +3085,10 @@ def _salida_manifiesto(request):
                         pedido, request.user, paquetes=cajas, respetar_otras_cajas=True, mover_pedido=False,
                     )
                 else:
-                    marcar_recolectado(pedido, request.user, paquetes=cajas)
+                    # Fix del manifiesto por caja (Chema 2026-10-21): del kardex sale solo lo
+                    # que viaja en las cajas que suben (kardex_por_caja); el pedido sigue
+                    # a sus cajas como siempre.
+                    marcar_recolectado(pedido, request.user, paquetes=cajas, kardex_por_caja=True)
                 recolectados.append(pedido.folio)
                 salidas.append((pedido, cajas))
                 sin_escaneo = [c.numero for c in (cajas or []) if c.pk in ya_cajas]

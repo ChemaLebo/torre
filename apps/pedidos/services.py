@@ -3348,12 +3348,14 @@ def _lineas_de_cajas(cajas):
     return lineas
 
 
-def _unidades_en_otras_cajas(pedido, salen):
+def _unidades_en_otras_cajas(pedido, salen, *, medias_cajas_enteras=False):
     """{linea_pk: unidades de venta} que siguen en OTRAS cajas del pedido aún
-    en bodega (no despachadas y fuera de `salen`), fracciones redondeadas
-    hacia arriba. Eso NO sale del kardex con estas cajas (Chema 2026-10-15,
-    PED-00151: la pieza de reposición vivía en la caja 2 cuando el carrier
-    dio por salida la caja 1)."""
+    en bodega (no despachadas y fuera de `salen`). Eso NO sale del kardex con
+    estas cajas (Chema 2026-10-15, PED-00151: la pieza de reposición vivía en
+    la caja 2 cuando el carrier dio por salida la caja 1). Fracciones hacia
+    arriba (salida por carrier); con `medias_cajas_enteras` hacia abajo: una
+    media caja que se queda NO retiene la unidad, que sale entera con la
+    primera mitad (regla del manifiesto por caja)."""
     import math
     from fractions import Fraction
 
@@ -3366,7 +3368,8 @@ def _unidades_en_otras_cajas(pedido, salen):
             continue
         for pl in caja.lineas.all():
             acumulado[pl.linea_pedido_id] = acumulado.get(pl.linea_pedido_id, Fraction(0)) + Fraction(pl.cantidad, max(pl.fraccion_de, 1))
-    return {pk: math.ceil(v) for pk, v in acumulado.items()}
+    redondeo = math.floor if medias_cajas_enteras else math.ceil
+    return {pk: redondeo(v) for pk, v in acumulado.items()}
 
 
 def _cupos_por_caja(linea, cajas):
@@ -3718,7 +3721,7 @@ def avisar_recoleccion_carrier(pedido, guia, notificar=True):
     transaction.on_commit(_fulfillment)
 
 
-def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False, tolerar_kardex=False, mover_pedido=True):
+def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False, tolerar_kardex=False, mover_pedido=True, kardex_por_caja=False):
     """GUIA_GENERADA / PARCIALMENTE_DESPACHADO → RECOLECTADO (o
     PARCIALMENTE_DESPACHADO si solo salieron algunas cajas): escaneo de
     salida + manifiesto.
@@ -3786,7 +3789,17 @@ def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False,
             lineas = list(_lineas_de_cajas(salen).values())
         else:
             lineas = list(pedido.lineas.select_related("sku"))
-        en_otras = _unidades_en_otras_cajas(pedido, salen) if respetar_otras_cajas else {}
+        # `kardex_por_caja` (fix del manifiesto, Chema 2026-10-21; PED-00281 y
+        # PED-00507): con varias cajas enteras del mismo producto, del kardex
+        # sale SOLO lo que viaja en las cajas que suben; lo que se queda en
+        # otra caja sale cuando esa caja salga. Una media caja que se queda no
+        # retiene la unidad (sale entera con la primera mitad, como siempre).
+        if respetar_otras_cajas:
+            en_otras = _unidades_en_otras_cajas(pedido, salen)
+        elif kardex_por_caja and salen:
+            en_otras = _unidades_en_otras_cajas(pedido, salen, medias_cajas_enteras=True)
+        else:
+            en_otras = {}
         for linea in lineas:
             # Sale del kardex lo pickeado que aún no ha salido: una línea
             # repartida en dos cajas sale entera con la primera (la unidad de
@@ -3801,7 +3814,7 @@ def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False,
                 # de pick, y los registros quedan con la caja en que salieron.
                 cajas_que_salen = salen or list(pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero"))
                 _despachar_linea(linea, por_despachar, pedido.folio, cajas_que_salen, tolerar=tolerar_kardex)
-            if respetar_otras_cajas:
+            if respetar_otras_cajas or (kardex_por_caja and salen):
                 linea.cantidad_despachada = min(linea.cantidad_pickeada, linea.cantidad_despachada + por_despachar)
             else:
                 linea.cantidad_despachada = linea.cantidad_pickeada
