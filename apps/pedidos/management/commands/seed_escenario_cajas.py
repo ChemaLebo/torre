@@ -14,8 +14,8 @@ una reposición ya empacada y los reingresos.
   cola: se pickea, se empaca y después se cancela desde Mesa con el modal.
 
 Solo con DEBUG=True (nunca en producción). Idempotente: borra y vuelve a
-sembrar sus pedidos (folio SEED-CAJAS-*), usa el producto SEED-C24 (lote
-SEEDLOTE) en el rack SEED-A3, y no habla con ningún carrier (las guías son
+sembrar sus pedidos (folio SEED-CAJAS-*) y los saldos del producto SEED-C24
+(lote SEEDLOTE) en el rack SEED-A3, y no habla con ningún carrier (las guías son
 registros locales y el plan de cajas de la reposición se siembra a mano).
 """
 from datetime import timedelta
@@ -83,7 +83,10 @@ class Command(BaseCommand):
                           "requiere_lote": True, "precio_declarado": Decimal("500")},
             )
             lote, _ = Lote.objects.get_or_create(sku=sku, codigo=LOTE, defaults={"fecha_caducidad": "2027-06-01"})
-            # Stock: 20 piezas del lote en el rack fijo del producto.
+            # Stock limpio en cada corrida: se borran los saldos del producto seed (el kardex
+            # conserva la historia) y se vuelven a sembrar 20 piezas del lote en su rack.
+            from apps.inventario.models import Saldo
+            Saldo.objects.filter(sku=sku).delete()
             orden = OrdenEntrada.objects.create(cliente=cliente)
             linea_asn = LineaASN.objects.create(orden=orden, sku=sku, cantidad_anunciada=20, lote_codigo=LOTE)
             recibir(linea_asn, 20, 0, piso)
