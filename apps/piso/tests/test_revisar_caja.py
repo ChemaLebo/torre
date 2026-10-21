@@ -74,13 +74,13 @@ class RevisarCajaTests(PisoTestCase):
 
     def test_chips_y_elegir_que_caja_empacar_primero(self):
         respuesta = self.client.get(self.url + "?caja=2")
-        self.assertContains(respuesta, "Caja 2 de 2")
+        self.assertContains(respuesta, "2 de 2 en esta tanda")
         self.assertContains(respuesta, f'name="paquete_id" value="{self.caja2.pk}"')
         self.assertContains(respuesta, "Caja 1 · pendiente")
         self.assertContains(respuesta, "?caja=1")
         # Sin ?caja, o con una que no existe, sigue la primera pendiente.
-        self.assertContains(self.client.get(self.url), "Caja 1 de 2")
-        self.assertContains(self.client.get(self.url + "?caja=9"), "Caja 1 de 2")
+        self.assertContains(self.client.get(self.url), "1 de 2 en esta tanda")
+        self.assertContains(self.client.get(self.url + "?caja=9"), "1 de 2 en esta tanda")
 
     def test_empacar_caja_estampa_su_foto_de_contenido(self):
         self._empacar(self.caja1, "12100", "c1.jpg")
@@ -173,7 +173,7 @@ class RevisarCajaTests(PisoTestCase):
 
         respuesta = self.client.get(self.url + "?caja=2")
         self.assertContains(respuesta, "Revisar caja")
-        self.assertContains(respuesta, "Caja 2 de 2")
+        self.assertContains(respuesta, "2 de 2 en esta tanda")
         self.caja2.refresh_from_db()
         self.assertContains(respuesta, f'name="evidencia_id" value="{self.caja2.foto_contenido_id}"')
         self.assertContains(respuesta, f'name="evidencia_id" value="{self.caja2.foto_cierre_id}"')

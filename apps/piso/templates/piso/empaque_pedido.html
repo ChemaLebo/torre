@@ -126,8 +126,8 @@
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Empaque · Revisar caja</div>
-    <h1>Caja {{ caja.numero }} de {{ total_cajas }}</h1>
-    <div class="small mono">{{ pedido.folio }} · {{ pedido.cliente.nombre }}</div>
+    <h1>Caja {{ caja.numero }}</h1>
+    <div class="small mono">{{ pedido.folio }} · {{ pedido.cliente.nombre }} · {% if posicion %}{{ posicion }} de {{ total_cajas }} en esta tanda{% else %}ya salió{% endif %}</div>
   </div>
   <a class="btn chico" href="{% url 'piso:empaque_pedido' pedido.pk %}">Volver al paso actual</a>
 </div>
@@ -163,8 +163,8 @@
   <div>
     <div class="eyebrow">Piso · Empaque</div>
     {% if paso == "caja" %}
-    <h1>Caja {{ caja.numero }} de {{ total_cajas }}</h1>
-    <div class="small mono">{{ pedido.folio }} · {{ pedido.cliente.nombre }}</div>
+    <h1>Caja {{ caja.numero }}</h1>
+    <div class="small mono">{{ pedido.folio }} · {{ pedido.cliente.nombre }} · {% if posicion %}{{ posicion }} de {{ total_cajas }} en esta tanda{% else %}ya salió{% endif %}</div>
     {% else %}
     <h1 class="mono">{{ pedido.folio }}</h1>
     <div class="small">{{ pedido.cliente.nombre }} · {{ pedido.comprador_nombre|default:"sin nombre" }}</div>
@@ -204,7 +204,7 @@
 {% if paso == "caja" %}
 <div class="card">
   <div class="titulo"><h2>Qué va en ESTA caja</h2>
-    <span class="pill accent">caja {{ caja.numero }}/{{ total_cajas }}</span>
+    <span class="pill accent">caja {{ caja.numero }}</span>
   </div>
   <ul class="timeline">
     {% for pl in caja.lineas.all %}
@@ -226,7 +226,7 @@
   {% for linea in lineas %}
   <div class="corral-fila">
     <div class="crece"><span class="mono">{{ linea.sku.codigo }}</span> · {{ linea.sku.descripcion }}</div>
-    <span class="num">{{ linea.cantidad_pickeada }} / {{ linea.con_stock }}</span>
+    <span class="num">{{ linea.pickeada_ola }} / {{ linea.cantidad_ola }}</span>
   </div>
   {% endfor %}
   {% for linea in faltantes %}

@@ -98,7 +98,8 @@ class CajasFantasmaTests(PisoTestCase):
         url = reverse("piso:empaque_pedido", args=[pedido.pk])
         respuesta = self.client.get(url)
         self.assertEqual((respuesta.context["paso"], respuesta.context["caja"].numero), ("caja", 2))
-        self.assertContains(respuesta, "Caja 1 · despachada")
+        self.assertNotContains(respuesta, "Caja 1 ·")  # la que ya salió no se pinta (Chema 2026-10-22)
+        self.assertContains(respuesta, "1 de 1 en esta tanda")
         with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)") as imprimir:
             respuesta = self.client.post(url, {
                 "accion": "empacar_caja", "paquete_id": caja2.pk,
@@ -140,7 +141,8 @@ class CajasFantasmaTests(PisoTestCase):
         url = reverse("piso:empaque_pedido", args=[pedido.pk])
         respuesta = self.client.get(url)
         self.assertEqual((respuesta.context["paso"], respuesta.context["caja"].numero), ("caja", 2))
-        self.assertContains(respuesta, "Caja 1 · despachada")
+        self.assertNotContains(respuesta, "Caja 1 ·")  # la que ya salió no se pinta (Chema 2026-10-22)
+        self.assertContains(respuesta, "1 de 1 en esta tanda")
         with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)") as imprimir:
             respuesta = self.client.post(url, {
                 "accion": "empacar_caja", "paquete_id": caja2.pk, "peso_real_gr": "2000", "foto_contenido": self.foto("c2.jpg"),

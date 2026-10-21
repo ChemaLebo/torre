@@ -51,7 +51,7 @@ class WizardCajasTests(PisoTestCase):
 
     def test_wizard_muestra_caja_1_de_2_con_su_rango_de_peso(self):
         respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, "Caja 1 de 2")
+        self.assertContains(respuesta, "1 de 2 en esta tanda")
         self.assertContains(respuesta, 'value="empacar_caja"')
         # Rango de ESA caja (12 kg ± 3%) renderizado para validar client-side
         # ANTES de subir nada.
@@ -161,7 +161,7 @@ class WizardCajasTests(PisoTestCase):
         self.assertEqual(self.caja1.estado, Paquete.EMPACADO)
         self.assertEqual(self.caja1.peso_real_gr, 12100)
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-        self.assertContains(r1, "Caja 2 de 2")  # auto-siguiente
+        self.assertContains(r1, "2 de 2 en esta tanda")  # auto-siguiente
 
         # Caja 2 (última): encadena empaque total + guías + impresión.
         with patch(

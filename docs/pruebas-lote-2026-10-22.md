@@ -26,7 +26,7 @@ El seed (solo con DEBUG=True) imprime los pk de cuatro pedidos SEED-CAJAS-A/B/C/
 3. Empaca con el wizard (báscula ~18 kg, foto de contenido). Lotes pasa a "en empaque"; el kardex trae una fila PICK con lote.
 
 ## 3. Cancelar una reposición ya empacada (SEED-CAJAS-D, segundo en la cola)
-1. Mi turno → EMPEZAR ofrece SEED-CAJAS-D (reposición aprobada de 1 pieza: la caja 2 repone a la caja 1). Pickea con el QR y empaca.
+1. Mi turno → EMPEZAR ofrece SEED-CAJAS-D (reposición aprobada de 1 pieza: la caja 2 repone a la caja 1). Picking dice "0 de 1" (solo esta ola: la pieza que ya salió no cuenta) y sin banner "Va DIVIDIDO". Pickea con el QR: "1 de 1" y pasa a empaque. El asistente muestra solo la caja 2 ("Caja 2 · 1 de 1 en esta tanda"); la caja 1, que ya salió, no aparece. Empaca.
 2. Mesa → SEED-CAJAS-D → Cajas: en la caja 2 aparece **Cancelar reposición**. El modal dice lo que el kardex sabe ("En empaque, no descontada: tomada de 1 de SEED-A3 lote SEEDLOTE").
 3. Decide: regresa a bodega (posición y lote prellenados), cuarentena o no regresa (con "descontar del kardex"). **Dividir** parte un renglón. Confirma: caja "Cancelada" en el expediente, compensación CANCELADA, la guía original vuelve a mandar, contadores corregidos, inventario donde dijiste.
 4. Vuelve a sembrar y repite con **Generar reingreso (decidir después)**: la caja aparece en Mesa → **Reingresos** y se resuelve desde ahí con el mismo modal.

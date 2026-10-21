@@ -1867,6 +1867,14 @@ def _cajas_en_mesa(cajas):
     ]
 
 
+def _posicion_en(cajas, caja):
+    """Lugar (desde 1) de `caja` entre las cajas de la mesa; None si ya no está ahí."""
+    for i, c in enumerate(cajas, start=1):
+        if c.pk == caja.pk:
+            return i
+    return None
+
+
 def _fotos_sueltas(pedido, cajas):
     """Fotos de empaque del pedido sin caja (cierre único legacy), para poder cambiarlas."""
     ligadas = {c.foto_contenido_id for c in cajas} | {c.foto_cierre_id for c in cajas}
@@ -1894,14 +1902,16 @@ def _render_revisar_caja(request, pedido, caja):
     """Una caja ya empacada: contenido, guía, báscula (corregible) y fotos (cambiables)."""
     cajas = _paquetes_con_lineas(pedido)
     caja = next((c for c in cajas if c.pk == caja.pk), caja)
+    en_mesa = _cajas_en_mesa(cajas)
     contexto = {
         "seccion": "empaque",
         "pedido": pedido,
         "paso": "revisar",
         "caja": caja,
-        "total_cajas": len(cajas),
+        "total_cajas": len(en_mesa),
+        "posicion": _posicion_en(en_mesa, caja),
         "guia": caja.guia_activa,
-        "chips": _chips_cajas(cajas, actual=caja.numero),
+        "chips": _chips_cajas(en_mesa, actual=caja.numero),
     }
     contexto.update(_contexto_peso(caja))
     return _render_empaque(request, contexto)
@@ -1917,11 +1927,14 @@ def _render_paso_empacar(request, pedido, elegida=None):
         return _render_revisar_caja(request, pedido, elegida)
     checklist, naked = _checklist_empaque(pedido)
     cajas = _paquetes_con_lineas(pedido)
+    en_mesa = _cajas_en_mesa(cajas)  # la caja que ya salió no se pinta (Chema 2026-10-22)
     # Solo lo que de verdad falta armar: una caja fantasma (guía ya ida) no se vuelve a pedir (2026-10-21).
-    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE) and not c.ya_salio]
+    pendientes = [c for c in en_mesa if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
     fallo_previo = request.session.pop(f"empaque_fallido_{pedido.pk}", None)
     todas = list(pedido.lineas.select_related("sku"))
     lineas = [l for l in todas if l.pendiente > 0]  # lo que esta ola empaca
+    for linea in lineas:
+        linea.pickeada_ola, linea.cantidad_ola = _ola_de(linea)
     contexto = {
         "seccion": "empaque",
         "pedido": pedido,
@@ -1985,9 +1998,10 @@ def _render_paso_empacar(request, pedido, elegida=None):
             "caja": caja,
             "dims_producto": dims_producto,
             "dims_iniciales": dims_iniciales,
-            "total_cajas": len(cajas),
-            "cajas_listas": len(cajas) - len(pendientes),
-            "chips": _chips_cajas(cajas, actual=caja.numero),
+            "total_cajas": len(en_mesa),
+            "posicion": _posicion_en(en_mesa, caja),
+            "cajas_listas": len(en_mesa) - len(pendientes),
+            "chips": _chips_cajas(en_mesa, actual=caja.numero),
             "cajas_cliente": _cajas_cliente(pedido),
         })
         contexto.update(_contexto_peso(caja))
@@ -2038,7 +2052,7 @@ def _render_tanda(request, pedido, elegida=None):
         "seccion": "empaque",
         "pedido": pedido,
         "fotos_sueltas": _fotos_sueltas(pedido, cajas),
-        "chips": _chips_cajas(cajas),
+        "chips": _chips_cajas(_cajas_en_mesa(cajas)),
         "corral": _corral_de_carrier(_carrier_probable(pedido)),
         "guias": guias,
         "tiene_guia": bool(guias),
