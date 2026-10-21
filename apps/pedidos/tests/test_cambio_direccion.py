@@ -49,6 +49,7 @@ class RegresarAEmpaqueTests(PisoTestCase):
         self.assertEqual(pedido.estado, Pedido.EMPACADO)
         self.assertIsNone(caja.ts_cierre)
         self.assertFalse(caja.foto_cierre)
+        self.assertEqual((caja.ts_etiquetas, caja.ts_listo_salida), (None, None))  # sellos de la tanda también
         self.assertFalse(pedido.empaque_completo)
         # La caja pesada y con foto de contenido no se deshace: solo se vuelve a cerrar.
         self.assertEqual(caja.estado, Paquete.EMPACADO)

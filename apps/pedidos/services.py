@@ -23,8 +23,9 @@ from .models import LineaPedido, Pedido
 
 # Evidencia de empaque (C1 — fin de la paradoja de la evidencia): al empacar
 # la guía AÚN NO existe, así que aquí solo se exige la foto del CONTENIDO.
-# La foto de la caja cerrada (con la etiqueta ya pegada) se toma después y se
-# valida en cerrar_caja().
+# La foto de la caja cerrada (con la etiqueta ya pegada) se toma después:
+# por caja en cerrar_caja() (primitiva) o, desde 2026-10-20, UNA por tanda en
+# cerrar_tanda() (el wizard: etiquetas pegadas → evidencia → lista en salida).
 FOTOS_CONTENIDO_MINIMAS = 1
 TIPO_FOTO_CONTENIDO = "contenido"
 TIPO_FOTO_CIERRE = "caja_cerrada"
@@ -793,12 +794,7 @@ def cambiar_paqueteria_caja(pedido, caja, carrier, actor):
         if guia is not None:
             cancelar_guia(guia, actor, motivo=f"Cambio de paquetería de la caja {caja.numero} a {etiqueta}")
             cancelada = guia.numero
-            campos = []
-            if caja.ts_cierre is not None or caja.foto_cierre_id:
-                caja.ts_cierre, caja.foto_cierre = None, None
-                campos += ["ts_cierre", "foto_cierre"]
-            if campos:
-                caja.save(update_fields=campos)
+            _reabrir_cierre(caja)
         if fresco.estado == Pedido.GUIA_GENERADA:
             fresco.asignado_a = None
             fresco.save(update_fields=["asignado_a", "actualizado"])
@@ -2638,6 +2634,142 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
     return fresco
 
 
+# ── Tanda de empaque (Chema 2026-10-20): etiquetas pegadas → UNA foto → lista en salida ──
+# La tanda son las cajas EMPACADO del pedido que siguen en bodega (nacen juntas
+# al pesar la última caja de la ola). El wizard deriva su paso de los sellos de
+# cada caja; cada servicio estampa SOLO a las cajas que siguen EMPACADO y aún no
+# tienen ese sello (una caja que el carrier sacó a media tanda ya no entra; una
+# caja nueva que se suma después hace su propia ronda).
+
+
+def cajas_de_tanda(pedido):
+    """Cajas EMPACADO del pedido en bodega, por número: la tanda que el wizard
+    lleva de las etiquetas a Salida. Las despachadas ya no piden nada."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    return [c for c in sorted(pedido.paquetes.all(), key=lambda c: c.numero) if c.estado == Paquete.EMPACADO]
+
+
+def _tanda_bajo_candado(pedido):
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    return list(
+        Paquete.objects.select_for_update().filter(pedido=pedido, estado=Paquete.EMPACADO)
+        .prefetch_related("guias").order_by("numero")
+    )
+
+
+def _numeros(cajas):
+    return ", ".join(str(c.numero) for c in cajas)
+
+
+@transaction.atomic
+def marcar_etiquetas_pegadas(pedido, actor):
+    """"Etiquetas pegadas ✓" del wizard: el operador afirma que cada caja de
+    la tanda ya trae su etiqueta. Exige guía viva en TODAS las cajas en
+    bodega (sin guía no hay etiqueta que pegar: "Reintentar guía"); estampa
+    Paquete.ts_etiquetas solo en las que no lo tenían. ValueError si no hay
+    cajas, si alguna no tiene guía o si ya todas estaban estampadas. Evento
+    `etiquetas_pegadas`. Regresa las cajas estampadas."""
+    tanda = _tanda_bajo_candado(pedido)
+    if not tanda:
+        raise ValueError(f"{pedido.folio} no tiene cajas empacadas en bodega.")
+    sin_guia = [c for c in tanda if c.guia_activa is None]
+    if sin_guia:
+        raise ValueError(
+            f"La caja {_numeros(sin_guia)} de {pedido.folio} todavía no tiene guía: "
+            "reintenta la guía antes de pegar las etiquetas."
+        )
+    pendientes = [c for c in tanda if c.ts_etiquetas is None]
+    if not pendientes:
+        raise ValueError(f"{pedido.folio} ya tiene las etiquetas pegadas en todas sus cajas.")
+    ahora = timezone.now()
+    for caja in pendientes:
+        caja.ts_etiquetas = ahora
+        caja.save(update_fields=["ts_etiquetas"])
+    registrar_evento(
+        "pedido", pedido.pk, "etiquetas_pegadas", actor=actor, cliente=pedido.cliente,
+        delta={"cajas": [c.numero for c in pendientes]},
+        motivo=f"Etiquetas pegadas en la caja {_numeros(pendientes)} de {pedido.folio}.",
+    )
+    return pendientes
+
+
+@transaction.atomic
+def cerrar_tanda(pedido, actor, foto_tanda):
+    """Foto de evidencia POR TANDA (Chema 2026-10-20): UNA foto de todas las
+    cajas de la tanda cerradas con sus etiquetas, en vez de una por caja.
+    Entran las cajas EMPACADO en bodega con guía viva y etiquetas pegadas que
+    aún no tienen cierre; la misma EvidenciaFoto (tipo caja_cerrada, ligada
+    al pedido, como en cerrar_caja) queda apuntada por `foto_cierre` de cada
+    una, con `ts_cierre`. Evento `caja_cerrada_con_evidencia` por caja
+    (bitácora, mismo nombre que la primitiva). Regresa las cajas cerradas."""
+    if foto_tanda is None:
+        raise ValueError("Toma la foto de las cajas cerradas con sus etiquetas antes de confirmar.")
+    tanda = _tanda_bajo_candado(pedido)
+    pendientes = [c for c in tanda if c.ts_cierre is None and c.ts_etiquetas is not None and c.guia_activa is not None]
+    if not pendientes:
+        raise ValueError(f"{pedido.folio} no tiene cajas esperando su foto de evidencia.")
+    evidencia = EvidenciaFoto.objects.create(
+        entidad="pedido", entidad_id=str(pedido.pk), tipo=TIPO_FOTO_CIERRE,
+        archivo=foto_tanda, tomada_por=_actor_nombre(actor),
+    )
+    ahora = timezone.now()
+    numeros = [c.numero for c in pendientes]
+    for caja in pendientes:
+        caja.ts_cierre, caja.foto_cierre = ahora, evidencia
+        caja.save(update_fields=["ts_cierre", "foto_cierre"])
+        registrar_evento(
+            "paquete", caja.pk, "caja_cerrada_con_evidencia", actor=actor, cliente=pedido.cliente,
+            delta={"pedido": pedido.folio, "caja": caja.numero, "evidencia_id": evidencia.pk, "tanda": numeros},
+            motivo=f"Caja {caja.numero} de {pedido.folio} cerrada con la etiqueta pegada (foto de la tanda).",
+        )
+    return pendientes
+
+
+@transaction.atomic
+def confirmar_lista_salida(pedido, actor):
+    """"Lista en salida ▶" del wizard: las cajas de la tanda con guía,
+    etiquetas y evidencia quedan listas en el corral (Paquete.ts_listo_salida);
+    desde aquí Salida las lista y el chofer se las puede llevar. ValueError
+    si ninguna caja espera esa confirmación. Evento `lista_en_salida`.
+    Regresa las cajas confirmadas."""
+    tanda = _tanda_bajo_candado(pedido)
+    pendientes = [c for c in tanda if c.ts_listo_salida is None and c.ts_cierre is not None and c.guia_activa is not None]
+    if not pendientes:
+        raise ValueError(f"{pedido.folio} no tiene cajas con evidencia esperando confirmar en salida.")
+    ahora = timezone.now()
+    for caja in pendientes:
+        caja.ts_listo_salida = ahora
+        caja.save(update_fields=["ts_listo_salida"])
+    registrar_evento(
+        "pedido", pedido.pk, "lista_en_salida", actor=actor, cliente=pedido.cliente,
+        delta={"cajas": [c.numero for c in pendientes]},
+        motivo=f"Caja {_numeros(pendientes)} de {pedido.folio} lista en el corral de salida.",
+    )
+    return pendientes
+
+
+def _reabrir_cierre(caja):
+    """La etiqueta de la caja cambia (guía cancelada por cambio de dirección o
+    de paquetería): se borran etiquetas pegadas, cierre, foto y lista en
+    salida para que el wizard la lleve otra vez por sus pantallas. Regresa
+    los campos borrados."""
+    campos = []
+    if caja.ts_etiquetas is not None:
+        caja.ts_etiquetas = None
+        campos.append("ts_etiquetas")
+    if caja.ts_cierre is not None or caja.foto_cierre_id:
+        caja.ts_cierre, caja.foto_cierre = None, None
+        campos += ["ts_cierre", "foto_cierre"]
+    if caja.ts_listo_salida is not None:
+        caja.ts_listo_salida = None
+        campos.append("ts_listo_salida")
+    if campos:
+        caja.save(update_fields=campos)
+    return campos
+
+
 @transaction.atomic
 def corregir_peso_caja(paquete, actor, peso_real_gr):
     """Corrige la báscula de una caja ya empacada (se capturó el peso de otra caja o pedido).
@@ -2892,12 +3024,7 @@ def regresar_a_empaque(pedido, actor, motivo=""):
             canceladas.append(guia.numero)
         recotizadas = []
         for caja in fresco.paquetes.all():
-            campos = []
-            if caja.ts_cierre is not None or caja.foto_cierre_id:
-                caja.ts_cierre, caja.foto_cierre = None, None
-                campos += ["ts_cierre", "foto_cierre"]
-            if campos:
-                caja.save(update_fields=campos)
+            _reabrir_cierre(caja)
             try:
                 recotizar_paquete(fresco, caja)
                 recotizadas.append(caja.numero)

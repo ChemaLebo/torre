@@ -47,7 +47,9 @@ class CambiarPaqueteriaCajaTests(PisoTestCase):
         self.pedido.refresh_from_db()
         self.c1.refresh_from_db()
         vieja = self.c1.guia_activa
-        Paquete.objects.filter(pk=self.c1.pk).update(ts_cierre=self.pedido.creado)
+        Paquete.objects.filter(pk=self.c1.pk).update(
+            ts_cierre=self.pedido.creado, ts_etiquetas=self.pedido.creado, ts_listo_salida=self.pedido.creado,
+        )
         Pedido.objects.filter(pk=self.pedido.pk).update(asignado_a=self.operador)
         self.pedido.refresh_from_db()
         self.c1.refresh_from_db()
@@ -58,6 +60,7 @@ class CambiarPaqueteriaCajaTests(PisoTestCase):
         # la suya, el pedido vuelve a GUIA_GENERADA sin dueño; el cierre borrado lo pide el wizard.
         self.assertEqual((self.pedido.estado, self.pedido.asignado_a), (Pedido.GUIA_GENERADA, None))
         self.assertEqual((vieja.estado, caja.ts_cierre, caja.carrier), (Guia.CANCELADA, None, "local"))
+        self.assertEqual((caja.ts_etiquetas, caja.ts_listo_salida), (None, None))  # la etiqueta cambia: sellos fuera
         self.assertEqual(caja.guia_activa.numero, f"LOCAL-{self.pedido.folio}-1")
         self.assertFalse(self.pedido.empaque_completo)  # falta la foto de cierre de la caja 1
         self.assertEqual(self.c2.guia_activa.estado, Guia.GUIA_CREADA)  # la otra caja ni se entera

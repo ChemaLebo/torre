@@ -421,3 +421,119 @@ class CajasCerradasCompletasTests(BaseEmpaqueCaja):
         self.assertFalse(pedido.cajas_cerradas_completas)
         self._foto_cierre_directa(pedido)
         self.assertTrue(pedido.cajas_cerradas_completas)
+
+
+class TandaTests(BaseEmpaqueCaja):
+    """Etiquetas pegadas → UNA foto de evidencia por tanda → lista en salida (Chema 2026-10-20)."""
+
+    def setUp(self):
+        self.pedido = self.pedido_directo(estado=Pedido.GUIA_GENERADA, peso_esperado_gr=4800)
+        self.c1, self.c2 = [
+            Paquete.objects.create(
+                pedido=self.pedido, numero=n, peso_kg=Decimal("2.40"), carrier="paquetexpress", estado=Paquete.EMPACADO,
+            )
+            for n in (1, 2)
+        ]
+        for caja in (self.c1, self.c2):
+            Guia.objects.create(
+                pedido=self.pedido, paquete=caja, carrier="paquetexpress", numero=f"MOCK-C{caja.numero}",
+                estado=Guia.GUIA_CREADA,
+            )
+
+    def _refrescar(self):
+        for caja in (self.c1, self.c2):
+            caja.refresh_from_db()
+
+    def _ciclo_completo(self):
+        services.marcar_etiquetas_pegadas(self.pedido, None)
+        services.cerrar_tanda(self.pedido, None, foto("tanda.jpg"))
+        services.confirmar_lista_salida(self.pedido, None)
+        self._refrescar()
+
+    def test_etiquetas_pegadas_exige_guia_en_todas_y_estampa_la_tanda(self):
+        sin_guia = Paquete.objects.create(
+            pedido=self.pedido, numero=3, peso_kg=Decimal("1"), carrier="paquetexpress", estado=Paquete.EMPACADO,
+        )
+        with self.assertRaisesMessage(ValueError, "La caja 3"):
+            services.marcar_etiquetas_pegadas(self.pedido, None)
+        sin_guia.delete()
+        estampadas = services.marcar_etiquetas_pegadas(self.pedido, None)
+        self._refrescar()
+        self.assertEqual([c.numero for c in estampadas], [1, 2])
+        self.assertIsNotNone(self.c1.ts_etiquetas)
+        self.assertEqual(self.c1.ts_etiquetas, self.c2.ts_etiquetas)
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(self.pedido.pk), accion="etiquetas_pegadas")
+        self.assertEqual(evento.delta["cajas"], [1, 2])
+        with self.assertRaisesMessage(ValueError, "ya tiene las etiquetas pegadas"):
+            services.marcar_etiquetas_pegadas(self.pedido, None)
+
+    def test_la_evidencia_es_una_sola_foto_para_toda_la_tanda(self):
+        with self.assertRaisesMessage(ValueError, "no tiene cajas esperando su foto"):
+            services.cerrar_tanda(self.pedido, None, foto("antes.jpg"))  # sin etiquetas pegadas todavía
+        services.marcar_etiquetas_pegadas(self.pedido, None)
+        with self.assertRaisesMessage(ValueError, "Toma la foto"):
+            services.cerrar_tanda(self.pedido, None, None)
+        cerradas = services.cerrar_tanda(self.pedido, None, foto("tanda.jpg"))
+        self._refrescar()
+        fotos = EvidenciaFoto.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk), tipo="caja_cerrada")
+        self.assertEqual((len(cerradas), fotos.count()), (2, 1))
+        self.assertEqual(self.c1.foto_cierre, fotos.get())
+        self.assertEqual(self.c2.foto_cierre, fotos.get())
+        self.assertIsNotNone(self.c1.ts_cierre)
+        self.assertEqual(
+            EventoAuditoria.objects.filter(entidad="paquete", accion="caja_cerrada_con_evidencia").count(), 2,
+        )
+        self.assertTrue(self.pedido.cajas_cerradas_completas)
+        with self.assertRaisesMessage(ValueError, "no tiene cajas esperando su foto"):
+            services.cerrar_tanda(self.pedido, None, foto("otra.jpg"))
+
+    def test_lista_en_salida_solo_con_evidencia(self):
+        services.marcar_etiquetas_pegadas(self.pedido, None)
+        with self.assertRaisesMessage(ValueError, "esperando confirmar en salida"):
+            services.confirmar_lista_salida(self.pedido, None)
+        services.cerrar_tanda(self.pedido, None, foto("tanda.jpg"))
+        listas = services.confirmar_lista_salida(self.pedido, None)
+        self._refrescar()
+        self.assertEqual([c.numero for c in listas], [1, 2])
+        self.assertEqual(self.c1.ts_listo_salida, self.c2.ts_listo_salida)
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk), accion="lista_en_salida").exists())
+
+    def test_una_caja_que_el_carrier_saco_a_media_tanda_no_se_estampa(self):
+        services.marcar_etiquetas_pegadas(self.pedido, None)
+        self.c2.transicionar(Paquete.DESPACHADO, motivo="el carrier ya la tiene")
+        cerradas = services.cerrar_tanda(self.pedido, None, foto("tanda.jpg"))
+        self._refrescar()
+        self.assertEqual([c.numero for c in cerradas], [1])
+        self.assertIsNone(self.c2.ts_cierre)
+
+    def test_una_caja_nueva_hace_su_propia_ronda(self):
+        self._ciclo_completo()
+        c3 = Paquete.objects.create(
+            pedido=self.pedido, numero=3, peso_kg=Decimal("1"), carrier="paquetexpress", estado=Paquete.EMPACADO,
+        )
+        Guia.objects.create(pedido=self.pedido, paquete=c3, carrier="paquetexpress", numero="MOCK-C3", estado=Guia.GUIA_CREADA)
+        self.assertEqual([c.numero for c in services.marcar_etiquetas_pegadas(self.pedido, None)], [3])
+        self.assertEqual([c.numero for c in services.cerrar_tanda(self.pedido, None, foto("c3.jpg"))], [3])
+        self.assertEqual([c.numero for c in services.confirmar_lista_salida(self.pedido, None)], [3])
+        c3.refresh_from_db()
+        self._refrescar()
+        self.assertNotEqual(c3.foto_cierre_id, self.c1.foto_cierre_id)  # la primera tanda conserva su foto
+        self.assertEqual(self.c1.foto_cierre_id, self.c2.foto_cierre_id)
+
+    def test_reabrir_cierre_borra_los_cuatro_sellos(self):
+        self._ciclo_completo()
+        self.assertEqual(
+            services._reabrir_cierre(self.c1), ["ts_etiquetas", "ts_cierre", "foto_cierre", "ts_listo_salida"],
+        )
+        self.c1.refresh_from_db()
+        self.assertEqual((self.c1.ts_etiquetas, self.c1.ts_cierre, self.c1.foto_cierre, self.c1.ts_listo_salida), (None, None, None, None))
+        self.assertEqual(services._reabrir_cierre(self.c1), [])  # ya limpia: no guarda nada
+
+    def test_el_reporte_etiqueta_la_foto_con_todas_sus_cajas(self):
+        from apps.pedidos.reportes import _cajas_por_evidencia, _etiqueta_foto
+
+        self._ciclo_completo()
+        pedido = Pedido.objects.prefetch_related("paquetes").get(pk=self.pedido.pk)
+        cajas = _cajas_por_evidencia([pedido])
+        self.assertEqual(cajas, {self.c1.foto_cierre_id: [1, 2]})
+        self.assertEqual(_etiqueta_foto(self.c1.foto_cierre, cajas), "Caja cerrada · cajas 1, 2")

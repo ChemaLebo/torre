@@ -270,6 +270,14 @@ class Paquete(models.Model):
     foto_cierre = models.ForeignKey(
         "core.EvidenciaFoto", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
     )
+    # Tanda de empaque (Chema 2026-10-20): el operador confirma "Etiquetas
+    # pegadas" (ts_etiquetas), toma UNA foto de evidencia de toda la tanda
+    # (ts_cierre + foto_cierre: la misma foto en cada caja de la tanda) y
+    # confirma "Lista en salida" (ts_listo_salida). Solo con el último sello
+    # la caja entra a Salida. Una caja DESPACHADO nunca los pide: la salida
+    # automática por carrier y el manifiesto no los miran. Estado, no historia.
+    ts_etiquetas = models.DateTimeField(null=True, blank=True)
+    ts_listo_salida = models.DateTimeField(null=True, blank=True)
     # Foto del contenido de ESTA caja (la estampa pedidos.services.empacar_caja;
     # reemplazar_foto_pedido la re-apunta). Igual que foto_cierre es estado, no
     # historia: el wizard de empaque la muestra por caja y permite cambiarla.

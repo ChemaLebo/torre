@@ -409,7 +409,7 @@ def _pipeline(pedido):
     marcas = [
         ("Pedido recibido", pedido.creado, "Lo tomamos de tu tienda y apartamos el producto."),
         ("En preparación", pedido.ts_picking, "El equipo junta el pedido pieza por pieza, con escáner."),
-        ("Empacado y verificado", pedido.ts_empacado, "Báscula y dos fotos antes de cerrar la caja."),
+        ("Empacado y verificado", pedido.ts_empacado, "Báscula y foto del contenido de cada caja; las cajas cerradas se fotografían con su guía pegada."),
         ("Guía lista", pedido.ts_guia, "La etiqueta de envío quedó impresa y pegada."),
         ("Salió de bodega", pedido.ts_recolectado, "Se entregó a la paquetería con manifiesto firmado."),
         ("En camino", pedido.ts_en_transito, "La paquetería lo lleva con el comprador."),

@@ -115,12 +115,15 @@ def _fotos_por_pedido(pedidos):
 
 
 def _cajas_por_evidencia(pedidos):
-    """{evidencia_id: número de caja} desde Paquete.foto_cierre (sin consultas:
-    los paquetes vienen en el prefetch)."""
-    return {
-        paq.foto_cierre_id: paq.numero
-        for p in pedidos for paq in p.paquetes.all() if paq.foto_cierre_id
-    }
+    """{evidencia_id: [números de caja]} desde Paquete.foto_cierre (sin
+    consultas: los paquetes vienen en el prefetch). Una foto de tanda
+    (2026-10-20) es la de varias cajas a la vez."""
+    cajas = {}
+    for p in pedidos:
+        for paq in p.paquetes.all():
+            if paq.foto_cierre_id:
+                cajas.setdefault(paq.foto_cierre_id, []).append(paq.numero)
+    return {k: sorted(v) for k, v in cajas.items()}
 
 
 def _transiciones(pedidos):
@@ -220,8 +223,12 @@ def armar_reporte(pedidos, con_operador=False):
 
 def _etiqueta_foto(foto, cajas):
     base = ETIQUETA_FOTO.get(foto.tipo, foto.tipo or "Foto")
-    caja = cajas.get(foto.pk)
-    return f"{base} · caja {caja}" if caja else base
+    numeros = cajas.get(foto.pk) or []
+    if len(numeros) == 1:
+        return f"{base} · caja {numeros[0]}"
+    if numeros:
+        return f"{base} · cajas {', '.join(str(n) for n in numeros)}"
+    return base
 
 
 def filas_csv(renglones, ruta_evidencia):
