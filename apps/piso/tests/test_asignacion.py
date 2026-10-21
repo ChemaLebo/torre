@@ -68,7 +68,7 @@ class AsignacionTests(PisoTestCase):
         evento = EventoAuditoria.objects.get(
             entidad="pedido", entidad_id=str(self.pedido.pk), accion="picking_reiniciado",
         )
-        self.assertEqual(evento.delta["avance_anterior"], [{"sku": self.sku.codigo, "pickeada": 1}])
+        self.assertEqual(evento.delta["avance_anterior"], [{"sku": self.sku.codigo, "pickeada": 1, "despachada": 0}])
 
     def test_transferencia_con_caja_ya_empacada_no_reinicia(self):
         from decimal import Decimal

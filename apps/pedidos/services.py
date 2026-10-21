@@ -2242,27 +2242,32 @@ def reiniciar_picking(pedido, actor, motivo=""):
     """El picking vuelve a cero cuando el pedido cambia de manos (transferencia
     aceptada o un pedido libre que toma OTRA persona): quien recibe el carrito
     no puede dar fe de lo que otro metió y lo re-escanea todo. Solo aplica en
-    picking y antes de que alguna caja esté empacada (una caja ya pesada y
-    con foto no se deshace); las hijas de kit declaradas en empaque no se
-    tocan (reservan stock al declararse). No mueve inventario: el pick se
-    confirma hasta empacar. Regresa True si reinició algo; queda el evento
+    picking y antes de que alguna caja de ESTA ola esté empacada (una caja ya
+    pesada y con foto no se deshace); las cajas de olas anteriores —despachadas,
+    canceladas o fantasma cuya guía ya se fue— no cuentan (PED-00528, Chema
+    2026-10-21: una reposición tras una entrega no se reiniciaba y el piso la
+    daba por pickeada). "Cero" es lo que ya salió en un manifiesto anterior
+    (cantidad_despachada), no 0: la reposición vuelve a "0 de 1" sin descuadrar
+    la ola que ya se fue. Las hijas de kit declaradas en empaque no se tocan
+    (reservan stock al declararse). No mueve inventario: el pick se confirma
+    hasta empacar. Regresa True si reinició algo; queda el evento
     picking_reiniciado con el avance que había."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
     if pedido.estado != Pedido.EN_PICKING:
         return False
-    if pedido.paquetes.filter(estado__in=[Paquete.EMPACADO, Paquete.DESPACHADO]).exists():
+    if any(c.estado == Paquete.EMPACADO and not c.ya_salio for c in pedido.paquetes.prefetch_related("guias")):
         return False
     with transaction.atomic():
-        lineas = list(
-            pedido.lineas.select_for_update().select_related("sku")
-            .filter(parte_de_kit__isnull=True, cantidad_pickeada__gt=0)
-        )
+        lineas = [
+            l for l in pedido.lineas.select_for_update().select_related("sku").filter(parte_de_kit__isnull=True)
+            if l.cantidad_pickeada > l.cantidad_despachada
+        ]
         if not lineas:
             return False
-        avance = [{"sku": l.sku.codigo, "pickeada": l.cantidad_pickeada} for l in lineas]
+        avance = [{"sku": l.sku.codigo, "pickeada": l.cantidad_pickeada, "despachada": l.cantidad_despachada} for l in lineas]
         for linea in lineas:
-            linea.cantidad_pickeada = 0
+            linea.cantidad_pickeada = linea.cantidad_despachada
             linea.save(update_fields=["cantidad_pickeada"])
         # Lote por pedido: lo que se anotó al escanear se vuelve a anotar al re-escanear.
         PickLinea.objects.filter(linea__in=lineas, estado=PickLinea.PICKEADO).delete()
