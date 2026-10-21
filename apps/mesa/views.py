@@ -1552,12 +1552,15 @@ def _cajas_para_parar(pedido, cajas):
             continue
         guia = caja.guia
         situacion = etiquetas[caja.estado]
-        if caja.estado == "EMPACADO" and caja.ts_listo_salida:
+        if pedido.estado == "EN_PICKING" and caja.estado == "EMPACADO":
+            situacion = "pesada antes de la última: vuelve a planeada si regresas lo escaneado en picking"
+        elif caja.estado == "EMPACADO" and caja.ts_listo_salida:
             situacion = "en el corral, lista para el chofer"
         elif caja.estado == "EMPACADO" and guia is not None:
             situacion = "empacada con guía"
         regreso = []
-        if caja.estado in ("EN_EMPAQUE", "EMPACADO"):
+        # En picking el pick físico aún no corre (se confirma al pesar la última caja): nada que desarmar del kardex.
+        if caja.estado in ("EN_EMPAQUE", "EMPACADO") and pedido.estado != "EN_PICKING":
             for _, sku, piezas, ubicacion, lote in contenido_que_regresa(pedido, caja):
                 regreso.append({
                     "sku": sku.codigo, "piezas": piezas,
@@ -1572,6 +1575,14 @@ def _cajas_para_parar(pedido, cajas):
             "regreso": regreso,
         })
     return tarjetas
+
+
+def _regreso_picking_para_parar(pedido):
+    """Lo escaneado en picking que Mesa puede regresar a sus racks al parar el
+    pedido (pedidos.regreso_al_detener, Chema 2026-10-21); None si no está en picking."""
+    from apps.pedidos.services import regreso_al_detener  # lazy por contrato
+
+    return regreso_al_detener(pedido) if pedido.estado == "EN_PICKING" else None
 
 
 def _pedidos_parar_en_piso(request):
@@ -1590,11 +1601,15 @@ def _pedidos_parar_en_piso(request):
         motivo = f"{motivo}: {detalle}"
     cajas_guia = [k.split("-")[1] for k, v in request.POST.items() if k.startswith("caja-") and k.endswith("-guia") and v]
     cajas_contenido = [k.split("-")[1] for k, v in request.POST.items() if k.startswith("caja-") and k.endswith("-contenido") and v]
-    incidencia = parar_en_piso(pedido, request.user, motivo, cajas_guia=cajas_guia, cajas_contenido=cajas_contenido)
+    regresar_picking = bool(request.POST.get("regresar_picking"))
+    incidencia = parar_en_piso(
+        pedido, request.user, motivo, cajas_guia=cajas_guia, cajas_contenido=cajas_contenido, regresar_picking=regresar_picking,
+    )
     folio = f" ({incidencia.folio})" if incidencia is not None else ""
     return (
         f"{pedido.folio} parado en piso{folio}: sale de la cola; Reanudar lo regresa."
         + (f" Guías canceladas: {len(cajas_guia) + len(cajas_contenido)} caja(s) tocada(s)." if cajas_guia or cajas_contenido else "")
+        + (" Lo escaneado regresó a sus racks." if regresar_picking else "")
     )
 
 
@@ -1936,6 +1951,7 @@ def pedido_detalle(request, pk):
         "puede_parar": pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA", "PARCIALMENTE_DESPACHADO") and not pedido.detenido,
         "motivos_detener": __import__("apps.pedidos.services", fromlist=["MOTIVOS_DETENER"]).MOTIVOS_DETENER,
         "cajas_parar": _cajas_para_parar(pedido, cajas),
+        "regreso_picking": _regreso_picking_para_parar(pedido),
         # Reanudar DET desde el pedido (Chema 2026-10-20): solo con una DET abierta; el modal avisa qué seguirá bloqueando.
         "bloqueos": bloqueos_pedido,
         "det_abierta": det_abierta,

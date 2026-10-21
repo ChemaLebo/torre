@@ -2305,7 +2305,7 @@ def _regresar_a_racks(pedido, actor, motivo):
     return {"piezas": [], "cajas_desarmadas": desarmadas, "guias_canceladas": canceladas}
 
 
-def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=()):
+def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=(), regresar_picking=False):
     """"Parar en piso" desde Mesa (Chema 2026-10-20/21): el pedido sale de la
     cola del piso como un DET del operador (detener_pedido con origen mesa).
     Antes, por caja seleccionada: `cajas_guia` = cajas en bodega con guía
@@ -2316,7 +2316,10 @@ def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=()):
     bodega a su posición y lote (_desarmar_caja_al_parar). Sin cajas, solo se
     detiene. Con el pedido con guía y alguna caja desarmada o sin guía, vuelve
     a EMPACADO; con una caja desarmada vuelve a picking (EN_PICKING o
-    PENDIENTE si algo ya salió). Regresa la incidencia DET."""
+    PENDIENTE si algo ya salió). `regresar_picking` (Chema 2026-10-21): con el
+    pedido en picking, lo escaneado vuelve a sus racks
+    (_regresar_picking_a_racks) y el avance a cero; al reanudar se pickea de
+    nuevo. Regresa la incidencia DET."""
     from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
     from apps.envios.services import cancelar_guia  # lazy por contrato
 
@@ -2349,10 +2352,11 @@ def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=()):
                 _reabrir_cierre(caja)
             if pk in pks_contenido:
                 desarmadas.append({"caja": caja.numero, "regreso": _desarmar_caja_al_parar(fresco, caja, actor, motivo)})
+        regresado = _regresar_picking_a_racks(fresco, actor, motivo) if regresar_picking and fresco.estado == Pedido.EN_PICKING else []
         _estado_tras_desarmar(fresco, actor, motivo, canceladas, desarmadas)
         registrar_evento(
             "pedido", fresco.pk, "parado_en_piso", actor=actor, cliente=fresco.cliente,
-            delta={"guias_canceladas": canceladas, "cajas_desarmadas": desarmadas, "estado": fresco.estado},
+            delta={"guias_canceladas": canceladas, "cajas_desarmadas": desarmadas, "piezas_regresadas": regresado, "estado": fresco.estado},
             motivo=motivo[:300],
         )
         incidencia = detener_pedido(fresco, actor, motivo, origen="mesa")

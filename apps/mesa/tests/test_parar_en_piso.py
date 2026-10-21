@@ -120,3 +120,43 @@ class PararEnPisoTests(PisoTestCase):
         services.reanudar_pedido(pedido, self.mesa)
         pedido.refresh_from_db()
         self.assertEqual((pedido.detenido, pedido.lineas.get().por_pickear), (False, 2))
+
+    def test_en_picking_puede_regresar_lo_escaneado_a_sus_racks(self):
+        """Chema 2026-10-21: lo escaneado vuelve a sus racks desde Mesa; el kardex no se mueve."""
+        pedido = self.crear_pedido(cantidad=2)
+        services.iniciar_picking(pedido, self.operador)
+        linea = pedido.lineas.get()
+        services.confirmar_linea_pick(linea, 2, self.operador, ubicacion=self.ubic_picking)
+        html = self.client.get(self._url(pedido)).content.decode()
+        self.assertIn('name="regresar_picking"', html)
+        self.assertIn('2 × COLIMITA-SIX → <span class="mono">A-01-1</span>', html)
+        antes = (suma(self.sku, Saldo.UBICADO_VENDIBLE), suma(self.sku, Saldo.RESERVADO))
+        respuesta = self.client.post(self._url(pedido), {
+            "accion": "parar_en_piso", "folio": pedido.folio, "motivo": "Otro", "detalle": "se reacomoda", "regresar_picking": "1",
+        }, follow=True)
+        self.assertContains(respuesta, "regresó a sus racks")
+        pedido.refresh_from_db()
+        linea.refresh_from_db()
+        self.assertEqual((pedido.detenido, pedido.estado, linea.cantidad_pickeada), (True, Pedido.EN_PICKING, 0))
+        self.assertEqual(list(linea.picks.values_list("estado", flat=True)), [PickLinea.REGRESADO])
+        self.assertEqual((suma(self.sku, Saldo.UBICADO_VENDIBLE), suma(self.sku, Saldo.RESERVADO)), antes)
+        evento = EventoAuditoria.objects.get(entidad="pedido", entidad_id=str(pedido.pk), accion="parado_en_piso")
+        self.assertEqual(evento.delta["piezas_regresadas"], [{"sku": self.sku.codigo, "piezas": 2, "a": [["A-01-1", None, 2]]}])
+
+    def test_en_picking_una_caja_pesada_antes_de_la_ultima_no_ofrece_desarmar(self):
+        """Antes de pesar la última caja el kardex no se ha movido: esa caja no se desarma, vuelve a planeada con lo escaneado."""
+        pedido = self.crear_pedido(cantidad=2)
+        services.iniciar_picking(pedido, self.operador)
+        linea = pedido.lineas.get()
+        services.confirmar_linea_pick(linea, 2, self.operador, ubicacion=self.ubic_picking)
+        caja = Paquete.objects.create(pedido=pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO)
+        PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=2)
+        html = self.client.get(self._url(pedido)).content.decode()
+        self.assertNotIn(f'name="caja-{caja.pk}-contenido"', html)
+        self.assertIn("pesada antes de la última", html)
+        self.client.post(self._url(pedido), {
+            "accion": "parar_en_piso", "folio": pedido.folio, "motivo": "Otro", "detalle": "x", "regresar_picking": "1",
+        }, follow=True)
+        caja.refresh_from_db()
+        linea.refresh_from_db()
+        self.assertEqual((caja.estado, linea.cantidad_pickeada), (Paquete.PLANEADO, 0))

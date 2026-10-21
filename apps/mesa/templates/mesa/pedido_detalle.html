@@ -45,6 +45,14 @@
     <p class="small">El pedido sale de la cola del piso: quien lo tenía lo pierde, lo pickeado se conserva y se abre su incidencia DET. Si no seleccionas ninguna caja, solo se detiene.</p>
     <label>Motivo <select name="motivo" required>{% for valor, texto in motivos_detener %}<option value="{{ valor }}">{{ texto }}</option>{% endfor %}</select></label>
     <label>Detalle <input type="text" name="detalle" maxlength="300" placeholder="Qué pasó" style="width:100%"></label>
+    {% if regreso_picking and regreso_picking.piezas %}
+    {# Lo escaneado en picking (Chema 2026-10-21): el kardex no se ha movido, solo se anota y el avance vuelve a cero. #}
+    <div style="padding:8px;border:1px solid var(--hair);border-radius:8px;margin-top:8px">
+      <label class="small"><input type="checkbox" name="regresar_picking" value="1"{% if not regreso_picking.puede %} disabled{% endif %}> Regresar a sus racks lo ya escaneado en picking: el avance vuelve a cero y al reanudar se pickea de nuevo (las piezas siguen apartadas en el kardex). Regresa:</label>
+      <ul class="small" style="margin:2px 0 0 22px">{% for r in regreso_picking.piezas %}<li>{{ r.piezas }} × {{ r.sku }} → <span class="mono">{{ r.donde|default:"sin posición conocida" }}</span>{% if r.lote %} · lote <span class="mono">{{ r.lote }}</span>{% endif %}</li>{% endfor %}</ul>
+      {% if regreso_picking.motivo_no %}<div class="small muted">{{ regreso_picking.motivo_no }}</div>{% endif %}
+    </div>
+    {% endif %}
     {% if cajas_parar %}
     <div class="small muted" style="margin-top:8px">Cajas en bodega. Marca lo que aplique a cada una:</div>
     {% for t in cajas_parar %}
