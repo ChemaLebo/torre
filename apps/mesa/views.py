@@ -3867,6 +3867,10 @@ def _guardar_tienda(request, cliente):
     webhook_secret = (request.POST.get("webhook_secret") or "").strip()
     location_id = (request.POST.get("location_id") or "").strip()
     activo = request.POST.get("activo") == "on"
+    # Credenciales de la app custom para conectar por OAuth desde Torre (Chema 2026-10-21).
+    client_id = (request.POST.get("client_id") or "").strip()
+    client_secret = (request.POST.get("client_secret") or "").strip()
+    read_all_orders = request.POST.get("read_all_orders") == "on"
 
     tienda_id = (request.POST.get("tienda_id") or "").strip()
     duplicada = Tienda.objects.filter(dominio=dominio)
@@ -3877,6 +3881,7 @@ def _guardar_tienda(request, cliente):
         delta = {}
         for campo, nuevo in (
             ("dominio", dominio), ("location_id", location_id), ("activo", activo),
+            ("client_id", client_id), ("read_all_orders", read_all_orders),
         ):
             viejo = getattr(tienda, campo)
             if viejo != nuevo:
@@ -3890,6 +3895,9 @@ def _guardar_tienda(request, cliente):
         if webhook_secret and tienda.webhook_secret != webhook_secret:
             tienda.webhook_secret = webhook_secret
             delta["webhook_secret"] = "actualizado (el valor no se registra)"
+        if client_secret and tienda.client_secret != client_secret:
+            tienda.client_secret = client_secret
+            delta["client_secret"] = "actualizado (el valor no se registra)"
         tienda.save()
         registrar_evento(
             "tienda", tienda.dominio, "edicion", actor=request.user, cliente=cliente,
@@ -3902,11 +3910,14 @@ def _guardar_tienda(request, cliente):
     tienda = Tienda.objects.create(
         cliente=cliente, dominio=dominio, token=token,
         webhook_secret=webhook_secret, location_id=location_id, activo=activo,
+        client_id=client_id, client_secret=client_secret, read_all_orders=read_all_orders,
     )
     registrar_evento(
         "tienda", tienda.dominio, "alta", actor=request.user, cliente=cliente,
-        delta={"tienda_id": tienda.pk}, motivo="Alta de tienda desde Mesa de Control",
+        delta={"tienda_id": tienda.pk, "con_app": bool(client_id)}, motivo="Alta de tienda desde Mesa de Control",
     )
+    if client_id and client_secret and not token:
+        return f"Tienda {tienda.dominio} guardada. Ahora Conectar con Shopify desde la tabla."
     return (
         f"Tienda {tienda.dominio} conectada. Pega el webhook en Shopify: "
         f"/hooks/shopify/{tienda.pk}/."

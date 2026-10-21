@@ -101,6 +101,22 @@
         {% if tienda_editar.webhook_secret %}<div class="small muted">Secret actual: <span class="mono">…{{ tienda_editar.webhook_secret|slice:"-4:" }}</span></div>{% endif %}
       </div>
       <div>
+        <label for="id_tienda_client_id">Client ID de la app custom (Dev Dashboard → Settings → Client credentials)</label>
+        <input type="text" name="client_id" id="id_tienda_client_id" placeholder="para Conectar con Shopify desde Torre"
+               value="{{ tienda_editar.client_id|default:'' }}">
+      </div>
+      <div>
+        <label for="id_tienda_client_secret">Client secret de la app</label>
+        <input type="password" name="client_secret" id="id_tienda_client_secret" autocomplete="new-password"
+               placeholder="{% if tienda_editar.client_secret %}vacío = conservar el actual{% else %}firma el callback de OAuth y los webhooks por API{% endif %}">
+        {% if tienda_editar.client_secret %}<div class="small muted">Secret actual: <span class="mono">…{{ tienda_editar.client_secret|slice:"-4:" }}</span></div>{% endif %}
+      </div>
+      <div>
+        <label for="id_tienda_read_all_orders">Soporte concedió read_all_orders</label>
+        <input type="checkbox" name="read_all_orders" id="id_tienda_read_all_orders" {% if tienda_editar.read_all_orders %}checked{% endif %}>
+        <div class="small muted">Órdenes de más de 60 días. Se pide al conectar solo si Soporte lo autorizó para esta app.</div>
+      </div>
+      <div>
         <label for="id_tienda_activo">Activa</label>
         <input type="checkbox" name="activo" id="id_tienda_activo"
                {% if not tienda_editar or tienda_editar.activo %}checked{% endif %}>

@@ -32,6 +32,30 @@ class Tienda(models.Model):
         max_length=60, blank=True,
         help_text="Location de Shopify que operamos (id numérico o GID)",
     )
+    # Conexión por OAuth desde Torre (Chema 2026-10-21): la app custom del Dev
+    # Dashboard de ESTA tienda (una app por tienda: la distribución custom no
+    # cruza merchants). Con client_id y client_secret, "Conectar con Shopify"
+    # pide los permisos, guarda el token y deja los webhooks por API; sin ellos
+    # la tienda sigue operando con el token pegado a mano, como antes.
+    client_id = models.CharField(
+        max_length=80, blank=True,
+        help_text="Client ID de la app custom (Dev Dashboard → Settings → Client credentials)",
+    )
+    client_secret = models.CharField(
+        max_length=200, blank=True,
+        help_text="Client secret de la app: firma el callback de OAuth y los webhooks creados por API",
+    )
+    scopes = models.TextField(
+        blank=True, help_text="Permisos otorgados en la última conexión, separados por coma",
+    )
+    read_all_orders = models.BooleanField(
+        default=False,
+        help_text="Soporte de Shopify concedió read_all_orders a esta app: se pide al conectar",
+    )
+    oauth_state = models.CharField(
+        max_length=64, blank=True, help_text="Nonce de la conexión en curso (vacío = ninguna)",
+    )
+    ts_conectada = models.DateTimeField(null=True, blank=True, help_text="Última conexión por OAuth")
     activo = models.BooleanField(default=True)
     checkpoint_reconciliacion = models.DateTimeField(
         null=True, blank=True,

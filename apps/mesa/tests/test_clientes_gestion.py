@@ -807,6 +807,30 @@ class TiendasTests(BaseGestionClientes):
         detalle = self.client.get(self.url)
         self.assertContains(detalle, f"/hooks/shopify/{tienda.pk}/")
 
+    def test_credenciales_de_la_app_se_guardan_sin_registrar_el_secret(self):
+        """Chema 2026-10-21: client ID y secret de la app custom para Conectar con Shopify desde Torre."""
+        from apps.integraciones.models import Tienda
+
+        respuesta = self.client.post(self.url, {
+            "accion": "tienda_guardar", "dominio": "caney.myshopify.com", "activo": "on",
+            "client_id": "abc123", "client_secret": "shhh-app-secret", "read_all_orders": "on",
+        }, follow=True)
+        self.assertContains(respuesta, "Ahora Conectar con Shopify")
+        tienda = Tienda.objects.get(dominio="caney.myshopify.com")
+        self.assertEqual((tienda.client_id, tienda.client_secret, tienda.read_all_orders), ("abc123", "shhh-app-secret", True))
+        evento = EventoAuditoria.objects.get(entidad="tienda", entidad_id="caney.myshopify.com", accion="alta")
+        self.assertNotIn("shhh", str(evento.delta))
+        # Editar sin secret lo conserva; el delta no lo registra.
+        self.client.post(self.url, {
+            "accion": "tienda_guardar", "tienda_id": tienda.pk, "dominio": "caney.myshopify.com", "activo": "on",
+            "client_id": "abc123", "client_secret": "", "read_all_orders": "",
+        }, follow=True)
+        tienda.refresh_from_db()
+        self.assertEqual((tienda.client_secret, tienda.read_all_orders), ("shhh-app-secret", False))
+        formulario = self.client.get(self.url + f"?tienda={tienda.pk}")
+        self.assertContains(formulario, 'name="client_id"')
+        self.assertNotContains(formulario, "shhh-app-secret")
+
     def test_dominio_duplicado_es_error(self):
         from apps.integraciones.models import Tienda
 
