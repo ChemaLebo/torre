@@ -19,7 +19,7 @@ from django.utils import timezone
 from apps.core.models import EvidenciaFoto
 from apps.core.services import registrar_evento
 
-from .models import LineaPedido, Pedido
+from .models import LineaPedido, Pedido, PickLinea
 
 # Evidencia de empaque (C1 — fin de la paradoja de la evidencia): al empacar
 # la guía AÚN NO existe, así que aquí solo se exige la foto del CONTENIDO.
@@ -2136,6 +2136,8 @@ def reiniciar_picking(pedido, actor, motivo=""):
         for linea in lineas:
             linea.cantidad_pickeada = 0
             linea.save(update_fields=["cantidad_pickeada"])
+        # Lote por pedido: lo que se anotó al escanear se vuelve a anotar al re-escanear.
+        PickLinea.objects.filter(linea__in=lineas, estado=PickLinea.PICKEADO).delete()
         registrar_evento(
             "pedido", pedido.pk, "picking_reiniciado", actor=actor, cliente=pedido.cliente,
             delta={"avance_anterior": avance},
@@ -2160,7 +2162,7 @@ def rechazar_transferencia(pedido, usuario):
     return pedido
 
 
-def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
+def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None, *, ubicacion=None, lote=None):
     """Confirma unidades pickeadas de una línea, por escaneo.
 
     Si viene codigo_escaneado, valida contra el código de barras (o código)
@@ -2168,6 +2170,11 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
     Atómico con select_for_update de la línea: dos escaneos concurrentes se
     serializan y el segundo valida sobre el avance FRESCO (nada se pierde ni
     se pasa del pedido).
+    `ubicacion` / `lote` (Chema 2026-10-22, lote por pedido): de dónde salió
+    la pieza según el escaneo (el piso resuelve el lote del QR y la posición
+    del rack o del FEFO); queda en PickLinea para que empacar y la salida
+    resten exactamente eso. Sin ellos la pieza queda "sin registro" (pick
+    automático, hija de kit, seed) y se resta como siempre.
     """
     with transaction.atomic():
         fresca = (
@@ -2207,9 +2214,14 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None):
             )
         fresca.cantidad_pickeada += cantidad
         fresca.save(update_fields=["cantidad_pickeada"])
+        PickLinea.objects.create(linea=fresca, ubicacion=ubicacion, lote=lote, cantidad=cantidad)
         registrar_evento(
             "linea_pedido", fresca.pk, "pick", actor=actor, cliente=pedido.cliente,
-            delta={"sku": fresca.sku.codigo, "cantidad": cantidad, "pickeada": fresca.cantidad_pickeada},
+            delta={
+                "sku": fresca.sku.codigo, "cantidad": cantidad, "pickeada": fresca.cantidad_pickeada,
+                "posicion": ubicacion.codigo if ubicacion is not None else None,
+                "lote": lote.codigo if lote is not None else None,
+            },
             motivo=f"Pick de {pedido.folio}",
         )
     # La instancia del caller refleja el avance real (las vistas la re-pintan).
@@ -2279,11 +2291,13 @@ def declarar_contenido_kit(linea_kit, items, actor, caja=None):
                     f"Sin stock de {sku.codigo} para el kit; no se apartó nada — "
                     "elige otro producto o avisa a Mesa."
                 )
-            LineaPedido.objects.create(
+            hija = LineaPedido.objects.create(
                 pedido=pedido, sku=sku, cantidad=piezas,
                 cantidad_pickeada=piezas, reservada=True, parte_de_kit=linea_kit,
                 kit_caja=caja,
             )
+            # Sin registro de posición ni lote: el packer las tiene en la mano; se restan FEFO al empacar.
+            PickLinea.objects.create(linea=hija, cantidad=piezas)
         pedido.peso_esperado_gr = (pedido.peso_esperado_gr or 0) + sum(
             (s.peso_gr or 0) * c for s, c in consolidadas.items()
         )

@@ -1454,24 +1454,43 @@ def _picking_escanear(request, pedido, reiniciado=False):
             f"La línea de {candidatas[0].sku.codigo} ya está completa. No pickees de más."
         )
 
-    if lote_escaneado is not None and not linea.sku.es_kit:
+    # Lote por pedido (Chema 2026-10-22): cada escaneo anota de qué posición y
+    # lote salió la pieza (PickLinea). El QR da el lote; la posición es la del
+    # rack fijo (o la del FEFO sin rack). Un producto con lote exige el QR:
+    # con el código de barras a secas no sabríamos qué lote se llevó.
+    ubicacion = lote = None
+    if not linea.sku.es_kit:
+        from apps.catalogo.models import Lote  # lazy: modelo de otra app
         from apps.catalogo.services import rack_de  # lazy por contrato
         from apps.inventario.services import lote_que_sale_primero  # lazy por contrato
 
         eleccion = lote_que_sale_primero(linea.sku, rack_de(linea.sku))
-        if eleccion is not None:
-            lote_fefo, saldo = eleccion
-            esperado = lote_fefo.codigo if lote_fefo else ""
-            if lote_escaneado != esperado:
-                return error(
-                    f"Esa caja es del lote {lote_escaneado or 'sin lote'}; primero sale el lote {esperado or 'sin lote'}"
-                    f" (caduca antes), que está en {saldo.ubicacion.codigo}. Regresa esta caja."
-                )
+        if lote_escaneado is not None:
+            if eleccion is not None:
+                lote_fefo, saldo = eleccion
+                esperado = lote_fefo.codigo if lote_fefo else ""
+                if lote_escaneado != esperado:
+                    return error(
+                        f"Esa caja es del lote {lote_escaneado or 'sin lote'}; primero sale el lote {esperado or 'sin lote'}"
+                        f" (caduca antes), que está en {saldo.ubicacion.codigo}. Regresa esta caja."
+                    )
+                ubicacion, lote = saldo.ubicacion, lote_fefo
+            elif lote_escaneado:
+                lote = Lote.objects.filter(sku=linea.sku, codigo=lote_escaneado).first()
+        elif linea.sku.requiere_lote:
+            return error(
+                f"{linea.sku.codigo} lleva lote: escanea el QR de la etiqueta de la caja, "
+                "no el código de barras."
+            )
+        elif eleccion is not None:
+            lote, saldo = eleccion
+            ubicacion = saldo.ubicacion
 
     from apps.pedidos.services import confirmar_linea_pick  # lazy por contrato
     try:
         confirmar_linea_pick(
-            linea, request.POST.get("cantidad") or "1", request.user, codigo_escaneado=codigo
+            linea, request.POST.get("cantidad") or "1", request.user, codigo_escaneado=codigo,
+            ubicacion=ubicacion, lote=lote,
         )
     except ValueError as exc:
         return error(str(exc))

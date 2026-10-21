@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import LineaPedido, Pedido
+from .models import LineaPedido, Pedido, PickLinea
 
 
 class LineaPedidoInline(admin.TabularInline):
@@ -35,3 +35,23 @@ class LineaPedidoAdmin(admin.ModelAdmin):
     list_filter = ("reservada",)
     search_fields = ("pedido__folio", "sku__codigo")
     raw_id_fields = ("pedido", "sku", "lote_asignado")
+
+
+@admin.register(PickLinea)
+class PickLineaAdmin(admin.ModelAdmin):
+    """Piezas por pedido (Chema 2026-10-22): de qué posición y lote salió cada
+    pieza pickeada y en qué etapa va; solo lectura operativa (se escribe desde
+    el picking, el empaque y la salida)."""
+    list_display = ("pedido_folio", "sku_codigo", "ubicacion", "lote", "cantidad", "estado", "caja", "ts")
+    list_filter = ("estado",)
+    search_fields = ("linea__pedido__folio", "linea__sku__codigo", "lote__codigo", "ubicacion__codigo")
+    raw_id_fields = ("linea", "lote", "ubicacion", "caja")
+    list_select_related = ("linea__pedido", "linea__sku", "ubicacion", "lote", "caja")
+
+    @admin.display(description="pedido", ordering="linea__pedido__folio")
+    def pedido_folio(self, obj):
+        return obj.linea.pedido.folio
+
+    @admin.display(description="producto", ordering="linea__sku__codigo")
+    def sku_codigo(self, obj):
+        return obj.linea.sku.codigo

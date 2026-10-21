@@ -530,3 +530,56 @@ class LineaPedido(models.Model):
     def por_pickear(self):
         """Lo que falta por pickear de lo que tiene stock (tope del escaneo)."""
         return max(self.con_stock - self.cantidad_pickeada, 0)
+
+
+class PickLinea(models.Model):
+    """De dónde salió cada pieza pickeada (Chema 2026-10-22): un renglón por
+    escaneo con la posición y el lote que Torre resolvió en ese momento (el
+    QR de la etiqueta da el lote; el rack fijo o el FEFO dan la posición).
+
+    Es la liga pedido ↔ posición/lote que el saldo no tiene (el saldo es por
+    producto): empacar resta exactamente estas filas, la salida resta de
+    empaque lo que viajó en cada caja y los regresos vuelven con su lote.
+    Sin posición ni lote = pick sin registro (hija de kit, pick automático,
+    seed): se resta como siempre (FEFO) y Mesa lo muestra así. `estado`
+    sigue a la pieza: pickeada → en empaque (al pesar la tanda) → despachada
+    (manifiesto, con su caja) o regresada (quitar de salida, cancelación,
+    reingreso). Un picking reiniciado borra sus filas pickeadas.
+    """
+
+    PICKEADO = "pickeado"
+    EN_EMPAQUE = "en_empaque"
+    DESPACHADO = "despachado"
+    REGRESADO = "regresado"
+    ESTADOS = [
+        (PICKEADO, "Pickeada"),
+        (EN_EMPAQUE, "En empaque"),
+        (DESPACHADO, "Despachada"),
+        (REGRESADO, "Regresada"),
+    ]
+
+    linea = models.ForeignKey(LineaPedido, on_delete=models.CASCADE, related_name="picks")
+    ubicacion = models.ForeignKey(
+        "catalogo.Ubicacion", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
+    lote = models.ForeignKey(
+        "catalogo.Lote", null=True, blank=True, on_delete=models.PROTECT, related_name="picks",
+    )
+    cantidad = models.PositiveIntegerField()
+    estado = models.CharField(max_length=12, choices=ESTADOS, default=PICKEADO, db_index=True)
+    caja = models.ForeignKey(
+        "envios.Paquete", null=True, blank=True, on_delete=models.SET_NULL, related_name="picks",
+        help_text="Caja con la que salió (manifiesto) o a la que se asignó al regresar",
+    )
+    ts = models.DateTimeField(auto_now_add=True)
+    ts_estado = models.DateTimeField(null=True, blank=True, help_text="Último cambio de etapa")
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "pieza pickeada"
+        verbose_name_plural = "piezas pickeadas"
+
+    def __str__(self):
+        donde = self.ubicacion.codigo if self.ubicacion_id else "sin posición"
+        lote = f" L:{self.lote.codigo}" if self.lote_id else ""
+        return f"línea {self.linea_id} · {self.cantidad} × {donde}{lote} [{self.estado}]"
