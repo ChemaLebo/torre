@@ -281,6 +281,9 @@ def reponer_lineas(pedido, seleccion, actor, incidencia=None):
     espera a que salga."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
+    # Una caja que ya se entregó pero cuyo registro quedó planeado/empacado (fantasma) se
+    # cierra ANTES del candado: así cuenta como la caja de origen y el piso no la vuelve a pedir.
+    cerrar_cajas_fantasma(pedido, actor)
     reponibles = piezas_reponibles(pedido)
     if not reponibles:
         raise ValueError(
@@ -509,6 +512,7 @@ def _tras_reserva(pedido, actor):
         ]},
         motivo="Fulfillment parcial: lo que faltaba ya tiene reserva y entra a picking.",
     )
+    cerrar_cajas_fantasma(pedido, actor)
     _planificar_best_effort(pedido)
 
 
@@ -1866,6 +1870,32 @@ def _completar_plan_si_falta(pedido, actor):
     return True
 
 
+def cerrar_cajas_fantasma(pedido, actor):
+    """Cajas del pedido cuyo registro sigue en PLANEADO/EN_EMPAQUE/EMPACADO
+    aunque su guía ya salió o se entregó (empaque entero anterior al
+    2026-10-15; PED-00341): al reabrir el pedido (reposición, segunda ola) se
+    cierran como DESPACHADO con evento `caja_fantasma_cerrada`, sin tocar
+    kardex ni guías (eso ya pasó cuando salió el pedido). Regresa las cerradas."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    cerradas = []
+    for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).prefetch_related("guias").order_by("numero"):
+        if not caja.ya_salio:
+            continue
+        guia = next(g for g in caja.guias.all() if g.es_activa)
+        motivo = f"Cierre de registro: la caja salió con su guía {guia.numero} ({guia.estado}); el registro seguía en {caja.estado}."
+        if caja.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE):
+            caja.transicionar(Paquete.EMPACADO, actor=actor, motivo=motivo[:300])
+        caja.transicionar(Paquete.DESPACHADO, actor=actor, motivo=motivo[:300])
+        registrar_evento(
+            "pedido", pedido.pk, "caja_fantasma_cerrada", actor=actor, cliente=pedido.cliente,
+            delta={"caja": caja.numero, "guia": guia.numero, "estado_guia": guia.estado},
+            motivo=motivo[:300],
+        )
+        cerradas.append(caja)
+    return cerradas
+
+
 def asegurar_plan_para_empaque(pedido, actor):
     """Candado del wizard (Chema 2026-10-20): sin plan de cajas NO se empaca.
     Red de seguridad: en el flujo normal el plan nace al ingresar o en
@@ -2576,7 +2606,8 @@ def empacar_caja(paquete, actor, peso_real_gr, foto_contenido, caja=None, dims=N
     )
 
     cajas = list(pedido.paquetes.all())
-    if all(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in cajas):
+    # Una caja fantasma (guía ya ida, registro viejo) cuenta como hecha (2026-10-21).
+    if all(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) or c.ya_salio for c in cajas):
         if pedido.estado == Pedido.EMPACADO:
             # Reempaque por caja: el pedido ya confirmó su pick y ya es
             # EMPACADO; solo se actualiza el peso real total (sin segundo
@@ -2679,21 +2710,33 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
 # caja nueva que se suma después hace su propia ronda).
 
 
+def _en_la_mesa(caja):
+    """Una caja EMPACADO sigue en la mesa mientras no esté confirmada en salida
+    ni su guía haya salido (Chema 2026-10-21: lo que ya está en el corral o ya
+    se fue no vuelve a aparecer en el wizard)."""
+    return caja.ts_listo_salida is None and not caja.ya_salio
+
+
 def cajas_de_tanda(pedido):
-    """Cajas EMPACADO del pedido en bodega, por número: la tanda que el wizard
-    lleva de las etiquetas a Salida. Las despachadas ya no piden nada."""
+    """Cajas EMPACADO del pedido que siguen en la mesa, por número: la tanda
+    que el wizard lleva de las etiquetas a Salida. Las despachadas, las ya
+    confirmadas en salida y las fantasma (guía ya ida) no piden nada."""
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
-    return [c for c in sorted(pedido.paquetes.all(), key=lambda c: c.numero) if c.estado == Paquete.EMPACADO]
+    return [
+        c for c in sorted(pedido.paquetes.all(), key=lambda c: c.numero)
+        if c.estado == Paquete.EMPACADO and _en_la_mesa(c)
+    ]
 
 
 def _tanda_bajo_candado(pedido):
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
-    return list(
+    cajas = (
         Paquete.objects.select_for_update().filter(pedido=pedido, estado=Paquete.EMPACADO)
         .prefetch_related("guias").order_by("numero")
     )
+    return [c for c in cajas if not c.ya_salio]
 
 
 def _numeros(cajas):
@@ -2975,7 +3018,7 @@ def imprimir_guias_activas(pedido):
 
     guias = [
         g for g in pedido.guias.filter(estado=Guia.GUIA_CREADA).select_related("paquete").order_by("id")
-        if g.paquete is None or g.paquete.estado != Paquete.DESPACHADO
+        if g.paquete is None or (g.paquete.estado != Paquete.DESPACHADO and not g.paquete.ya_salio)
     ]
     mensajes = []
     for guia in guias:
@@ -3156,9 +3199,13 @@ def cajas_por_salir(pedido):
 
 def cajas_listas_en_salida(pedido):
     """De cajas_por_salir, las que ya pasaron por "Lista en salida"
-    (ts_listo_salida) y tienen guía viva: las que Salida lista y el chofer se
-    puede llevar (Chema 2026-10-20: la puerta a Salida es por caja)."""
-    return [c for c in cajas_por_salir(pedido) if c.ts_listo_salida is not None and c.guia_activa is not None]
+    (ts_listo_salida) y tienen guía viva que aún no sale: las que Salida lista
+    y el chofer se puede llevar (Chema 2026-10-20: la puerta a Salida es por
+    caja; una caja fantasma cuya guía ya se fue no se ofrece)."""
+    return [
+        c for c in cajas_por_salir(pedido)
+        if c.ts_listo_salida is not None and c.guia_activa is not None and not c.ya_salio
+    ]
 
 
 def salida_por_carrier(pedido, guia, ts, descripcion=""):

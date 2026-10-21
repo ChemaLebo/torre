@@ -330,6 +330,17 @@ class Paquete(models.Model):
         return next((g for g in self.guias.all() if g.es_activa), None)
 
     @property
+    def ya_salio(self):
+        """True si alguna guía viva de la caja ya se movió con el carrier
+        (estado distinto de GUIA_CREADA: recolectada, en tránsito, entregada…),
+        diga lo que diga `estado`: cajas fantasma del empaque entero anterior
+        al 2026-10-15 que se quedaron PLANEADO/EMPACADO aunque se entregaron
+        (PED-00341, Chema 2026-10-21). El wizard, la tanda y Salida las
+        ignoran. Una GUIA_CREADA con `ts_recolectado_carrier` NO cuenta aquí:
+        esa es la caja que Salida premarca como "ya salió"."""
+        return any(g.es_activa and g.estado != Guia.GUIA_CREADA for g in self.guias.all())
+
+    @property
     def regresada(self):
         """True si el carrier devolvió esta caja (alguna guía suya en RETORNO)."""
         return any(g.estado == Guia.RETORNO for g in self.guias.all())

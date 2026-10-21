@@ -704,8 +704,8 @@ def generar_guias(pedido):
                 guias = [_crear_guia(pedido, carrier, servicio)]
     else:
         for paquete in paquetes:
-            if paquete.estado == Paquete.DESPACHADO:
-                continue  # ya salió: su guía (viva o cancelada) no se repone aquí
+            if paquete.estado == Paquete.DESPACHADO or paquete.ya_salio:
+                continue  # ya salió (aunque el registro diga otra cosa): su guía no se repone aquí
             try:
                 with transaction.atomic():
                     # Candado por caja: quien gane el lock compra la guía; el

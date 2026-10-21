@@ -404,7 +404,7 @@ class Pedido(models.Model):
             # la salida de las demás.
             return all(
                 c.ts_cierre is not None and c.ts_listo_salida is not None and c.guia_activa is not None
-                for c in cajas if c.estado == "EMPACADO"
+                for c in cajas if c.estado == "EMPACADO" and not c.ya_salio  # una caja fantasma ya no pide nada
             )
         if not any(g.es_activa for g in self.guias.all()):
             return False

@@ -1175,7 +1175,7 @@ def _paquetes_con_lineas(pedido):
     from apps.envios.models import Paquete  # import local: el plan puede no existir aún
     return list(
         Paquete.objects.filter(pedido=pedido)
-        .prefetch_related("lineas__linea_pedido__sku")
+        .prefetch_related("lineas__linea_pedido__sku", "guias")
         .order_by("numero")
     )
 
@@ -1555,13 +1555,13 @@ def _por_reempacar(pedido):
     (2026-10-20) las cajas confirmadas pueden salir antes de que la nueva se
     empaque, así que una caja ya en la calle no frena a la que falta."""
     cajas = list(pedido.paquetes.all())
-    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
+    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE) and not c.ya_salio]
     return len(cajas) > 1 and bool(pendientes)
 
 
 def _que_falta_empaque(pedido):
     """Qué le falta a un pedido para salir de la mesa de empaque, en corto (Mi turno)."""
-    cajas = list(pedido.paquetes.all())
+    cajas = [c for c in pedido.paquetes.all() if not c.ya_salio]  # una caja fantasma ya no pide nada
     pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
     if pedido.estado == Pedido.EMPACADO and pendientes and _por_reempacar(pedido):
         return "sin empacar: caja " + ", ".join(str(c.numero) for c in pendientes)
@@ -1811,12 +1811,12 @@ def _chips_cajas(cajas, actual=None):
     """Chips de navegación del wizard: cada caja con su estado corto y si es la abierta."""
     chips = []
     for caja in cajas:
-        if caja.estado == Paquete.EMPACADO and caja.ts_listo_salida is not None:
+        if caja.estado == Paquete.DESPACHADO or caja.ya_salio:
+            estado = "despachada"  # también la caja fantasma cuya guía ya se fue
+        elif caja.estado == Paquete.EMPACADO and caja.ts_listo_salida is not None:
             estado = "lista"
         elif caja.ts_cierre is not None:
             estado = "cerrada"
-        elif caja.estado == Paquete.DESPACHADO:
-            estado = "despachada"
         elif caja.estado == Paquete.EMPACADO:
             estado = "empacada"
         else:
@@ -1875,7 +1875,8 @@ def _render_paso_empacar(request, pedido, elegida=None):
         return _render_revisar_caja(request, pedido, elegida)
     checklist, naked = _checklist_empaque(pedido)
     cajas = _paquetes_con_lineas(pedido)
-    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE)]
+    # Solo lo que de verdad falta armar: una caja fantasma (guía ya ida) no se vuelve a pedir (2026-10-21).
+    pendientes = [c for c in cajas if c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE) and not c.ya_salio]
     fallo_previo = request.session.pop(f"empaque_fallido_{pedido.pk}", None)
     todas = list(pedido.lineas.select_related("sku"))
     lineas = [l for l in todas if l.pendiente > 0]  # lo que esta ola empaca
@@ -1983,7 +1984,12 @@ def _render_tanda(request, pedido, elegida=None):
         pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
     )
     cajas_empacadas = [c for c in cajas if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
-    tanda = [c for c in cajas_empacadas if c.estado == Paquete.EMPACADO]  # las despachadas ya no piden nada
+    # La tanda es lo que sigue en la mesa (Chema 2026-10-21): fuera las despachadas,
+    # las ya confirmadas en salida y las fantasma cuya guía ya se fue.
+    tanda = [
+        c for c in cajas_empacadas
+        if c.estado == Paquete.EMPACADO and c.ts_listo_salida is None and not c.ya_salio
+    ]
     con_guia = {g.paquete_id for g in guias}
     sin_guia = [c for c in tanda if c.pk not in con_guia]
     contexto = {
@@ -2004,10 +2010,10 @@ def _render_tanda(request, pedido, elegida=None):
             pedido.estado == Pedido.PARCIALMENTE_DESPACHADO and bool(sin_guia)
         ),
     }
-    if not cajas_empacadas:
-        # Sin cajas físicas (histórico: empacado entero con cierre único, o
-        # plan nacido con la guía): completo → en salida; si no, solo queda
-        # reintentar la guía o que Mesa replanee (el cierre único ya no existe).
+    if not cajas_empacadas or not any(c.estado == Paquete.EMPACADO and not c.ya_salio for c in cajas_empacadas):
+        # Sin cajas físicas en la mesa (histórico: empacado entero con cierre
+        # único, plan nacido con la guía, o solo cajas fantasma): completo → en
+        # salida; si no, solo queda reintentar la guía o que Mesa replanee.
         if pedido.empaque_completo:
             contexto["paso"] = "en_salida"
         else:
@@ -2114,7 +2120,11 @@ def _empaque_caja(request, pedido):
         return destino
 
     pedido.refresh_from_db()
-    quedan = pedido.paquetes.filter(estado__in=(Paquete.PLANEADO, Paquete.EN_EMPAQUE)).exists()
+    # Una caja fantasma (guía ya ida) no cuenta como pendiente (2026-10-21).
+    quedan = any(
+        c.estado in (Paquete.PLANEADO, Paquete.EN_EMPAQUE) and not c.ya_salio
+        for c in pedido.paquetes.prefetch_related("guias")
+    )
     if pedido.estado != Pedido.EMPACADO or quedan:
         messages.success(
             request,
@@ -2571,7 +2581,7 @@ def _salida_escanear(request, corral, carrier, listos, datos):
     if paquete is not None and listo.cajas_salida:
         caja = next((c for c in listo.cajas_salida if c.pk == paquete.pk), None)
         if caja is None:
-            if paquete.estado == Paquete.DESPACHADO:
+            if paquete.estado == Paquete.DESPACHADO or paquete.ya_salio:
                 return error(f"La caja {paquete.numero} de {pedido.folio} ya salió en otro manifiesto.")
             suyo = _carrier_de_caja(paquete, pedido)
             if suyo != carrier:
