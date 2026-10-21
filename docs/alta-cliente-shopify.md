@@ -16,7 +16,7 @@ Proceso vigente desde el 2026-10-21 (primer uso: Soda Mate). Sustituye el link d
 3. Configuración de la versión:
    - App URL de relleno: `https://fulfillment.wop.partners/`.
    - Redirect URL **exacta**: `https://fulfillment.wop.partners/oauth/callback`.
-   - "Use legacy install flow" activado (es el authorization code grant, el flujo de apps sin interfaz).
+   - "Use legacy install flow" **activado**. Es el authorization code grant: Shopify muestra los permisos, regresa a la redirect URL con un código y Torre lo cambia por el token. Es el único flujo para apps sin interfaz dentro del admin, como Torre; el "flujo nuevo" de Shopify (managed installation con token exchange) solo sirve para apps embebidas. Lo que Torre dejó de usar son los links de instalación que caducan y el token copiado a mano, no este ajuste. Si se apaga, Torre no recibe ningún token.
    - Access scopes, los 10 de Torre: `read_orders`, `write_orders`, `read_products`, `read_inventory`, `write_inventory`, `read_locations`, `read_fulfillments`, `write_fulfillments`, `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`. `read_all_orders` solo si Soporte ya lo concedió a ESTA app (paso 6).
 4. **Distribution → Custom distribution** → la tienda del cliente (su dominio myshopify). "Allow multi-store installs" apagado: solo aplicaría a varias tiendas de una misma organización Plus.
 5. **Release / publicar la versión**: debe quedar Active. No generes el link de instalación: lo sustituye el botón.
