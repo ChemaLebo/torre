@@ -36,7 +36,10 @@ class CajasSinSalidaTests(TestCase):
         if pedido is None:
             pedido = crear_pedido(self.cliente, self.tienda, estado=Pedido.GUIA_GENERADA, es_local=False)
             LineaPedido.objects.create(pedido=pedido, sku=self.sku, cantidad=1, reservada=True, cantidad_pickeada=1)
-        caja = Paquete.objects.create(pedido=pedido, numero=numero, peso_kg=Decimal("4"), carrier=carrier, estado=Paquete.EMPACADO, ts_cierre=nacio)
+        caja = Paquete.objects.create(
+            pedido=pedido, numero=numero, peso_kg=Decimal("4"), carrier=carrier, estado=Paquete.EMPACADO,
+            ts_cierre=nacio, ts_etiquetas=nacio, ts_listo_salida=nacio,
+        )
         PaqueteLinea.objects.create(paquete=caja, linea_pedido=pedido.lineas.first(), cantidad=1)
         guia = Guia.objects.create(pedido=pedido, paquete=caja, carrier=carrier, numero=f"G-{pedido.pk}-{numero}", proveedor="mock", estado=Guia.GUIA_CREADA)
         Guia.objects.filter(pk=guia.pk).update(creado=nacio)
@@ -62,6 +65,15 @@ class CajasSinSalidaTests(TestCase):
         # El carrier la reportó: ya no es "sin salida".
         Guia.objects.filter(pk=guia.pk).update(ts_recolectado_carrier=_en(9, 11))
         self.assertEqual(services.cajas_sin_salida(_en(9, 12)), [])
+
+    def test_una_caja_sin_confirmar_en_salida_no_es_caja_sin_salida(self):
+        """Sin "Lista en salida" la caja no está en el corral: es Completar empaquetado, no CSS (2026-10-20)."""
+        pedido, caja, guia = self._caja_lista(_en(8, 10))
+        self._salida("estafeta", _en(9, 11))
+        Paquete.objects.filter(pk=caja.pk).update(ts_listo_salida=None)
+        self.assertEqual(services.cajas_sin_salida(_en(9, 12)), [])
+        Paquete.objects.filter(pk=caja.pk).update(ts_listo_salida=_en(8, 10))
+        self.assertEqual([f["caja"].pk for f in services.cajas_sin_salida(_en(9, 12))], [caja.pk])
 
     def test_el_domingo_no_cuenta(self):
         # Sábado 10 de octubre 18:00; el lunes 12 a las 17:00 son 47 h con un domingo en medio: faltan.

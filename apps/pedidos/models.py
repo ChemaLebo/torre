@@ -395,6 +395,10 @@ class Pedido(models.Model):
         """
         cajas = [c for c in self.paquetes.all() if c.estado in ("EMPACADO", "DESPACHADO")]
         if cajas:
+            if self.estado == "EMPACADO" and any(c.estado in ("PLANEADO", "EN_EMPAQUE") for c in self.paquetes.all()):
+                # Replaneo con guía comprada (2026-10-20): hay cajas nuevas por
+                # empacar aunque las demás ya estén listas o en la calle.
+                return False
             # Solo las que siguen en bodega (2026-10-05): una caja despachada
             # cuya guía se canceló después (el carrier la perdió) ya no frena
             # la salida de las demás.

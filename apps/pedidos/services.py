@@ -3226,7 +3226,8 @@ def cajas_sin_salida(ahora=None):
     no ha reportado la caja, y desde que llegó ya cerró al menos una salida
     de su paquetería sin ella (el camión pasó y no se subió). Pedido con guía
     lista (GUIA_GENERADA / PARCIALMENTE_DESPACHADO) y caja EMPACADO con guía
-    viva; sin cajas por caja, la guía del pedido. Regresa [{pedido, caja,
+    viva y confirmada "Lista en salida" (sin confirmar no está en el corral);
+    sin cajas por caja, la guía del pedido. Regresa [{pedido, caja,
     guia, manifiesto, horas}] del más viejo al más nuevo."""
     from apps.envios.models import Guia, Manifiesto, Paquete  # lazy: modelos de otra app
     from apps.envios.services import CARRIER_LOCAL  # lazy por contrato
@@ -3244,6 +3245,8 @@ def cajas_sin_salida(ahora=None):
     for guia in guias:
         if guia.paquete_id and guia.paquete.estado != Paquete.EMPACADO:
             continue
+        if guia.paquete_id and guia.paquete.ts_listo_salida is None:
+            continue  # no está en el corral: es "Completar empaquetado", no "Caja sin salida" (2026-10-20)
         if not guia.paquete_id and cajas_por_salir(guia.pedido):
             continue
         plazo = timedelta(hours=HORAS_SIN_SALIDA * (1 + _domingos_entre(guia.creado, ahora)))

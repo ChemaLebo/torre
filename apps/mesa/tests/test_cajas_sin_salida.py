@@ -26,7 +26,10 @@ class CajaSinSalidaMesaTests(TestCase):
         self.pedido = crear_pedido(self.cliente, self.tienda, estado=Pedido.GUIA_GENERADA, es_local=False)
         linea = LineaPedido.objects.create(pedido=self.pedido, sku=sku, cantidad=1, reservada=True, cantidad_pickeada=1)
         nacio = timezone.now() - timezone.timedelta(days=3)
-        self.caja = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO, ts_cierre=nacio)
+        self.caja = Paquete.objects.create(
+            pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO,
+            ts_cierre=nacio, ts_etiquetas=nacio, ts_listo_salida=nacio,
+        )
         PaqueteLinea.objects.create(paquete=self.caja, linea_pedido=linea, cantidad=1)
         guia = Guia.objects.create(pedido=self.pedido, paquete=self.caja, carrier="estafeta", numero="EST-1", proveedor="mock", estado=Guia.GUIA_CREADA)
         Guia.objects.filter(pk=guia.pk).update(creado=nacio)

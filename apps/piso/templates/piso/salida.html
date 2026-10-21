@@ -64,7 +64,7 @@ document.addEventListener("DOMContentLoaded", function () {
     <span class="small muted">{{ corral.listos|length }} listo{{ corral.listos|length|pluralize }} para el chofer</span>
   </div>
 
-  {# Aquí solo hay pedidos con empaque completo: guía y foto de cierre en cada caja. #}
+  {# Aquí solo hay cajas confirmadas en salida: guía, evidencia y "Lista en salida" (por caja, 2026-10-20). #}
   {% if corral.listos %}
   {% for grupo in corral.carriers %}
   <hr class="sep">

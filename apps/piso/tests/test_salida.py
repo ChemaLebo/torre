@@ -439,6 +439,66 @@ class ManifiestoPorCajaTests(PisoTestCase):
         self.assertEqual(en_empaque, 0)
         self.assertNotContains(self.client.get(self.url), pedido.folio)
 
+    def test_solo_la_caja_confirmada_en_salida_sube_al_camion(self):
+        """Puerta por caja (Chema 2026-10-20): la caja con evidencia pero sin "Lista en
+        salida" no está en el corral; la otra sí sale y el pedido queda parcial."""
+        from apps.envios.models import Paquete
+
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        Paquete.objects.filter(pk=c2.pk).update(ts_listo_salida=None)
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, "1 por salir de 2")
+        # Escanearla en Registrar salida la rechaza diciendo qué le falta.
+        registrar = reverse("piso:salida_registrar") + "?corral=SAL-OTRO&carrier=puntopost"
+        c2.refresh_from_db()
+        respuesta = self.client.post(registrar, {"accion": "escanear", "codigo": c2.guia_activa.numero}, follow=True)
+        self.assertContains(respuesta, "La caja 2")
+        self.assertContains(respuesta, "no está confirmada en salida")
+        self.assertContains(respuesta, "Lista en salida")
+        # El manifiesto con las dos palomeadas se lleva solo la 1 y avisa por la 2.
+        respuesta = self.client.post(self.url, {
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "chofer": "Chofer Prueba", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "paquete_id": [c1.pk, c2.pk],
+        }, follow=True)
+        self.assertContains(respuesta, "la caja 2 se queda, no está confirmada en salida")
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.DESPACHADO, Paquete.EMPACADO, Pedido.PARCIALMENTE_DESPACHADO))
+        # Mi turno la sigue pidiendo en Completar empaquetado y la cuenta en salida por la caja 1.
+        home = self.client.get(reverse("piso:home"))
+        self.assertContains(home, "falta confirmar en salida: caja 2")
+
+    def test_un_pedido_de_vuelta_en_empaque_por_otra_caja_saca_las_confirmadas(self):
+        """Replaneo con guía comprada (Chema 2026-10-20): la caja nueva se empaca
+        mientras las confirmadas siguen en el corral y el chofer se las lleva; el
+        pedido no cambia de carril."""
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete
+
+        pedido, c1, c2 = self._pedido_dos_cajas()
+        Paquete.objects.create(pedido=pedido, numero=3, peso_kg=Decimal("2"), carrier="puntopost")  # planeada, sin guía
+        pedido.transicionar(Pedido.EMPACADO, motivo="Replaneo con guía comprada: caja 3 nueva")
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, pedido.folio)
+        self.assertContains(respuesta, "2 por salir de 2")  # la caja 3 aún no es física
+        respuesta = self.client.post(self.url, {
+            "accion": "manifiesto", "firma_png": FIRMA_PNG, "chofer": "Chofer Prueba", "corral": "SAL-OTRO", "carrier": "puntopost",
+            "paquete_id": [c1.pk, c2.pk],
+        }, follow=True)
+        self.assertContains(respuesta, "sigue en empaque por la caja 3")
+        pedido.refresh_from_db()
+        c1.refresh_from_db()
+        c2.refresh_from_db()
+        self.assertEqual((c1.estado, c2.estado), (Paquete.DESPACHADO, Paquete.DESPACHADO))
+        self.assertEqual(pedido.estado, Pedido.EMPACADO)
+        self.assertNotContains(self.client.get(self.url), pedido.folio)
+        # La caja 3 sigue viva para el piso: Completar empaquetado y el wizard en su paso de caja.
+        self.assertContains(self.client.get(reverse("piso:home")), "sin empacar: caja 3")
+        self.assertEqual(self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk])).context["paso"], "caja")
+
     def test_pedido_id_de_un_pedido_por_caja_sube_todas_sus_cajas(self):
         pedido, c1, c2 = self._pedido_dos_cajas()
         self.client.post(self.url, {
