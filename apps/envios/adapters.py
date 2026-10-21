@@ -110,6 +110,8 @@ PATRONES_ESTADO_ENVIA = [
     ("last_mile", "EN_RUTA"),
     # Intento fallido (antes que "entregado"/"delivered")
     ("delivery_attempt", "INTENTO_FALLIDO"),
+    # "Undeliverable" de iMile vía envia (censo 2026-10-21: 7 de 11 se entregaron después): cuenta como intento, no como retorno.
+    ("undeliverable", "INTENTO_FALLIDO"),
     ("intento", "INTENTO_FALLIDO"),
     ("failed", "INTENTO_FALLIDO"),
     ("attempt", "INTENTO_FALLIDO"),
@@ -135,7 +137,8 @@ PATRONES_ESTADO_ENVIA = [
     ("collect", "RECOLECTADO"),
     ("recolect", "RECOLECTADO"),
     ("recogido", "RECOLECTADO"),
-    # En tránsito
+    # En tránsito ("Shipped" de envia: 27 guías se quedaban en "guía creada" porque llegaba antes de "Picked Up", censo 2026-10-21)
+    ("shipped", "EN_TRANSITO"),
     ("transit", "EN_TRANSITO"),
     ("transito", "EN_TRANSITO"),
     ("camino", "EN_TRANSITO"),
@@ -175,6 +178,21 @@ def _quitar_acentos(texto):
     )
 
 
+# Estatus de envia.com que NO mueven la guía pero se reconocen como tales (censo
+# 2026-10-21): "Delayed" (28 guías), "Information" (23) y "N/A" (24 de iMile).
+# El poller los guarda con su texto en el historial; "Redirected" se trata
+# aparte (services: la caja queda por decidir).
+ESTATUS_NEUTROS_ENVIA = ("delayed", "information", "n_a", "redirected")
+
+
+def estatus_neutro_envia(texto):
+    """True si el estatus crudo de envia es uno de los neutros (no mueve la guía)."""
+    if not texto:
+        return False
+    clave = re.sub(r"[\s\-./]+", "_", _quitar_acentos(str(texto)).strip().lower())
+    return clave in ESTATUS_NEUTROS_ENVIA
+
+
 def normalizar_estado_envia(texto):
     """Estado/descripción cruda de envia.com → estado canónico de Guia.
 
@@ -186,6 +204,8 @@ def normalizar_estado_envia(texto):
     clave = re.sub(r"[\s\-./]+", "_", clave)
     if clave.upper() in ESTADOS_CANONICOS:
         return clave.upper()
+    if clave in ESTATUS_NEUTROS_ENVIA:
+        return None
     for patron, canonico in PATRONES_ESTADO_ENVIA:
         if patron in clave:
             return canonico
@@ -711,6 +731,7 @@ class EnviaAdapter(CarrierAdapter):
         )
         return {
             "estado": estado,
+            "crudo": str(crudo)[:80],  # el estatus tal cual (los neutros quedan en el historial con su texto)
             "descripcion": descripcion,
             "ts_evento": ts_evento,
             "raw": d0,

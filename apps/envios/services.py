@@ -1390,7 +1390,8 @@ def _guardar_eventos(guia, info, estado_nuevo, hubo_movimiento, ahora):
             ))
     elif hubo_movimiento:
         descripcion = (info.get("descripcion") or "")[:300]
-        crudo = str(info.get("estado") or "")[:80]
+        # Sin estado canónico (estatus neutro: Delayed, Information, N/A, Redirected) queda el texto del carrier.
+        crudo = str(info.get("estado") or info.get("crudo") or "")[:80]
         clave = (info.get("ts_evento"), crudo, descripcion)
         if clave not in vistos:
             nuevos.append(EventoGuia(

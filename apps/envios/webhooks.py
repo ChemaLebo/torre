@@ -95,7 +95,7 @@ def info_desde_envia(payload):
     ts = _parsear_fecha(datos.get("date") or datos.get("movementDate") or payload.get("created_at"))
     estado = normalizar_estado_envia(crudo) or normalizar_estado_envia(descripcion)
     return numero, {
-        "estado": estado, "descripcion": descripcion, "ts_evento": ts, "raw": datos,
+        "estado": estado, "crudo": crudo[:80], "descripcion": descripcion, "ts_evento": ts, "raw": datos,
         "eventos": [{"estado": estado or "", "crudo": crudo[:80], "descripcion": descripcion, "ts": ts, "raw": datos}],
     }
 
