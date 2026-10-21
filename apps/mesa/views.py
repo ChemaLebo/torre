@@ -1509,6 +1509,35 @@ def pedidos(request):
     })
 
 
+def _lineas_con_lotes(pedido):
+    """Líneas del pedido con `.lotes`: resumen de sus registros de pick (lote
+    por pedido, Chema 2026-10-22): de qué posición y lote salió cada pieza y
+    en qué va (pickeada, en empaque, salió en la caja N, regresó). Lee
+    `lineas.all()` para respetar el prefetch del detalle."""
+    from apps.pedidos.models import PickLinea  # lazy: modelo de otra app
+
+    etapas = {
+        PickLinea.PICKEADO: "pickeada", PickLinea.EN_EMPAQUE: "en empaque",
+        PickLinea.DESPACHADO: "salió", PickLinea.REGRESADO: "regresó",
+    }
+    lineas = list(pedido.lineas.all())
+    resumen = {}
+    for p in (
+        PickLinea.objects.filter(linea__in=lineas).select_related("ubicacion", "lote", "caja").order_by("pk")
+    ):
+        clave = (p.estado, p.ubicacion_id, p.lote_id, p.caja_id)
+        fila = resumen.setdefault(p.linea_id, {}).setdefault(clave, {
+            "piezas": 0,
+            "donde": p.ubicacion.codigo if p.ubicacion_id else "sin posición",
+            "lote": p.lote.codigo if p.lote_id else "",
+            "etapa": etapas.get(p.estado, p.estado) + (f" en la caja {p.caja.numero}" if p.caja_id and p.estado == PickLinea.DESPACHADO else ""),
+        })
+        fila["piezas"] += p.cantidad
+    for linea in lineas:
+        linea.lotes = list(resumen.get(linea.pk, {}).values())
+    return lineas
+
+
 def _reposiciones_del_pedido(pedido, compensaciones):
     """Reposiciones aprobadas del pedido para la tarjeta Cajas (Chema
     2026-10-14): se ven desde que se aprueban, aunque sin existencias no haya
@@ -1679,7 +1708,7 @@ def pedido_detalle(request, pk):
         # Entrega propia (2026-10-06): el costo se captura por pedido cuando alguna caja o guía es "local".
         "entrega_propia": any(c.carrier == "local" for c in cajas) or any(g.carrier == "local" for g in pedido.guias.all()),
         "hoy": timezone.localdate().isoformat(),
-        "lineas": list(pedido.lineas.all()),
+        "lineas": _lineas_con_lotes(pedido),
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
         # "Rehacer entrega" (2026-10-10): misma regla que reponer_lineas: hay piezas que ya
         # salieron en una caja y ninguna ola en manos del piso (un PENDIENTE que espera

@@ -367,8 +367,55 @@ def confirmar_pick(sku, cantidad, referencia, *, preferir=None):
     return origen, no_cumplido
 
 
-def despachar(sku, cantidad, referencia):
-    """Salida física: en_empaque → despachado (delta negativo en el kardex)."""
+def _restar_preferido(filas, cantidad, preferir, resto_ordenado):
+    """Resta `cantidad` de `filas` tomando PRIMERO lo anotado en `preferir`
+    [(ubicacion_id, lote_id, piezas)] fila por fila, y el resto en el orden
+    de `resto_ordenado(filas_vivas)`. Regresa (origen, no_cumplido) como en
+    confirmar_pick: de dónde salió de verdad y qué parte de lo anotado no
+    estaba en el registro."""
+    origen, no_cumplido = [], []
+    restante = cantidad
+    for ubicacion_id, lote_id, piezas in (preferir or []):
+        if restante == 0:
+            break
+        piezas = min(int(piezas or 0), restante)
+        if piezas <= 0:
+            continue
+        fila = next(
+            (f for f in filas if f.cantidad > 0 and (f.ubicacion_id, f.lote_id) == (ubicacion_id, lote_id)),
+            None,
+        )
+        tomo = min(fila.cantidad, piezas) if fila is not None else 0
+        if tomo:
+            origen += _restar_detallado([fila], tomo)
+            restante -= tomo
+        if tomo < piezas:
+            no_cumplido.append((ubicacion_id, lote_id, piezas - tomo))
+    if restante > 0:
+        origen += _restar_detallado(resto_ordenado([f for f in filas if f.cantidad > 0]), restante)
+    return origen, no_cumplido
+
+
+def _kardex_por_lote(sku, tipo, origen, *, signo=1, estado_origen="", estado_destino="", referencia="", actor=""):
+    """Una fila del kardex por lote a partir de [(ubicacion_id, lote_id, piezas)]."""
+    por_lote = {}
+    for _, lote_id, piezas in origen:
+        por_lote[lote_id] = por_lote.get(lote_id, 0) + piezas
+    for lote_id, piezas in por_lote.items():
+        _mov(
+            sku, tipo, signo * piezas, lote_id=lote_id,
+            origen=estado_origen, destino=estado_destino, referencia=referencia, actor=actor,
+        )
+
+
+def despachar(sku, cantidad, referencia, *, preferir=None):
+    """Salida física: en_empaque → despachado (delta negativo en el kardex).
+
+    `preferir` (lote por pedido, Chema 2026-10-22): [(ubicacion_id, lote_id,
+    piezas)] de lo que viaja en las cajas que salen (PickLinea en empaque):
+    sale PRIMERO exactamente eso, y solo lo que no alcance sale FEFO de lo
+    que haya en empaque, como siempre (el lote más viejo primero). Una fila
+    SALIDA del kardex por lote. Regresa (origen, no_cumplido)."""
     cantidad = _validar_cantidad(cantidad, "despachar")
     with transaction.atomic():
         en_empaque = list(
@@ -381,41 +428,66 @@ def despachar(sku, cantidad, referencia):
                 "Confirma el pick antes de despachar."
             )
         caducidades = _caducidades(en_empaque)
-        _restar(sorted(en_empaque, key=lambda s: _clave_fefo(s, caducidades)), cantidad)
-        _mov(
-            sku, Movimiento.SALIDA, -cantidad,
-            origen=Saldo.EN_EMPAQUE, destino="despachado", referencia=referencia,
+        origen, no_cumplido = _restar_preferido(
+            en_empaque, cantidad, preferir,
+            lambda vivas: sorted(vivas, key=lambda s: _clave_fefo(s, caducidades)),
+        )
+        _kardex_por_lote(
+            sku, Movimiento.SALIDA, origen, signo=-1,
+            estado_origen=Saldo.EN_EMPAQUE, estado_destino="despachado", referencia=referencia,
         )
         registrar_evento(
             "sku", sku.codigo, "salida", cliente=sku.cliente,
-            delta={"cantidad": cantidad, "referencia": str(referencia)},
+            delta={
+                "cantidad": cantidad, "referencia": str(referencia),
+                "fuera_de_registro": sum(p for _, _, p in no_cumplido),
+            },
         )
     _notificar_cambio_disponible(sku)
+    return origen, no_cumplido
 
 
-def regresar_de_salida(sku, cantidad, referencia, actor, ubicacion=None):
+def regresar_de_salida(sku, cantidad, referencia, actor, ubicacion=None, *, slices=None):
     """Reverso exacto de `despachar` para una caja que firmó manifiesto pero
     nunca se fue ("Quitar de salida", Chema 2026-10-05): despachado →
     en_empaque, delta positivo. La caja sigue cerrada con su contenido, así
     que vuelve a EN_EMPAQUE (no a vendible) y la siguiente salida la vuelve a
-    despachar. Cae en `ubicacion` (el corral del que salió) o, sin ella, en
-    la primera de salida / recepción activa; sin lote (la salida tampoco lo
-    lleva). Sin reintento de reservas: no entra stock vendible."""
+    despachar. `slices` (lote por pedido, 2026-10-22): [(ubicacion_id,
+    lote_id, piezas)] de lo que salió con ESA caja: vuelve a esa posición con
+    ese lote; lo que no tenga registro cae en `ubicacion` (el corral del que
+    salió) o, sin ella, en la primera de salida / recepción activa, sin lote
+    (la salida de antes tampoco lo llevaba). Una fila RETORNO por lote. Sin
+    reintento de reservas: no entra stock vendible."""
     cantidad = _validar_cantidad(cantidad, "regresar de salida")
     ubic = ubicacion or _ubicacion_tipo(Ubicacion.SALIDA, Ubicacion.RECEPCION)
     if ubic is None:
         raise ValueError("No hay ubicación de salida ni de recepción activa para regresar la caja.")
     with transaction.atomic():
-        _incrementar(sku, ubic.pk, None, Saldo.EN_EMPAQUE, cantidad)
-        _mov(
-            sku, Movimiento.RETORNO, cantidad,
-            origen="despachado", destino=Saldo.EN_EMPAQUE, referencia=referencia, actor=actor,
+        destinos = []
+        restante = cantidad
+        for ubicacion_id, lote_id, piezas in (slices or []):
+            piezas = min(int(piezas or 0), restante)
+            if piezas <= 0:
+                continue
+            destino_id = ubicacion_id or ubic.pk
+            _incrementar(sku, destino_id, lote_id, Saldo.EN_EMPAQUE, piezas)
+            destinos.append((destino_id, lote_id, piezas))
+            restante -= piezas
+        if restante > 0:
+            _incrementar(sku, ubic.pk, None, Saldo.EN_EMPAQUE, restante)
+            destinos.append((ubic.pk, None, restante))
+        _kardex_por_lote(
+            sku, Movimiento.RETORNO, destinos,
+            estado_origen="despachado", estado_destino=Saldo.EN_EMPAQUE, referencia=referencia, actor=actor,
         )
         registrar_evento(
             "sku", sku.codigo, "regreso_de_salida", actor=actor, cliente=sku.cliente,
-            delta={"cantidad": cantidad, "referencia": str(referencia), "ubicacion": ubic.codigo},
+            delta={"cantidad": cantidad, "referencia": str(referencia), "ubicacion": ubic.codigo, "con_registro": len(destinos) - (1 if restante > 0 else 0)},
         )
     _notificar_cambio_disponible(sku)
+    return destinos
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1628,14 +1700,18 @@ def retornar(sku, cantidad, referencia, actor):
     _notificar_cambio_disponible(sku)
 
 
-def reingresar_desde_pedido(sku, cantidad, referencia, actor, desde_empaque):
+def reingresar_desde_pedido(sku, cantidad, referencia, actor, desde_empaque, *, slices=None):
     """Mercancía de un pedido cancelado en bodega vuelve a put-away (zona de
     recepción) para que el piso la ubique por recepción, sin ubicación automática.
 
     desde_empaque=True: sale de EN_EMPAQUE (el pick ya se confirmó al empacar).
     desde_empaque=False: sale de UBICADO_VENDIBLE (pickeado en carrito, aún
     reservado): se libera la reserva y se resta el vendible FEFO. Kardex RETORNO
-    con origen real → en_putaway; el lote se vuelve a declarar al ubicar.
+    con origen real → en_putaway, una fila por lote. `slices` (lote por pedido,
+    2026-10-22): [(ubicacion_id, lote_id, piezas)] anotado para ese pedido:
+    se resta PRIMERO de esas filas exactas y el lote viaja al put-away, así
+    el piso lo acomoda con su lote; sin registro, FEFO y el lote se vuelve a
+    declarar al ubicar. Regresa [(ubicacion_id, lote_id, piezas)] de lo que salió.
     """
     cantidad = _validar_cantidad(cantidad, "reingresar")
     ubic = _ubicacion_tipo(Ubicacion.RECEPCION)
@@ -1651,7 +1727,7 @@ def reingresar_desde_pedido(sku, cantidad, referencia, actor, desde_empaque):
                     f"Inconsistencia de saldo: hay {total} de {sku.codigo} en empaque y el "
                     f"reingreso pide {cantidad}. Levanta un conteo."
                 )
-            _restar(sorted(filas, key=lambda f: f.pk), cantidad)
+            salio, _ = _restar_preferido(filas, cantidad, slices, lambda vivas: sorted(vivas, key=lambda f: f.pk))
         else:
             origen = Saldo.UBICADO_VENDIBLE
             liberar_reserva(sku, cantidad, referencia)
@@ -1663,11 +1739,14 @@ def reingresar_desde_pedido(sku, cantidad, referencia, actor, desde_empaque):
                     f"reingreso pide {cantidad}. Levanta un conteo."
                 )
             caducidades = _caducidades(filas)
-            _restar(sorted(filas, key=lambda f: _clave_fefo(f, caducidades)), cantidad)
-        _incrementar(sku, ubic.pk, None, Saldo.EN_PUTAWAY, cantidad)
-        _mov(
-            sku, Movimiento.RETORNO, cantidad,
-            origen=origen, destino=Saldo.EN_PUTAWAY, referencia=referencia, actor=actor,
+            salio, _ = _restar_preferido(
+                filas, cantidad, slices, lambda vivas: sorted(vivas, key=lambda f: _clave_fefo(f, caducidades)),
+            )
+        for _, lote_id, piezas in salio:
+            _incrementar(sku, ubic.pk, lote_id, Saldo.EN_PUTAWAY, piezas)
+        _kardex_por_lote(
+            sku, Movimiento.RETORNO, salio,
+            estado_origen=origen, estado_destino=Saldo.EN_PUTAWAY, referencia=referencia, actor=actor,
         )
         registrar_evento(
             "sku", sku.codigo, "reingreso_pedido", actor=actor, cliente=sku.cliente,

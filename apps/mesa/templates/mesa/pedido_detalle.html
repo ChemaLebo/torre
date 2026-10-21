@@ -249,7 +249,7 @@
     <div class="titulo"><h3>Líneas</h3></div>
     <div class="tabla-wrap">
       <table data-sin-tabla-js>
-        <thead><tr><th>Producto</th><th>Pedidas</th><th>Pickeadas</th><th>Despachadas</th><th></th></tr></thead>
+        <thead><tr><th>Producto</th><th>Pedidas</th><th>Pickeadas</th><th>Despachadas</th><th title="De qué posición y lote salió cada pieza (lo anotado al escanear en picking) y en qué va">Lotes</th><th></th></tr></thead>
         <tbody>
           {% for linea in lineas %}
           <tr>
@@ -257,10 +257,11 @@
             <td class="mono">{{ linea.cantidad }}</td>
             <td class="mono">{{ linea.cantidad_pickeada }}</td>
             <td class="mono">{{ linea.cantidad_despachada }}</td>
+            <td class="small">{% for l in linea.lotes %}<div>{{ l.piezas }} × {{ l.donde }}{% if l.lote %} · <span class="mono">{{ l.lote }}</span>{% endif %} · {{ l.etapa }}</div>{% empty %}<span class="muted">sin registro</span>{% endfor %}</td>
             <td>{% if linea.cantidad_repuesta %}<span class="pill accent" title="Piezas repuestas de este producto ({{ linea.cantidad_repuesta_reservada }} con stock); viajan en otra caja">repuestas: {{ linea.cantidad_repuesta }}</span>{% endif %}{% if linea.faltante %}<span class="pill crit">Sin inventario</span>{% elif not linea.reservada and not linea.cantidad_despachada %}<span class="pill warn">sin reservar</span>{% endif %}{% if linea.parte_de_kit_id %}<span class="pill">componente de kit</span>{% endif %}</td>
           </tr>
           {% empty %}
-          <tr><td colspan="5" class="muted">Sin renglones.</td></tr>
+          <tr><td colspan="6" class="muted">Sin renglones.</td></tr>
           {% endfor %}
         </tbody>
       </table>

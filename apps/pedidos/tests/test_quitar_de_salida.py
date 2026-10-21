@@ -99,10 +99,11 @@ class QuitarDeSalidaTests(PisoTestCase):
         self.assertEqual((c1.estado, c2.estado, pedido.estado), (Paquete.EMPACADO, Paquete.DESPACHADO, Pedido.PARCIALMENTE_DESPACHADO))
         self.assertIsNotNone(c1.ts_cierre)
         self.assertIsNotNone(pedido.ts_recolectado)
-        # Kardex: sus 2 piezas regresan a en_empaque en el corral del manifiesto; el contador baja a lo que sigue fuera.
+        # Kardex: sus 2 piezas regresan a en_empaque con la posición de donde salieron (lote por
+        # pedido, 2026-10-22; antes caían al corral sin lote); el contador baja a lo que sigue fuera.
         self.assertEqual((linea.cantidad_despachada, suma(self.sku, Saldo.EN_EMPAQUE)), (2, 2))
         saldo = Saldo.objects.get(sku=self.sku, estado=Saldo.EN_EMPAQUE)
-        self.assertEqual(saldo.ubicacion.codigo, "SAL-OTRO")
+        self.assertEqual(saldo.ubicacion.codigo, "A-01-1")
         mov = Movimiento.objects.filter(sku=self.sku, tipo=Movimiento.RETORNO).latest("ts")
         self.assertEqual((mov.delta, mov.estado_origen, mov.estado_destino, mov.referencia), (2, "despachado", "en_empaque", pedido.folio))
         # La hoja firmada se conserva; solo la línea de la caja 1 queda "no salió".

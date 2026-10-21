@@ -3241,24 +3241,125 @@ def _unidades_en_otras_cajas(pedido, salen):
     return {pk: math.ceil(v) for pk, v in acumulado.items()}
 
 
-def _despachar_lo_que_haya(linea, por_despachar, pedido):
-    """Salida por carrier con el kardex corto (Chema 2026-10-15): descuenta lo
-    que haya en empaque de ese producto y deja evento `salida_kardex_corto`
-    con lo que solo se marcó; nunca truena por eso."""
+def _cupos_por_caja(linea, cajas):
+    """[(caja, piezas)] que viajan de la línea en cada caja, por número (medias
+    cajas redondeadas hacia arriba); sin cajas, [] (los registros salen sin caja)."""
+    import math
+    from fractions import Fraction
+
+    cupos = []
+    for caja in sorted(cajas or [], key=lambda c: c.numero):
+        unidades = sum(
+            (Fraction(pl.cantidad, max(pl.fraccion_de, 1)) for pl in caja.lineas.all() if pl.linea_pedido_id == linea.pk),
+            Fraction(0),
+        )
+        if unidades > 0:
+            cupos.append([caja, math.ceil(unidades)])
+    return cupos
+
+
+def _mover_registros(linea, picks, cantidad, estado, *, cajas=None, origen=None):
+    """Pasa `cantidad` piezas de los registros `picks` (en orden) al `estado`
+    dado, partiendo un registro cuando solo sale una parte, y les asigna caja
+    según `cajas` (cupos por número de caja: lo que viaja de la línea en cada
+    una). Si los registros no alcanzan (pedido anterior al cambio), nacen
+    registros con `origen` [(ubicacion_id, lote_id, piezas)] o, sin origen,
+    sin posición ni lote. Regresa las piezas movidas."""
+    ahora = timezone.now()
+    cupos = _cupos_por_caja(linea, cajas)
+    pendientes = list(picks)
+    extra = [list(s) for s in (origen or [])]
+    restante = cantidad
+    while restante > 0:
+        pick = pendientes[0] if pendientes else None
+        if pick is not None:
+            ubicacion_id, lote_id, disponible = pick.ubicacion_id, pick.lote_id, pick.cantidad
+        elif extra:
+            ubicacion_id, lote_id, disponible = extra[0]
+        else:
+            ubicacion_id, lote_id, disponible = None, None, restante
+        tomo = min(int(disponible), restante)
+        caja = None
+        for cupo in cupos:
+            if cupo[1] > 0:
+                caja = cupo[0]
+                tomo = min(tomo, cupo[1])
+                cupo[1] -= tomo
+                break
+        if tomo <= 0:
+            break
+        if pick is not None:
+            pendientes.pop(0)
+            if tomo < pick.cantidad:
+                resto = PickLinea.objects.create(
+                    linea=linea, ubicacion_id=pick.ubicacion_id, lote_id=pick.lote_id,
+                    cantidad=pick.cantidad - tomo, estado=pick.estado, caja_id=pick.caja_id, ts_estado=pick.ts_estado,
+                )
+                pendientes.insert(0, resto)
+                pick.cantidad = tomo
+            pick.estado, pick.ts_estado = estado, ahora
+            if caja is not None:
+                pick.caja = caja
+            pick.save(update_fields=["cantidad", "estado", "ts_estado", "caja"])
+        else:
+            if extra:
+                extra[0][2] -= tomo
+                if extra[0][2] <= 0:
+                    extra.pop(0)
+            PickLinea.objects.create(
+                linea=linea, ubicacion_id=ubicacion_id, lote_id=lote_id, cantidad=tomo,
+                estado=estado, caja=caja, ts_estado=ahora,
+            )
+        restante -= tomo
+    return cantidad
+
+
+def _despachar_linea(linea, cantidad, folio, cajas=None, *, tolerar=False):
+    """Salida del kardex de `cantidad` piezas de la línea restando PRIMERO lo
+    que la línea tiene anotado en empaque (PickLinea: posición y lote, en
+    orden de pick; lote por pedido, Chema 2026-10-22) y marcando esos
+    registros como despachados con la caja en que salieron (`cajas`: cupos
+    por número según el plan). `tolerar` (salida por carrier, Chema
+    2026-10-15): si el kardex no tiene todo en empaque descuenta lo que haya y
+    deja el evento `salida_kardex_corto`; nunca truena por eso. Lo anotado
+    que el registro de empaque no tenía sale FEFO y queda el evento
+    `salida_fuera_de_registro`. Regresa las piezas que salieron del kardex."""
     from apps.inventario.models import Saldo  # lazy: modelo de otra app
     from apps.inventario.services import despachar  # lazy por contrato
 
-    disponible = Saldo.objects.filter(sku=linea.sku, estado=Saldo.EN_EMPAQUE).aggregate(t=Sum("cantidad"))["t"] or 0
-    del_kardex = min(por_despachar, disponible)
+    pedido = linea.pedido
+    del_kardex = cantidad
+    if tolerar:
+        disponible = Saldo.objects.filter(sku=linea.sku, estado=Saldo.EN_EMPAQUE).aggregate(t=Sum("cantidad"))["t"] or 0
+        del_kardex = min(cantidad, disponible)
+    picks = list(linea.picks.filter(estado=PickLinea.EN_EMPAQUE).order_by("pk"))
+    preferir = [(p.ubicacion_id, p.lote_id, p.cantidad) for p in picks if p.ubicacion_id is not None or p.lote_id is not None]
+    origen, no_cumplido = [], []
     if del_kardex > 0:
-        despachar(linea.sku, del_kardex, pedido.folio)
-    if del_kardex < por_despachar:
+        resultado = despachar(linea.sku, del_kardex, folio, preferir=preferir) if preferir else despachar(linea.sku, del_kardex, folio)
+        if isinstance(resultado, tuple) and len(resultado) == 2:
+            origen, no_cumplido = resultado
+    _mover_registros(linea, picks, cantidad, PickLinea.DESPACHADO, cajas=cajas, origen=origen)
+    if no_cumplido:
+        registrar_evento(
+            "pedido", pedido.pk, "salida_fuera_de_registro", cliente=pedido.cliente,
+            delta={"sku": linea.sku.codigo, "anotado": _codigos_de(no_cumplido), "resto": _codigos_de(origen)},
+            motivo=f"{linea.sku.codigo}: lo anotado en empaque no estaba en el registro; salió lo que había (lote más viejo primero)."[:300],
+        )
+    if del_kardex < cantidad:
         registrar_evento(
             "pedido", pedido.pk, "salida_kardex_corto", cliente=pedido.cliente,
-            delta={"sku": linea.sku.codigo, "por_despachar": por_despachar, "kardex": del_kardex, "solo_marcadas": por_despachar - del_kardex},
+            delta={"sku": linea.sku.codigo, "por_despachar": cantidad, "kardex": del_kardex, "solo_marcadas": cantidad - del_kardex},
             motivo="Salida por carrier: el kardex no tenía todas las piezas en empaque; se descontó lo que había y el resto solo se marcó.",
         )
     return del_kardex
+
+
+def _despachar_lo_que_haya(linea, por_despachar, pedido, cajas=None):
+    """Salida por carrier con el kardex corto (Chema 2026-10-15): descuenta lo
+    que haya en empaque de ese producto y deja evento `salida_kardex_corto`
+    con lo que solo se marcó; nunca truena por eso."""
+    return _despachar_linea(linea, por_despachar, pedido.folio, cajas, tolerar=True)
 
 
 def cajas_por_salir(pedido):
@@ -3532,7 +3633,6 @@ def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False,
             "no se puede marcar recolectado."
         )
     from apps.envios.models import Paquete  # lazy: modelo de otra app
-    from apps.inventario.services import despachar  # lazy
 
     primer_manifiesto = mover_pedido and pedido.estado == Pedido.GUIA_GENERADA
     with transaction.atomic():
@@ -3569,10 +3669,10 @@ def marcar_recolectado(pedido, actor, paquetes=None, respetar_otras_cajas=False,
             if por_despachar <= 0:
                 continue
             if not linea.sku.es_kit:
-                if tolerar_kardex:
-                    _despachar_lo_que_haya(linea, por_despachar, pedido)
-                else:
-                    despachar(linea.sku, por_despachar, pedido.folio)
+                # Lote por pedido: sale lo anotado en empaque para esta línea, en orden
+                # de pick, y los registros quedan con la caja en que salieron.
+                cajas_que_salen = salen or list(pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero"))
+                _despachar_linea(linea, por_despachar, pedido.folio, cajas_que_salen, tolerar=tolerar_kardex)
             if respetar_otras_cajas:
                 linea.cantidad_despachada = min(linea.cantidad_pickeada, linea.cantidad_despachada + por_despachar)
             else:
@@ -3738,7 +3838,14 @@ def _regresar_contenido_caja(pedido, caja, actor, ubicacion=None):
         if cuantas <= 0:
             return
         if not linea.sku.es_kit:
-            regresar_de_salida(linea.sku, cuantas, pedido.folio, actor, ubicacion=ubicacion)
+            # Lote por pedido: lo que salió con ESTA caja vuelve a su posición con su lote.
+            picks = list(linea.picks.filter(estado=PickLinea.DESPACHADO, caja=caja).order_by("pk"))
+            slices = _fusionar_slices((p.ubicacion_id, p.lote_id, p.cantidad) for p in picks if p.ubicacion_id is not None or p.lote_id is not None)
+            if slices:
+                regresar_de_salida(linea.sku, cuantas, pedido.folio, actor, ubicacion=ubicacion, slices=slices)
+            else:
+                regresar_de_salida(linea.sku, cuantas, pedido.folio, actor, ubicacion=ubicacion)
+            _mover_registros(linea, picks, cuantas, PickLinea.EN_EMPAQUE)
             devuelto.append([linea.sku.codigo, cuantas])
         linea.cantidad_despachada -= cuantas
         linea.save(update_fields=["cantidad_despachada"])
@@ -3865,7 +3972,6 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
             "consigue el stock o quítalas del pedido antes de entregarlo en bodega."
         )
     from apps.envios.models import Paquete  # lazy: modelo de otra app
-    from apps.inventario.services import despachar  # lazy
 
     with transaction.atomic():
         # Sin select_related: tienda es nullable y Postgres no admite FOR UPDATE
@@ -3887,7 +3993,10 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
             if not linea.sku.es_kit:
                 if estado_inicial != Pedido.EMPACADO:
                     _confirmar_pick_linea(linea, por_despachar, pedido.folio)
-                despachar(linea.sku, por_despachar, pedido.folio)
+                _despachar_linea(
+                    linea, por_despachar, pedido.folio,
+                    list(pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero")),
+                )
             linea.cantidad_despachada = linea.cantidad_pickeada
             linea.save(update_fields=["cantidad_despachada"])
         for caja in pedido.paquetes.exclude(estado=Paquete.DESPACHADO).order_by("numero"):
@@ -4186,7 +4295,15 @@ def _devolver_stock_y_cancelar(pedido, actor, motivo, tardia=False):
             # en bodega: sigue el camino de la cancelación tardía.
             pickeada = linea.cantidad_pickeada - linea.cantidad_despachada
             if pickeada > 0:
-                reingresar_desde_pedido(linea.sku, pickeada, pedido.folio, actor, desde_empaque=empacado)
+                # Lote por pedido: vuelve exactamente lo anotado (posición y lote) y el lote viaja al put-away.
+                estado_pick = PickLinea.EN_EMPAQUE if empacado else PickLinea.PICKEADO
+                picks = list(linea.picks.filter(estado=estado_pick).order_by("pk"))
+                slices = _fusionar_slices((p.ubicacion_id, p.lote_id, p.cantidad) for p in picks if p.ubicacion_id is not None or p.lote_id is not None)
+                if slices:
+                    reingresar_desde_pedido(linea.sku, pickeada, pedido.folio, actor, desde_empaque=empacado, slices=slices)
+                else:
+                    reingresar_desde_pedido(linea.sku, pickeada, pedido.folio, actor, desde_empaque=empacado)
+                _mover_registros(linea, picks, pickeada, PickLinea.REGRESADO)
                 reingreso.append((linea.sku, pickeada))
             resto = linea.con_stock - linea.cantidad_pickeada
             if resto > 0:

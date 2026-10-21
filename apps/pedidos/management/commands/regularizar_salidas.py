@@ -26,7 +26,7 @@ from django.utils import timezone
 from apps.core.services import registrar_evento
 from apps.envios.models import Paquete
 from apps.inventario.models import Saldo
-from apps.inventario.services import despachar
+from apps.pedidos.services import _despachar_linea
 from apps.pedidos.models import LineaPedido, Pedido
 
 ESTADOS_EN_LA_CALLE = (Pedido.RECOLECTADO, Pedido.EN_TRANSITO, Pedido.ENTREGA_PRESUNTA, Pedido.ENTREGADO, Pedido.RETORNADO)
@@ -122,7 +122,7 @@ class Command(BaseCommand):
                     detalle = []
                     for linea, del_kardex, solo_marcar in reparto:
                         if del_kardex:
-                            despachar(linea.sku, del_kardex, pedido.folio)
+                            _despachar_linea(linea, del_kardex, pedido.folio, cajas)
                         linea.cantidad_despachada = linea.cantidad_pickeada
                         linea.save(update_fields=["cantidad_despachada"])
                         detalle.append({"sku": linea.sku.codigo, "kardex": del_kardex, "solo_marcadas": solo_marcar})
