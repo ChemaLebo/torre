@@ -91,13 +91,23 @@ class SeedEscenarioCajasTests(PisoTestCase):
         call_command("seed_escenario_cajas", verbosity=0)
         a = Pedido.objects.get(folio="SEED-CAJAS-A")
         b = Pedido.objects.get(folio="SEED-CAJAS-B")
+        c = Pedido.objects.get(folio="SEED-CAJAS-C")
+        d = Pedido.objects.get(folio="SEED-CAJAS-D")
         self.assertEqual((a.estado, a.paquetes.count(), b.paquetes.count()), (Pedido.GUIA_GENERADA, 3, 2))
         self.assertEqual(a.lineas.get().picks.filter(ubicacion__codigo="SEED-A3", lote__codigo="SEEDLOTE").count(), 1)
         sku = a.lineas.get().sku
-        self.assertEqual((suma(sku, Saldo.EN_EMPAQUE), suma(sku, Saldo.UBICADO_VENDIBLE)), (4, 6))
+        self.assertEqual((suma(sku, Saldo.EN_EMPAQUE), suma(sku, Saldo.UBICADO_VENDIBLE), suma(sku, Saldo.RESERVADO)), (4, 16, 3))
+        # C y D: en picking, libres y al frente de la cola (C primero).
+        self.assertEqual((c.estado, c.asignado_a, d.estado, d.asignado_a), (Pedido.EN_PICKING, None, Pedido.EN_PICKING, None))
+        self.assertLess(c.ts_picking, d.ts_picking)
+        from apps.incidencias.models import Compensacion
+        comp = Compensacion.objects.get(incidencia__pedido=d)
+        self.assertEqual((comp.estado, d.lineas.get().cantidad_repuesta, d.paquetes.get(numero=2).lineas.get().repone_a.numero), ("APROBADA", 1, 1))
         self.login_piso()
         self.assertContains(self.client.get(reverse("piso:salida")), "SEED-CAJAS-A")
+        home = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
+        self.assertRedirects(home, reverse("piso:picking_pedido", args=[c.pk]), fetch_redirect_response=False)
         call_command("seed_escenario_cajas", verbosity=0)  # idempotente
-        self.assertEqual(Pedido.objects.filter(folio__startswith="SEED-CAJAS-").count(), 2)
+        self.assertEqual(Pedido.objects.filter(folio__startswith="SEED-CAJAS-").count(), 4)
         with override_settings(DEBUG=False), self.assertRaises(Exception):
             call_command("seed_escenario_cajas", verbosity=0)
