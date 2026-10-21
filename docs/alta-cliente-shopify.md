@@ -61,7 +61,7 @@ Proceso vigente desde el 2026-10-21 (primer uso: Soda Mate). Sustituye el copiad
 | "Conexión no iniciada desde Torre o ya usada" | La tienda ya tiene token y la llegada no viene del botón: link caducado, ya usado, o Conectar apretado dos veces | Vuelve a apretar Actualizar permisos o genera otro link |
 | Shopify: "The installation link for this app is invalid" | Primera instalación intentada con el botón de Mesa de Torre, no con el link del Dev Dashboard de Shopify | Abre el link del Dev Dashboard de Shopify sin `no_redirect`; Torre recibe el código |
 | 404 "Tienda desconocida" | El dominio en Mesa no es el de la tienda que aprobó | Corrige el dominio |
-| Shopify: redirect_uri no permitida | La Redirect URL de la app no es exacta | Corrígela en el Dashboard y publica |
+| Shopify: redirect_uri no permitida | La Redirect URL de la app no es exacta | Corrígela en el Dev Dashboard de Shopify y publica |
 | Shopify: invalid scope | Un scope no está en la versión publicada, p. ej. `read_all_orders` sin concesión | Quita la bandera o publica la versión con el scope |
 | "Webhooks: sin tocar: la tienda ya firma con otro secret" | Tienda vieja con webhooks de Notificaciones | Normal. Migrar es opcional: borra los de Notificaciones y vuelve a Actualizar permisos |
 
