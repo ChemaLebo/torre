@@ -51,7 +51,8 @@ class RegistrarSalidaTests(PisoTestCase):
         for caja in cajas:
             PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=2)
         self._con_guia(pedido)
-        Paquete.objects.filter(pk__in=[c.pk for c in cajas]).update(ts_cierre=timezone.now())
+        ahora = timezone.now()  # tanda completa: etiquetas pegadas, evidencia y "Lista en salida"
+        Paquete.objects.filter(pk__in=[c.pk for c in cajas]).update(ts_cierre=ahora, ts_etiquetas=ahora, ts_listo_salida=ahora)
         pedido.refresh_from_db()
         return pedido, cajas[0], cajas[1]
 

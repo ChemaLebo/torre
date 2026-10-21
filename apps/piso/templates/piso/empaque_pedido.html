@@ -2,22 +2,124 @@
 {% block title %}Empacar {{ pedido.folio }}{% endblock %}
 {% block content %}
 
-{% if paso == "exito" %}
-{# ── Paso 5: éxito — al corral y al siguiente ── #}
+{% if paso == "en_salida" %}
+{# ── Ya en salida (Chema 2026-10-20): las cajas de la tanda están en el corral con evidencia ── #}
 <div class="exito-pantalla">
   <span class="palomita">✅</span>
-  <h1 class="mono">{{ pedido.folio }} listo</h1>
-  <p>Déjalo en el corral <b class="mono">{{ corral }}</b>. Cajas cerradas con evidencia completa.</p>
+  <h1 class="mono">{{ pedido.folio }} en salida</h1>
+  <p>Sus cajas están en el corral <b class="mono">{{ corral }}</b> con evidencia completa.</p>
 </div>
 {% include "piso/_chips_cajas.html" %}
 {% if chips %}<p class="small muted centro mt">¿Una foto salió mal? Toca su caja y cámbiala ahí.</p>{% endif %}
 {% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
-<form method="post" action="{% url 'piso:home' %}" class="accion-fija">{% csrf_token %}
-  <input type="hidden" name="accion" value="siguiente">
-  <button class="btn primario gigante" type="submit">SIGUIENTE PEDIDO ▶</button>
+<div class="accion-fija"><a class="btn primario gigante" href="{% url 'piso:home' %}">Ir a Mi turno ▶</a></div>
+
+{% elif paso == "final" %}
+{# ── Paso 5: "Lista en salida" — hasta aquí nada entra a Salida; al confirmar, de vuelta a Mi turno ── #}
+<div class="exito-pantalla">
+  <span class="palomita">📦</span>
+  <h1 class="mono">{{ pedido.folio }}</h1>
+  <p>Déjalo en el corral <b class="mono">{{ corral }}</b>. Cajas cerradas con evidencia completa.</p>
+  <p class="small muted">Caja {{ numeros_tanda }}. Al confirmar, regresas a Mi turno.</p>
+</div>
+{% include "piso/_chips_cajas.html" %}
+<form method="post" class="accion-fija">{% csrf_token %}
+  <input type="hidden" name="accion" value="lista_salida">
+  <button class="btn primario gigante" type="submit">Lista en salida ▶</button>
 </form>
-<p class="centro mt"><a class="small" href="{% url 'piso:home' %}">ir a Mi turno</a></p>
 <script>document.addEventListener("DOMContentLoaded", function () { Feedback.ok(); });</script>
+
+{% elif paso == "evidencia" %}
+{# ── Paso 4: UNA foto de evidencia de toda la tanda (cajas cerradas con sus etiquetas) ── #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Empaque · Evidencia</div>
+    <h1 class="mono">{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · caja {{ numeros_tanda }}</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:home' %}">Mi turno</a>
+</div>
+{% include "piso/_chips_cajas.html" %}
+<div class="card mt">
+  <div class="titulo"><h2>Foto de evidencia</h2><span class="pill accent">una por tanda</span></div>
+  <p class="small">Acomoda la caja {{ numeros_tanda }} cerrada{{ tanda_evidencia|length|pluralize }} con las etiquetas a la vista y toma UNA foto de todo.</p>
+  <form method="post" enctype="multipart/form-data">{% csrf_token %}
+    <input type="hidden" name="accion" value="cerrar_tanda">
+    <label for="foto_tanda">Foto · cajas cerradas con etiquetas</label>
+    <input type="file" name="foto_tanda" id="foto_tanda" accept="image/*" capture="environment" required>
+    <div class="accion-fija mt">
+      <button class="btn primario gigante" type="submit">Guardar evidencia ✓</button>
+    </div>
+  </form>
+</div>
+
+{% elif paso == "etiquetas" %}
+{# ── Paso 3: guías impresas → "Etiquetas pegadas ✓" (sustituye al cierre por caja) ── #}
+<div class="topbar">
+  <div>
+    <div class="eyebrow">Piso · Empaque · Etiquetas</div>
+    <h1 class="mono">{{ pedido.folio }}</h1>
+    <div class="small">{{ pedido.cliente.nombre }} · {{ tanda|length }} caja{{ tanda|length|pluralize }} en esta tanda</div>
+  </div>
+  <a class="btn chico" href="{% url 'piso:home' %}">Mi turno</a>
+</div>
+{% include "piso/_chips_cajas.html" %}
+
+{% if tiene_guia %}
+<div class="banner ok"><span class="foco"></span>
+  <div>
+    <b>🖨 Guía{{ guias|length|pluralize }} lista{{ guias|length|pluralize }} — etiquetas enviadas a la impresora.</b>
+    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if g.paquete_id %} (caja {{ g.paquete.numero }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
+    <div class="small">Si alguna etiqueta no salió, reimprímela con el botón de su caja aquí abajo (o desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>).</div>
+  </div>
+</div>
+{% endif %}
+{% if cajas_sin_guia and tiene_guia %}
+<div class="banner warn"><span class="foco"></span>
+  Sin guía: caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+  El carrier falló en esa caja: reintenta aquí y pega su etiqueta. Sin guía y evidencia, no llega al corral.
+</div>
+{% endif %}
+{% if not tiene_guia %}
+<div class="banner warn"><span class="foco"></span>
+  Este pedido aún no tiene guía. Reintenta aquí, pega las etiquetas y toma la foto de evidencia. Sin guía y evidencia, no llega al corral.
+</div>
+{% endif %}
+{% if puede_reintentar_guia %}
+<form method="post" class="mt">{% csrf_token %}
+  <input type="hidden" name="accion" value="generar_guia">
+  <button class="btn primario" type="submit">Reintentar guía{% if cajas_sin_guia and tiene_guia %} · caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</button>
+</form>
+{% endif %}
+
+<div class="card mt">
+  <div class="titulo"><h2>Pega las etiquetas</h2><span class="pill accent">caja {{ numeros_tanda }}</span></div>
+  <p class="small">Cada caja lleva la etiqueta de su paquetería y la interna; las de manejo van en las caras que marcan las flechas.</p>
+  {% for caja in tanda %}
+  <div class="corral-fila">
+    <div class="crece">Caja {{ caja.numero }}
+      {% if caja.guia_activa %} · <span class="mono">{{ caja.guia_activa.numero }}</span> ({{ caja.guia_activa.carrier }}){% else %} · <span class="pill crit">sin guía</span>{% endif %}
+      {% if caja.ts_etiquetas %}<span class="pill ok">pegadas</span>{% endif %}
+    </div>
+    {% if caja.guia_activa %}
+    {# Reimpresión por caja (Chema 2026-10-13): la del carrier y la interna con sus etiquetas de manejo. #}
+    <form method="post">{% csrf_token %}
+      <input type="hidden" name="accion" value="imprimir_guia">
+      <input type="hidden" name="paquete_id" value="{{ caja.pk }}">
+      <button class="btn chico" type="submit" title="Vuelve a mandar a la impresora la guía de esta caja (etiqueta del carrier, interna y de manejo)">🖨 Reimprimir</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="etiquetas_pegadas">
+    <div class="accion-fija mt">
+      <button class="btn primario gigante" type="submit" {% if cajas_sin_guia %}disabled{% endif %}>Etiquetas pegadas ✓</button>
+    </div>
+  </form>
+  <p class="small muted">{% if cajas_sin_guia %}Sin guía no hay etiqueta que pegar: reintenta la guía primero.{% else %}Al confirmar sigue la foto de evidencia de la tanda.{% endif %}</p>
+</div>
+{% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
 
 {% elif paso == "revisar" %}
 {# ── Revisión de una caja ya empacada: contenido, guía, báscula (corregible) y fotos (cambiables) ── #}
@@ -56,12 +158,12 @@
 {% include "piso/_foto_caja.html" with foto=caja.foto_cierre clase="caja_cerrada" %}
 
 {% elif paso == "cierre" %}
-{# ── Paso 3-4: etiquetas impresas → foto de CAJA CERRADA por caja ── #}
+{# ── Cierre único legacy (pedido sin plan de cajas): guía → foto de la caja cerrada ── #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Empaque · Cierre</div>
     <h1 class="mono">{{ pedido.folio }}</h1>
-    <div class="small">{{ pedido.cliente.nombre }} · cierre {{ cierres_hechos|add:1 }} de {{ total_cierres }}</div>
+    <div class="small">{{ pedido.cliente.nombre }}</div>
   </div>
   <a class="btn chico" href="{% url 'piso:home' %}">Mi turno</a>
 </div>
@@ -71,15 +173,9 @@
 <div class="banner ok"><span class="foco"></span>
   <div>
     <b>🖨 Guía{{ guias|length|pluralize }} lista{{ guias|length|pluralize }} — etiquetas enviadas a la impresora.</b>
-    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if g.paquete_id %} (caja {{ g.paquete.numero }}){% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
-    <div class="small">Si alguna etiqueta no salió, reimprímela con el botón de su caja aquí abajo (o desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>).</div>
+    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
+    <div class="small">Si la etiqueta no salió, reimprímela desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>.</div>
   </div>
-</div>
-{% endif %}
-{% if cajas_sin_guia and tiene_guia %}
-<div class="banner warn"><span class="foco"></span>
-  Sin guía: caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}.
-  El carrier falló en esa caja: reintenta aquí, pega su etiqueta y toma su foto de cierre. Sin guía y foto, no llega al corral.
 </div>
 {% endif %}
 {% if not tiene_guia %}
@@ -90,11 +186,10 @@
 {% if puede_reintentar_guia %}
 <form method="post" class="mt">{% csrf_token %}
   <input type="hidden" name="accion" value="generar_guia">
-  <button class="btn primario" type="submit">Reintentar guía{% if cajas_sin_guia and tiene_guia %} · caja{{ cajas_sin_guia|length|pluralize }} {% for c in cajas_sin_guia %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</button>
+  <button class="btn primario" type="submit">Reintentar guía</button>
 </form>
 {% endif %}
 
-{% if cierre_legacy %}
 <div class="card mt">
   <div class="titulo"><h2>Foto de la caja cerrada</h2><span class="pill accent">con la etiqueta pegada</span></div>
   <p class="small">Cierra la caja, pega la etiqueta y tómale foto: es la evidencia que sube al manifiesto.</p>
@@ -107,40 +202,6 @@
     </div>
   </form>
 </div>
-{% elif caja_cierre %}
-<div class="card mt">
-  <div class="titulo"><h2>Caja {{ caja_cierre.numero }} de {{ total_cierres }}</h2><span class="pill accent">foto de cierre</span></div>
-  <p class="small">
-    Cierra la caja {{ caja_cierre.numero }}, pega SU etiqueta
-    {% if caja_cierre.guia_activa %}(<span class="mono">{{ caja_cierre.guia_activa.numero }}</span>){% endif %}
-    y tómale foto con la etiqueta visible.
-  </p>
-  {% if caja_cierre.guia_activa %}
-  {# Reimpresión por caja (Chema 2026-10-13): la del carrier y la interna, como al empacar. #}
-  <form method="post">{% csrf_token %}
-    <input type="hidden" name="accion" value="imprimir_guia">
-    <input type="hidden" name="paquete_id" value="{{ caja_cierre.pk }}">
-    <button class="btn chico" type="submit" title="Vuelve a mandar a la impresora de bodega la guía de esta caja (etiqueta del carrier e interna)">🖨 Reimprimir guía de la caja {{ caja_cierre.numero }}</button>
-  </form>
-  {% endif %}
-  <form method="post" enctype="multipart/form-data">{% csrf_token %}
-    <input type="hidden" name="accion" value="cerrar_caja">
-    <input type="hidden" name="paquete_id" value="{{ caja_cierre.pk }}">
-    <label for="foto_cierre">Foto · caja {{ caja_cierre.numero }} cerrada con etiqueta</label>
-    <input type="file" name="foto_cierre" id="foto_cierre" accept="image/*" capture="environment" required>
-    <div class="accion-fija mt">
-      <button class="btn primario gigante" type="submit">Caja {{ caja_cierre.numero }} cerrada ✓</button>
-    </div>
-  </form>
-  {% if otras_por_cerrar %}
-  <p class="small muted mt">Faltan después:
-    {% for c in otras_por_cerrar %}caja {{ c.numero }}{% if not forloop.last %} · {% endif %}{% endfor %}
-  </p>
-  {% endif %}
-</div>
-{% include "piso/_peso_caja.html" with caja=caja_cierre %}
-{% include "piso/_foto_caja.html" with caja=caja_cierre foto=caja_cierre.foto_contenido clase="contenido" %}
-{% endif %}
 {% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
 
 {% else %}
@@ -480,7 +541,7 @@ function agregarRenglonKit(kitPk) {
 })();
 </script>
 {% endif %}
-{% if paso != "exito" %}
+{% if paso != "en_salida" and paso != "final" %}
 {# Detener (Chema 2026-10-06, sustituye a Soltar): sale de la cola con su avance y abre una incidencia interna con el motivo; Mesa lo reanuda al resolver. #}
 <details class="colapsable mt">
   <summary>Detener este pedido · algo no deja seguir</summary>

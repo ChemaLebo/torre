@@ -2587,7 +2587,9 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
     paquete (ts_cierre + foto_cierre: el estado vive en columnas, el evento
     es bitácora). Una caja no se cierra dos veces: el candado (ts_cierre) se
     revisa con el paquete bajo select_for_update — dos POSTs concurrentes se
-    serializan.
+    serializan. Desde 2026-10-20 es el cierre DE GOLPE de una caja (estampa
+    también ts_etiquetas y ts_listo_salida); el wizard cierra por tanda
+    (marcar_etiquetas_pegadas → cerrar_tanda → confirmar_lista_salida).
     """
     from apps.envios.models import Paquete  # lazy: modelo de otra app
 
@@ -2619,12 +2621,19 @@ def cerrar_caja(paquete, actor, foto_caja_cerrada):
         entidad="pedido", entidad_id=str(pedido.pk), tipo=TIPO_FOTO_CIERRE,
         archivo=foto_caja_cerrada, tomada_por=_actor_nombre(actor),
     )
-    fresco.ts_cierre = timezone.now()
+    # Cierre de golpe (seeds, pruebas, cajas sueltas): equivale a etiquetas
+    # pegadas + evidencia + lista en salida; el wizard usa la tanda (2026-10-20).
+    ahora = timezone.now()
+    fresco.ts_cierre = ahora
     fresco.foto_cierre = evidencia
-    fresco.save(update_fields=["ts_cierre", "foto_cierre"])
+    fresco.ts_etiquetas = fresco.ts_etiquetas or ahora
+    fresco.ts_listo_salida = ahora
+    fresco.save(update_fields=["ts_cierre", "foto_cierre", "ts_etiquetas", "ts_listo_salida"])
     if fresco is not paquete:
         paquete.ts_cierre = fresco.ts_cierre
         paquete.foto_cierre = evidencia
+        paquete.ts_etiquetas = fresco.ts_etiquetas
+        paquete.ts_listo_salida = fresco.ts_listo_salida
     registrar_evento(
         "paquete", fresco.pk, "caja_cerrada_con_evidencia", actor=actor,
         cliente=pedido.cliente,
@@ -3115,6 +3124,13 @@ def cajas_por_salir(pedido):
     if not any(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in cajas):
         return []
     return [c for c in cajas if c.estado == Paquete.EMPACADO]
+
+
+def cajas_listas_en_salida(pedido):
+    """De cajas_por_salir, las que ya pasaron por "Lista en salida"
+    (ts_listo_salida) y tienen guía viva: las que Salida lista y el chofer se
+    puede llevar (Chema 2026-10-20: la puerta a Salida es por caja)."""
+    return [c for c in cajas_por_salir(pedido) if c.ts_listo_salida is not None and c.guia_activa is not None]
 
 
 def salida_por_carrier(pedido, guia, ts, descripcion=""):

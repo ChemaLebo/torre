@@ -380,7 +380,8 @@ class ManifiestoPorCajaTests(PisoTestCase):
         for caja in cajas:
             PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=2)
         _con_guia(pedido)
-        Paquete.objects.filter(pk__in=[c.pk for c in cajas]).update(ts_cierre=timezone.now())
+        ahora = timezone.now()  # tanda completa: etiquetas pegadas, evidencia y "Lista en salida"
+        Paquete.objects.filter(pk__in=[c.pk for c in cajas]).update(ts_cierre=ahora, ts_etiquetas=ahora, ts_listo_salida=ahora)
         pedido.refresh_from_db()
         return pedido, cajas[0], cajas[1]
 
@@ -397,11 +398,10 @@ class ManifiestoPorCajaTests(PisoTestCase):
         from apps.envios.models import Paquete
 
         pedido, c1, c2 = self._pedido_dos_cajas()
-        Paquete.objects.filter(pk=c2.pk).update(ts_cierre=None)
-        self.assertNotContains(self.client.get(self.url), pedido.folio)
+        Paquete.objects.filter(pk=c2.pk).update(ts_cierre=None, ts_listo_salida=None)
         home = self.client.get(reverse("piso:home"))
         self.assertContains(home, "Completar empaquetado")
-        self.assertContains(home, "falta foto de cierre: caja 2")
+        self.assertContains(home, "falta evidencia: caja 2")
 
     def test_sale_una_caja_y_el_pedido_queda_parcial_hasta_la_ultima(self):
         from apps.envios.models import Paquete

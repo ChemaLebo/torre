@@ -385,7 +385,8 @@ class Pedido(models.Model):
     @property
     def empaque_completo(self):
         """True cuando en la mesa de empaque ya no falta nada: cada caja
-        EMPACADO/DESPACHADO con guía activa y su foto de cierre (ts_cierre);
+        EMPACADO con guía activa, su foto de cierre (ts_cierre) y su
+        confirmación "Lista en salida" (ts_listo_salida, Chema 2026-10-20);
         sin plan de cajas, una guía activa del pedido y su foto de cierre.
 
         Salida solo lista pedidos con esto en True: nada llega al corral sin
@@ -398,7 +399,7 @@ class Pedido(models.Model):
             # cuya guía se canceló después (el carrier la perdió) ya no frena
             # la salida de las demás.
             return all(
-                c.ts_cierre is not None and c.guia_activa is not None
+                c.ts_cierre is not None and c.ts_listo_salida is not None and c.guia_activa is not None
                 for c in cajas if c.estado == "EMPACADO"
             )
         if not any(g.es_activa for g in self.guias.all()):

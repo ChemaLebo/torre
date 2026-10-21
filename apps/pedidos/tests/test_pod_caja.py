@@ -35,6 +35,7 @@ class PodPorCajaTests(PisoTestCase):
             caja = Paquete.objects.create(
                 pedido=pedido, numero=n, peso_kg=Decimal("4"), carrier="local", carrier_forzado="local",
                 servicio="entrega_local", estado=Paquete.EMPACADO, ts_cierre=timezone.now(),
+                ts_etiquetas=timezone.now(), ts_listo_salida=timezone.now(),
             )
             PaqueteLinea.objects.create(paquete=caja, linea_pedido=linea, cantidad=2)
             cajas.append(caja)

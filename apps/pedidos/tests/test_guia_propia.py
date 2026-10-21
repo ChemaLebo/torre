@@ -25,8 +25,9 @@ class GuiaPropiaTests(PisoTestCase):
         self.mesa = get_user_model().objects.create_user("mesa1", password="x12345678")
         self.pedido = self.dejar_empacado(self.crear_pedido(cantidad=4))
         linea = self.pedido.lineas.get()
-        self.c1 = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO, ts_cierre=self.pedido.creado)
-        self.c2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO, ts_cierre=self.pedido.creado)
+        sellos = {"ts_cierre": self.pedido.creado, "ts_etiquetas": self.pedido.creado, "ts_listo_salida": self.pedido.creado}
+        self.c1 = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO, **sellos)
+        self.c2 = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.EMPACADO, **sellos)
         PaqueteLinea.objects.create(paquete=self.c1, linea_pedido=linea, cantidad=2)
         PaqueteLinea.objects.create(paquete=self.c2, linea_pedido=linea, cantidad=2)
 

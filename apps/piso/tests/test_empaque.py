@@ -236,8 +236,8 @@ class EmpaquePisoTests(PisoTestCase):
                 entidad="pedido", entidad_id=str(self.pedido.pk), tipo="caja_cerrada",
             ).exists()
         )
-        self.assertContains(respuesta, "SIGUIENTE PEDIDO")
-        self.assertContains(respuesta, "listo")
+        self.assertContains(respuesta, "en salida")
+        self.assertContains(respuesta, "Ir a Mi turno")
 
 
 class ListaEmpaqueTests(PisoTestCase):

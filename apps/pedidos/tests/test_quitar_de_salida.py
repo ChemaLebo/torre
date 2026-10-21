@@ -184,7 +184,8 @@ class CasoMixtoTests(PisoTestCase):
         PaqueteLinea.objects.create(paquete=c1, linea_pedido=linea, cantidad=2)
         PaqueteLinea.objects.create(paquete=c2, linea_pedido=linea, cantidad=2)
         services.generar_guia(pedido)
-        Paquete.objects.filter(pedido=pedido).update(ts_cierre=timezone.now())
+        ahora = timezone.now()  # tanda completa: etiquetas pegadas, evidencia y "Lista en salida"
+        Paquete.objects.filter(pedido=pedido).update(ts_cierre=ahora, ts_etiquetas=ahora, ts_listo_salida=ahora)
         pedido.refresh_from_db()
         with patch("apps.mensajeria.services.enviar_en_camino"), self.captureOnCommitCallbacks(execute=True):
             services.marcar_recolectado(pedido, self.operador)

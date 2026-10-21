@@ -1,8 +1,8 @@
 """Navegación entre cajas del wizard de empaque; cambio de una foto y de la báscula.
 
-Chips arriba (?caja=N): la caja pendiente se empaca ella, la empacada sin
-cierre abre su paso de cierre (con su foto de contenido y su báscula a la
-mano) y la cerrada se revisa con sus dos fotos y su peso.
+Chips arriba (?caja=N): la caja pendiente se empaca ella, la tanda sin
+cerrar abre el paso que toca (Etiquetas / Evidencia / Lista en salida) y la
+cerrada se revisa con sus dos fotos y su peso (la de cierre es la de la tanda).
 reemplazar_foto_pedido mete la foto nueva, re-apunta la caja, borra la vieja
 y deja el evento foto_reemplazada; corregir_peso_caja cambia la báscula sin
 reabrir nada y recalcula el peso del pedido si ya quedó empacado.
@@ -56,9 +56,10 @@ class RevisarCajaTests(PisoTestCase):
             }, follow=True)
 
     def _cerrar(self, caja, nombre):
-        return self.client.post(self.url, {
-            "accion": "cerrar_caja", "paquete_id": caja.pk, "foto_cierre": self.foto(nombre),
-        }, follow=True)
+        """Cierra la TANDA (Chema 2026-10-20): etiquetas pegadas + una foto para todas
+        las cajas empacadas; `caja` se conserva por compatibilidad de las pruebas."""
+        self.client.post(self.url, {"accion": "etiquetas_pegadas"})
+        return self.client.post(self.url, {"accion": "cerrar_tanda", "foto_tanda": self.foto(nombre)}, follow=True)
 
     def _reemplazar(self, evidencia_id, caja, nombre="otra.jpg", foto=True):
         datos = {"accion": "reemplazar_foto", "evidencia_id": evidencia_id, "caja": caja}
@@ -98,7 +99,7 @@ class RevisarCajaTests(PisoTestCase):
         self.assertContains(respuesta, "Caja 1 · empacada")
         self.assertContains(respuesta, reverse("core:evidencia", args=[vieja.pk]))
         self.assertContains(respuesta, f'name="evidencia_id" value="{vieja.pk}"')
-        self.assertContains(respuesta, "Se toma en el paso de cierre")  # aún sin foto de cierre
+        self.assertContains(respuesta, "Se toma en la pantalla Evidencia")  # aún sin foto de cierre
 
         respuesta = self._reemplazar(vieja.pk, "1", "c1-bien.jpg")
         self.assertContains(respuesta, "Foto del contenido cambiada (caja 1)")
@@ -118,25 +119,23 @@ class RevisarCajaTests(PisoTestCase):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
 
-    def test_en_cierre_se_elige_la_caja_y_la_foto_de_cierre_se_cambia_sin_reabrir(self):
+    def test_la_foto_de_la_tanda_se_cambia_para_todas_sus_cajas_sin_reabrir(self):
         self._empacar(self.caja1, "12100", "c1.jpg")
         self._empacar(self.caja2, "8100", "c2.jpg")
         self.caja2.refresh_from_db()
 
-        # ?caja=2 abre el cierre de la 2 aunque la 1 siga por cerrar, con su
-        # foto de contenido a la mano por si salió mal.
+        # ?caja=2 con la tanda sin cerrar abre el paso actual (Etiquetas), no un cierre por caja.
         respuesta = self.client.get(self.url + "?caja=2")
-        self.assertContains(respuesta, 'value="cerrar_caja"')
-        self.assertContains(respuesta, f'name="paquete_id" value="{self.caja2.pk}"')
-        self.assertContains(respuesta, f'name="evidencia_id" value="{self.caja2.foto_contenido_id}"')
-        self.assertContains(respuesta, 'value="corregir_peso"')
-        self.assertContains(respuesta, "Faltan después:")
-        self.assertContains(respuesta, "caja 1")
+        self.assertContains(respuesta, 'value="etiquetas_pegadas"')
+        self.assertContains(respuesta, 'value="imprimir_guia"')
+        self.assertNotContains(respuesta, 'value="cerrar_caja"')
 
-        self._cerrar(self.caja1, "z1.jpg")
+        self._cerrar(self.caja1, "z1.jpg")  # etiquetas pegadas + UNA foto para las dos cajas
         self.caja1.refresh_from_db()
+        self.caja2.refresh_from_db()
         vieja, ts_cierre = self.caja1.foto_cierre, self.caja1.ts_cierre
         self.assertIsNotNone(vieja)
+        self.assertEqual(self.caja2.foto_cierre_id, vieja.pk)
 
         respuesta = self.client.get(self.url + "?caja=1")
         self.assertContains(respuesta, "Revisar caja")
@@ -146,24 +145,31 @@ class RevisarCajaTests(PisoTestCase):
         respuesta = self._reemplazar(vieja.pk, "1", "z1-bien.jpg")
         self.assertContains(respuesta, "Foto de la caja cerrada cambiada (caja 1)")
         self.caja1.refresh_from_db()
+        self.caja2.refresh_from_db()
         self.assertEqual(self.caja1.ts_cierre, ts_cierre)
         self.assertNotEqual(self.caja1.foto_cierre_id, vieja.pk)
+        self.assertEqual(self.caja1.foto_cierre_id, self.caja2.foto_cierre_id)  # la tanda entera apunta a la nueva
         self.assertEqual(self.caja1.foto_cierre.tipo, "caja_cerrada")
         self.assertFalse(EvidenciaFoto.objects.filter(pk=vieja.pk).exists())
         self.assertEqual(self._fotos("caja_cerrada").count(), 1)
-        # La caja 2 sigue por cerrar: el cambio de foto no cerró nada de más.
-        self.assertFalse(self.pedido.cajas_cerradas_completas)
-        self.assertEqual(self.pedido.paquetes.filter(ts_cierre__isnull=False).count(), 1)
+        evento = EventoAuditoria.objects.get(accion="foto_reemplazada")
+        self.assertEqual((evento.entidad, evento.delta["cajas"]), ("pedido", [1, 2]))
+        # Cambiar la foto no confirma nada: la tanda sigue esperando "Lista en salida".
+        self.pedido.refresh_from_db()
+        self.assertTrue(self.pedido.cajas_cerradas_completas)
+        self.assertFalse(self.pedido.empaque_completo)
 
-    def test_desde_exito_se_revisan_las_cajas(self):
+    def test_desde_en_salida_se_revisan_las_cajas(self):
         self._empacar(self.caja1, "12100", "c1.jpg")
         self._empacar(self.caja2, "8100", "c2.jpg")
         self._cerrar(self.caja1, "z1.jpg")
-        respuesta = self._cerrar(self.caja2, "z2.jpg")
-        self.assertContains(respuesta, "SIGUIENTE PEDIDO")
-        self.assertContains(respuesta, "Caja 1 · cerrada")
-        self.assertContains(respuesta, "Caja 2 · cerrada")
+        self.client.post(self.url, {"accion": "lista_salida"})
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "en salida")
+        self.assertContains(respuesta, "Caja 1 · lista")
+        self.assertContains(respuesta, "Caja 2 · lista")
         self.assertContains(respuesta, "¿Una foto salió mal?")
+        self.assertNotContains(respuesta, "SIGUIENTE PEDIDO")
 
         respuesta = self.client.get(self.url + "?caja=2")
         self.assertContains(respuesta, "Revisar caja")
@@ -253,7 +259,7 @@ class RevisarCajaTests(PisoTestCase):
         self.assertEqual([c.args[0].pk for c in imprimir.call_args_list], [guia.pk, guia.pk])
         self.assertEqual([c.kwargs["interna"] for c in imprimir.call_args_list], [False, True])
         self.assertContains(respuesta, f"Caja 1: guía {guia.numero}")
-        self.assertContains(respuesta, f"Caja 1 de 2")  # regresa al cierre de esa caja
+        self.assertContains(respuesta, 'value="etiquetas_pegadas"')  # regresa a la pantalla Etiquetas de la tanda
         # Cerrada, la revisión de la caja conserva el botón.
         self._cerrar(self.caja1, "cc1.jpg")
         respuesta = self.client.get(self.url + "?caja=1")

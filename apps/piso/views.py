@@ -573,7 +573,16 @@ def home(request):
     )
     # Esperando inventario tras una salida parcial: ni en el corral ni en la mesa.
     en_empaque = [p for p in en_empaque if not p.esperando_inventario]
-    staging = [p for p in en_empaque if p.estado != Pedido.EMPACADO and p.empaque_completo]
+    from apps.pedidos.services import cajas_listas_en_salida  # lazy por contrato
+
+    def _en_corral(p):
+        # Por caja (Chema 2026-10-20): basta una caja con "Lista en salida" y guía;
+        # un pedido puede estar en el corral y en "Completar empaquetado" a la vez.
+        if any(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in p.paquetes.all()):
+            return bool(cajas_listas_en_salida(p))
+        return p.estado != Pedido.EMPACADO and p.empaque_completo  # legacy sin cajas
+
+    staging = [p for p in en_empaque if _en_corral(p)]
     incompletos = [p for p in en_empaque if not p.empaque_completo]
     if not _es_mesa(request):
         incompletos = [p for p in incompletos if _pedido_libre_o_mio(p, request.user)]
@@ -1565,9 +1574,16 @@ def _que_falta_empaque(pedido):
         return "sin guía: caja " + ", ".join(str(c.numero) for c in sin_guia)
     if not empacadas and not any(g.es_activa for g in pedido.guias.all()):
         return "sin guía"
+    # Tanda (Chema 2026-10-20): etiquetas pegadas → evidencia → lista en salida.
+    sin_etiquetas = [c for c in en_bodega if c.ts_etiquetas is None]
+    if sin_etiquetas:
+        return "falta pegar etiquetas: caja " + ", ".join(str(c.numero) for c in sin_etiquetas)
     sin_cierre = [c for c in en_bodega if c.ts_cierre is None]
     if sin_cierre:
-        return "falta foto de cierre: caja " + ", ".join(str(c.numero) for c in sin_cierre)
+        return "falta evidencia: caja " + ", ".join(str(c.numero) for c in sin_cierre)
+    sin_confirmar = [c for c in en_bodega if c.ts_listo_salida is None]
+    if sin_confirmar:
+        return "falta confirmar en salida: caja " + ", ".join(str(c.numero) for c in sin_confirmar)
     return "falta foto de cierre"
 
 
@@ -1589,13 +1605,16 @@ def _rango_peso(gramos):
 
 @rol_requerido("piso", "mesa")
 def empaque_pedido(request, pk):
-    """Wizard de empaque por caja del carril único.
+    """Wizard de empaque por caja del carril único (teléfono).
 
     Pasos: foto CONTENIDO + peso por caja (empacar_caja; la última encadena
-    guía + impresión) → foto de CAJA CERRADA con etiqueta por caja
-    (cerrar_caja) → pantalla de éxito con SIGUIENTE PEDIDO ▶. El pedido
-    legacy sin plan de paquetes corre el mismo wizard con 1 caja (empacar
-    clásico + cierre implícito).
+    guía + impresión) → pantalla Etiquetas ("Etiquetas pegadas ✓",
+    marcar_etiquetas_pegadas) → pantalla Evidencia (UNA foto de la tanda,
+    cerrar_tanda) → pantalla final "Déjalo en el corral" ("Lista en salida ▶",
+    confirmar_lista_salida, de vuelta a Mi turno). Chema 2026-10-20: la foto
+    es por tanda, no por caja, y hasta "Lista en salida" nada entra a Salida.
+    El pedido legacy sin plan de paquetes corre el mismo wizard con 1 caja
+    (empacar clásico + cierre único).
 
     ?caja=N navega entre las cajas del pedido (chips arriba): la pendiente
     se empaca, la que falta cerrar abre su cierre y la cerrada se revisa con
@@ -1636,8 +1655,12 @@ def empaque_pedido(request, pk):
             return _empaque_generar_guia(request, pedido)
         if accion == "empacar_caja":
             return _empaque_caja(request, pedido)
-        if accion == "cerrar_caja":
-            return _empaque_cerrar_caja(request, pedido)
+        if accion == "etiquetas_pegadas":
+            return _empaque_etiquetas_pegadas(request, pedido)
+        if accion == "cerrar_tanda":
+            return _empaque_cerrar_tanda(request, pedido)
+        if accion == "lista_salida":
+            return _empaque_lista_salida(request, pedido)
         if accion == "cerrar_legacy":
             return _empaque_cerrar_legacy(request, pedido)
         if accion == "contenido_kit":
@@ -1654,7 +1677,7 @@ def empaque_pedido(request, pk):
         # 2026-09-24): el wizard vuelve al paso de caja hasta pesarlas todas.
         return _render_paso_empacar(request, pedido, elegida)
     if pedido.estado in (Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
-        return _render_cierre_o_exito(request, pedido, elegida)
+        return _render_tanda(request, pedido, elegida)
     if pedido.estado != Pedido.EN_PICKING:
         messages.error(
             request,
@@ -1776,7 +1799,9 @@ def _chips_cajas(cajas, actual=None):
     """Chips de navegación del wizard: cada caja con su estado corto y si es la abierta."""
     chips = []
     for caja in cajas:
-        if caja.ts_cierre is not None:
+        if caja.estado == Paquete.EMPACADO and caja.ts_listo_salida is not None:
+            estado = "lista"
+        elif caja.ts_cierre is not None:
             estado = "cerrada"
         elif caja.estado == Paquete.DESPACHADO:
             estado = "despachada"
@@ -1931,11 +1956,19 @@ def _render_paso_empacar(request, pedido, elegida=None):
     return _render_empaque(request, contexto)
 
 
-def _render_cierre_o_exito(request, pedido, elegida=None):
-    """Paso 3-5 del wizard: etiquetas impresas → foto de cierre → éxito.
+def _numeros_cajas(cajas):
+    return ", ".join(str(c.numero) for c in cajas)
 
-    ?caja=N (elegida): si le falta el cierre, abre SU paso de cierre aunque no
-    sea la primera; si ya está cerrada, la revisión con sus fotos (cambiables).
+
+def _render_tanda(request, pedido, elegida=None):
+    """Pasos 3-5 del wizard, por tanda (Chema 2026-10-20): etiquetas pegadas
+    → una foto de evidencia → lista en salida; "en_salida" cuando ya no falta
+    nada. El paso se deriva de los sellos de las cajas EMPACADO en bodega:
+    sin ts_etiquetas (o sin guía) → etiquetas; sin ts_cierre → evidencia; sin
+    ts_listo_salida → final. Una caja nueva que se suma después hace su
+    propia ronda. ?caja=N (elegida) ya cerrada → revisión con sus fotos (la de
+    cierre es la de la tanda: cambiarla la cambia para todas). Pedido sin
+    cajas (legacy): cierre único ligado al pedido, como siempre.
     """
     cajas = _paquetes_con_lineas(pedido)
     if (
@@ -1944,55 +1977,51 @@ def _render_cierre_o_exito(request, pedido, elegida=None):
         and _caja_cerrada(elegida)
     ):
         return _render_revisar_caja(request, pedido, elegida)
-    contexto = {
-        "seccion": "empaque",
-        "pedido": pedido,
-        "fotos_sueltas": _fotos_sueltas(pedido, cajas),
-    }
-    # Éxito solo cuando Salida lo va a aceptar: cada caja con cierre Y guía
-    # viva (empaque_completo). Una caja quitada de salida conserva su cierre
-    # pero no tiene guía: cae al paso de cierre, que ofrece "Reintentar guía".
-    if pedido.empaque_completo:
-        contexto.update({
-            "paso": "exito",
-            "corral": _corral_de_carrier(_carrier_probable(pedido)),
-            "chips": _chips_cajas(cajas),
-        })
-        return _render_empaque(request, contexto)
-
     guias = list(
         pedido.guias.exclude(estado__in=list(Guia.ESTADOS_INACTIVOS)).order_by("id")
     )
     cajas_empacadas = [c for c in cajas if c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO)]
-    en_bodega = [c for c in cajas_empacadas if c.estado == Paquete.EMPACADO]  # las despachadas ya no piden nada
-    por_cerrar = [c for c in en_bodega if not _caja_cerrada(c)]
-    caja_cierre = por_cerrar[0] if por_cerrar else None
-    if elegida is not None:
-        caja_cierre = next((c for c in por_cerrar if c.pk == elegida.pk), caja_cierre)
+    tanda = [c for c in cajas_empacadas if c.estado == Paquete.EMPACADO]  # las despachadas ya no piden nada
     con_guia = {g.paquete_id for g in guias}
-    contexto.update({
-        "paso": "cierre",
+    sin_guia = [c for c in tanda if c.pk not in con_guia]
+    contexto = {
+        "seccion": "empaque",
+        "pedido": pedido,
+        "fotos_sueltas": _fotos_sueltas(pedido, cajas),
+        "chips": _chips_cajas(cajas),
+        "corral": _corral_de_carrier(_carrier_probable(pedido)),
         "guias": guias,
         "tiene_guia": bool(guias),
         # Cajas en bodega sin guía activa (el carrier falló, o se quitó de salida): se reintentan aquí.
-        "cajas_sin_guia": [c for c in en_bodega if c.pk not in con_guia],
+        "cajas_sin_guia": sin_guia,
         "cajas_empacadas": cajas_empacadas,
-        "por_cerrar": por_cerrar,
-        "caja_cierre": caja_cierre,
-        "otras_por_cerrar": [c for c in por_cerrar if caja_cierre and c.pk != caja_cierre.pk],
-        "chips": _chips_cajas(cajas, actual=caja_cierre.numero if caja_cierre else None),
-        "cierre_legacy": not cajas_empacadas,  # 1 caja implícita
-        "total_cierres": max(len(cajas_empacadas), 1),
-        "cierres_hechos": max(len(cajas_empacadas), 1) - (len(por_cerrar) or 1),
-        # La guía que falló con el carrier se reintenta AQUÍ (antes vivía en
-        # Salida): nada llega al corral sin guía y foto de cierre. Con otras
-        # cajas ya fuera (parcial) solo cuando alguna en bodega no tiene guía.
+        # La guía que falló con el carrier se reintenta AQUÍ: nada llega al
+        # corral sin guía. Con otras cajas ya fuera (parcial) solo cuando
+        # alguna en bodega no tiene guía.
         "puede_reintentar_guia": pedido.estado == Pedido.EMPACADO or (
-            pedido.estado == Pedido.PARCIALMENTE_DESPACHADO and any(c.pk not in con_guia for c in en_bodega)
+            pedido.estado == Pedido.PARCIALMENTE_DESPACHADO and bool(sin_guia)
         ),
-    })
-    if caja_cierre is not None:
-        contexto.update(_contexto_peso(caja_cierre))
+    }
+    if not cajas_empacadas:
+        # Legacy sin plan de cajas: una caja implícita con cierre único.
+        if pedido.empaque_completo:
+            contexto["paso"] = "en_salida"
+        else:
+            contexto.update({"paso": "cierre", "cierre_legacy": True})
+        return _render_empaque(request, contexto)
+    por_etiquetar = [c for c in tanda if c.ts_etiquetas is None]
+    por_evidenciar = [c for c in tanda if c.ts_etiquetas is not None and c.ts_cierre is None]
+    por_confirmar = [c for c in tanda if c.ts_cierre is not None and c.ts_listo_salida is None]
+    if sin_guia or por_etiquetar:
+        contexto.update({"paso": "etiquetas", "tanda": tanda, "numeros_tanda": _numeros_cajas(tanda)})
+    elif por_evidenciar:
+        contexto.update({
+            "paso": "evidencia", "tanda_evidencia": por_evidenciar, "numeros_tanda": _numeros_cajas(por_evidenciar),
+        })
+    elif por_confirmar:
+        contexto.update({"paso": "final", "numeros_tanda": _numeros_cajas(por_confirmar)})
+    else:
+        contexto["paso"] = "en_salida"
     return _render_empaque(request, contexto)
 
 
@@ -2107,18 +2136,48 @@ def _empaque_generar_guia(request, pedido):
     return _despachar_y_avisar(request, pedido, destino)
 
 
-def _empaque_cerrar_caja(request, pedido):
-    """Foto de la caja cerrada CON su etiqueta pegada → cerrar_caja."""
+def _empaque_etiquetas_pegadas(request, pedido):
+    """Botón "Etiquetas pegadas ✓": estampa la tanda y sigue la evidencia."""
     destino = redirect("piso:empaque_pedido", pk=pedido.pk)
-    paquete = get_object_or_404(Paquete, pk=request.POST.get("paquete_id"), pedido=pedido)
-    from apps.pedidos.services import cerrar_caja  # lazy por contrato
+    from apps.pedidos.services import marcar_etiquetas_pegadas  # lazy por contrato
     try:
-        cerrar_caja(paquete, request.user, request.FILES.get("foto_cierre"))
+        cajas = marcar_etiquetas_pegadas(pedido, request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
         return destino
-    messages.success(request, f"Caja {paquete.numero} cerrada con su etiqueta.")
+    messages.success(request, f"Etiquetas pegadas en la caja {_numeros_cajas(cajas)}. Ahora la foto de evidencia.")
     return destino
+
+
+def _empaque_cerrar_tanda(request, pedido):
+    """UNA foto de evidencia de la tanda cerrada con sus etiquetas → cerrar_tanda."""
+    destino = redirect("piso:empaque_pedido", pk=pedido.pk)
+    from apps.pedidos.services import cerrar_tanda  # lazy por contrato
+    try:
+        cajas = cerrar_tanda(pedido, request.user, request.FILES.get("foto_tanda"))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return destino
+    messages.success(request, f"Evidencia guardada de la caja {_numeros_cajas(cajas)}.")
+    return destino
+
+
+def _empaque_lista_salida(request, pedido):
+    """Botón "Lista en salida ▶": las cajas de la tanda entran a Salida y el
+    operador regresa a Mi turno (Chema 2026-10-20: nunca reclama el siguiente
+    pedido; un pedido asignado a quien no lo trabaja queda pausado)."""
+    from apps.pedidos.services import confirmar_lista_salida  # lazy por contrato
+    try:
+        cajas = confirmar_lista_salida(pedido, request.user)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect("piso:empaque_pedido", pk=pedido.pk)
+    corral = _corral_de_carrier(_carrier_probable(pedido))
+    messages.success(
+        request,
+        f"{pedido.folio}: caja {_numeros_cajas(cajas)} lista en salida. Déjala en el corral {corral}.",
+    )
+    return redirect("piso:home")
 
 
 def _empaque_reemplazar_foto(request, pedido):

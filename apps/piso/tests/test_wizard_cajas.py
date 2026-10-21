@@ -1,8 +1,9 @@
 """Wizard de empaque POR CAJA (C2): services reales, impresión mockeada.
 
 Foto de contenido + peso por caja (empacar_caja), la última encadena empaque
-total + guías + impresión (despachar_a_corral), luego foto de CAJA CERRADA
-por caja (cerrar_caja) y pantalla de éxito con SIGUIENTE PEDIDO ▶.
+total + guías + impresión (despachar_a_corral), luego "Etiquetas pegadas",
+UNA foto de evidencia de la tanda (cerrar_tanda) y "Lista en salida" de
+vuelta a Mi turno (Chema 2026-10-20).
 """
 from decimal import Decimal
 from unittest.mock import patch
@@ -150,7 +151,15 @@ class WizardCajasTests(PisoTestCase):
             0,
         )
 
-    def test_flujo_completo_caja_por_caja_hasta_exito(self):
+    def _empacar_las_dos(self):
+        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
+            for caja, peso in ((self.caja1, "12100"), (self.caja2, "8100")):
+                self.client.post(self.url, {
+                    "accion": "empacar_caja", "paquete_id": caja.pk,
+                    "peso_real_gr": peso, "foto_contenido": self.foto(),
+                })
+
+    def test_flujo_completo_caja_por_caja_hasta_lista_en_salida(self):
         # Caja 1: foto + peso contra SU plan; el pedido sigue en picking.
         with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
             r1 = self.client.post(self.url, {
@@ -178,84 +187,98 @@ class WizardCajasTests(PisoTestCase):
         guias = list(Guia.objects.filter(pedido=self.pedido))
         self.assertEqual(len(guias), 2)  # una guía por caja
         self.assertEqual(imprimir.call_count, 4)  # (carrier + interna) × 2 cajas
-        # Paso de cierre: etiquetas impresas + foto de caja cerrada por caja.
+        # Pantalla Etiquetas (Chema 2026-10-20): guías impresas, reimpresión por caja y "Etiquetas pegadas".
         self.assertContains(r2, "etiquetas enviadas a la impresora")
-        self.assertContains(r2, 'value="cerrar_caja"')
+        self.assertContains(r2, 'value="etiquetas_pegadas"')
+        self.assertContains(r2, 'value="imprimir_guia"')
+        self.assertNotContains(r2, 'value="cerrar_caja"')
+        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)  # nada en Salida todavía
 
-        # Cierre caja 1 → sigue la 2 (auto-siguiente).
-        r3 = self.client.post(self.url, {
-            "accion": "cerrar_caja", "paquete_id": self.caja1.pk,
-            "foto_cierre": self.foto("z1.jpg"),
-        }, follow=True)
-        self.assertFalse(self.pedido.cajas_cerradas_completas)
-        self.assertContains(r3, f'value="{self.caja2.pk}"')
+        # Etiquetas pegadas → pantalla Evidencia: UNA foto de la tanda.
+        r3 = self.client.post(self.url, {"accion": "etiquetas_pegadas"}, follow=True)
+        self.assertContains(r3, "Etiquetas pegadas en la caja 1, 2")
+        self.assertContains(r3, 'value="cerrar_tanda"')
+        self.assertContains(r3, 'name="foto_tanda"')
+        self.caja1.refresh_from_db()
+        self.assertIsNotNone(self.caja1.ts_etiquetas)
 
-        # Cierre caja 2 → evidencia completa + pantalla de éxito.
-        r4 = self.client.post(self.url, {
-            "accion": "cerrar_caja", "paquete_id": self.caja2.pk,
-            "foto_cierre": self.foto("z2.jpg"),
-        }, follow=True)
+        # Evidencia → pantalla final "Déjalo en el corral" con "Lista en salida".
+        r4 = self.client.post(self.url, {"accion": "cerrar_tanda", "foto_tanda": self.foto("tanda.jpg")}, follow=True)
+        self.assertContains(r4, "Déjalo en el corral")
+        self.assertContains(r4, "Lista en salida")
+        self.assertContains(r4, 'value="lista_salida"')
+        self.pedido.refresh_from_db()
         self.assertTrue(self.pedido.cajas_cerradas_completas)
-        self.assertContains(r4, "SIGUIENTE PEDIDO")
-        fotos = EvidenciaFoto.objects.filter(
-            entidad="pedido", entidad_id=str(self.pedido.pk),
-        )
+        self.assertFalse(self.pedido.empaque_completo)  # sin "Lista en salida" no entra a Salida
+        fotos = EvidenciaFoto.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk))
         self.assertEqual(fotos.filter(tipo="contenido").count(), 2)
-        self.assertEqual(fotos.filter(tipo="caja_cerrada").count(), 2)
+        self.assertEqual(fotos.filter(tipo="caja_cerrada").count(), 1)  # una foto para las dos cajas
+        self.caja1.refresh_from_db()
+        self.caja2.refresh_from_db()
+        self.assertEqual(self.caja1.foto_cierre_id, self.caja2.foto_cierre_id)
+        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
 
-    def test_con_una_caja_ya_fuera_el_wizard_cierra_la_que_queda(self):
+        # Lista en salida → de vuelta a Mi turno (nunca al siguiente pedido), ya en el corral.
+        r5 = self.client.post(self.url, {"accion": "lista_salida"})
+        self.assertRedirects(r5, reverse("piso:home"), fetch_redirect_response=False)
+        self.pedido.refresh_from_db()
+        self.caja1.refresh_from_db()
+        self.assertTrue(self.pedido.empaque_completo)
+        self.assertIsNotNone(self.caja1.ts_listo_salida)
+        home = self.client.get(reverse("piso:home"))
+        self.assertContains(home, "lista en salida")
+        self.assertContains(home, "En salida")
+        self.assertContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
+        otra_vez = self.client.get(self.url)
+        self.assertContains(otra_vez, "en salida")
+        self.assertContains(otra_vez, "Ir a Mi turno")
+        self.assertContains(otra_vez, "Caja 1 · lista")
+        self.assertNotContains(otra_vez, "SIGUIENTE PEDIDO")
+
+    def test_con_una_caja_ya_fuera_la_que_queda_hace_su_propia_tanda(self):
         from apps.pedidos.services import cerrar_caja, marcar_recolectado
 
-        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
-            for caja, peso in ((self.caja1, "12100"), (self.caja2, "8100")):
-                self.client.post(self.url, {
-                    "accion": "empacar_caja", "paquete_id": caja.pk,
-                    "peso_real_gr": peso, "foto_contenido": self.foto(),
-                })
-        cerrar_caja(self.caja1, self.operador, self.foto("z1.jpg"))
+        self._empacar_las_dos()
+        cerrar_caja(self.caja1, self.operador, self.foto("z1.jpg"))  # cierre de golpe: ya lista en salida
         self.pedido.refresh_from_db()
         marcar_recolectado(self.pedido, self.operador, paquetes=[self.caja1])
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, Pedido.PARCIALMENTE_DESPACHADO)
 
-        # El link "tomar foto de cierre" de Salida abre el paso de cierre de la caja 2.
+        # La caja 2 sigue en bodega: pantalla Etiquetas solo con ella.
         respuesta = self.client.get(self.url)
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, 'value="cerrar_caja"')
-        self.assertContains(respuesta, f'value="{self.caja2.pk}"')
+        self.assertContains(respuesta, 'value="etiquetas_pegadas"')
+        self.assertContains(respuesta, "1 caja en esta tanda")
         self.assertNotContains(respuesta, "no se puede empacar")
-
-        respuesta = self.client.post(self.url, {
-            "accion": "cerrar_caja", "paquete_id": self.caja2.pk,
-            "foto_cierre": self.foto("z2.jpg"),
-        }, follow=True)
-        self.assertContains(respuesta, "SIGUIENTE PEDIDO")
+        self.client.post(self.url, {"accion": "etiquetas_pegadas"})
+        self.client.post(self.url, {"accion": "cerrar_tanda", "foto_tanda": self.foto("z2.jpg")})
+        respuesta = self.client.post(self.url, {"accion": "lista_salida"})
+        self.assertRedirects(respuesta, reverse("piso:home"), fetch_redirect_response=False)
         self.caja2.refresh_from_db()
         self.assertIsNotNone(self.caja2.ts_cierre)
+        self.assertIsNotNone(self.caja2.ts_listo_salida)
+        self.pedido.refresh_from_db()
         self.assertTrue(self.pedido.cajas_cerradas_completas)
+        self.assertTrue(self.pedido.empaque_completo)
 
-    def test_una_caja_no_se_cierra_dos_veces(self):
-        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
-            for caja, peso in ((self.caja1, "12100"), (self.caja2, "8100")):
-                self.client.post(self.url, {
-                    "accion": "empacar_caja", "paquete_id": caja.pk,
-                    "peso_real_gr": peso, "foto_contenido": self.foto(),
-                })
-        self.client.post(self.url, {
-            "accion": "cerrar_caja", "paquete_id": self.caja1.pk,
-            "foto_cierre": self.foto("z1.jpg"),
-        })
-        repetida = self.client.post(self.url, {
-            "accion": "cerrar_caja", "paquete_id": self.caja1.pk,
-            "foto_cierre": self.foto("z1-bis.jpg"),
-        }, follow=True)
-        self.assertContains(repetida, "ya tiene su foto de cierre")
+    def test_la_evidencia_de_la_tanda_no_se_toma_dos_veces(self):
+        self._empacar_las_dos()
+        self.client.post(self.url, {"accion": "etiquetas_pegadas"})
+        self.client.post(self.url, {"accion": "cerrar_tanda", "foto_tanda": self.foto("z1.jpg")})
+        repetida = self.client.post(self.url, {"accion": "cerrar_tanda", "foto_tanda": self.foto("z1-bis.jpg")}, follow=True)
+        self.assertContains(repetida, "no tiene cajas esperando su foto")
         self.assertEqual(
             EvidenciaFoto.objects.filter(
                 entidad="pedido", entidad_id=str(self.pedido.pk), tipo="caja_cerrada",
             ).count(),
             1,
         )
+        # Y sin guía en alguna caja, "Etiquetas pegadas" no se puede confirmar.
+        Guia.objects.filter(paquete=self.caja2).update(estado=Guia.CANCELADA)
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "Sin guía: caja 2")
+        self.assertContains(respuesta, "reintenta la guía primero")
 
     def test_cierre_legacy_rechazado_con_cajas_empacadas(self):
         # Con plan de cajas empacado, el cierre es POR CAJA: el POST
@@ -304,6 +327,6 @@ class WizardCajasTests(PisoTestCase):
             }, follow=True)
         self.assertContains(respuesta, "No se imprimió la etiqueta")
         self.pedido.refresh_from_db()
-        # BEST-EFFORT: las guías quedan vivas y el cierre sigue disponible.
+        # BEST-EFFORT: las guías quedan vivas y la tanda sigue a Etiquetas pegadas.
         self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
-        self.assertContains(respuesta, 'value="cerrar_caja"')
+        self.assertContains(respuesta, 'value="etiquetas_pegadas"')
