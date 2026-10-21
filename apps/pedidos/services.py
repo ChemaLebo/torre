@@ -2071,6 +2071,134 @@ def detener_pedido(pedido, usuario, motivo, origen="manual", tipo="DET", texto=N
     return incidencia
 
 
+def contenido_que_regresa(pedido, caja):
+    """Qué regresaría a bodega si la caja se desarma al parar el pedido:
+    [(linea, sku, piezas, ubicacion|None, lote|None)] según lo anotado al
+    escanear (PickLinea en empaque), o el rack fijo del producto si no hay
+    registro. Solo cajas pickeadas y empacadas (en empaque o empacadas)."""
+    from apps.catalogo.services import rack_de  # lazy por contrato
+
+    filas = []
+    for linea, sku, unidades in contenido_caja_por_pieza(caja):
+        picks = list(linea.picks.filter(estado=PickLinea.EN_EMPAQUE).select_related("ubicacion", "lote").order_by("pk"))
+        restante = unidades
+        for p in picks:
+            if restante <= 0:
+                break
+            if p.ubicacion_id is None:
+                continue
+            tomo = min(p.cantidad, restante)
+            filas.append((linea, sku, tomo, p.ubicacion, p.lote))
+            restante -= tomo
+        if restante > 0:
+            rack = rack_de(sku)
+            lote = next((p.lote for p in picks if p.lote_id), None)
+            filas.append((linea, sku, restante, rack, lote))
+    return filas
+
+
+def _desarmar_caja_al_parar(pedido, caja, actor, motivo):
+    """La caja se desarma al parar el pedido (Chema 2026-10-21): su contenido
+    vuelve a bodega a la posición y lote de donde se tomó (lo anotado al
+    escanear o el rack fijo), vuelve a quedar apartado para el pedido, la
+    caja regresa a PLANEADO y los contadores de la línea bajan: al reanudar,
+    el piso la vuelve a pickear y empacar. ValueError si alguna pieza no
+    tiene posición a dónde volver."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+    from apps.inventario.services import regresar_piezas_de_empaque, reservar  # lazy por contrato
+
+    if caja.estado not in (Paquete.EN_EMPAQUE, Paquete.EMPACADO):
+        raise ValueError(f"La caja {caja.numero} no está empacada: no hay nada que desarmar.")
+    filas = contenido_que_regresa(pedido, caja)
+    sin_posicion = [sku.codigo for _, sku, _, ubicacion, _ in filas if ubicacion is None]
+    if sin_posicion:
+        raise ValueError(
+            f"La caja {caja.numero}: {', '.join(sorted(set(sin_posicion)))} no tiene posición a dónde volver "
+            "(sin registro de picking ni rack fijo). Decide su destino desde Reingresos."
+        )
+    regresado = []
+    por_linea = {}
+    for linea, sku, piezas, ubicacion, lote in filas:
+        if sku.requiere_lote and lote is None:
+            raise ValueError(f"La caja {caja.numero}: {sku.codigo} lleva lote y no hay registro de cuál. Decide su destino desde Reingresos.")
+        por_linea.setdefault(linea.pk, [linea, sku, []])[2].append({"cantidad": piezas, "destino": "bodega", "ubicacion": ubicacion, "lote": lote})
+    for linea, sku, decisiones in por_linea.values():
+        picks = list(linea.picks.filter(estado=PickLinea.EN_EMPAQUE).order_by("pk"))
+        preferir = [(p.ubicacion_id, p.lote_id, p.cantidad) for p in picks if p.ubicacion_id is not None or p.lote_id is not None]
+        regresar_piezas_de_empaque(sku, decisiones, pedido.folio, actor, preferir=preferir)
+        total = sum(d["cantidad"] for d in decisiones)
+        _mover_registros(linea, picks, total, PickLinea.REGRESADO)
+        # Vuelve a quedar apartado para este pedido: al reanudar se pickea otra vez.
+        reservar(sku, total, pedido.folio)
+        regresado.append({"sku": sku.codigo, "piezas": total, "a": [[d["ubicacion"].codigo, d["lote"].codigo if d["lote"] else None, d["cantidad"]] for d in decisiones]})
+    caja.transicionar(Paquete.PLANEADO, actor=actor, motivo=f"Parar en piso: la caja {caja.numero} se desarma; sus piezas vuelven a bodega.")
+    for pl in caja.lineas.select_related("linea_pedido__sku"):
+        if not pl.linea_pedido.sku.es_kit:
+            _recalcular_contadores(pl.linea_pedido)
+    return regresado
+
+
+def parar_en_piso(pedido, actor, motivo, *, cajas_guia=(), cajas_contenido=()):
+    """"Parar en piso" desde Mesa (Chema 2026-10-20/21): el pedido sale de la
+    cola del piso como un DET del operador (detener_pedido con origen mesa).
+    Antes, por caja seleccionada: `cajas_guia` = cajas en bodega con guía
+    comprada a las que se les cancela la guía y se les quitan las
+    confirmaciones del empaque (ni el piso ni la paquetería pueden escanearla;
+    al reanudar el wizard la lleva otra vez por etiquetas, evidencia y lista en
+    salida); `cajas_contenido` = cajas que se desarman: su contenido vuelve a
+    bodega a su posición y lote (_desarmar_caja_al_parar). Sin cajas, solo se
+    detiene. Con el pedido con guía y alguna caja desarmada o sin guía, vuelve
+    a EMPACADO; con una caja desarmada vuelve a picking (EN_PICKING o
+    PENDIENTE si algo ya salió). Regresa la incidencia DET."""
+    from apps.envios.models import Guia, Paquete  # lazy: modelos de otra app
+    from apps.envios.services import cancelar_guia  # lazy por contrato
+
+    motivo = (motivo or "").strip()
+    if not motivo:
+        raise ValueError("Di por qué se para el pedido.")
+    with transaction.atomic():
+        fresco = Pedido.objects.select_for_update().get(pk=pedido.pk)
+        if fresco.estado not in (Pedido.PENDIENTE, Pedido.EN_PICKING, Pedido.EMPACADO, Pedido.GUIA_GENERADA, Pedido.PARCIALMENTE_DESPACHADO):
+            raise ValueError(f"{fresco.folio} está {fresco.get_estado_display()}: ya no está en el piso.")
+        if fresco.detenido:
+            raise ValueError(f"{fresco.folio} ya está detenido.")
+        pks_guia = {int(x) for x in cajas_guia}
+        pks_contenido = {int(x) for x in cajas_contenido}
+        cajas = {c.pk: c for c in Paquete.objects.select_for_update().filter(pedido=fresco, pk__in=pks_guia | pks_contenido).prefetch_related("guias")}
+        faltan = (pks_guia | pks_contenido) - set(cajas)
+        if faltan:
+            raise ValueError("Alguna caja seleccionada no es de este pedido.")
+        canceladas, desarmadas = [], []
+        for pk, caja in cajas.items():
+            if caja.estado == Paquete.DESPACHADO:
+                raise ValueError(f"La caja {caja.numero} ya salió: no se puede parar.")
+            if pk in pks_guia or pk in pks_contenido:
+                guia = caja.guia_activa
+                if guia is not None and guia.estado == Guia.GUIA_CREADA:
+                    cancelar_guia(guia, actor, motivo=f"Parar en piso: caja {caja.numero} de {fresco.folio}")
+                    canceladas.append(guia.numero)
+                elif guia is not None and pk in pks_guia:
+                    raise ValueError(f"La guía {guia.numero} de la caja {caja.numero} ya salió ({guia.get_estado_display().lower()}): no se cancela.")
+                _reabrir_cierre(caja)
+            if pk in pks_contenido:
+                desarmadas.append({"caja": caja.numero, "regreso": _desarmar_caja_al_parar(fresco, caja, actor, motivo)})
+        if fresco.estado == Pedido.GUIA_GENERADA and (canceladas or desarmadas):
+            fresco.transicionar(Pedido.EMPACADO, actor=actor, motivo=f"Parar en piso: guía cancelada o caja desarmada ({motivo})"[:300])
+        if desarmadas:
+            if fresco.estado == Pedido.EMPACADO:
+                fresco.transicionar(Pedido.EN_PICKING, actor=actor, motivo=f"Parar en piso: hay piezas por volver a pickear ({motivo})"[:300])
+            elif fresco.estado == Pedido.PARCIALMENTE_DESPACHADO:
+                fresco.transicionar(Pedido.PENDIENTE, actor=actor, motivo=f"Parar en piso: hay piezas por volver a pickear ({motivo})"[:300])
+        registrar_evento(
+            "pedido", fresco.pk, "parado_en_piso", actor=actor, cliente=fresco.cliente,
+            delta={"guias_canceladas": canceladas, "cajas_desarmadas": desarmadas, "estado": fresco.estado},
+            motivo=motivo[:300],
+        )
+        incidencia = detener_pedido(fresco, actor, motivo, origen="mesa")
+    pedido.estado = fresco.estado
+    return incidencia
+
+
 def reanudar_pedido(pedido, actor, motivo=""):
     """Mesa resolvió el problema: el pedido vuelve a la cola de Mi turno, el
     primero por antigüedad (sigue con su `creado` / `ts_picking`), sin dueño

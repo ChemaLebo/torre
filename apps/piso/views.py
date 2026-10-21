@@ -2354,8 +2354,8 @@ def _cajas_en_corral(pedido):
     pedido está en Salida (ni los que esperan inventario tras una salida parcial)."""
     from apps.pedidos.services import cajas_listas_en_salida  # lazy por contrato
 
-    if pedido.estado not in _ESTADOS_CON_CORRAL or pedido.esperando_inventario:
-        return None
+    if pedido.estado not in _ESTADOS_CON_CORRAL or pedido.esperando_inventario or pedido.detenido:
+        return None  # detenido (Chema 2026-10-21): Mesa lo paró; nada suyo sube al camión
     if any(c.estado in (Paquete.EMPACADO, Paquete.DESPACHADO) for c in pedido.paquetes.all()):
         return cajas_listas_en_salida(pedido) or None
     if pedido.estado != Pedido.EMPACADO and pedido.empaque_completo:

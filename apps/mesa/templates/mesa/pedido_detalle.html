@@ -13,9 +13,40 @@
     {% if url_siguiente %}<a class="btn chico" href="{{ url_siguiente }}" title="Pedido más antiguo con estos filtros">Siguiente →</a>{% endif %}
     {% if url_shopify %}<a class="btn chico" href="{{ url_shopify }}" target="_blank" rel="noopener">Orden en Shopify ↗</a>{% endif %}
     {% if puede_rehacer %}<a class="btn" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}&amp;reponer=1" title="Reponer producto que ya salió: eliges el tipo de incidencia (daño, producto erróneo…) y te deja en la reposición por producto y caja">Rehacer entrega</a>{% endif %}
+    {% if puede_parar %}<button class="btn peligro" type="button" onclick="document.getElementById('modal-parar').showModal()" title="Saca el pedido de la cola del piso como un DET: el operador lo pierde, el avance se conserva y Reanudar lo regresa">Parar en piso</button>{% endif %}
     <a class="btn primario" href="{% url 'mesa:incidencia_nueva' %}?pedido={{ pedido.pk }}">Levantar incidencia</a>
   </div>
 </div>
+{% if puede_parar %}
+{# Parar en piso (Chema 2026-10-20/21): motivo obligatorio y tarjetas por caja; sin seleccionar cajas solo se detiene. #}
+<dialog class="modal" id="modal-parar" aria-labelledby="modal-parar-titulo" style="max-width:760px">
+  <form method="post">{% csrf_token %}
+    <input type="hidden" name="accion" value="parar_en_piso"><input type="hidden" name="folio" value="{{ pedido.folio }}">
+    <h3 id="modal-parar-titulo">Parar {{ pedido.folio }} en piso</h3>
+    <p class="small">El pedido sale de la cola del piso: quien lo tenía lo pierde, lo pickeado se conserva y se abre su incidencia DET. Si no seleccionas ninguna caja, solo se detiene.</p>
+    <label>Motivo <select name="motivo" required>{% for valor, texto in motivos_detener %}<option value="{{ valor }}">{{ texto }}</option>{% endfor %}</select></label>
+    <label>Detalle <input type="text" name="detalle" maxlength="300" placeholder="Qué pasó" style="width:100%"></label>
+    {% if cajas_parar %}
+    <div class="small muted" style="margin-top:8px">Cajas en bodega. Marca lo que aplique a cada una:</div>
+    {% for t in cajas_parar %}
+    <div style="padding:8px;border:1px solid var(--hair);border-radius:8px;margin-top:6px">
+      <div class="fila entre"><b>Caja {{ t.caja.numero }}</b> <span class="small muted">{{ t.situacion }}{% if t.guia %} · guía <span class="mono">{{ t.guia.numero }}</span> ({{ t.guia.carrier }}, {{ t.guia.get_estado_display|lower }}){% endif %}</span></div>
+      <div class="small">{{ t.contenido|join:", " }}</div>
+      {% if t.puede_cancelar_guia %}<label class="small"><input type="checkbox" name="caja-{{ t.caja.pk }}-guia" value="1"> Cancelar su guía y sacarla del corral: ni el piso ni la paquetería podrán escanearla; al reanudar, el wizard la lleva otra vez por etiquetas, evidencia y lista en salida.</label>{% endif %}
+      {% if t.puede_desarmar %}
+      <label class="small"><input type="checkbox" name="caja-{{ t.caja.pk }}-contenido" value="1"> Desarmarla: su contenido regresa a bodega y el piso la vuelve a pickear al reanudar. Regresa:</label>
+      <ul class="small" style="margin:2px 0 0 22px">{% for r in t.regreso %}<li>{{ r.piezas }} × {{ r.sku }} → <span class="mono">{{ r.donde }}</span>{% if r.lote %} · lote <span class="mono">{{ r.lote }}</span>{% endif %}</li>{% endfor %}</ul>
+      {% elif t.regreso %}<div class="small muted">No se puede desarmar desde aquí: {% for r in t.regreso %}{{ r.piezas }} × {{ r.sku }} {{ r.donde }}{% if not forloop.last %}; {% endif %}{% endfor %}.</div>{% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+    <div class="fila" style="justify-content:flex-end;gap:8px;margin-top:10px">
+      <button class="btn chico" type="button" onclick="this.closest('dialog').close()">Cerrar</button>
+      <button class="btn chico peligro" type="submit">Parar en piso</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
 
 <div class="grid g3">
   <div class="card">

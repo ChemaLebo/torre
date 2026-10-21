@@ -239,10 +239,14 @@ class Paquete(models.Model):
     # 2026-10-05, PED-00319): la caja subió al manifiesto pero nunca se fue
     # (guía cancelada, el carrier no la recogió) y vuelve a bodega
     # (pedidos.services.quitar_de_salida).
+    # EN_EMPAQUE / EMPACADO → PLANEADO solo al "Parar en piso" desde Mesa con
+    # "regresar su contenido a bodega" (pedidos.services.parar_en_piso,
+    # 2026-10-22): la caja se desarma, sus piezas vuelven a su posición y el
+    # piso la vuelve a pickear y empacar al reanudar.
     TRANSICIONES = {
         PLANEADO: {EN_EMPAQUE, EMPACADO, CANCELADO},
-        EN_EMPAQUE: {EMPACADO, CANCELADO},
-        EMPACADO: {DESPACHADO, CANCELADO},
+        EN_EMPAQUE: {EMPACADO, CANCELADO, PLANEADO},
+        EMPACADO: {DESPACHADO, CANCELADO, PLANEADO},
         DESPACHADO: {EMPACADO},
         CANCELADO: set(),
     }

@@ -1420,6 +1420,7 @@ def _ejecutar_accion_pedido(request):
         "cancelar_reposicion": _pedidos_cancelar_reposicion,
         "cancelar_reposicion_caja": _pedidos_cancelar_reposicion_caja,
         "reingreso_caja": _pedidos_reingreso_caja,
+        "parar_en_piso": _pedidos_parar_en_piso,
         "sustituir_guia_caja": _pedidos_sustituir_guia_caja,
         "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
@@ -1535,6 +1536,65 @@ def pedidos(request):
         "clientes_filtro": Cliente.objects.all(),
         "filtro": filtro,
     })
+
+
+def _cajas_para_parar(pedido, cajas):
+    """Tarjetas del modal "Parar en piso" (Chema 2026-10-21): por caja en
+    bodega, qué lleva, en qué va, si tiene guía comprada (se puede cancelar)
+    y, si está empacada, qué regresaría a bodega y a dónde si se desarma."""
+    from apps.pedidos.services import contenido_caja_por_pieza, contenido_que_regresa  # lazy por contrato
+
+    etiquetas = {"PLANEADO": "planeada (sin pickear)", "EN_EMPAQUE": "en empaque", "EMPACADO": "empacada"}
+    tarjetas = []
+    for caja in cajas:
+        if caja.estado not in etiquetas:
+            continue
+        guia = caja.guia
+        situacion = etiquetas[caja.estado]
+        if caja.estado == "EMPACADO" and caja.ts_listo_salida:
+            situacion = "en el corral, lista para el chofer"
+        elif caja.estado == "EMPACADO" and guia is not None:
+            situacion = "empacada con guía"
+        regreso = []
+        if caja.estado in ("EN_EMPAQUE", "EMPACADO"):
+            for _, sku, piezas, ubicacion, lote in contenido_que_regresa(pedido, caja):
+                regreso.append({
+                    "sku": sku.codigo, "piezas": piezas,
+                    "donde": ubicacion.codigo if ubicacion is not None else "sin posición: decide en Reingresos",
+                    "lote": lote.codigo if lote is not None else "",
+                })
+        tarjetas.append({
+            "caja": caja, "situacion": situacion,
+            "contenido": [f"{unidades} × {sku.codigo}" for _, sku, unidades in contenido_caja_por_pieza(caja)],
+            "guia": guia, "puede_cancelar_guia": guia is not None and guia.estado == "GUIA_CREADA",
+            "puede_desarmar": caja.estado in ("EN_EMPAQUE", "EMPACADO") and regreso and all(r["donde"] and not r["donde"].startswith("sin posición") for r in regreso),
+            "regreso": regreso,
+        })
+    return tarjetas
+
+
+def _pedidos_parar_en_piso(request):
+    """"Parar en piso" desde Mesa (Chema 2026-10-20): motivo obligatorio y,
+    por caja seleccionada, cancelar su guía y sacarla del corral o desarmarla
+    para que su contenido vuelva a bodega (pedidos.parar_en_piso)."""
+    from apps.pedidos.models import Pedido  # lazy: modelo de otra app
+    from apps.pedidos.services import parar_en_piso  # lazy por contrato
+
+    pedido = get_object_or_404(Pedido, folio=request.POST.get("folio"))
+    motivo = (request.POST.get("motivo") or "").strip()[:120]
+    detalle = (request.POST.get("detalle") or "").strip()[:300]
+    if motivo == "Otro" or not motivo:
+        motivo = detalle or motivo
+    elif detalle:
+        motivo = f"{motivo}: {detalle}"
+    cajas_guia = [k.split("-")[1] for k, v in request.POST.items() if k.startswith("caja-") and k.endswith("-guia") and v]
+    cajas_contenido = [k.split("-")[1] for k, v in request.POST.items() if k.startswith("caja-") and k.endswith("-contenido") and v]
+    incidencia = parar_en_piso(pedido, request.user, motivo, cajas_guia=cajas_guia, cajas_contenido=cajas_contenido)
+    folio = f" ({incidencia.folio})" if incidencia is not None else ""
+    return (
+        f"{pedido.folio} parado en piso{folio}: sale de la cola; Reanudar lo regresa."
+        + (f" Guías canceladas: {len(cajas_guia) + len(cajas_contenido)} caja(s) tocada(s)." if cajas_guia or cajas_contenido else "")
+    )
 
 
 def _posiciones_para_modal():
@@ -1868,6 +1928,10 @@ def pedido_detalle(request, pk):
         "hoy": timezone.localdate().isoformat(),
         "lineas": _lineas_con_lotes(pedido),
         "posiciones": _posiciones_para_modal(),
+        # Parar en piso (Chema 2026-10-20): mientras el pedido esté en el piso y no esté ya detenido.
+        "puede_parar": pedido.estado in ("PENDIENTE", "EN_PICKING", "EMPACADO", "GUIA_GENERADA", "PARCIALMENTE_DESPACHADO") and not pedido.detenido,
+        "motivos_detener": __import__("apps.pedidos.services", fromlist=["MOTIVOS_DETENER"]).MOTIVOS_DETENER,
+        "cajas_parar": _cajas_para_parar(pedido, cajas),
         "piezas_sin_inventario": sum(l.pendiente_sin_stock for l in pedido.lineas_faltantes),
         # "Rehacer entrega" (2026-10-10): misma regla que reponer_lineas: hay piezas que ya
         # salieron en una caja y ninguna ola en manos del piso (un PENDIENTE que espera
