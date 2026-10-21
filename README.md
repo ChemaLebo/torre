@@ -44,6 +44,8 @@ Abrir <http://127.0.0.1:8380>
 
 ## Integraciones reales (activar con variables de entorno)
 
+Alta de un cliente con tienda Shopify, paso por paso (app custom, Conectar con Shopify desde Mesa, catálogo y arranque físico): `docs/alta-cliente-shopify.md`.
+
 ```bash
 export ENVIA_API_KEY="..."        # tasas preferenciales Envia.com; sin key → MockAdapter
 export WHATSAPP_TOKEN="..."       # Cloud API; sin token → consola
