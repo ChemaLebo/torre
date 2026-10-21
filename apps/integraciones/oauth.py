@@ -147,9 +147,10 @@ def intercambiar_codigo(tienda, code):
     return cuerpo
 
 
-def conectar_tienda(tienda, code, actor=None):
+def conectar_tienda(tienda, code, actor=None, *, desde_link_dashboard=False):
     """Guarda el token y los permisos otorgados y cierra el nonce. Evento
-    `tienda_conectada` (sin el token)."""
+    `tienda_conectada` (sin el token); `desde_link_dashboard` deja dicho que
+    la primera instalación entró por el link del Dashboard y no por el botón."""
     cuerpo = intercambiar_codigo(tienda, code)
     tienda.token = cuerpo["access_token"]
     tienda.scopes = cuerpo.get("scope") or ",".join(scopes_de(tienda))
@@ -158,7 +159,9 @@ def conectar_tienda(tienda, code, actor=None):
     tienda.save(update_fields=["token", "scopes", "oauth_state", "ts_conectada"])
     registrar_evento(
         "tienda", tienda.dominio, "tienda_conectada", actor=actor, cliente=tienda.cliente,
-        delta={"scopes": tienda.scopes.split(",")}, motivo="Token de la Admin API guardado por OAuth.",
+        delta={"scopes": tienda.scopes.split(","), "desde_link_dashboard": desde_link_dashboard},
+        motivo="Token de la Admin API guardado por OAuth"
+        + (" (primera instalación desde el link del Dashboard)." if desde_link_dashboard else "."),
     )
     return tienda
 

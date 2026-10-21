@@ -125,6 +125,29 @@ class OAuthShopifyTests(TestCase):
         self.tienda.refresh_from_db()
         self.assertEqual(self.tienda.token, "")
 
+    def test_primera_instalacion_desde_el_link_del_dashboard_entra_sin_state(self):
+        """Soda Mate 2026-10-21: una app custom se instala desde el link del Dashboard, que regresa sin el state de Torre."""
+        params = {"code": "codigo-dash", "shop": "sodamate.myshopify.com", "timestamp": "1700000000", "host": "aG9zdA"}
+        params["hmac"] = firmar(params, "secreto-app")
+        respuesta_token = MagicMock(status_code=200)
+        respuesta_token.json.return_value = {"access_token": "shpat_dash", "scope": "read_orders"}
+        with patch("apps.integraciones.oauth.requests.post", return_value=respuesta_token), \
+                patch("apps.integraciones.oauth.ShopifyClient") as cliente_cls, \
+                patch("apps.integraciones.services.crear_definicion_link", return_value="creada"):
+            cliente_cls.return_value.graphql.side_effect = graphql_simulado
+            respuesta = self.client.get(reverse("oauth:callback"), params)
+        self.assertEqual(respuesta.status_code, 200)
+        self.tienda.refresh_from_db()
+        self.assertEqual(self.tienda.token, "shpat_dash")
+        evento = EventoAuditoria.objects.get(entidad="tienda", entidad_id="sodamate.myshopify.com", accion="tienda_conectada")
+        self.assertTrue(evento.delta["desde_link_dashboard"])
+        # Ya con token, una llegada sin state se rechaza: solo el botón de Torre puede reconectar.
+        params["code"] = "otro"
+        params["hmac"] = firmar(params, "secreto-app")
+        with patch("apps.integraciones.oauth.requests.post") as post:
+            self.assertEqual(self.client.get(reverse("oauth:callback"), params).status_code, 403)
+            post.assert_not_called()
+
     def test_callback_de_tienda_desconocida_es_404(self):
         respuesta = self.client.get(reverse("oauth:callback"), {"shop": "otra.myshopify.com", "code": "x", "hmac": "y", "state": "z"})
         self.assertEqual(respuesta.status_code, 404)

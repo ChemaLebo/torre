@@ -109,7 +109,14 @@ def oauth_callback(request):
     tienda se identifica por `shop`; se valida la firma con su client_secret y
     el `state` que Torre generó al iniciar; el código se cambia por el token y
     corren los pasos post-conexión. Con sesión de Mesa regresa a la ficha del
-    cliente; sin sesión (el cliente desde su admin) muestra una página simple."""
+    cliente; sin sesión (el cliente desde su admin) muestra una página simple.
+
+    Primera instalación (Chema 2026-10-21, Soda Mate): una app de distribución
+    custom solo se instala desde el link de instalación del Dashboard, no desde
+    /admin/oauth/authorize. Ese link regresa aquí con el código pero SIN el
+    `state` de Torre, así que mientras la tienda no tenga token se acepta la
+    llegada sin state: la firma con el client_secret ya prueba que viene de
+    Shopify para esta app. Con token, el state es obligatorio como siempre."""
     from . import oauth  # lazy por contrato
 
     params = {clave: valor for clave, valor in request.GET.items()}
@@ -119,14 +126,16 @@ def oauth_callback(request):
         return HttpResponseNotFound("Tienda desconocida o sin app configurada en Torre.")
     if not oauth.firma_valida(params, tienda.client_secret):
         return HttpResponseForbidden("Firma inválida: la respuesta no viene de Shopify o el client secret no es el de esta app.")
-    if not tienda.oauth_state or params.get("state") != tienda.oauth_state:
+    state_ok = bool(tienda.oauth_state) and params.get("state") == tienda.oauth_state
+    primera_instalacion = not tienda.token and not params.get("state")
+    if not (state_ok or primera_instalacion):
         return HttpResponseForbidden("Conexión no iniciada desde Torre o ya usada: vuelve a Conectar con Shopify.")
     code = params.get("code") or ""
     if not code:
         return HttpResponseForbidden("Shopify no mandó el código de autorización.")
     actor = request.user if request.user.is_authenticated else None
     try:
-        oauth.conectar_tienda(tienda, code, actor=actor)
+        oauth.conectar_tienda(tienda, code, actor=actor, desde_link_dashboard=primera_instalacion)
     except ShopifyError as exc:
         registrar_evento(
             "tienda", tienda.dominio, "conexion_fallida", actor=actor, cliente=tienda.cliente,
