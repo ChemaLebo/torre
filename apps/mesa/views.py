@@ -4693,3 +4693,41 @@ def manual_detalle(request, slug):
         "cuerpo_template": f"manuales/{slug}.html",
         "url_lista": "mesa:manuales",
     })
+
+
+@rol_requerido("mesa")
+def tienda_conectar(request, pk, tienda_pk):
+    """Botones de la columna Conexión de la ficha del cliente (Chema 2026-10-21):
+    `conectar` abre la pantalla de permisos de Shopify de la app de la tienda
+    (al aprobar, /oauth/callback guarda el token y corre los pasos
+    post-conexión); `link` genera el link de 7 días para que el cliente
+    apruebe desde su admin; `sincronizar` corre catálogo y pedidos en segundo
+    plano. Todo por POST; nada habla con Shopify dentro de la petición salvo
+    la redirección a su pantalla."""
+    from apps.integraciones import oauth  # lazy por contrato
+    from apps.integraciones.models import Tienda  # lazy: modelo de otra app
+
+    cliente = get_object_or_404(Cliente, pk=pk)
+    tienda = get_object_or_404(Tienda, pk=tienda_pk, cliente=cliente)
+    volver = redirect(f"{reverse('mesa:cliente_detalle', args=[cliente.pk])}?tienda={tienda.pk}")
+    if request.method != "POST":
+        return volver
+    accion = request.POST.get("accion", "conectar")
+    try:
+        if accion == "link":
+            messages.success(
+                request,
+                f"Link de conexión para el cliente (vale 7 días; lo abre con su sesión de admin de "
+                f"{tienda.dominio}): {oauth.link_de_conexion(tienda)}",
+            )
+        elif accion == "sincronizar":
+            oauth.sincronizar_en_segundo_plano(tienda, actor=request.user)
+            messages.success(
+                request,
+                f"{tienda.dominio}: catálogo y pedidos sincronizando en segundo plano; revisa Salud de sync en unos minutos.",
+            )
+        else:
+            return redirect(oauth.iniciar_conexion(tienda, actor=request.user))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    return volver

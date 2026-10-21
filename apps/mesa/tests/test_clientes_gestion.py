@@ -9,6 +9,8 @@ import json
 import re
 from decimal import Decimal
 
+from unittest.mock import MagicMock, patch
+
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -830,6 +832,59 @@ class TiendasTests(BaseGestionClientes):
         formulario = self.client.get(self.url + f"?tienda={tienda.pk}")
         self.assertContains(formulario, 'name="client_id"')
         self.assertNotContains(formulario, "shhh-app-secret")
+
+    def test_conectar_con_shopify_redirige_a_la_pantalla_de_permisos(self):
+        """Chema 2026-10-21: con client ID y secret, la tabla ofrece Conectar, Link para el cliente y Sincronizar."""
+        from apps.integraciones.models import Tienda
+
+        tienda = Tienda.objects.create(cliente=self.colima, dominio="caney.myshopify.com", client_id="cid", client_secret="sec")
+        self.assertContains(self.client.get(self.url), "Conectar con Shopify")
+        url = reverse("mesa:tienda_conectar", args=[self.colima.pk, tienda.pk])
+        respuesta = self.client.post(url, {"accion": "conectar"})
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn("https://caney.myshopify.com/admin/oauth/authorize?client_id=cid", respuesta["Location"])
+        respuesta = self.client.post(url, {"accion": "link"}, follow=True)
+        self.assertContains(respuesta, "/oauth/conectar/")
+        self.assertContains(self.client.post(url, {"accion": "sincronizar"}, follow=True), "conecta la tienda primero")
+        tienda.token = "shpat_x"
+        tienda.save()
+        with patch("apps.integraciones.oauth.sincronizar_en_segundo_plano") as sync:
+            respuesta = self.client.post(url, {"accion": "sincronizar"}, follow=True)
+        self.assertContains(respuesta, "segundo plano")
+        sync.assert_called_once()
+        self.assertContains(self.client.get(self.url), "Actualizar permisos")
+
+    def test_el_callback_con_sesion_de_mesa_regresa_a_la_ficha_con_el_resumen(self):
+        import hashlib
+        import hmac as hmac_lib
+        from apps.integraciones import oauth
+        from apps.integraciones.models import Tienda
+
+        tienda = Tienda.objects.create(cliente=self.colima, dominio="caney.myshopify.com", client_id="cid", client_secret="sec")
+        oauth.iniciar_conexion(tienda)
+        tienda.refresh_from_db()
+        params = {"code": "c1", "shop": "caney.myshopify.com", "state": tienda.oauth_state, "timestamp": "1"}
+        mensaje = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        params["hmac"] = hmac_lib.new(b"sec", mensaje.encode(), hashlib.sha256).hexdigest()
+        respuesta_token = MagicMock(status_code=200)
+        respuesta_token.json.return_value = {"access_token": "shpat_nuevo", "scope": "read_orders"}
+        api = MagicMock()
+        api.graphql.side_effect = lambda q, v=None: (
+            {"webhookSubscriptions": {"edges": []}} if "webhookSubscriptions(" in q
+            else {"webhookSubscriptionCreate": {"webhookSubscription": {"id": "w"}, "userErrors": []}} if "webhookSubscriptionCreate" in q
+            else {"locations": {"edges": [{"node": {"id": "gid://shopify/Location/9", "name": "Bodega WOP", "isActive": True}}]}} if "locations(" in q
+            else {"currentAppInstallation": {"accessScopes": [{"handle": "read_orders"}]}}
+        )
+        with patch("apps.integraciones.oauth.requests.post", return_value=respuesta_token), \
+                patch("apps.integraciones.oauth.ShopifyClient", return_value=api), \
+                patch("apps.integraciones.services.crear_definicion_link", return_value="creada"):
+            respuesta = self.client.get(reverse("oauth:callback"), params, follow=True)
+        self.assertRedirects(respuesta, f"{self.url}?tienda={tienda.pk}")
+        self.assertContains(respuesta, "caney.myshopify.com conectada")
+        self.assertContains(respuesta, "Webhooks: 4 creados")
+        self.assertContains(respuesta, "Faltan permisos: write_orders")
+        tienda.refresh_from_db()
+        self.assertEqual((tienda.token, tienda.location_id), ("shpat_nuevo", "gid://shopify/Location/9"))
 
     def test_dominio_duplicado_es_error(self):
         from apps.integraciones.models import Tienda

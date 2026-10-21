@@ -51,7 +51,7 @@
   <div class="titulo"><h3>Tiendas conectadas</h3><a class="small" href="{% url 'mesa:sync' %}">salud de sync →</a></div>
   <div class="tabla-wrap">
     <table>
-      <thead><tr><th>Dominio</th><th>Plataforma</th><th>Location</th><th>Ingesta</th><th>Push</th><th>Estado</th><th></th></tr></thead>
+      <thead><tr><th>Dominio</th><th>Plataforma</th><th>Location</th><th>Ingesta</th><th>Push</th><th>Estado</th><th>Conexión</th><th></th></tr></thead>
       <tbody>
         {% for tienda in tiendas %}
         <tr>
@@ -63,10 +63,23 @@
           <td><span class="small">{{ tienda.frescura_ingesta }}</span></td>
           <td><span class="small">{{ tienda.frescura_push }}</span></td>
           <td>{% if tienda.activo %}<span class="pill ok">activa</span>{% else %}<span class="pill crit">inactiva</span>{% endif %}</td>
+          <td>
+            {# Conectar con Shopify desde Torre (Chema 2026-10-21): necesita el client ID y el secret de la app custom de la tienda. #}
+            {% if tienda.ts_conectada %}<span class="pill ok" title="{{ tienda.scopes }}">conectada {{ tienda.ts_conectada|date:"d/M H:i" }}</span>
+            {% elif tienda.token %}<span class="pill">token a mano</span>
+            {% else %}<span class="pill warn">sin conectar</span>{% endif %}
+            {% if tienda.client_id %}
+            <form method="post" action="{% url 'mesa:tienda_conectar' cliente.pk tienda.pk %}" class="fila mt" style="gap:4px;flex-wrap:wrap">{% csrf_token %}
+              <button class="btn chico primario" name="accion" value="conectar" type="submit" title="Abre la pantalla de permisos de Shopify con la lista de Torre; al aprobar, el token se guarda solo">{% if tienda.token %}Actualizar permisos{% else %}Conectar con Shopify{% endif %}</button>
+              <button class="btn chico" name="accion" value="link" type="submit" title="Link de 7 días para que el cliente apruebe desde su admin, sin entrar a Mesa">Link para el cliente</button>
+              {% if tienda.token %}<button class="btn chico" name="accion" value="sincronizar" type="submit" title="Catálogo y pedidos en segundo plano">Sincronizar ahora</button>{% endif %}
+            </form>
+            {% else %}<div class="small muted">sin app: captura client ID y secret en editar</div>{% endif %}
+          </td>
           <td class="derecha"><a class="btn chico" href="?tienda={{ tienda.pk }}#form-tienda">editar</a></td>
         </tr>
         {% empty %}
-        <tr><td colspan="7" class="muted centro">Sin tiendas conectadas.</td></tr>
+        <tr><td colspan="8" class="muted centro">Sin tiendas conectadas.</td></tr>
         {% endfor %}
       </tbody>
     </table>

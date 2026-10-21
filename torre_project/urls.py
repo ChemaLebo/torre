@@ -9,6 +9,7 @@ urlpatterns = [
     path("piso/", include("apps.piso.urls", namespace="piso")),
     path("mesa/", include("apps.mesa.urls", namespace="mesa")),
     path("hooks/", include("apps.integraciones.urls", namespace="integraciones")),
+    path("oauth/", include("apps.integraciones.urls_oauth", namespace="oauth")),
     path("r/", include("apps.rastreo.urls", namespace="rastreo")),
     path("api/impresion/", include("apps.envios.urls", namespace="envios")),
 ]

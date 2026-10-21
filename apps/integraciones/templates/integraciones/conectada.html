@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if error %}No se pudo conectar{% else %}Tienda conectada{% endif %} · Torre</title>
+<style>
+  body { margin: 0; background: #F7F6F3; color: #1b1b1b; font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 560px; margin: 10vh auto; padding: 0 20px; }
+  h1 { font-size: 1.4rem; margin: 0 0 8px; }
+  .mono { font-family: ui-monospace, monospace; }
+  .muted { color: #666; }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+  {% if error %}
+  <h1>No se pudo conectar {{ tienda.dominio }}</h1>
+  <p>{{ error }}</p>
+  <p class="muted">Vuelve a abrir el link de conexión o avisa a Torre.</p>
+  {% else %}
+  <h1>Listo: Torre quedó conectado a <span class="mono">{{ tienda.dominio }}</span></h1>
+  <p>Ya puedes cerrar esta pestaña. Torre se encarga del resto.</p>
+  {% if resumen %}
+  <ul class="muted">
+    <li>Webhooks: {{ resumen.webhooks }}</li>
+    <li>Metafield de rastreo: {{ resumen.metafield }}</li>
+    {% if resumen.location_elegida %}<li>Location elegida: {{ resumen.location_elegida }}</li>{% endif %}
+    {% if resumen.permisos_faltantes %}<li>Permisos que faltan: {{ resumen.permisos_faltantes|join:", " }}</li>{% endif %}
+  </ul>
+  {% endif %}
+  {% endif %}
+</main>
+</body>
+</html>
