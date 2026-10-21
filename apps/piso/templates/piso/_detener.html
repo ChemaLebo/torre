@@ -1,6 +1,9 @@
-{# Detener (Chema 2026-10-06, sustituye a Soltar): sale de la cola con su avance y abre una incidencia interna con el motivo; Mesa lo reanuda al resolver.
-   Al confirmar (Chema 2026-10-21) un modal pregunta si lo escaneado o empacado de ESTA ola regresa a sus racks, con la lista de a dónde va cada pieza
-   (regreso_detener, pedidos.regreso_al_detener); las cajas en salida, despachadas o que ya salieron nunca se tocan desde aquí: eso lo decide Mesa. #}
+{% comment %}
+Detener (Chema 2026-10-06, sustituye a Soltar): sale de la cola con su avance y abre una incidencia interna con el motivo; Mesa lo reanuda al resolver.
+Al confirmar (Chema 2026-10-21) un modal pregunta si lo escaneado o empacado de ESTA ola regresa a sus racks, con la lista de a dónde va cada pieza
+(regreso_detener, pedidos.regreso_al_detener); las cajas en salida, despachadas o que ya salieron nunca se tocan desde aquí: eso lo decide Mesa.
+Un comentario {# #} de Django solo vale en una línea: a varias líneas se imprime en la página (visto en PED-00197).
+{% endcomment %}
 <details class="colapsable mt">
   <summary>Detener este pedido · algo no deja seguir</summary>
   <form method="post" class="colapsable-cuerpo" id="form-detener">{% csrf_token %}

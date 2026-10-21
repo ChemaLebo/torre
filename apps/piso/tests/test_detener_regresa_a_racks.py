@@ -68,6 +68,7 @@ class DetenerRegresaARacksTests(PisoTestCase):
         self.assertContains(respuesta, 'id="modal-detener"')
         self.assertContains(respuesta, "Regresar a racks y detener")
         self.assertContains(respuesta, '2 × <span class="mono">COLIMITA-SIX</span> → <span class="mono">A-01-1</span>')
+        self.assertNotContains(respuesta, "{#")  # un comentario de plantilla a varias líneas se imprime (PED-00197)
         self.assertEqual(self._saldos(), (20, 2, 0))
         respuesta = self.client.post(url, {"accion": "detener", "motivo": "No encuentro el producto", "regresar": "1"}, follow=True)
         self.assertRedirects(respuesta, reverse("piso:home"), fetch_redirect_response=False)
