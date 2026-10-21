@@ -146,10 +146,23 @@ Constantes en el repo (no cambiarlas sin cambiar las colas):
 | `envios.TrabajoImpresion.IMPRESORA_ENVIOS` / `IMPRESORA_ETIQUETAS` | `envios` / `etiquetas` | campo `impresora` del trabajo; el agente lo traduce a `IMPRESORA` / `IMPRESORA_ETIQUETAS` |
 | `TrabajoImpresion.MEDIA_GUIAS` | `Custom.100x150mm` | papel de las guías |
 | `TrabajoImpresion.MEDIA_ETIQUETAS` y `apps/piso/etiquetas.py: MEDIA_ETIQUETAS` | `Custom.51x51mm` | papel de las etiquetas |
-| `apps/piso/etiquetas.py: ANCHO, ALTO` | 100 mm × 150 mm | tamaño del PDF de la etiqueta interna de guía |
-| `apps/piso/etiquetas.py: ETIQUETA_LADO` | 51 mm | tamaño del PDF de etiquetas de recepción |
+| `TrabajoImpresion.TIPO_INTERNA` / `TIPO_MANEJO` | `interna` / `manejo` | etiqueta interna 51×51 con sus etiquetas de manejo (packing) y etiquetas de manejo sueltas (Salida); van a la térmica de etiquetas (2026-10-20) |
+| `apps/piso/etiquetas.py: ANCHO, ALTO` | 100 mm × 150 mm | tamaño del PDF de la etiqueta interna de guía (solo pedidos LOCALES desde 2026-10-20) |
+| `apps/piso/etiquetas.py: ETIQUETA_LADO` | 51 mm | tamaño del PDF de etiquetas de recepción, de la interna 51×51 y de las de manejo |
+| `apps/piso/etiquetas.py: QR_PUNTOS_INTERNA` | 6 puntos (0.75 mm) por módulo | QR del repartidor en la interna 51×51 (~22 mm visibles) |
+| `configuracion.EtiquetasManejo` (admin) | FRÁGIL 4 · orientación 3 | cuántas etiquetas de manejo salen con la interna de una caja marcada (0 apaga) |
 | `deploy/agente_impresion.py: MEDIA_GUIAS` | `Custom.100x150mm` | papel si un trabajo viniera sin `media` |
 | `torre_project/settings.py` | `TORRE_MODO_IMPRESION=relay`, `TORRE_TOKEN_IMPRESION`, `TORRE["IMPRESION_MAX_INTENTOS"]=5` | modo, token de la API, reintentos |
+
+Qué va a cada térmica desde el 2026-10-20:
+
+| Qué | Cuándo | Térmica |
+|---|---|---|
+| Guía del carrier (PDF oficial) | al pesar la última caja del pedido, y reimpresión por caja | AiYin (guías, 10×15) |
+| Interna 51×51 + FRÁGIL ×4 + orientación ×3 (según las banderas del producto) | mismo momento, un solo trabajo por caja | Munbyn (etiquetas, 51×51) |
+| Interna 10×15 con dirección y banda de manejo | solo pedidos locales (`Pedido.es_local`) | AiYin |
+| Etiquetas de recepción (caja y tarima) | Terminar conteo, por tanda | Munbyn |
+| Etiquetas de manejo sueltas | botones de Salida, con cantidad | Munbyn |
 
 Modo `local` (sin agente): Torre corre `lp` en el propio servidor con las colas de `TORRE_IMPRESORA_ETIQUETAS` (guías) y `TORRE_IMPRESORA_ETIQUETAS_51` (etiquetas) del `.env`. En producción no se usa.
 
@@ -173,6 +186,20 @@ t = encolar_impresion(generar_pdf_etiquetas(items), tipo=TrabajoImpresion.TIPO_T
     impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS, media=MEDIA_ETIQUETAS, referencia="PRUEBA impresora 51x51",
     cliente=Cliente.objects.order_by("pk").first(), nombre="prueba-51x51.pdf")
 print("trabajo", t.pk, t.estado, "páginas", t.paginas)
+EOF
+```
+
+Una etiqueta FRÁGIL y una de orientación de prueba en la chica (sin pedido ni guía):
+
+```bash
+sudo -u torre bash -c 'cd /srv/torre/torre && /srv/torre/venv/bin/python manage.py shell' <<'EOF'
+from apps.envios.models import TrabajoImpresion
+from apps.piso.etiquetas import MEDIA_ETIQUETAS, encolar_impresion, generar_pdf_manejo
+for tipo in ("fragil", "orientacion"):
+    t = encolar_impresion(generar_pdf_manejo(tipo, 1), tipo=TrabajoImpresion.TIPO_MANEJO,
+        impresora=TrabajoImpresion.IMPRESORA_ETIQUETAS, media=MEDIA_ETIQUETAS, referencia=f"PRUEBA manejo {tipo}",
+        cliente=None, nombre=f"prueba-{tipo}.pdf")
+    print("trabajo", t.pk, t.estado, "páginas", t.paginas)
 EOF
 ```
 
@@ -234,5 +261,7 @@ Síntoma → causa → arreglo:
 - 2026-08-20: Ubuntu crea sola `BY-480BT` con PPD de HP Designjet (nunca imprimió).
 - Hasta el 2026-10-13: las guías salían por una cola `AiYin_BY-480BT` cuyo driver no quedó registrado.
 - 2026-10-13: se instala la Munbyn ITPP130B. Primer intento con PPD de HP (etiquetas en blanco); resuelto con `tspl-cups-driver` 1.3.6 y la cola `Etiquetas51`. Se despliega el agente de dos impresoras. En el proceso la cola `AiYin_BY-480BT` quedó mal (guías gigantes), el agente se apuntó por error a `BY-480BT` (nada salía) y la cola de la Aiyin se borró sin respaldo. Se reconstruyó con el driver TSPL; el detalle que lo arregló fue `Resolution=203dpi`.
+
+- 2026-10-20: la etiqueta interna de pedidos foráneos pasa a la Munbyn en 51×51 (folio, paquete n de m, paquetería y QR del repartidor) y con ella salen las etiquetas de manejo FRÁGIL / orientación (ISO 780) según las banderas del producto; la AiYin se queda con la guía del carrier y con la interna 10×15 de pedidos locales. Salida imprime etiquetas de manejo sueltas.
 
 Pendiente recomendado: guardar en esa laptop un respaldo de `/etc/cups/ppd/` (`sudo tar czf ~/respaldo-ppd-$(date +%F).tgz /etc/cups/ppd`) y traer una copia a `deploy/cups/` del repo para que recrear una cola sea copiar un archivo.

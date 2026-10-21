@@ -227,14 +227,14 @@ leído del código de su página, no probado con una guía real). Doble intento
 planificador elige por regla/precio y solo si ninguno cotiza abre la
 incidencia PAQ.
 
-## Segunda impresora para las etiquetas de manejo (Chema 2026-09-29)
+## Segunda impresora para las etiquetas de manejo — hecho 2026-10-20
 
-Hoy FRÁGIL / ESTE LADO ARRIBA van como banda dentro de la etiqueta interna
-(100×150) de cada caja. Chema quiere después una segunda impresora dedicada a
-esas etiquetas (rollo aparte, más grandes, una por cara). Cuando toque:
-`TORRE_IMPRESORA_MANEJO` en .env, `imprimir_etiqueta(guia, manejo=True)` con
-un PDF propio de marcas, y encolarla en `imprimir_guias_activas` junto a la
-interna solo cuando `marcas_de_manejo(guia)` traiga algo.
+Cerrado con la etiqueta interna 51×51 en la Munbyn: FRÁGIL (copa ISO 780) y
+orientación (flechas ISO 780) salen en el mismo trabajo que la interna, solo
+en cajas cuyo producto trae la bandera, en la cantidad de Configuraciones de
+sistema (`EtiquetasManejo`, default 4 y 3); Salida imprime sueltas. La banda
+dentro de la 100×150 queda solo para pedidos locales. Ver CONVENTIONS (piso,
+envios, configuracion) y `docs/impresion-bodega.md` §6.
 
 ## Reposición y reembolso — hecho 2026-09-28
 
@@ -819,3 +819,21 @@ pickeado fuera de las posiciones y búsqueda por fragmento de código de barras.
 - El filtro de Posiciones es del lado del navegador (texto de cada tarjeta);
   con miles de posiciones convendría pasarlo al servidor.
 
+## Etiqueta interna 51×51, empaque por tanda y Salida por caja — hecho 2026-10-20
+
+La foto de evidencia es POR TANDA, no por caja: tras pesar la última caja el
+wizard (teléfono) pasa por Etiquetas ("Etiquetas pegadas ✓", reimpresión por
+caja, Reintentar guía), Evidencia (UNA foto de todas las cajas cerradas con
+sus etiquetas) y "Déjalo en el corral SAL-xx" con "Lista en salida ▶", que
+confirma y regresa a Mi turno. Sellos por caja (`ts_etiquetas`, `ts_cierre` +
+`foto_cierre` compartida, `ts_listo_salida`; migración envios 0030 con
+relleno). Salida y manifiesto son POR CAJA: sale la caja confirmada aunque el
+pedido siga en empaque por otra (replaneo con guía comprada); la salida
+automática por carrier no mira sellos. Sin plan de cajas no se empaca (PAQ y
+detenido antes de pesar); una PAQ resuelta a mano sin plan no reanuda; sin
+DET automática al fallar la compra de guía (reintento desde Etiquetas,
+Detener manual). Murieron el empaque entero y el cierre único (los 48
+pedidos históricos con cierre único siguen leyéndose). Lo que queda: la
+caja que esperaba stock debería salir PRIMERO y el pick & pack debería ser
+por caja, sin olas — pendiente número 1, plan conceptual en
+`docs/plan-pick-pack-por-caja.md`.
