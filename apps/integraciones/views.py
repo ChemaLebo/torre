@@ -97,7 +97,8 @@ def _resumen_conexion(tienda, resumen):
     if resumen.get("location_elegida"):
         partes.append(f"Location: {resumen['location_elegida']}.")
     elif not tienda.location_id:
-        partes.append("Elige la location de WOP en editar.")
+        disponibles = ", ".join(resumen.get("locations") or [])
+        partes.append("Elige la location de WOP en editar" + (f" (disponibles: {disponibles})" if disponibles else "") + ".")
     if resumen.get("permisos_faltantes"):
         partes.append("Faltan permisos: " + ", ".join(resumen["permisos_faltantes"]) + ".")
     return " ".join(partes)
