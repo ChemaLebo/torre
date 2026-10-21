@@ -34,10 +34,12 @@ def _actor_str(actor):
     return str(actor)
 
 
-def _mov(sku, tipo, delta, *, lote=None, origen="", destino="", referencia="", actor=""):
-    """Escribe una línea del kardex (append-only)."""
+def _mov(sku, tipo, delta, *, lote=None, lote_id=None, origen="", destino="", referencia="", actor=""):
+    """Escribe una línea del kardex (append-only). `lote` (objeto) o `lote_id`."""
+    if lote_id is None and lote is not None:
+        lote_id = lote.pk
     return Movimiento.objects.create(
-        sku=sku, lote=lote, tipo=tipo, delta=delta,
+        sku=sku, lote_id=lote_id, tipo=tipo, delta=delta,
         estado_origen=origen, estado_destino=destino,
         referencia=str(referencia), actor=_actor_str(actor),
     )
@@ -253,13 +255,21 @@ def _restar_detallado(saldos_ordenados, cantidad):
     return origen
 
 
-def confirmar_pick(sku, cantidad, referencia):
+def confirmar_pick(sku, cantidad, referencia, *, preferir=None):
     """Pick confirmado: consume la reserva y mueve el físico vendible → en_empaque.
 
-    Desde 2026-10-13 (racks con producto fijo) el físico sale PRIMERO de la
-    posición fija del producto (FEFO dentro de ella), luego de la posición y
-    lote de la capa de reserva, y al final FEFO en toda la bodega; lo que
-    pasa a en_empaque conserva la posición y el lote de donde salió."""
+    `preferir` (lote por pedido, Chema 2026-10-22): [(ubicacion_id, lote_id,
+    piezas)] anotado al escanear. El físico sale PRIMERO de esas filas
+    exactas; solo lo que no alcance sigue el orden de siempre (desde
+    2026-10-13, racks con producto fijo): el rack fijo del producto (FEFO
+    dentro de él), luego la posición y lote de la capa de reserva, y al final
+    FEFO en toda la bodega. Lo que pasa a en_empaque conserva la posición y
+    el lote de donde salió, y el kardex lleva una fila PICK por lote.
+
+    Regresa (origen, no_cumplido): `origen` = [(ubicacion_id, lote_id,
+    piezas)] de dónde salió de verdad; `no_cumplido` = lo anotado que el
+    registro no tenía (restock sin registrar, traslado posterior): el
+    llamador lo audita para que la diferencia no pase en silencio."""
     from apps.catalogo.services import rack_de  # lazy por contrato
 
     cantidad = _validar_cantidad(cantidad, "pickear")
@@ -283,6 +293,9 @@ def confirmar_pick(sku, cantidad, referencia):
                 "vendible no alcanza. Levanta un conteo antes de continuar."
             )
         caducidades = _caducidades(saldos)
+        # 1) bajan las capas de reserva (FEFO); sus posiciones y lotes son la
+        #    segunda preferencia del físico, como siempre
+        claves_capas = []
         restante = cantidad
         for capa in sorted(reservados, key=lambda s: _clave_fefo(s, caducidades)):
             if restante == 0:
@@ -290,41 +303,68 @@ def confirmar_pick(sku, cantidad, referencia):
             tomo = min(capa.cantidad, restante)
             if tomo == 0:
                 continue
-            # 1) baja la capa de reserva
             capa.cantidad -= tomo
             if capa.cantidad == 0:
                 capa.delete()
             else:
                 capa.save(update_fields=["cantidad"])
-            # 2) baja el físico vendible: primero el rack fijo del producto (FEFO
-            #    dentro de él), luego misma ubicación/lote de la capa, luego FEFO
+            claves_capas.append((capa.ubicacion_id, capa.lote_id))
+            restante -= tomo
+        # 2) baja el físico vendible: primero lo anotado al escanear, fila por fila
+        origen, no_cumplido = [], []
+        restante = cantidad
+        for ubicacion_id, lote_id, piezas in (preferir or []):
+            if restante == 0:
+                break
+            piezas = min(int(piezas or 0), restante)
+            if piezas <= 0:
+                continue
+            fila = next(
+                (v for v in vendibles if v.cantidad > 0 and (v.ubicacion_id, v.lote_id) == (ubicacion_id, lote_id)),
+                None,
+            )
+            tomo = min(fila.cantidad, piezas) if fila is not None else 0
+            if tomo:
+                origen += _restar_detallado([fila], tomo)
+                restante -= tomo
+            if tomo < piezas:
+                no_cumplido.append((ubicacion_id, lote_id, piezas - tomo))
+        #    luego el rack fijo del producto (FEFO dentro de él), la posición y
+        #    lote de las capas de reserva, y FEFO en toda la bodega
+        if restante > 0:
             en_rack = sorted(
                 (v for v in vendibles if v.cantidad > 0 and rack_id is not None and v.ubicacion_id == rack_id),
                 key=lambda s: _clave_fefo(s, caducidades),
             )
             mismos = [
                 v for v in vendibles
-                if v.cantidad > 0 and v not in en_rack and (v.ubicacion_id, v.lote_id) == (capa.ubicacion_id, capa.lote_id)
+                if v.cantidad > 0 and v not in en_rack and (v.ubicacion_id, v.lote_id) in claves_capas
             ]
             otros = sorted(
-                (v for v in vendibles
-                 if v.cantidad > 0 and v not in en_rack and (v.ubicacion_id, v.lote_id) != (capa.ubicacion_id, capa.lote_id)),
+                (v for v in vendibles if v.cantidad > 0 and v not in en_rack and v not in mismos),
                 key=lambda s: _clave_fefo(s, caducidades),
             )
-            # 3) sube en_empaque conservando la posición y el lote de donde salió (trazabilidad)
-            for ubicacion_id, lote_id, salio in _restar_detallado(en_rack + mismos + otros, tomo):
-                _incrementar(sku, ubicacion_id, lote_id, Saldo.EN_EMPAQUE, salio)
-            restante -= tomo
-
-        _mov(
-            sku, Movimiento.PICK, cantidad,
-            origen=Saldo.RESERVADO, destino=Saldo.EN_EMPAQUE, referencia=referencia,
-        )
+            origen += _restar_detallado(en_rack + mismos + otros, restante)
+        # 3) sube en_empaque conservando la posición y el lote de donde salió (trazabilidad)
+        for ubicacion_id, lote_id, salio in origen:
+            _incrementar(sku, ubicacion_id, lote_id, Saldo.EN_EMPAQUE, salio)
+        por_lote = {}
+        for _, lote_id, salio in origen:
+            por_lote[lote_id] = por_lote.get(lote_id, 0) + salio
+        for lote_id, piezas in por_lote.items():
+            _mov(
+                sku, Movimiento.PICK, piezas, lote_id=lote_id,
+                origen=Saldo.RESERVADO, destino=Saldo.EN_EMPAQUE, referencia=referencia,
+            )
         registrar_evento(
             "sku", sku.codigo, "pick", cliente=sku.cliente,
-            delta={"cantidad": cantidad, "referencia": str(referencia)},
+            delta={
+                "cantidad": cantidad, "referencia": str(referencia),
+                "fuera_de_registro": sum(p for _, _, p in no_cumplido),
+            },
         )
     _notificar_cambio_disponible(sku)
+    return origen, no_cumplido
 
 
 def despachar(sku, cantidad, referencia):

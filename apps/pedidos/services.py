@@ -2229,6 +2229,68 @@ def confirmar_linea_pick(linea, cantidad, actor, codigo_escaneado=None, *, ubica
     return fresca
 
 
+def _codigos_de(slices):
+    """[(posición, lote, piezas)] legible a partir de [(ubicacion_id, lote_id, piezas)]."""
+    from apps.catalogo.models import Lote, Ubicacion  # lazy: modelos de otra app
+
+    ubicaciones = dict(Ubicacion.objects.filter(pk__in={u for u, _, _ in slices if u}).values_list("pk", "codigo"))
+    lotes = dict(Lote.objects.filter(pk__in={l for _, l, _ in slices if l}).values_list("pk", "codigo"))
+    return [[ubicaciones.get(u), lotes.get(l), n] for u, l, n in slices]
+
+
+def _fusionar_slices(slices):
+    """[(ubicacion_id, lote_id, piezas)] sumando las piezas de la misma posición y lote, en orden de aparición."""
+    acumulado, orden = {}, []
+    for ubicacion_id, lote_id, piezas in slices:
+        clave = (ubicacion_id, lote_id)
+        if clave not in acumulado:
+            orden.append(clave)
+        acumulado[clave] = acumulado.get(clave, 0) + int(piezas)
+    return [(u, l, acumulado[(u, l)]) for u, l in orden if acumulado[(u, l)] > 0]
+
+
+def _confirmar_pick_linea(linea, cantidad, folio):
+    """Confirma en inventario `cantidad` piezas de la línea restando PRIMERO lo
+    anotado al escanear (PickLinea pickeadas: posición y lote; lote por pedido,
+    Chema 2026-10-22) y deja los registros "en empaque" con lo que el kardex
+    restó de verdad. Lo anotado que el registro no tenía (restock sin
+    registrar, traslado posterior) se resta como siempre y queda el evento
+    `pick_fuera_de_registro` del pedido para que Mesa lo vea. Sin registros
+    (pedido anterior al cambio, hija de kit) empaca como siempre y los
+    registros nacen con lo que salió. Regresa [(ubicacion_id, lote_id, piezas)]."""
+    from apps.inventario.services import confirmar_pick  # lazy
+
+    picks = list(linea.picks.filter(estado=PickLinea.PICKEADO).order_by("pk"))
+    preferir = [
+        (p.ubicacion_id, p.lote_id, p.cantidad) for p in picks
+        if p.ubicacion_id is not None or p.lote_id is not None
+    ]
+    if preferir:
+        resultado = confirmar_pick(linea.sku, cantidad, folio, preferir=preferir)
+    else:
+        resultado = confirmar_pick(linea.sku, cantidad, folio)
+    # (origen, no_cumplido); una prueba que simula el inventario regresa otra cosa: sin registros.
+    origen, no_cumplido = resultado if isinstance(resultado, tuple) and len(resultado) == 2 else ([], [])
+    ahora = timezone.now()
+    PickLinea.objects.filter(pk__in=[p.pk for p in picks]).delete()
+    for ubicacion_id, lote_id, piezas in _fusionar_slices(origen):
+        PickLinea.objects.create(
+            linea=linea, ubicacion_id=ubicacion_id, lote_id=lote_id, cantidad=piezas,
+            estado=PickLinea.EN_EMPAQUE, ts_estado=ahora,
+        )
+    if no_cumplido:
+        pedido = linea.pedido
+        registrar_evento(
+            "pedido", pedido.pk, "pick_fuera_de_registro", cliente=pedido.cliente,
+            delta={"sku": linea.sku.codigo, "anotado": _codigos_de(no_cumplido), "resto": _codigos_de(origen)},
+            motivo=(
+                f"{linea.sku.codigo}: lo anotado al escanear no estaba en el registro de esa posición; "
+                "se restó de donde sí había. Revisa el restock o la posición."
+            )[:300],
+        )
+    return origen
+
+
 # ── Kits (contenido declarado en empaque — mystery box) ──
 
 def declarar_contenido_kit(linea_kit, items, actor, caja=None):
@@ -2487,14 +2549,14 @@ def empacar(pedido, actor, peso_real_gr, fotos, peso_ya_verificado=False):
                 "al final, con la etiqueta ya pegada."
             )
 
-        from apps.inventario.services import confirmar_pick  # lazy
         for linea in fresco.lineas.select_related("sku"):
             # La línea kit se escanea (la caja física) pero no tiene stock propio.
             # Segunda ola: lo que salió con la primera (cantidad_despachada) se
-            # confirmó entonces; solo se confirma lo nuevo.
+            # confirmó entonces; solo se confirma lo nuevo. El físico sale de
+            # lo anotado al escanear (lote por pedido).
             por_confirmar = linea.cantidad_pickeada - linea.cantidad_despachada
             if por_confirmar > 0 and not linea.sku.es_kit:
-                confirmar_pick(linea.sku, por_confirmar, fresco.folio)
+                _confirmar_pick_linea(linea, por_confirmar, fresco.folio)
 
         fresco.peso_real_gr = peso_real
         fresco.save(update_fields=["peso_real_gr", "actualizado"])
@@ -3803,7 +3865,7 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
             "consigue el stock o quítalas del pedido antes de entregarlo en bodega."
         )
     from apps.envios.models import Paquete  # lazy: modelo de otra app
-    from apps.inventario.services import confirmar_pick, despachar  # lazy
+    from apps.inventario.services import despachar  # lazy
 
     with transaction.atomic():
         # Sin select_related: tienda es nullable y Postgres no admite FOR UPDATE
@@ -3824,7 +3886,7 @@ def entregar_sin_guia(pedido, actor, recibio="", motivo=""):
                 continue  # sin pick, o ya salió con la primera ola
             if not linea.sku.es_kit:
                 if estado_inicial != Pedido.EMPACADO:
-                    confirmar_pick(linea.sku, por_despachar, pedido.folio)
+                    _confirmar_pick_linea(linea, por_despachar, pedido.folio)
                 despachar(linea.sku, por_despachar, pedido.folio)
             linea.cantidad_despachada = linea.cantidad_pickeada
             linea.save(update_fields=["cantidad_despachada"])
