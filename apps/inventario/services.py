@@ -1794,6 +1794,182 @@ def restock_empaque(sku, cantidad, referencia, actor=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Decisiones pieza por pieza (Chema 2026-10-22): producto empacado que no va a
+# salir (reposición cancelada, caja desarmada) o que ya salió y regresó
+# (reingreso por caja). Torre no adivina: ejecuta exactamente lo que Mesa
+# decidió por pieza. Inventario automático solo en pick → pack → salida.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DESTINO_BODEGA = "bodega"
+DESTINO_CUARENTENA = "cuarentena"
+DESTINO_MERMA = "merma"
+DESTINOS_PIEZA = (DESTINO_BODEGA, DESTINO_CUARENTENA, DESTINO_MERMA)
+
+
+def _validar_decision(sku, decision):
+    """Normaliza y valida una decisión por pieza: {cantidad, destino, ubicacion,
+    lote, descontar, motivo}. ValueError con el texto para la pantalla."""
+    cantidad = _validar_cantidad(decision.get("cantidad", 0), "decidir")
+    destino = decision.get("destino")
+    if destino not in DESTINOS_PIEZA:
+        raise ValueError("Elige a dónde va cada pieza: regresa a bodega, cuarentena o no regresa.")
+    ubicacion = decision.get("ubicacion")
+    lote = decision.get("lote")
+    if lote is not None and lote.sku_id != sku.pk:
+        raise ValueError(f"El lote {lote.codigo} no corresponde al producto {sku.codigo}.")
+    if destino == DESTINO_BODEGA:
+        if ubicacion is None:
+            raise ValueError(f"{sku.codigo}: elige la posición a la que regresa la pieza.")
+        if not ubicacion.activo:
+            raise ValueError(f"La posición {ubicacion.codigo} está inactiva.")
+        if ubicacion.tipo not in (Ubicacion.PICKING, Ubicacion.RESERVA):
+            raise ValueError(
+                f"{ubicacion.codigo} es de tipo {ubicacion.get_tipo_display()}: el producto vendible solo vive en picking o reserva."
+            )
+    if destino in (DESTINO_BODEGA, DESTINO_CUARENTENA) and sku.requiere_lote and lote is None:
+        raise ValueError(f"{sku.codigo} lleva lote: elige o escanea el lote de la pieza antes de regresarla.")
+    return {
+        "cantidad": cantidad, "destino": destino, "ubicacion": ubicacion, "lote": lote,
+        "descontar": bool(decision.get("descontar", True)), "motivo": (decision.get("motivo") or "")[:300],
+    }
+
+
+def _resumen_decisiones(decisiones):
+    return [
+        {
+            "cantidad": d["cantidad"], "destino": d["destino"],
+            "ubicacion": d["ubicacion"].codigo if d["ubicacion"] is not None else None,
+            "lote": d["lote"].codigo if d["lote"] is not None else None,
+            "descontar": d["descontar"],
+        }
+        for d in decisiones
+    ]
+
+
+def regresar_piezas_de_empaque(sku, decisiones, referencia, actor, *, preferir=None):
+    """Producto EN_EMPAQUE que no va a salir, decidido pieza por pieza por Mesa:
+
+    - "bodega": en_empaque → ubicado_vendible en la posición elegida (activa,
+      picking o reserva) con el lote elegido (obligatorio si requiere_lote);
+      kardex PUTAWAY por lote. Vuelve a ser vendible (push a Shopify y
+      reintento de reservas pendientes).
+    - "cuarentena": en_empaque → cuarentena en la zona de retorno/recepción,
+      con lote; kardex TRASLADO.
+    - "merma": con descontar=True sale del inventario (kardex MERMA negativo
+      con lote); con descontar=False NO mueve nada (la pieza ya no está en el
+      kardex: p. ej. una caja que el manifiesto descontó de más) y solo queda
+      el evento.
+
+    Lo que se resta de empaque sale primero de las filas anotadas para ese
+    pedido (`preferir` [(ubicacion_id, lote_id, piezas)]) y del lote elegido,
+    y al final FEFO. ValueError si el kardex no tiene en empaque lo que las
+    decisiones piden descontar. Regresa [(decisión, origen)]."""
+    decisiones = [_validar_decision(sku, d) for d in decisiones]
+    por_descontar = sum(d["cantidad"] for d in decisiones if d["destino"] != DESTINO_MERMA or d["descontar"])
+    resultado = []
+    with transaction.atomic():
+        en_empaque = list(Saldo.objects.select_for_update().filter(sku=sku, estado=Saldo.EN_EMPAQUE))
+        total = sum(s.cantidad for s in en_empaque)
+        if total < por_descontar:
+            raise ValueError(
+                f"El kardex tiene {total} pieza(s) de {sku.codigo} en empaque y las decisiones descuentan {por_descontar}. "
+                "Marca como 'no regresa sin descontar' las que ya no estén en el kardex."
+            )
+        caducidades = _caducidades(en_empaque)
+        anotado = list(preferir or [])
+        zona = None
+        for d in decisiones:
+            if d["destino"] == DESTINO_MERMA and not d["descontar"]:
+                resultado.append((d, []))
+                continue
+            lote_id = d["lote"].pk if d["lote"] is not None else None
+            primero = [p for p in anotado if p[1] == lote_id] + [p for p in anotado if p[1] != lote_id]
+            origen, _ = _restar_preferido(
+                en_empaque, d["cantidad"], primero,
+                lambda vivas, lote_id=lote_id: sorted(
+                    vivas, key=lambda s: (s.lote_id != lote_id, _clave_fefo(s, caducidades)),
+                ),
+            )
+            # lo tomado deja de estar "anotado"
+            anotado = [(u, l, max(0, n - sum(t for uu, ll, t in origen if (uu, ll) == (u, l)))) for u, l, n in anotado]
+            if d["destino"] == DESTINO_BODEGA:
+                _incrementar(sku, d["ubicacion"].pk, lote_id, Saldo.UBICADO_VENDIBLE, d["cantidad"])
+                _kardex_por_lote(
+                    sku, Movimiento.PUTAWAY, [(d["ubicacion"].pk, lote_id, d["cantidad"])],
+                    estado_origen=Saldo.EN_EMPAQUE, estado_destino=Saldo.UBICADO_VENDIBLE, referencia=referencia, actor=actor,
+                )
+            elif d["destino"] == DESTINO_CUARENTENA:
+                zona = zona or _ubicacion_tipo(Ubicacion.RETORNO, Ubicacion.RECEPCION)
+                if zona is None:
+                    raise ValueError("No hay ubicación de retorno ni de recepción activa para la cuarentena.")
+                _incrementar(sku, zona.pk, lote_id, Saldo.CUARENTENA, d["cantidad"])
+                _kardex_por_lote(
+                    sku, Movimiento.TRASLADO, [(zona.pk, lote_id, d["cantidad"])],
+                    estado_origen=Saldo.EN_EMPAQUE, estado_destino=Saldo.CUARENTENA, referencia=referencia, actor=actor,
+                )
+            else:
+                _kardex_por_lote(
+                    sku, Movimiento.MERMA, [(None, lote_id, d["cantidad"])], signo=-1,
+                    estado_origen=Saldo.EN_EMPAQUE, estado_destino="", referencia=referencia, actor=actor,
+                )
+            resultado.append((d, origen))
+        registrar_evento(
+            "sku", sku.codigo, "piezas_regresadas_de_empaque", actor=actor, cliente=sku.cliente,
+            delta={"referencia": str(referencia), "decisiones": _resumen_decisiones(decisiones)},
+        )
+    if any(d["destino"] == DESTINO_BODEGA for d in decisiones):
+        _notificar_cambio_disponible(sku)
+        _reintentar_pendientes(sku)
+    return resultado
+
+
+def reingresar_piezas(sku, decisiones, referencia, actor):
+    """Producto que YA salió del kardex (caja despachada que regresó o se perdió),
+    decidido pieza por pieza por Mesa:
+
+    - "bodega": entra como RETORNO a ubicado_vendible en la posición y lote
+      elegidos (vuelve a ser vendible).
+    - "cuarentena": entra como RETORNO a cuarentena en la zona de retorno/recepción, con lote.
+    - "merma" (no regresa / se perdió): nada entra; solo queda el evento.
+
+    Regresa [(decisión, [(ubicacion_id, lote_id, piezas)])]."""
+    decisiones = [_validar_decision(sku, d) for d in decisiones]
+    resultado = []
+    with transaction.atomic():
+        zona = None
+        for d in decisiones:
+            lote_id = d["lote"].pk if d["lote"] is not None else None
+            if d["destino"] == DESTINO_BODEGA:
+                _incrementar(sku, d["ubicacion"].pk, lote_id, Saldo.UBICADO_VENDIBLE, d["cantidad"])
+                entrada = [(d["ubicacion"].pk, lote_id, d["cantidad"])]
+                _kardex_por_lote(
+                    sku, Movimiento.RETORNO, entrada,
+                    estado_origen="despachado", estado_destino=Saldo.UBICADO_VENDIBLE, referencia=referencia, actor=actor,
+                )
+            elif d["destino"] == DESTINO_CUARENTENA:
+                zona = zona or _ubicacion_tipo(Ubicacion.RETORNO, Ubicacion.RECEPCION)
+                if zona is None:
+                    raise ValueError("No hay ubicación de retorno ni de recepción activa para la cuarentena.")
+                _incrementar(sku, zona.pk, lote_id, Saldo.CUARENTENA, d["cantidad"])
+                entrada = [(zona.pk, lote_id, d["cantidad"])]
+                _kardex_por_lote(
+                    sku, Movimiento.RETORNO, entrada,
+                    estado_origen="despachado", estado_destino=Saldo.CUARENTENA, referencia=referencia, actor=actor,
+                )
+            else:
+                entrada = []
+            resultado.append((d, entrada))
+        registrar_evento(
+            "sku", sku.codigo, "piezas_reingresadas", actor=actor, cliente=sku.cliente,
+            delta={"referencia": str(referencia), "decisiones": _resumen_decisiones(decisiones)},
+        )
+    if any(d["destino"] == DESTINO_BODEGA for d in decisiones):
+        _notificar_cambio_disponible(sku)
+        _reintentar_pendientes(sku)
+    return resultado
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Contrato: dictamen de cuarentena (doble firma)
 # ─────────────────────────────────────────────────────────────────────────────
 
