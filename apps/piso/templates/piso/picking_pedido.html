@@ -89,8 +89,8 @@
 {# Una línea por pantalla, en orden de ruta (primera ubicación FEFO). #}
 {% for linea in lineas %}
 <section class="pick-linea card" {% if linea.completa %}hidden{% endif %}
-         data-linea-id="{{ linea.pk }}" data-cantidad="{{ linea.con_stock }}"
-         data-pickeada="{{ linea.cantidad_pickeada }}"
+         data-linea-id="{{ linea.pk }}" data-cantidad="{{ linea.cantidad_ola }}"
+         data-pickeada="{{ linea.pickeada_ola }}"
          data-barras="{{ linea.sku.codigo_barras|default:'' }}"
          data-codigo="{{ linea.sku.codigo }}" data-descripcion="{{ linea.sku.descripcion }}"
          data-ubicacion="{% if linea.primera_ubicacion %}{{ linea.primera_ubicacion.ubicacion.codigo }}{% endif %}">
@@ -123,7 +123,7 @@
   {% endif %}
   {% endif %}
   <p class="pick-producto mt">{{ linea.sku.descripcion }}<br><span class="small mono">{{ linea.sku.codigo }} · {{ linea.sku.codigo_barras|default:"sin barras" }}</span></p>
-  <div class="pick-avance">{{ linea.cantidad_pickeada }} de {{ linea.con_stock }}</div>
+  <div class="pick-avance">{{ linea.pickeada_ola }} de {{ linea.cantidad_ola }}</div>
 </section>
 {% endfor %}
 

@@ -80,7 +80,21 @@ class CajasFantasmaTests(PisoTestCase):
         services.iniciar_picking(pedido, self.operador)
         linea.refresh_from_db()
         self.assertEqual(linea.por_pickear, 1)
-        services.confirmar_linea_pick(linea, 1, self.operador)
+        # La pantalla cuenta solo esta ola: 0 de 1, no 1 de 2; y no anuncia la caja que ya salió (Chema 2026-10-22).
+        url_picking = reverse("piso:picking_pedido", args=[pedido.pk])
+        respuesta = self.client.get(url_picking)
+        self.assertContains(respuesta, "0 de 1")
+        self.assertContains(respuesta, ">0 / 1<")
+        self.assertNotContains(respuesta, "1 de 2")
+        self.assertNotContains(respuesta, "Va DIVIDIDO")
+        respuesta = self.client.post(
+            url_picking, {"codigo": self.sku.codigo_barras, "cantidad": "1"}, HTTP_ACCEPT="application/json",
+        )
+        datos = respuesta.json()
+        self.assertEqual(
+            (datos["pickeada"], datos["cantidad"], datos["completo"], datos["avance"]),
+            (1, 1, True, {"pickeadas": 1, "total": 1}),
+        )
         url = reverse("piso:empaque_pedido", args=[pedido.pk])
         respuesta = self.client.get(url)
         self.assertEqual((respuesta.context["paso"], respuesta.context["caja"].numero), ("caja", 2))

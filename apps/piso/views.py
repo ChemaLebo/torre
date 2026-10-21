@@ -137,12 +137,23 @@ def _piezas_sin_inventario(pedido):
     return sum(linea.pendiente_sin_stock for linea in pedido.lineas_faltantes)
 
 
+def _ola_de(linea):
+    """(pickeadas, total) de la línea en la ola en curso, leídos de la orden:
+    `pendiente` es lo que esta ola surte y `por_pickear` lo que falta por
+    escanear; lo ya pickeado de la ola es la resta. Lo que salió en un
+    manifiesto anterior no cuenta: una reposición o una segunda ola arranca
+    en 0 de 1, no en 1 de 2 (Chema 2026-10-22)."""
+    total = linea.pendiente
+    return min(max(total - linea.por_pickear, 0), total), total
+
+
 def _avance(pedido):
     """(pickeadas, total, porcentaje) de lo que esta ola surte, para medidores."""
     total = pickeadas = 0
     for linea in pedido.lineas_por_surtir:
-        total += linea.con_stock
-        pickeadas += min(linea.cantidad_pickeada, linea.con_stock)
+        hechas, meta = _ola_de(linea)
+        total += meta
+        pickeadas += hechas
     pct = int(round(pickeadas * 100.0 / total)) if total else 0
     return pickeadas, total, pct
 
@@ -1268,6 +1279,7 @@ def _lineas_en_ruta(pedido):
     lineas = [l for l in pedido.lineas.select_related("sku") if l.pendiente > 0]
     for linea in lineas:
         linea.completa = linea.cantidad_pickeada >= linea.con_stock
+        linea.pickeada_ola, linea.cantidad_ola = _ola_de(linea)
         vendibles = list(
             Saldo.objects.filter(sku=linea.sku, estado=Saldo.UBICADO_VENDIBLE, cantidad__gt=0)
             .select_related("ubicacion", "lote")
@@ -1366,7 +1378,7 @@ def picking_pedido(request, pk):
         "motivos_detener": _motivos_detener(),
         "quien_lo_solto": _quien_lo_solto(pedido),
         "operadores": _operadores_piso(request),
-        "paquetes": _paquetes_con_lineas(pedido),
+        "paquetes": _cajas_en_mesa(_paquetes_con_lineas(pedido)),  # la caja que ya salió no se pinta
         "ahorro_division": _ahorro_division(pedido),
         "seccion": "picking",
         "pedido": pedido,
@@ -1385,13 +1397,14 @@ def _picking_json(pedido, linea, lineas, reiniciado=False):
     la página: los contadores de las demás líneas volvieron a cero."""
     pickeadas, total, _ = _avance(pedido)
     completo = all(l.cantidad_pickeada >= l.con_stock for l in lineas)
+    hechas, meta = _ola_de(linea)
     return JsonResponse({
         "ok": True,
         "reiniciado": reiniciado,
         "linea_id": linea.pk,
         "sku": linea.sku.codigo,
-        "pickeada": linea.cantidad_pickeada,
-        "cantidad": linea.con_stock,  # lo pedido más lo repuesto con stock
+        "pickeada": hechas,  # solo esta ola: sin lo que ya salió en un manifiesto anterior
+        "cantidad": meta,
         "restante": linea.por_pickear,
         "completo": completo,
         "avance": {"pickeadas": pickeadas, "total": total},
@@ -1501,9 +1514,8 @@ def _picking_escanear(request, pedido, reiniciado=False):
     if all(l.cantidad_pickeada >= l.con_stock for l in lineas):
         messages.success(request, f"Pedido {pedido.folio} completo. Llévalo a la mesa de empaque.")
         return redirect("piso:empaque_pedido", pk=pedido.pk)
-    messages.success(
-        request, f"{linea.sku.codigo}: van {linea.cantidad_pickeada} de {linea.con_stock}."
-    )
+    hechas, meta = _ola_de(linea)
+    messages.success(request, f"{linea.sku.codigo}: van {hechas} de {meta}.")
     return destino
 
 
@@ -1842,6 +1854,17 @@ def _chips_cajas(cajas, actual=None):
             estado = "pendiente"
         chips.append({"caja": caja, "estado": estado, "activa": caja.numero == actual})
     return chips
+
+
+def _cajas_en_mesa(cajas):
+    """Las cajas que el piso todavía tiene enfrente: fuera las despachadas, las
+    fantasma cuya guía ya se fue y las canceladas. Picking y empaque solo
+    pintan estas: una caja que ya salió no tiene nada que hacer frente a
+    quien pickea o empaca (Chema 2026-10-22)."""
+    return [
+        c for c in cajas
+        if c.estado not in (Paquete.DESPACHADO, Paquete.CANCELADO) and not c.ya_salio
+    ]
 
 
 def _fotos_sueltas(pedido, cajas):
