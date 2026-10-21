@@ -817,6 +817,7 @@ def _gestionar_incidencia(request, incidencia):
     if accion == "resolver":
         if not texto:
             raise ValueError("Describe la resolución antes de marcar resuelta.")
+        _exigir_plan_para_paq(incidencia)
         resolver(incidencia, texto, request.user)
         return "Incidencia resuelta. El cliente puede confirmarla o reabrirla desde su portal."
 
@@ -876,6 +877,7 @@ def _gestionar_incidencia(request, incidencia):
         )
         return f"{pedido.folio} regresó a empaquetado: el piso compra la guía nueva con la dirección corregida."
     if accion == "cerrar":
+        _exigir_plan_para_paq(incidencia)
         cerrar(incidencia, request.user)
         return "Incidencia cerrada. Si el pedido ya no tiene incidencias abiertas, quedó liberado."
 
@@ -963,6 +965,20 @@ def _gestionar_incidencia(request, incidencia):
         return f"Reclamación actualizada a {rec.get_estado_display()}."
 
     raise ValueError("Acción desconocida. Recarga la página e intenta de nuevo.")
+
+
+def _exigir_plan_para_paq(incidencia):
+    """Una PAQ no se resuelve ni se cierra a mano con el pedido sin plan de
+    cajas (Chema 2026-10-20): reanudarlo así lo mandaba a empacar sin plan.
+    Elegir paquetería en la misma incidencia la resuelve sola con plan."""
+    from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+    from apps.incidencias.services import pedido_sin_plan  # lazy por contrato
+
+    pedido = incidencia.pedido
+    if incidencia.tipo == Incidencia.TIPO_PAQ and pedido is not None and pedido_sin_plan(pedido):
+        raise ValueError(
+            f"{pedido.folio} sigue sin plan de cajas: elige la paquetería aquí mismo y la incidencia se resuelve sola."
+        )
 
 
 @redirigir_rol(portal="portal:incidencia_detalle")

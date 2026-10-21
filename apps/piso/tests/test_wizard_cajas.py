@@ -75,8 +75,9 @@ class WizardCajasTests(PisoTestCase):
         self.assertNotContains(respuesta, 'data-t="0"')
         self.assertContains(respuesta, 'id="dim-largo" min="1" value="40"')
 
-    def test_si_una_caja_falla_con_el_carrier_la_otra_se_imprime_y_se_avisa(self):
+    def test_si_una_caja_falla_con_el_carrier_la_otra_se_imprime_y_se_reintenta_sin_det(self):
         from apps.envios.adapters import ErrorCarrier
+        from apps.incidencias.models import Incidencia
 
         self.client.post(self.url, {
             "accion": "empacar_caja", "paquete_id": self.caja1.pk,
@@ -99,31 +100,19 @@ class WizardCajasTests(PisoTestCase):
         self.assertEqual(imprimir.call_count, 2)  # carrier + interna de la que sí salió
         self.assertContains(respuesta, "El carrier no respondió")
         self.assertContains(respuesta, "que sí tienen guía ya se mandaron a imprimir")
-        # Guía fallida = pedido detenido en piso (Chema 2026-10-06): sale de la cola sin dueño,
-        # con su incidencia DET para Mesa; el operador vuelve a Mi turno.
-        from apps.incidencias.models import Incidencia
+        # Sin DET automática (Chema 2026-10-20): el pedido sigue con su dueño en la pantalla
+        # Etiquetas con "Reintentar guía"; "Etiquetas pegadas" espera la guía; Detener es manual.
         self.pedido.refresh_from_db()
-        self.assertEqual((self.pedido.estado, self.pedido.detenido, self.pedido.asignado_a), (Pedido.EMPACADO, True, None))
-        det = Incidencia.objects.get(pedido=self.pedido, tipo=Incidencia.TIPO_DET)
-        self.assertTrue(det.interna)
-        self.assertTrue(det.mensajes.filter(texto__contains="El carrier no dio la guía: envia.com regresó error: 1300").exists())
-        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
-        home = self.client.get(reverse("piso:home"))
-        self.assertNotContains(home, "sin guía: caja 1")
-        self.assertContains(home, "Detenidos en piso")
-        self.assertRedirects(self.client.get(self.url), reverse("piso:home"), fetch_redirect_response=False)
-        # Mesa resuelve la DET: el pedido vuelve a la cola, CONTINUAR abre el wizard y el reintento vive ahí.
-        from apps.incidencias.services import resolver
-        resolver(det, "El carrier ya responde; reintenta la guía.", self.operador)
-        self.pedido.refresh_from_db()
-        self.assertFalse(self.pedido.detenido)
-        self.assertContains(self.client.get(reverse("piso:home")), "sin guía: caja 1")
-        respuesta = self.client.post(reverse("piso:home"), {"accion": "siguiente"}, follow=True)
+        self.assertEqual((self.pedido.estado, self.pedido.detenido, self.pedido.asignado_a), (Pedido.EMPACADO, False, self.operador))
+        self.assertFalse(Incidencia.objects.filter(pedido=self.pedido, tipo=Incidencia.TIPO_DET).exists())
         self.assertContains(respuesta, "Sin guía: caja 1")
-        self.assertContains(respuesta, 'value="generar_guia"')  # el reintento vive aquí
+        self.assertContains(respuesta, 'value="generar_guia"')
         self.assertContains(respuesta, "Reintentar guía · caja 1")
+        self.assertContains(respuesta, "reintenta la guía primero")
+        self.assertNotContains(self.client.get(reverse("piso:salida")), self.pedido.folio)
+        self.assertContains(self.client.get(reverse("piso:home")), "sin guía: caja 1")
 
-        # Reintentar guía desde el cierre: ahora el carrier responde y sale la que faltaba.
+        # Reintentar guía desde Etiquetas: ahora el carrier responde y sale la que faltaba.
         with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
             respuesta = self.client.post(self.url, {"accion": "generar_guia"}, follow=True)
         self.assertContains(respuesta, "listas para")
@@ -131,6 +120,7 @@ class WizardCajasTests(PisoTestCase):
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
         self.assertNotContains(respuesta, 'value="generar_guia"')
+        self.assertContains(respuesta, 'value="etiquetas_pegadas"')
 
     @override_settings(TORRE_PESO_MODO="bloquear")
     def test_peso_fuera_de_rango_no_toca_nada(self):
@@ -279,28 +269,6 @@ class WizardCajasTests(PisoTestCase):
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "Sin guía: caja 2")
         self.assertContains(respuesta, "reintenta la guía primero")
-
-    def test_cierre_legacy_rechazado_con_cajas_empacadas(self):
-        # Con plan de cajas empacado, el cierre es POR CAJA: el POST
-        # cerrar_legacy (cierre único) no debe inflar la evidencia.
-        with patch("apps.piso.etiquetas.imprimir_etiqueta", return_value="ok (mock)"):
-            for caja, peso in ((self.caja1, "12100"), (self.caja2, "8100")):
-                self.client.post(self.url, {
-                    "accion": "empacar_caja", "paquete_id": caja.pk,
-                    "peso_real_gr": peso, "foto_contenido": self.foto(),
-                })
-        respuesta = self.client.post(self.url, {
-            "accion": "cerrar_legacy", "foto_cierre": self.foto("unica.jpg"),
-        }, follow=True)
-        self.assertContains(respuesta, "se empacó por caja")
-        self.assertEqual(
-            EvidenciaFoto.objects.filter(
-                entidad="pedido", entidad_id=str(self.pedido.pk), tipo="caja_cerrada",
-            ).count(),
-            0,
-        )
-        self.pedido.refresh_from_db()
-        self.assertFalse(self.pedido.cajas_cerradas_completas)
 
     def test_post_fallido_conserva_el_peso_y_pide_la_foto_de_nuevo(self):
         # El navegador tira el file input en el PRG: el re-render debe traer

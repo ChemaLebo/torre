@@ -213,35 +213,6 @@ class RevisarCajaTests(PisoTestCase):
         self.assertEqual(self._fotos("contenido").count(), 1)
         self.assertFalse(EventoAuditoria.objects.filter(accion="foto_reemplazada").exists())
 
-    def test_cierre_legacy_ofrece_cambiar_sus_fotos_sueltas(self):
-        # Pedido sin plan de cajas: sus fotos cuelgan del pedido, no de una caja.
-        # Con 20 kg el plan que nace en la guía traería dos cajas y desde el
-        # 2026-09-24 eso manda a reempacar (ReempaquePendiente): el legacy de
-        # una caja implícita se prueba con un pedido que cabe en una sola.
-        Paquete.objects.filter(pedido=self.pedido).delete()
-        linea = self.pedido.lineas.get()
-        linea.cantidad = 4
-        linea.cantidad_pickeada = 4
-        linea.save(update_fields=["cantidad", "cantidad_pickeada"])
-        self.pedido.peso_esperado_gr = self.sku.peso_gr * 4
-        self.pedido.save(update_fields=["peso_esperado_gr"])
-        pedido = self.dejar_empacado(self.pedido)
-        from apps.envios.services import generar_guia
-        generar_guia(pedido)
-        self.assertEqual(pedido.paquetes.count(), 1)
-        contenido = self._fotos("contenido").get()
-        respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, 'value="cerrar_legacy"')
-        self.assertContains(respuesta, f'name="evidencia_id" value="{contenido.pk}"')
-
-        respuesta = self._reemplazar(contenido.pk, "", "mejor.jpg")
-        self.assertContains(respuesta, "Foto del contenido cambiada.")
-        self.assertFalse(EvidenciaFoto.objects.filter(pk=contenido.pk).exists())
-        self.assertEqual(self._fotos("contenido").count(), 1)
-        evento = EventoAuditoria.objects.get(accion="foto_reemplazada")
-        self.assertEqual((evento.entidad, evento.entidad_id), ("pedido", str(pedido.pk)))
-        self.assertEqual(evento.delta["cajas"], [])
-
     def test_imprimir_la_guia_de_una_caja_empacada(self):
         """Botón por caja (Chema 2026-10-13): reimprime la del carrier y la interna de ESA guía."""
         self._empacar(self.caja1, "12100", "c1.jpg")

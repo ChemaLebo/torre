@@ -53,6 +53,30 @@ class DetenidosEnMesaTests(PisoTestCase):
         resolver(self.det, "Ya se repuso el producto.", self.operador)
         self.pedido.refresh_from_db()
         self.assertTrue(self.pedido.detenido)  # la PAQ sigue abierta
+        from decimal import Decimal
+
+        from apps.envios.models import Paquete
+        Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("2"), carrier="estafeta")  # ya hay plan
         resolver(paq, "Se eligió paquetería.", self.operador)
         self.pedido.refresh_from_db()
         self.assertFalse(self.pedido.detenido)
+
+    def test_una_paq_sin_plan_no_se_resuelve_a_mano_ni_reanuda(self):
+        """Chema 2026-10-20: así llegaban pedidos a empaque sin cajas. Sin plan, la PAQ
+        no se resuelve ni se cierra desde Mesa, y por servicio no reanuda el pedido."""
+        from apps.incidencias.services import abrir_sin_paqueteria, resolver
+
+        paq = abrir_sin_paqueteria(self.pedido, "Ningún carrier cotiza.")
+        resolver(self.det, "Ya se repuso el producto.", self.operador)
+        url = reverse("mesa:incidencia_detalle", args=[paq.pk])
+        respuesta = self.client.post(url, {"accion": "resolver", "texto": "Listo."}, follow=True)
+        self.assertContains(respuesta, "sigue sin plan de cajas")
+        respuesta = self.client.post(url, {"accion": "cerrar"}, follow=True)
+        self.assertContains(respuesta, "sigue sin plan de cajas")
+        paq.refresh_from_db()
+        self.pedido.refresh_from_db()
+        self.assertEqual((paq.estado, self.pedido.detenido), (Incidencia.ABIERTA, True))
+        resolver(paq, "Resuelta a mano por servicio.", self.operador)
+        self.pedido.refresh_from_db()
+        self.assertTrue(self.pedido.detenido)
+        self.assertTrue(paq.mensajes.filter(texto__contains="sigue sin plan de cajas").exists())

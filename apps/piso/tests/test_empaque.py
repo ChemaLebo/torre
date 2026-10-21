@@ -1,8 +1,9 @@
-"""Empaque en piso, contrato del carril único: báscula ±settings.TORRE, foto de
-CONTENIDO obligatoria (la de caja cerrada se toma después, con la etiqueta
-pegada) y guía + impresión encadenadas en el MISMO POST (despachar_a_corral)."""
+"""Empaque en piso, contrato del carril único: checklist por cliente, kits con
+reserva real, y el candado "sin plan de cajas no se empaca" (Chema 2026-10-20).
+El empaque por caja vive en test_wizard_cajas; el empaque entero ya no existe."""
 from unittest.mock import patch
 
+from django.conf import settings
 from django.db.models import Sum
 from django.test import override_settings
 from django.urls import reverse
@@ -13,6 +14,12 @@ from apps.inventario.models import Saldo
 from apps.pedidos.models import Pedido
 
 from .base import PisoTestCase
+
+# La lista blanca de producción cambia con el negocio; estas pruebas planean con los carriers de la tabla mock.
+TORRE_CARRIERS_CLASICOS = {
+    **settings.TORRE,
+    "CARRIERS_COTIZAR": ["estafeta", "paquetexpress", "fedex", "noventa9Minutos", "amPm"],
+}
 
 
 class EmpaqueKitTests(PisoTestCase):
@@ -51,8 +58,9 @@ class EmpaqueKitTests(PisoTestCase):
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, "falta declarar")
 
+        caja = self.pedido.paquetes.get()  # el plan nació al abrir el wizard (sin plan no se empaca)
         bloqueo = self.client.post(self.url, {
-            "peso_real_gr": "400", "foto_contenido": self.foto(),
+            "accion": "empacar_caja", "paquete_id": caja.pk, "peso_real_gr": "400", "foto_contenido": self.foto(),
         }, follow=True)
         self.assertContains(bloqueo, "Declara el contenido")
 
@@ -82,6 +90,7 @@ class EmpaqueKitTests(PisoTestCase):
         self.assertEqual(self._reservado(), 0)
 
 
+@override_settings(TORRE=TORRE_CARRIERS_CLASICOS)
 class EmpaquePisoTests(PisoTestCase):
     def setUp(self):
         self.login_piso()
@@ -107,137 +116,37 @@ class EmpaquePisoTests(PisoTestCase):
         self.assertContains(respuesta, "NAKED PACKING")
         self.assertContains(respuesta, "JAMÁS cinta del 3PL")
 
-    def test_sin_foto_de_contenido_no_hay_empacado(self):
-        respuesta = self.client.post(self.url, {"peso_real_gr": "6000"}, follow=True)
-        self.assertContains(respuesta, "Falta la foto del contenido")
+    def test_sin_plan_de_cajas_no_se_empaca_abre_paq_y_detiene(self):
+        """Candado (Chema 2026-10-20): si llega a empaque sin cajas y nadie cotiza,
+        nace la PAQ y el pedido se detiene ANTES de pesar nada; el empaque entero ya no existe."""
+        from apps.core.models import EventoAuditoria
+        from apps.envios.cotizador import SinCotizacion
+        from apps.incidencias.models import Incidencia
+
+        with patch("apps.envios.cotizador.planificar_envio", side_effect=SinCotizacion("Ningún carrier cotiza el pedido")):
+            respuesta = self.client.get(self.url, follow=True)
+        self.assertContains(respuesta, "no tiene paquetería que cotice")
         self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-
-    @override_settings(TORRE_PESO_MODO="bloquear")
-    def test_peso_fuera_de_tolerancia_muestra_esperado_vs_real(self):
-        respuesta = self.client.post(self.url, {
-            "peso_real_gr": "7000",  # 16.7% arriba: fuera de ±3%
-            "foto_contenido": self.foto("contenido.jpg"),
-        }, follow=True)
-        self.assertContains(respuesta, "El peso no cuadra")
-        self.assertContains(respuesta, "6000")
-        self.assertContains(respuesta, "7000")
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.EN_PICKING)
-        self.assertIsNone(self.pedido.peso_real_gr)
-
-    def test_empacado_feliz_encadena_guia_e_impresion(self):
-        with patch(
-            "apps.piso.etiquetas.imprimir_etiqueta",
-            return_value="Etiqueta enviada a la impresora (mock).",
-        ) as imprimir:
-            respuesta = self.client.post(self.url, {
-                "peso_real_gr": "6100",  # 1.7%: dentro de tolerancia
-                "foto_contenido": self.foto("contenido.jpg"),
-            })
-        # Wizard del carril único: el mismo POST encadena guía + impresión y
-        # regresa al wizard, que ahora pide la foto de CIERRE por caja.
-        self.assertRedirects(respuesta, self.url, fetch_redirect_response=False)
-
-        self.pedido.refresh_from_db()
-        # MISMO POST: empaque verificado + guía generada + impresión lanzada.
-        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
-        self.assertEqual(self.pedido.peso_real_gr, 6100)
-        self.assertIsNotNone(self.pedido.ts_empacado)
-        self.assertIsNotNone(self.pedido.ts_guia)
-
-        guias = list(Guia.objects.filter(pedido=self.pedido))
-        self.assertGreaterEqual(len(guias), 1)
-        # Doble etiqueta por guía: la del carrier + la interna (identidad).
-        self.assertEqual(imprimir.call_count, 2 * len(guias))
-        self.assertTrue(any(c.kwargs.get("interna") for c in imprimir.call_args_list))
-
-        fotos = EvidenciaFoto.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk))
-        self.assertEqual(fotos.count(), 1)
-        self.assertEqual(set(fotos.values_list("tipo", flat=True)), {"contenido"})
-        en_empaque = (
-            Saldo.objects.filter(sku=self.sku, estado=Saldo.EN_EMPAQUE)
-            .aggregate(t=Sum("cantidad"))["t"] or 0
+        self.assertEqual(
+            (self.pedido.estado, self.pedido.detenido, self.pedido.asignado_a, self.pedido.paquetes.count()),
+            (Pedido.EN_PICKING, True, None, 0),
         )
-        self.assertEqual(en_empaque, 3)
-
-    def test_falla_de_impresora_no_revierte_la_guia(self):
-        with patch(
-            "apps.piso.etiquetas.imprimir_etiqueta",
-            side_effect=ValueError("No hay impresora configurada."),
-        ):
-            respuesta = self.client.post(self.url, {
-                "peso_real_gr": "6100",
-                "foto_contenido": self.foto("contenido.jpg"),
-            }, follow=True)
-        self.assertContains(respuesta, "No se imprimió la etiqueta")
+        paq = Incidencia.objects.get(pedido=self.pedido, tipo=Incidencia.TIPO_PAQ)
+        self.assertTrue(paq.interna)
+        self.assertTrue(EventoAuditoria.objects.filter(entidad="pedido", entidad_id=str(self.pedido.pk), accion="empaque_sin_plan").exists())
+        # Ni por POST: detenido, el wizard lo regresa a Mi turno sin tocar nada.
+        self.client.post(self.url, {"peso_real_gr": "6100", "foto_contenido": self.foto("contenido.jpg")})
         self.pedido.refresh_from_db()
-        # BEST-EFFORT: la impresora falló pero la guía queda viva.
-        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
-        self.assertTrue(Guia.objects.filter(pedido=self.pedido).exists())
+        self.assertEqual((self.pedido.estado, self.pedido.peso_real_gr), (Pedido.EN_PICKING, None))
 
-    def test_error_del_carrier_deja_el_pedido_empacado(self):
-        with patch(
-            "apps.envios.services.generar_guia",
-            side_effect=RuntimeError("timeout del carrier"),
-        ):
-            respuesta = self.client.post(self.url, {
-                "peso_real_gr": "6100",
-                "foto_contenido": self.foto("contenido.jpg"),
-            }, follow=True)
-        self.assertContains(respuesta, "El carrier no respondió")
-        self.pedido.refresh_from_db()
-        # El empaque NO se pierde: queda EMPACADO y recuperable desde Salida.
-        self.assertEqual(self.pedido.estado, Pedido.EMPACADO)
-        self.assertFalse(Guia.objects.filter(pedido=self.pedido).exists())
-
-    def test_pedido_ya_empacado_muestra_paso_de_cierre(self):
-        # EMPACADO sin guía (excepción legacy): el wizard muestra el paso de
-        # cierre con el aviso de que la guía se genera en Salida.
-        self.dejar_empacado(self.pedido)
+    def test_con_plan_recien_hecho_el_wizard_abre_la_caja_1(self):
+        """Red de seguridad: sin cajas pero con carriers que cotizan, el plan nace aquí y sigue el wizard por caja."""
         respuesta = self.client.get(self.url)
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "no tiene guía")
-        self.assertContains(respuesta, "foto de cierre")
-
-    def test_cierre_legacy_con_guia_guarda_evidencia_y_muestra_exito(self):
-        # Flujo completo del wizard legacy: empacar → guía → foto de cierre →
-        # pantalla de éxito con SIGUIENTE PEDIDO.
-        with patch(
-            "apps.piso.etiquetas.imprimir_etiqueta",
-            return_value="Etiqueta enviada a la impresora (mock).",
-        ):
-            self.client.post(self.url, {
-                "peso_real_gr": "6100",
-                "foto_contenido": self.foto("contenido.jpg"),
-            })
-        self.pedido.refresh_from_db()
-        self.assertEqual(self.pedido.estado, Pedido.GUIA_GENERADA)
-
-        # GET: paso de cierre con las guías impresas.
-        respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, "etiquetas enviadas a la impresora")
-        self.assertContains(respuesta, "cerrar_legacy")
-
-        # POST cierre sin foto → error claro, nada se guarda.
-        sin_foto = self.client.post(self.url, {"accion": "cerrar_legacy"}, follow=True)
-        self.assertContains(sin_foto, "Toma la foto de la caja cerrada")
-        self.assertFalse(self.pedido.cajas_cerradas_completas)
-
-        # POST cierre con foto → evidencia guardada + pantalla de éxito.
-        respuesta = self.client.post(self.url, {
-            "accion": "cerrar_legacy", "foto_cierre": self.foto("cierre.jpg"),
-        }, follow=True)
-        self.assertEqual(respuesta.status_code, 200)
-        self.pedido.refresh_from_db()
-        self.assertTrue(self.pedido.cajas_cerradas_completas)
-        self.assertTrue(
-            EvidenciaFoto.objects.filter(
-                entidad="pedido", entidad_id=str(self.pedido.pk), tipo="caja_cerrada",
-            ).exists()
-        )
-        self.assertContains(respuesta, "en salida")
-        self.assertContains(respuesta, "Ir a Mi turno")
+        self.assertEqual(respuesta.context["paso"], "caja")
+        self.assertGreaterEqual(self.pedido.paquetes.count(), 1)
+        self.assertContains(respuesta, 'value="empacar_caja"')
+        self.assertNotContains(respuesta, 'value="empacar"')
 
 
 class ListaEmpaqueTests(PisoTestCase):

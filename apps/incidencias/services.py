@@ -367,6 +367,12 @@ def resolver(incidencia, resolucion_texto, actor):
     return incidencia
 
 
+def pedido_sin_plan(pedido):
+    """True si el pedido tiene algo que surtir y ninguna caja planeada: no
+    puede volver al piso (empacaría sin plan)."""
+    return not pedido.paquetes.exists() and bool(pedido.lineas_por_surtir)
+
+
 def _reanudar_si_detenia(incidencia, actor):
     """Resolver o cerrar una DET/PAQ reanuda el pedido detenido (Chema
     2026-10-06): vuelve a la cola de Mi turno, el primero por antigüedad, y
@@ -379,6 +385,20 @@ def _reanudar_si_detenia(incidencia, actor):
     pedido = incidencia.pedido
     pedido.refresh_from_db(fields=["detenido", "estado"])
     if not pedido.detenido:
+        return
+    if incidencia.tipo == Incidencia.TIPO_PAQ and pedido_sin_plan(pedido):
+        # Chema 2026-10-20: resolver o cerrar a mano una PAQ con el pedido sin
+        # plan lo regresaba a la cola y llegaba a empaque sin cajas (51 casos
+        # antes del detenido). Sin plan, sigue detenido hasta elegir paquetería.
+        responder(
+            incidencia, "Torre", MensajeIncidencia.ROL_SISTEMA,
+            f"{pedido.folio} sigue sin plan de cajas: elige la paquetería aquí para reanudarlo.",
+        )
+        registrar_evento(
+            "pedido", pedido.pk, "reanudacion_omitida_sin_plan", actor=actor, cliente=pedido.cliente,
+            delta={"incidencia": incidencia.folio},
+            motivo="La PAQ se resolvió a mano sin plan de cajas: el pedido sigue detenido.",
+        )
         return
     if Incidencia.objects.filter(
         pedido=pedido, tipo__in=TIPOS_QUE_DETIENEN, estado__in=Incidencia.ESTADOS_ABIERTOS,

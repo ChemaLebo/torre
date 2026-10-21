@@ -409,7 +409,8 @@ def planificar_envio(pedido, force=False):
     forzada ni si ya se intentó), se planea COMPLETO con ella, con su propia
     división de cajas y sus precios; evento `plan_respaldo`. Si tampoco
     cotiza, SinCotizacion con las dos nombradas. Solo al planear: un fallo al
-    comprar la guía sigue su camino de siempre (DET)."""
+    comprar la guía se reintenta desde el empaque (sin DET automática,
+    Chema 2026-10-20)."""
     from .services import carrier_preferido, carrier_respaldo, carriers_del_pedido  # lazy: evita ciclo
 
     carriers = carriers_del_pedido(pedido)

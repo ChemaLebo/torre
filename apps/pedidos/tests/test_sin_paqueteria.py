@@ -115,7 +115,7 @@ class SinPaqueteriaTests(PisoTestCase):
         self.assertEqual(_que_falta_empaque(pedido), "sin guía")
         self.login_piso()
         respuesta = self.client.get(reverse("piso:empaque_pedido", args=[pedido.pk]))
-        self.assertEqual(respuesta.context["paso"], "cierre")  # nada que volver a pesar
+        self.assertEqual(respuesta.context["paso"], "etiquetas")  # nada que volver a pesar: a reintentar la guía
         with override_settings(TORRE=POOL_CLASICO):
             services.generar_guia(pedido)
         pedido.refresh_from_db()

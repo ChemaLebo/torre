@@ -114,10 +114,10 @@
   <form method="post">{% csrf_token %}
     <input type="hidden" name="accion" value="etiquetas_pegadas">
     <div class="accion-fija mt">
-      <button class="btn primario gigante" type="submit" {% if cajas_sin_guia %}disabled{% endif %}>Etiquetas pegadas ✓</button>
+      <button class="btn primario gigante" type="submit" {% if cajas_sin_guia or not tanda %}disabled{% endif %}>Etiquetas pegadas ✓</button>
     </div>
   </form>
-  <p class="small muted">{% if cajas_sin_guia %}Sin guía no hay etiqueta que pegar: reintenta la guía primero.{% else %}Al confirmar sigue la foto de evidencia de la tanda.{% endif %}</p>
+  <p class="small muted">{% if not tanda %}Este pedido no tiene cajas empacadas en bodega: reintenta la guía o pide a Mesa que replanee sus cajas.{% elif cajas_sin_guia %}Sin guía no hay etiqueta que pegar: reintenta la guía primero.{% else %}Al confirmar sigue la foto de evidencia de la tanda.{% endif %}</p>
 </div>
 {% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
 
@@ -157,55 +157,8 @@
 {% include "piso/_foto_caja.html" with foto=caja.foto_contenido clase="contenido" %}
 {% include "piso/_foto_caja.html" with foto=caja.foto_cierre clase="caja_cerrada" %}
 
-{% elif paso == "cierre" %}
-{# ── Cierre único legacy (pedido sin plan de cajas): guía → foto de la caja cerrada ── #}
-<div class="topbar">
-  <div>
-    <div class="eyebrow">Piso · Empaque · Cierre</div>
-    <h1 class="mono">{{ pedido.folio }}</h1>
-    <div class="small">{{ pedido.cliente.nombre }}</div>
-  </div>
-  <a class="btn chico" href="{% url 'piso:home' %}">Mi turno</a>
-</div>
-{% include "piso/_chips_cajas.html" %}
-
-{% if tiene_guia %}
-<div class="banner ok"><span class="foco"></span>
-  <div>
-    <b>🖨 Guía{{ guias|length|pluralize }} lista{{ guias|length|pluralize }} — etiquetas enviadas a la impresora.</b>
-    {% for g in guias %}<span class="mono">{{ g.numero }}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
-    <div class="small">Si la etiqueta no salió, reimprímela desde <a href="{% url 'piso:salida' %}"><b>Salida</b></a>.</div>
-  </div>
-</div>
-{% endif %}
-{% if not tiene_guia %}
-<div class="banner warn"><span class="foco"></span>
-  Este pedido aún no tiene guía. Reintenta aquí, pega la etiqueta y toma la foto de cierre. Sin guía y foto, no llega al corral.
-</div>
-{% endif %}
-{% if puede_reintentar_guia %}
-<form method="post" class="mt">{% csrf_token %}
-  <input type="hidden" name="accion" value="generar_guia">
-  <button class="btn primario" type="submit">Reintentar guía</button>
-</form>
-{% endif %}
-
-<div class="card mt">
-  <div class="titulo"><h2>Foto de la caja cerrada</h2><span class="pill accent">con la etiqueta pegada</span></div>
-  <p class="small">Cierra la caja, pega la etiqueta y tómale foto: es la evidencia que sube al manifiesto.</p>
-  <form method="post" enctype="multipart/form-data">{% csrf_token %}
-    <input type="hidden" name="accion" value="cerrar_legacy">
-    <label for="foto_cierre">Foto · caja cerrada con etiqueta</label>
-    <input type="file" name="foto_cierre" id="foto_cierre" accept="image/*" capture="environment" required>
-    <div class="accion-fija mt">
-      <button class="btn primario gigante" type="submit" {% if not tiene_guia %}disabled{% endif %}>Caja cerrada ✓</button>
-    </div>
-  </form>
-</div>
-{% for foto in fotos_sueltas %}{% include "piso/_foto_caja.html" with foto=foto clase=foto.tipo %}{% endfor %}
-
 {% else %}
-{# ── Paso 1-2: CAJA i de N (o caja única legacy) — foto CONTENIDO + peso ── #}
+{# ── Paso 1-2: CAJA i de N — foto CONTENIDO + peso ── #}
 <div class="topbar">
   <div>
     <div class="eyebrow">Piso · Empaque</div>
@@ -427,11 +380,7 @@ function agregarRenglonKit(kitPk) {
     <input type="hidden" name="paquete_id" value="{{ caja.pk }}">
     {% endif %}
     <label for="foto_contenido">1 · Foto del CONTENIDO {% if paso == "caja" %}de la caja {{ caja.numero }}{% endif %} (obligatoria)</label>
-    <input type="file" name="foto_contenido" id="foto_contenido" accept="image/*" capture="environment"
-           {% if paso == "caja" %}required{% elif fotos_existentes < 1 %}required{% endif %}>
-    {% if paso == "legacy" and fotos_existentes %}
-    <p class="small muted">Este pedido ya tiene {{ fotos_existentes }} foto(s) de contenido guardadas.</p>
-    {% endif %}
+    <input type="file" name="foto_contenido" id="foto_contenido" accept="image/*" capture="environment" required>
 
     <label for="peso_real_gr">2 · Peso de la báscula (gramos)</label>
     <input type="number" name="peso_real_gr" id="peso_real_gr" min="1" inputmode="numeric"
@@ -487,7 +436,7 @@ function agregarRenglonKit(kitPk) {
   var form = document.getElementById("form-empaque");
   var fuera = document.getElementById("peso-fuera");
   var fueraTexto = document.getElementById("peso-fuera-texto");
-  var existentes = {% if paso == "legacy" %}{{ fotos_existentes }}{% else %}0{% endif %};
+  var existentes = 0;
   var minimo = Number(peso.dataset.min), maximo = Number(peso.dataset.max);
   var esperado = Number(peso.dataset.esperado);
   var modo = peso.dataset.modo || "off";

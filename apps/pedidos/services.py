@@ -1866,6 +1866,34 @@ def _completar_plan_si_falta(pedido, actor):
     return True
 
 
+def asegurar_plan_para_empaque(pedido, actor):
+    """Candado del wizard (Chema 2026-10-20): sin plan de cajas NO se empaca.
+    Red de seguridad: en el flujo normal el plan nace al ingresar o en
+    EMPEZAR (_completar_plan_si_falta); si aun así un pedido llega a empaque
+    sin cajas, se planea una vez más aquí (síncrono) y, si nadie cotiza, nace
+    la incidencia "Sin paquetería que cotice" que lo detiene
+    (incidencias.abrir_sin_paqueteria) ANTES de pesar nada. Regresa True si
+    hay plan; False si el pedido quedó detenido (evento `empaque_sin_plan`)."""
+    if pedido.paquetes.exists():
+        return True
+    try:
+        from apps.envios.cotizador import planificar_envio  # lazy por contrato
+        planificar_envio(pedido)
+    except ValueError as exc:
+        try:
+            from apps.incidencias.services import abrir_sin_paqueteria  # lazy por contrato
+            abrir_sin_paqueteria(pedido, str(exc))
+        except Exception:  # noqa: BLE001 — el aviso jamás tapa el candado
+            registrar_evento("pedido", pedido.pk, "sin_paqueteria", cliente=pedido.cliente, motivo=str(exc)[:300])
+        registrar_evento(
+            "pedido", pedido.pk, "empaque_sin_plan", actor=actor, cliente=pedido.cliente,
+            motivo=f"Llegó a empaque sin plan de cajas y nadie cotiza: {exc}"[:300],
+        )
+        pedido.refresh_from_db(fields=["detenido", "asignado_a"])
+        return False
+    return pedido.paquetes.exists()
+
+
 def _nombre_usuario(u):
     return getattr(u, "username", str(u) or "?")
 

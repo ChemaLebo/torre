@@ -1615,8 +1615,8 @@ def empaque_pedido(request, pk):
     cerrar_tanda) → pantalla final "Déjalo en el corral" ("Lista en salida ▶",
     confirmar_lista_salida, de vuelta a Mi turno). Chema 2026-10-20: la foto
     es por tanda, no por caja, y hasta "Lista en salida" nada entra a Salida.
-    El pedido legacy sin plan de paquetes corre el mismo wizard con 1 caja
-    (empacar clásico + cierre único).
+    Sin plan de cajas no se empaca (asegurar_plan_para_empaque): el empaque
+    entero y el cierre único legacy ya no existen.
 
     ?caja=N navega entre las cajas del pedido (chips arriba): la pendiente
     se empaca, la que falta cerrar abre su cierre y la cerrada se revisa con
@@ -1663,13 +1663,12 @@ def empaque_pedido(request, pk):
             return _empaque_cerrar_tanda(request, pedido)
         if accion == "lista_salida":
             return _empaque_lista_salida(request, pedido)
-        if accion == "cerrar_legacy":
-            return _empaque_cerrar_legacy(request, pedido)
         if accion == "contenido_kit":
             return _empaque_contenido_kit(request, pedido)
         if accion == "quitar_contenido_kit":
             return _empaque_quitar_contenido_kit(request, pedido)
-        return _empacar(request, pedido)
+        messages.error(request, "No entendí la acción. Intenta de nuevo.")
+        return redirect("piso:empaque_pedido", pk=pedido.pk)
 
     # PARCIALMENTE_DESPACHADO: ya salió alguna caja; las que siguen en bodega
     # toman aquí su foto de cierre para poder subir al siguiente manifiesto.
@@ -1692,6 +1691,17 @@ def empaque_pedido(request, pk):
             f"Faltan piezas por pickear en {pedido.folio}. Termina el escaneo antes de empacar.",
         )
         return redirect("piso:picking_pedido", pk=pedido.pk)
+    if not pedido.paquetes.exists():
+        # Sin plan de cajas no se empaca (Chema 2026-10-20): se planea una vez
+        # más y, si nadie cotiza, nace la PAQ que lo detiene antes de pesar nada.
+        from apps.pedidos.services import asegurar_plan_para_empaque  # lazy por contrato
+
+        if not asegurar_plan_para_empaque(pedido, request.user):
+            messages.error(
+                request,
+                f"{pedido.folio} no tiene paquetería que cotice: Mesa elige una y lo reanuda. Toma el que sigue.",
+            )
+            return redirect("piso:home")
     return _render_paso_empacar(request, pedido, elegida)
 
 
@@ -1940,22 +1950,12 @@ def _render_paso_empacar(request, pedido, elegida=None):
         contexto.update(_contexto_peso(caja))
         return _render_empaque(request, contexto)
 
-    # Legacy sin plan de paquetes (o plan ya empacado por fuera): 1 caja.
-    esperado = pedido.peso_esperado_gr or 0
-    peso_min, peso_max, tolerancia = _rango_peso(esperado)
-    contexto.update({
-        "paso": "legacy",
-        "total_cajas": 1,
-        "tolerancia": tolerancia,
-        "peso_modo": settings.TORRE_PESO_MODO,
-        "peso_esperado": esperado,
-        "peso_min": peso_min,
-        "peso_max": peso_max,
-        "fotos_existentes": EvidenciaFoto.objects.filter(
-            entidad="pedido", entidad_id=str(pedido.pk), tipo="contenido",
-        ).count(),
-    })
-    return _render_empaque(request, contexto)
+    # Sin caja pendiente que pesar (todas empacadas o sin plan): nada que hacer aquí.
+    messages.error(
+        request,
+        f"{pedido.folio} no tiene cajas pendientes de empacar. Si le falta el plan, Mesa lo replanea.",
+    )
+    return redirect("piso:home")
 
 
 def _numeros_cajas(cajas):
@@ -2005,11 +2005,13 @@ def _render_tanda(request, pedido, elegida=None):
         ),
     }
     if not cajas_empacadas:
-        # Legacy sin plan de cajas: una caja implícita con cierre único.
+        # Sin cajas físicas (histórico: empacado entero con cierre único, o
+        # plan nacido con la guía): completo → en salida; si no, solo queda
+        # reintentar la guía o que Mesa replanee (el cierre único ya no existe).
         if pedido.empaque_completo:
             contexto["paso"] = "en_salida"
         else:
-            contexto.update({"paso": "cierre", "cierre_legacy": True})
+            contexto.update({"paso": "etiquetas", "tanda": [], "numeros_tanda": ""})
         return _render_empaque(request, contexto)
     por_etiquetar = [c for c in tanda if c.ts_etiquetas is None]
     por_evidenciar = [c for c in tanda if c.ts_etiquetas is not None and c.ts_cierre is None]
@@ -2250,108 +2252,6 @@ def _empaque_imprimir_guia(request, pedido):
             "sale en segundos en la bodega.",
         )
     return destino
-
-
-def _empaque_cerrar_legacy(request, pedido):
-    """Cierre del pedido sin empaque por caja: 1 caja implícita con evidencia."""
-    destino = redirect("piso:empaque_pedido", pk=pedido.pk)
-    if pedido.estado not in (Pedido.EMPACADO, Pedido.GUIA_GENERADA):
-        messages.error(
-            request, f"El pedido {pedido.folio} no está empacado; no hay caja que cerrar.",
-        )
-        return destino
-    if pedido.paquetes.filter(estado__in=[Paquete.EMPACADO, Paquete.DESPACHADO]).exists():
-        # Con cajas empacadas el cierre es POR CAJA (cerrar_caja): un cierre
-        # único inflaría el conteo de evidencia sin foto de cada caja.
-        messages.error(
-            request,
-            f"El pedido {pedido.folio} se empacó por caja: toma la foto de cierre "
-            "de CADA caja, no un cierre único.",
-        )
-        return destino
-    if _guia_activa(pedido) is None:
-        messages.error(
-            request,
-            f"El pedido {pedido.folio} todavía no tiene guía; génerala en Salida, "
-            "pega la etiqueta y entonces toma la foto de cierre.",
-        )
-        return destino
-    if pedido.cajas_cerradas_completas:
-        messages.success(request, f"{pedido.folio} ya tiene su foto de cierre.")
-        return destino
-    foto = request.FILES.get("foto_cierre")
-    if foto is None:
-        messages.error(request, "Toma la foto de la caja cerrada con la etiqueta pegada.")
-        return destino
-    evidencia = EvidenciaFoto.objects.create(
-        entidad="pedido", entidad_id=str(pedido.pk), tipo="caja_cerrada",
-        archivo=foto, tomada_por=request.user.username,
-    )
-    registrar_evento(
-        "pedido", pedido.pk, "caja_cerrada_con_evidencia", actor=request.user,
-        cliente=pedido.cliente, delta={"evidencia_id": evidencia.pk},
-        motivo=f"Caja de {pedido.folio} cerrada con la etiqueta pegada.",
-    )
-    messages.success(request, f"{pedido.folio}: foto de cierre guardada. Listo para el manifiesto.")
-    return destino
-
-
-def _empacar(request, pedido):
-    """Empaque clásico (pedido legacy sin plan por caja): peso + foto contenido.
-
-    Contrato del carril único: al empacar solo se exige la foto del CONTENIDO
-    (la guía aún no existe). En el MISMO POST se encadena guía + impresión de
-    etiquetas (pedidos.services.despachar_a_corral, best-effort); la foto de
-    la caja cerrada con la etiqueta pegada se toma después (paso de cierre).
-    """
-    destino = redirect("piso:empaque_pedido", pk=pedido.pk)
-    if pedido.estado != Pedido.EN_PICKING:
-        messages.error(
-            request,
-            f"El pedido {pedido.folio} no se puede empacar: está {pedido.get_estado_display()}.",
-        )
-        return destino
-    peso = (request.POST.get("peso_real_gr") or "").strip()
-    if not peso:
-        messages.error(request, "Captura el peso que marca la báscula, en gramos.")
-        return destino
-
-    foto_contenido = request.FILES.get("foto_contenido")
-    existentes = EvidenciaFoto.objects.filter(
-        entidad="pedido", entidad_id=str(pedido.pk), tipo="contenido",
-    ).count()
-    if not foto_contenido and existentes < 1:
-        _recordar_peso_empaque(request, pedido)
-        messages.error(
-            request,
-            "Falta la foto del contenido: tómala antes de marcar empacado. "
-            "La foto de la caja cerrada se toma al final, con la etiqueta pegada.",
-        )
-        return destino
-
-    # Instancia con tipo correcto; empacar() la liga al pedido y la guarda.
-    fotos = []
-    if foto_contenido:
-        fotos.append(EvidenciaFoto(tipo="contenido", archivo=foto_contenido, tomada_por=request.user.username))
-
-    from apps.pedidos.services import empacar  # lazy por contrato
-    try:
-        empacar(pedido, request.user, peso, fotos)
-    except ValueError as exc:
-        _recordar_peso_empaque(request, pedido)
-        messages.error(request, str(exc))
-        return destino
-    _marcar_paquetes_empacados(pedido, request.user)
-    n_paquetes = pedido.paquetes.count()
-    if n_paquetes > 1:
-        messages.success(
-            request,
-            f"{pedido.folio} empacado y verificado en {n_paquetes} paquetes. "
-            "Cada caja lleva su propia guía.",
-        )
-    else:
-        messages.success(request, f"{pedido.folio} empacado y verificado.")
-    return _despachar_y_avisar(request, pedido, destino)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
