@@ -1187,6 +1187,11 @@ def _procesar_rastreo(guia, info, ahora):
         guia.save(update_fields=sorted(set(campos)))
 
     _guardar_eventos(guia, info, estado_nuevo if cambio else "", hubo_movimiento, ahora)
+    # "Redirected" de envia.com (Chema 2026-10-21): dos casos en toda la
+    # historia y sin nada después; no se da la guía por regresada: la caja
+    # entra a Reingresos por decidir con su RF y se ve caso por caso.
+    if _es_redirected(info) and guia.paquete_id and guia.paquete.regreso_reportado is None:
+        resultado["incidencias"] += _reportar_regreso_por_carrier(guia, descripcion)
     if guia.estado in _ESTADOS_YA_RECOLECTADA:
         if guia.ts_recolectado_carrier is None:
             _registrar_recoleccion_carrier(guia, info.get("ts_evento") or ahora, descripcion)
@@ -1214,6 +1219,63 @@ def _procesar_rastreo(guia, info, ahora):
     if guia.estado not in Guia.ESTADOS_TERMINALES:
         resultado["incidencias"] += _revisar_retraso(guia, ahora)
     return resultado
+
+
+def _limpiar_regreso_reportado(guia, descripcion):
+    """Llegó "entregado" a una caja con regreso reportado y sin decisión: la
+    marca se quita (ya no está por decidir) y queda el evento."""
+    caja = guia.paquete if guia.paquete_id else None
+    if caja is None or caja.regreso_reportado is None or caja.reingreso_estado != "":
+        return
+    caja.regreso_reportado = None
+    caja.save(update_fields=["regreso_reportado"])
+    registrar_evento(
+        "paquete", caja.pk, "regreso_descartado", cliente=guia.pedido.cliente,
+        delta={"pedido": guia.pedido.folio, "caja": caja.numero, "guia": guia.numero},
+        motivo=f"El carrier entregó la caja {caja.numero}: el regreso reportado se descarta. {descripcion}"[:300],
+    )
+
+
+def _es_redirected(info):
+    """True si el estatus crudo del carrier (envia) es "Redirected"."""
+    raw = info.get("raw") if isinstance(info.get("raw"), dict) else {}
+    textos = [str(raw.get("status") or ""), str(info.get("descripcion") or "")]
+    return any(t.strip().lower().startswith("redirected") for t in textos)
+
+
+def _reportar_regreso_por_carrier(guia, descripcion):
+    """La caja de la guía queda "regreso reportado" (Reingresos por decidir)
+    y se abre su RF; la guía no se toca (si después llega "entregado" se
+    limpia sola). Regresa cuántas incidencias se abrieron."""
+    from apps.pedidos.services import reportar_regreso_caja  # lazy por contrato
+
+    pedido = guia.pedido
+    reportar_regreso_caja(pedido, guia.paquete, None, f"envia.com reporta Redirected: {descripcion}"[:300], manual=False)
+    texto = (
+        f"envia.com reporta \"Redirected\" en la guía {guia.numero} ({guia.carrier}), caja {guia.paquete.numero}: "
+        "posible regreso. La caja está en Reingresos por decidir; revisa el rastreo del carrier y decide caso por caso."
+    )
+    return 1 if _abrir_incidencia(pedido, "RF", texto, pese_a_pausa=True) else 0
+
+
+def marcar_retorno_manual(guia, actor, motivo=""):
+    """Mesa registra a mano que la caja regresó ("Registrar reingreso", Chema
+    2026-10-20: envia.com no siempre avisa): la guía viva pasa a RETORNO por
+    el mismo camino que un retorno del carrier (RF, pedido RETORNADO o
+    ENTREGADO según las demás cajas). Una guía ya terminal no se toca."""
+    if guia.estado in Guia.ESTADOS_TERMINALES:
+        return False
+    descripcion = (motivo or "Retorno registrado a mano en Mesa")[:300]
+    guia.transicionar(Guia.RETORNO, actor=actor, motivo=descripcion)
+    guia.ultimo_evento = descripcion
+    guia.ts_ultimo_movimiento = timezone.now()
+    guia.save(update_fields=["ultimo_evento", "ts_ultimo_movimiento"])
+    registrar_evento(
+        "guia", guia.pk, "retorno_manual", actor=actor, cliente=guia.pedido.cliente,
+        delta={"numero": guia.numero, "carrier": guia.carrier}, motivo=descripcion,
+    )
+    _aplicar_efectos(guia, Guia.RETORNO, descripcion)
+    return True
 
 
 # El carrier ya tiene el paquete en cualquiera de estos estados.
@@ -1366,6 +1428,7 @@ def _aplicar_efectos(guia, estado, descripcion):
         except Exception:  # noqa: BLE001, S110 — la nota es aviso; el rastreo sigue
             pass
     elif estado == Guia.ENTREGADO:
+        _limpiar_regreso_reportado(guia, descripcion)
         if _estado_por_guias(pedido) == "ENTREGADO":
             _transicionar_pedido(pedido, "ENTREGADO", motivo=descripcion)
             _cerrar_retrasos(pedido, descripcion)

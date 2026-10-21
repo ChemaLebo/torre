@@ -4713,6 +4713,40 @@ def resolver_contenido_caja(pedido, caja, decisiones, actor, motivo=""):
     return caja
 
 
+def reportar_regreso_caja(pedido, caja, actor, motivo="", *, manual=True):
+    """Una caja despachada regresa o va a regresar (Chema 2026-10-20, PED-00151:
+    envia.com no siempre avisa). La caja queda "regreso reportado" y entra a
+    Reingresos por decidir. `manual=True` (Mesa, "Registrar reingreso"): la
+    guía viva pasa a RETORNO por el mismo camino que un retorno del carrier
+    (envios.marcar_retorno_manual: RF y estado del pedido). `manual=False`
+    (envia "Redirected"): solo la marca; la guía sigue viva y "entregado" la
+    limpia. Regresa la caja."""
+    from apps.envios.models import Paquete  # lazy: modelo de otra app
+
+    if caja.pedido_id != pedido.pk:
+        raise ValueError(f"La caja {caja.numero} no es de {pedido.folio}.")
+    if caja.estado != Paquete.DESPACHADO:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} no ha salido: no hay regreso que registrar.")
+    if caja.reingreso_estado != Paquete.REINGRESO_PENDIENTE:
+        raise ValueError(f"La caja {caja.numero} de {pedido.folio} ya tiene decisión: {caja.get_reingreso_estado_display().lower()}.")
+    with transaction.atomic():
+        if caja.regreso_reportado is None:
+            caja.regreso_reportado = timezone.now()
+            caja.save(update_fields=["regreso_reportado"])
+        registrar_evento(
+            "paquete", caja.pk, "regreso_reportado", actor=actor, cliente=pedido.cliente,
+            delta={"pedido": pedido.folio, "caja": caja.numero, "origen": "mesa" if manual else "carrier"},
+            motivo=(motivo or f"Caja {caja.numero} de {pedido.folio}: regreso reportado.")[:300],
+        )
+        if manual:
+            guia = caja.guia_activa
+            if guia is not None:
+                from apps.envios.services import marcar_retorno_manual  # lazy por contrato
+
+                marcar_retorno_manual(guia, actor, motivo=motivo or f"Caja {caja.numero} de {pedido.folio} regresó (Mesa)")
+    return caja
+
+
 def deshacer_reposicion_empacada(pedido, caja, seleccion, actor, incidencia=None, motivo=""):
     """Cancela una reposición aprobada cuya caja ya se pickeó o empacó (Chema
     2026-10-20, PED-00281): la caja pasa a CANCELADO (se queda en el

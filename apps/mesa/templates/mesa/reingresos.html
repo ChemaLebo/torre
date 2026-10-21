@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Reingresos · Mesa{% endblock %}
+{% block content %}
+{# Reingresos por decidir (Chema 2026-10-21): antes vivían dentro de Recepciones. Por caja, el modal pieza por pieza; "Crear recepción" manda al piso como antes. #}
+<div class="topbar">
+  <div>
+    <h1>Reingresos</h1>
+    <div class="small muted">Cajas cuyo contenido hay que acomodar o dar por perdido: regresadas por el carrier, regreso reportado, cancelación tardía, producto erróneo o reposición cancelada. La decisión es por caja y pieza por pieza: Torre hace exactamente lo que elijas.</div>
+  </div>
+</div>
+
+{% if pedidos %}
+<div class="card">
+  <div class="titulo"><h2>Por decidir</h2><span class="pill warn">{{ pedidos|length }}</span></div>
+  <div class="tabla-wrap">
+    <table>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Caja</th><th>Por qué</th><th>Contenido</th><th>Incidencia</th><th>Desde</th><th class="derecha"></th></tr></thead>
+      <tbody>
+        {% for p in pedidos %}
+          {% for caja in p.cajas_reingreso %}
+          <tr>
+            <td class="mono"><a href="{% url 'mesa:pedido_detalle' p.pk %}#cajas">{{ p.folio }}</a></td>
+            <td>{{ p.cliente.nombre }}</td>
+            <td><span class="pill {% if p.estado == 'RETORNADO' %}crit{% else %}warn{% endif %}">{{ p.get_estado_display }}</span></td>
+            <td class="mono">{{ caja.numero }} de {{ p.total_cajas }}{% if caja.guia %}<div class="small muted">{{ caja.guia.carrier }} · {{ caja.guia.get_estado_display }}</div>{% endif %}</td>
+            <td class="small">{{ caja.por_que }}</td>
+            <td class="small">{% for pz in caja.piezas_modal %}<div>{{ pz.unidades }} × {{ pz.codigo }}</div>{% endfor %}</td>
+            <td>{% if p.incidencia %}<a class="mono" href="{% url 'mesa:incidencia_detalle' p.incidencia.pk %}">{{ p.incidencia.folio }}</a> <span class="small muted">{{ p.incidencia.get_tipo_display }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td class="small muted">{{ p.actualizado|date:"d/M H:i" }}</td>
+            <td class="derecha">
+              <div class="fila" style="justify-content:flex-end;gap:6px">
+                <button class="btn chico primario" type="button" onclick="document.getElementById('{{ caja.modal_id }}').showModal()" title="Decide pieza por pieza: regresa a bodega (posición y lote), cuarentena o no regresa">Registrar reingreso</button>
+                <form method="post" class="inline" onsubmit="return confirm('¿Crear una recepción para el piso con el contenido de las cajas por decidir de {{ p.folio }}? El piso la cuenta y la acomoda escaneando.');">{% csrf_token %}
+                  <input type="hidden" name="pedido_id" value="{{ p.pk }}"><input type="hidden" name="accion" value="reingreso">
+                  <button class="btn chico" type="submit" title="Como antes: nace una orden de reingreso que el piso recibe y acomoda">Crear recepción</button>
+                </form>
+                <form method="post" class="inline fila" style="gap:4px">{% csrf_token %}
+                  <input type="hidden" name="pedido_id" value="{{ p.pk }}"><input type="hidden" name="accion" value="no_recuperado">
+                  <input type="text" name="motivo" placeholder="Motivo" autocomplete="off" aria-label="Motivo para {{ p.folio }}" style="width:120px">
+                  <button class="btn chico" type="submit" title="Nada regresa: queda en el expediente sin mover stock">Inventario no recuperado</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td class="mono"><a href="{% url 'mesa:pedido_detalle' p.pk %}">{{ p.folio }}</a></td>
+            <td>{{ p.cliente.nombre }}</td>
+            <td><span class="pill {% if p.estado == 'RETORNADO' %}crit{% else %}warn{% endif %}">{{ p.get_estado_display }}</span></td>
+            <td class="small muted" colspan="3">pedido entero (sin cajas despachadas por separado)</td>
+            <td>{% if p.incidencia %}<a class="mono" href="{% url 'mesa:incidencia_detalle' p.incidencia.pk %}">{{ p.incidencia.folio }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td class="small muted">{{ p.actualizado|date:"d/M H:i" }}</td>
+            <td class="derecha">
+              <form method="post" class="fila" style="justify-content:flex-end;gap:4px">{% csrf_token %}
+                <input type="hidden" name="pedido_id" value="{{ p.pk }}">
+                <input type="text" name="motivo" placeholder="Motivo (obligatorio si no se recupera)" autocomplete="off" aria-label="Motivo para {{ p.folio }}">
+                <button class="btn chico primario" type="submit" name="accion" value="reingreso">Crear recepción</button>
+                <button class="btn chico" type="submit" name="accion" value="no_recuperado">Inventario no recuperado</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% for p in pedidos %}{% for caja in p.cajas_reingreso %}
+{% include "mesa/_modal_piezas.html" with modal_id=caja.modal_id titulo=caja.modal_titulo intro="Decide a dónde va cada pieza. Si la caja ya salió del kardex, lo que regrese entra como retorno; si era una reposición cancelada, se mueve desde empaque." accion="reingreso_caja" pedido=p caja=caja piezas=caja.piezas_modal permite_generar=False boton="Registrar reingreso" motivo_obligatorio=False %}
+{% endfor %}{% endfor %}
+{% else %}
+<div class="card"><p class="muted">Nada por decidir: ninguna caja regresada, reportada, cancelada tarde ni reposición cancelada pendiente.</p></div>
+{% endif %}
+{% endblock %}

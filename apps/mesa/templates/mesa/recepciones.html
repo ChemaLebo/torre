@@ -10,37 +10,8 @@
   <div class="quien">El aviso que llega por WhatsApp se captura aquí, en menos de 15 minutos.</div>
 </div>
 
-{% if reingresos %}
-<div class="card mb">
-  <div class="titulo"><h2>Reingresos por decidir</h2><span class="pill warn">{{ reingresos|length }}</span></div>
-  <p class="small">Cajas que ya salieron y el carrier regresó, o pedidos cancelados con la mercancía en la calle. La decisión es por caja: aunque el resto del pedido se haya entregado, la caja regresada aparece aquí. Cuando la mercancía esté físicamente aquí, regístrala: nace una orden de reingreso con el contenido de esas cajas que el piso recibe y ubica. Si no va a volver, dala por no recuperada (queda en el expediente, sin mover stock).</p>
-  <div class="tabla-wrap">
-    <table>
-      <thead><tr><th>Pedido</th><th>Cliente</th><th>Estado</th><th>Cajas</th><th>Incidencia</th><th>Desde</th><th class="derecha"></th></tr></thead>
-      <tbody>
-        {% for p in reingresos %}
-        <tr>
-          <td class="mono"><a href="{% url 'mesa:pedido_detalle' p.pk %}">{{ p.folio }}</a></td>
-          <td>{{ p.cliente.nombre }}</td>
-          <td><span class="pill {% if p.estado == 'RETORNADO' %}crit{% else %}warn{% endif %}">{{ p.get_estado_display }}</span></td>
-          <td class="small">{% if p.cajas_reingreso %}caja {{ p.cajas_reingreso|join:", " }} de {{ p.total_cajas }}{% if p.cancelacion_tardia %} <span class="muted">(cancelación tardía)</span>{% elif p.cajas_erroneas %} <span class="muted">(producto erróneo: salió otro producto)</span>{% else %} <span class="muted">(regresada por el carrier)</span>{% endif %}{% else %}<span class="muted">pedido entero</span>{% endif %}</td>
-          <td>{% if p.incidencia %}<a class="mono" href="{% url 'mesa:incidencia_detalle' p.incidencia.pk %}">{{ p.incidencia.folio }}</a> <span class="small muted">{{ p.incidencia.get_tipo_display }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-          <td class="small muted">{{ p.actualizado|date:"d/M H:i" }}</td>
-          <td class="derecha">
-            <form method="post" class="fila">{% csrf_token %}
-              <input type="hidden" name="pedido_id" value="{{ p.pk }}">
-              <input type="text" name="motivo" placeholder="Motivo (obligatorio si no se recupera)" autocomplete="off" aria-label="Motivo para {{ p.folio }}">
-              <button class="btn chico primario" type="submit" name="accion" value="reingreso">Registrar reingreso</button>
-              <button class="btn chico" type="submit" name="accion" value="no_recuperado">Inventario no recuperado</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
+{# Los reingresos por decidir viven en Mesa → Reingresos desde 2026-10-22. #}
+<p class="small muted">¿Buscas una caja regresada o una reposición cancelada? Están en <a href="{% url 'mesa:reingresos' %}">Reingresos</a>.</p>
 
 <div class="card mb">
   {% if cliente_captura %}

@@ -15,7 +15,7 @@ _CLAVES_TORRE_TEMPLATES = (
 
 
 def _reingresos_pendientes(request):
-    """Pedidos que ya salieron con mercancía por decidir (Mesa): badge de Recepciones."""
+    """Pedidos con mercancía por decidir (Mesa): badge de Reingresos (antes colgaba de Recepciones)."""
     if getattr(request, "rol", None) != "mesa" and not getattr(getattr(request, "user", None), "is_superuser", False):
         return 0
     try:

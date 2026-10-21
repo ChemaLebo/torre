@@ -1,5 +1,6 @@
-"""Reingresos en Mesa → Recepciones: la tarjeta de pedidos por decidir, los dos
-botones, el badge del nav y la orden de reingreso vista desde el piso."""
+"""Reingresos en Mesa → Reingresos (desde 2026-10-22 en su propia pantalla, antes
+dentro de Recepciones): la tarjeta de pedidos por decidir, los botones, el badge
+del nav y la orden de reingreso ("Crear recepción") vista desde el piso."""
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -23,7 +24,7 @@ class ReingresosMesaTests(TestCase):
         cls.sku = SKU.objects.create(cliente=cls.colima, codigo="COLIMITA-SIX", descripcion="Colimita")
         cls.mesa = crear_usuario("mesa1", "mesa")
         cls.piso = crear_usuario("piso1", "piso")
-        cls.url = reverse("mesa:recepciones")
+        cls.url = reverse("mesa:reingresos")
 
     def setUp(self):
         self.client.force_login(self.mesa)
@@ -34,11 +35,11 @@ class ReingresosMesaTests(TestCase):
 
     def test_tarjeta_badge_y_botones(self):
         respuesta = self.client.get(self.url)
-        self.assertContains(respuesta, "Reingresos por decidir")
+        self.assertContains(respuesta, "Por decidir")
         self.assertContains(respuesta, self.pedido.folio)
-        self.assertContains(respuesta, "Registrar reingreso")
+        self.assertContains(respuesta, "Crear recepción")
         self.assertContains(respuesta, "Inventario no recuperado")
-        self.assertContains(respuesta, 'Recepciones <span class="pill warn">1</span>')
+        self.assertContains(respuesta, 'Reingresos <span class="pill warn">1</span>')
 
     def test_cancelacion_tardia_enlaza_su_incidencia(self):
         from apps.incidencias.models import Incidencia
@@ -57,10 +58,10 @@ class ReingresosMesaTests(TestCase):
 
     def test_registrar_reingreso_crea_la_orden_y_el_piso_la_ve(self):
         respuesta = self.client.post(self.url, {"accion": "reingreso", "pedido_id": self.pedido.pk}, follow=True)
-        self.assertContains(respuesta, "creado para")
+        self.assertContains(respuesta, "creada para")
         orden = OrdenEntrada.objects.get(tipo="reingreso", pedido=self.pedido)
         self.assertContains(respuesta, orden.folio)
-        self.assertNotContains(respuesta, "Reingresos por decidir")
+        self.assertNotContains(respuesta, "Por decidir")
         self.client.force_login(self.piso)
         lista = self.client.get(reverse("piso:recepciones"))
         self.assertContains(lista, orden.folio)
@@ -111,10 +112,10 @@ class ReingresoPorCajaMesaTests(ReingresosMesaTests):
 
         respuesta = self.client.get(self.url)
         self.assertContains(respuesta, self.pedido.folio)
-        self.assertContains(respuesta, "caja 2 de 2")
+        self.assertContains(respuesta, "2 de 2")
         self.assertContains(respuesta, "regresada por el carrier")
         respuesta = self.client.post(self.url, {"pedido_id": self.pedido.pk, "accion": "reingreso"}, follow=True)
-        self.assertContains(respuesta, "creado para " + self.pedido.folio)
+        self.assertContains(respuesta, "creada para " + self.pedido.folio)
         orden = OrdenEntrada.objects.get(pedido=self.pedido, tipo=OrdenEntrada.TIPO_REINGRESO)
         self.assertEqual(orden.lineas.get().cantidad_anunciada, 2)
-        self.assertNotContains(respuesta, "Reingresos por decidir")
+        self.assertNotContains(respuesta, "Por decidir")

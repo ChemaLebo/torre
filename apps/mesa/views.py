@@ -1419,6 +1419,7 @@ def _ejecutar_accion_pedido(request):
         "quitar_de_salida_caja": _pedidos_quitar_de_salida_caja,
         "cancelar_reposicion": _pedidos_cancelar_reposicion,
         "cancelar_reposicion_caja": _pedidos_cancelar_reposicion_caja,
+        "reingreso_caja": _pedidos_reingreso_caja,
         "sustituir_guia_caja": _pedidos_sustituir_guia_caja,
         "costo_entrega_propia": _pedidos_costo_entrega_propia,
         "reimprimir_caja": _pedidos_reimprimir_caja,
@@ -1807,6 +1808,15 @@ def pedido_detalle(request, pk):
         caja.puede_cancelar_reposicion = bool(caja.compensaciones_cancelables) and not (pedido.asignado_a_id and not pedido.detenido)
         caja.modal_cancelar_id = f"modal-cancelar-reposicion-{caja.pk}"
         caja.modal_cancelar_titulo = f"Cancelar la reposición de la caja {caja.numero}"
+        # Registrar reingreso por caja (Chema 2026-10-20, PED-00151): salió y no se ha entregado ni está ya por decidir.
+        caja.puede_reingreso = (
+            caja.estado == "DESPACHADO" and caja.reingreso_estado == "" and not caja.regresada
+            and caja.regreso_reportado is None and not caja.contenido_erroneo and not pedido.cancelacion_tardia
+            and (caja.guia is None or caja.guia.estado != "ENTREGADO")
+        )
+        caja.modal_reingreso_id = f"modal-reingreso-{caja.pk}"
+        caja.modal_reingreso_titulo = f"Registrar reingreso de la caja {caja.numero}"
+        caja.piezas_reingreso = _piezas_para_modal(pedido, caja) if caja.puede_reingreso else []
         caja.piezas_modal = _piezas_para_modal(pedido, caja) if caja.puede_cancelar_reposicion else []
         for g in caja.historial:  # `sustituta`: la guía que la reemplazó (sin pegarle a la BD por guía)
             g.sustituta = next((n for n in caja.guias.all() if n.sustituye_a_id == g.pk), None)
@@ -2771,28 +2781,9 @@ def recepciones(request):
         .select_related("cliente").prefetch_related("lineas__sku", "incidencias")[:10]
     )
 
-    from apps.incidencias.models import Incidencia  # lazy por contrato
-    from apps.pedidos.services import cajas_por_reingresar, reingresos_por_decidir  # lazy por contrato
-
-    # Cada reingreso por decidir enlaza a su incidencia abierta (CAN de la
-    # cancelación tardía, RET/RF del retorno) para revisar el caso sin salir.
-    reingresos = list(reingresos_por_decidir().prefetch_related("paquetes__guias"))
-    incidencias = {}
-    for inc in Incidencia.objects.filter(
-        pedido__in=reingresos, tipo__in=["CAN", "RET", "RF"], estado__in=Incidencia.ESTADOS_ABIERTOS,
-    ).order_by("ts_apertura"):
-        incidencias[inc.pedido_id] = inc
-    for p in reingresos:
-        p.incidencia = incidencias.get(p.pk)
-        # Reingreso por caja (2026-10-06): qué cajas regresaron y siguen por decidir.
-        cajas_p = cajas_por_reingresar(p)
-        p.cajas_reingreso = [c.numero for c in cajas_p]
-        p.cajas_erroneas = [c.numero for c in cajas_p if c.contenido_erroneo and not c.regresada]
-        p.total_cajas = len(p.paquetes.all())
-
+    # Los reingresos por decidir viven en su propia pantalla desde 2026-10-22 (mesa:reingresos).
     return render(request, "mesa/recepciones.html", {
         "seccion": "recepciones",
-        "reingresos": reingresos,
         "skus_plantilla": skus_plantilla,
         # codigo → pk para que el navegador vuelque un CSV elegido en los renglones
         "codigos_sku": {s.codigo: s.pk for s in skus_plantilla},
@@ -3124,6 +3115,116 @@ def _recepciones_decidir_reingreso(request):
     except ValueError as exc:
         messages.error(request, str(exc))
     return redirect("mesa:recepciones")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reingresos (Chema 2026-10-21): cajas cuyo contenido hay que acomodar o dar por perdido
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _por_que_por_decidir(pedido, caja):
+    """Texto corto de por qué la caja está por decidir."""
+    if caja.estado == "CANCELADO":
+        return "reposición cancelada"
+    if caja.regresada:
+        return "regresada por el carrier"
+    if caja.regreso_reportado:
+        return "regreso reportado"
+    if caja.contenido_erroneo:
+        return "producto erróneo: salió otro producto"
+    if pedido.cancelacion_tardia:
+        return "cancelación tardía"
+    return "por decidir"
+
+
+def _reingresos_decorados():
+    """Pedidos con mercancía por decidir, cada uno con sus cajas por decidir
+    (con el modal pieza por pieza listo) y su incidencia abierta."""
+    from apps.incidencias.models import Incidencia  # lazy: modelo de otra app
+    from apps.pedidos.services import cajas_por_reingresar, reingresos_por_decidir  # lazy por contrato
+
+    pedidos = list(reingresos_por_decidir().prefetch_related("paquetes__guias", "paquetes__lineas__linea_pedido__sku"))
+    incidencias = {}
+    for inc in Incidencia.objects.filter(
+        pedido__in=pedidos, tipo__in=["CAN", "RET", "RF"], estado__in=Incidencia.ESTADOS_ABIERTOS,
+    ).order_by("ts_apertura"):
+        incidencias[inc.pedido_id] = inc
+    for p in pedidos:
+        p.incidencia = incidencias.get(p.pk)
+        p.cajas_reingreso = cajas_por_reingresar(p)
+        p.total_cajas = len(p.paquetes.all())
+        for caja in p.cajas_reingreso:
+            caja.por_que = _por_que_por_decidir(p, caja)
+            caja.modal_id = f"modal-reingreso-{caja.pk}"
+            caja.modal_titulo = f"Registrar reingreso de la caja {caja.numero} de {p.folio}"
+            caja.piezas_modal = _piezas_para_modal(p, caja)
+            caja.guia = caja.guia_activa
+    return pedidos
+
+
+def _reingresos_decidir(request):
+    """Decisiones por PEDIDO desde la pantalla de Reingresos: "Crear
+    recepción" (registrar_reingreso: nace la orden que el piso recibe y
+    acomoda) o "Inventario no recuperado" (queda en el expediente, sin stock)."""
+    from apps.pedidos.models import Pedido
+    from apps.pedidos.services import marcar_no_recuperado, registrar_reingreso  # lazy
+
+    pedido = get_object_or_404(Pedido.objects.select_related("cliente"), pk=request.POST.get("pedido_id"))
+    motivo = (request.POST.get("motivo") or "").strip()
+    try:
+        if request.POST.get("accion") == "reingreso":
+            orden = registrar_reingreso(pedido, request.user, motivo=motivo)
+            messages.success(request, f"Recepción {orden.folio} creada para {pedido.folio}: el piso la recibe y la acomoda.")
+        else:
+            if not motivo:
+                raise ValueError("Escribe el motivo: queda en el expediente del pedido.")
+            marcar_no_recuperado(pedido, request.user, motivo=motivo)
+            messages.success(request, f"{pedido.folio}: inventario dado por no recuperado.")
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    return redirect("mesa:reingresos")
+
+
+@rol_requerido("mesa")
+def reingresos(request):
+    """Reingresos por decidir (Chema 2026-10-21): cajas que ya salieron y el
+    carrier regresó o Mesa reportó, cancelaciones tardías, producto erróneo y
+    reposiciones canceladas ya empacadas. Por caja: "Registrar reingreso"
+    (modal pieza por pieza: bodega con posición y lote, cuarentena, no
+    regresa), "Crear recepción" (al piso, como antes) o "Inventario no
+    recuperado"."""
+    if request.method == "POST":
+        if request.POST.get("accion") in ("reingreso", "no_recuperado"):
+            return _reingresos_decidir(request)
+        _ejecutar_accion_pedido(request)
+        return redirect("mesa:reingresos")
+    return render(request, "mesa/reingresos.html", {
+        "seccion": "reingresos",
+        "pedidos": _reingresos_decorados(),
+        "posiciones": _posiciones_para_modal(),
+    })
+
+
+def _pedidos_reingreso_caja(request):
+    """"Registrar reingreso" por caja (Chema 2026-10-20, PED-00151): una caja
+    despachada que regresó. Si aún no estaba por decidir, se reporta el
+    regreso (la guía viva pasa a retorno con su RF); luego, con decisiones,
+    se resuelve pieza por pieza, o con "Generar reingreso" se queda en
+    Reingresos para decidir después."""
+    from apps.pedidos.services import cajas_por_reingresar, reportar_regreso_caja, resolver_contenido_caja  # lazy por contrato
+
+    pedido, caja = _caja_del_post(request)
+    generar = request.POST.get("generar_reingreso") == "1"
+    motivo = (request.POST.get("motivo") or "").strip()[:300]
+    if caja.pk not in {c.pk for c in cajas_por_reingresar(pedido)}:
+        reportar_regreso_caja(pedido, caja, request.user, motivo, manual=True)
+        pedido.refresh_from_db()
+        caja.refresh_from_db()
+    if generar:
+        return f"Caja {caja.numero} de {pedido.folio}: regreso registrado; queda en Reingresos por decidir."
+    decisiones = _decisiones_del_post(request, pedido)
+    resolver_contenido_caja(pedido, caja, decisiones, request.user, motivo=motivo)
+    return f"Caja {caja.numero} de {pedido.folio}: cada pieza quedó donde decidiste."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
