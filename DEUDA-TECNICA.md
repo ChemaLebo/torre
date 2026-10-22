@@ -36,11 +36,19 @@ link del portal cuando exista al menos un manual con audiencia portal.
 2. `fulfillments/create`: un fulfillment que no creó Torre sobre un pedido en
    proceso abre incidencia y detiene el picking (evita doble salida).
 3. Catálogo: HECHO 2026-10-01 como pull en `sync_shopify`
-   (`sincronizar_catalogo`): nuevos inactivos "por completar", cambios de
-   nombre y código seguidos por `shopify_variant_id`; peso y medidas son
-   manuales por decisión de Chema. Pendiente: webhooks `products/*` para
-   tiempo real (hoy 15 min bastan), marcar bajas, y qué tienda manda si un
-   cliente repite código en dos tiendas (hoy gana la primera que liga).
+   (`sincronizar_catalogo`): cambios de nombre y código seguidos por
+   `shopify_variant_id`. Desde 2026-10-21 las variantes nuevas nacen con el
+   peso y las medidas empacadas de Shopify (activas con peso; sin peso,
+   inactivas "por completar") y Mesa tiene «↻ sincronizar» por SKU; en las
+   actualizaciones automáticas lo físico sigue sin tocarse (Chema). Las
+   medidas dependen de la versión 2027-01 de la API (release candidate
+   hasta el 2027-01-01): cuando prod suba a esa versión o una más nueva,
+   `VERSION_MEDIDAS` deja de hacer falta. Pendiente: webhooks `products/*`
+   para tiempo real (hoy 15 min bastan), marcar bajas, productos virtuales
+   (los PROTECTP de Soda Mate nunca tendrán peso y llenan el aviso "por
+   completar"; la ingesta tampoco distingue líneas que no requieren envío),
+   y qué tienda manda si un cliente repite código en dos tiendas (hoy gana
+   la primera que liga).
 4. HECHO 2026-09-30: webhooks de rastreo de envia.com (tipo 3, firmado) y
    99minutos entran por `envios/webhooks.py` y el poller queda de respaldo.
    Falta registrarlos: envia en su panel con la URL y el token; 99minutos con

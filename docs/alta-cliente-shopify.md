@@ -38,8 +38,9 @@ Proceso vigente desde el 2026-10-21 (primer uso: Soda Mate). Sustituye el copiad
 
 ## 3. Catálogo, antes del primer ASN
 
-- Ficha del cliente → SKUs → **Transformar export de Shopify** con el CSV del cliente → vista previa → importar. Si prefieres esperar al sync, las variantes nacen inactivas "por completar".
-- **Exportar CSV** de catálogo, completar `peso_gr`, `largo_cm`, `ancho_cm`, `alto_cm`, `requiere_lote`, `empaques_divisibles`, `es_kit`, `categoria`, `rotacion`, e importarlo. Shopify solo trae código, nombre, variante, código de barras y precio.
+- Si la tienda captura peso y medidas en Shopify (ficha del producto → Shipping: *Weight* y *Packed product size*), basta con **Sincronizar ahora**: las variantes nacen con código, nombre, variante, código de barras, precio, peso y medidas, y ACTIVAS si traen peso. Las que no traen peso nacen inactivas "por completar": captúralas en Mesa, o usa **↻ sincronizar** en su fila cuando el cliente las complete en Shopify (pide confirmación; lo que Shopify trae con valor pisa lo de Torre, lo vacío allá no borra nada).
+- Alternativa por archivo: ficha del cliente → SKUs → **Transformar export de Shopify** con el CSV del cliente → vista previa → importar; luego **Exportar CSV**, completar `peso_gr`, `largo_cm`, `ancho_cm`, `alto_cm`, `requiere_lote`, `empaques_divisibles`, `es_kit`, `categoria`, `rotacion`, e importarlo.
+- Lote, divisibles, kit, categoría y banderas de manejo siempre se capturan en Mesa: Shopify no los tiene.
 - Racks fijos: Bodega → Posiciones, o `cargar_asignaciones`.
 
 ## 4. Arranque físico
