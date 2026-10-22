@@ -225,6 +225,9 @@ window.addEventListener("load", function () {
   // botón (antes quedaban encendidos para siempre sin que nada viajara).
   document.addEventListener("submit", function (ev) {
     if (ev.defaultPrevented) return;
+    // Un envío que abre otra pestaña (formtarget=_blank) no navega esta: sin spinner ni botón bloqueado.
+    var destino = (ev.submitter && ev.submitter.getAttribute("formtarget")) || ev.target.getAttribute("target");
+    if (destino === "_blank") return;
     var boton = ev.submitter || ev.target.querySelector("button[type=submit], input[type=submit]");
     if (boton && !boton.disabled) {
       boton.setAttribute("data-cargando", "1");

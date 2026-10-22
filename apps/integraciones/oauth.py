@@ -83,14 +83,12 @@ def iniciar_conexion(tienda, actor=None):
         "client_id": tienda.client_id, "scope": ",".join(scopes_de(tienda)),
         "redirect_uri": redirect_uri(), "state": tienda.oauth_state,
     })
-    # Primera instalación (sin token): por el admin unificado, que es a donde
-    # Shopify redirige hoy; la forma clásica {tienda}.myshopify.com/admin/oauth
-    # cayó en "The installation link for this app is invalid" con Soda Mate
-    # (2026-10-21). Con token (actualizar permisos) la forma clásica es la
-    # probada con Colima el 2026-09-23.
-    if not tienda.token:
-        handle = tienda.dominio[: -len(".myshopify.com")]
-        return f"https://admin.shopify.com/store/{handle}/oauth/authorize?{consulta}"
+    # Solo para una app YA instalada en la tienda: la primera instalación de
+    # una app custom entra únicamente por el link firmado del Dev Dashboard de
+    # Shopify (probado con Soda Mate 2026-10-21: por aquí, con la forma clásica
+    # o la del admin unificado, Shopify responde "The installation link for
+    # this app is invalid"). Con la app instalada, esta URL regresa el código
+    # y Torre toma el token sin copiarlo (probado con Colima 2026-09-23).
     return f"https://{tienda.dominio}/admin/oauth/authorize?{consulta}"
 
 
