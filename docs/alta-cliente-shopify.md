@@ -20,18 +20,18 @@ Proceso vigente desde el 2026-10-21 (primer uso: Soda Mate). Sustituye el copiad
    - Access scopes, los 10 de Torre: `read_orders`, `write_orders`, `read_products`, `read_inventory`, `write_inventory`, `read_locations`, `read_fulfillments`, `write_fulfillments`, `read_merchant_managed_fulfillment_orders`, `write_merchant_managed_fulfillment_orders`. `read_all_orders` solo si Soporte ya lo concedió a ESTA app (paso 6).
 4. **Distribution → Custom distribution** → la tienda del cliente (su dominio myshopify). "Allow multi-store installs" apagado: solo aplicaría a varias tiendas de una misma organización Plus.
 5. **Release / publicar la versión**: debe quedar Active.
-6. **Genera el link de instalación** para la tienda. Shopify solo permite la primera instalación de una app custom desde ese link del Dev Dashboard; el botón de Mesa de Torre no puede hacerla (Shopify responde "The installation link for this app is invalid"). Si el link trae `&no_redirect=true`, quítaselo antes de abrirlo: así, al aprobar, Shopify regresa a Torre con el código y la tienda queda conectada sola, sin copiar el token.
+6. **Genera el link de instalación** para la tienda. Shopify solo permite la primera instalación de una app custom desde ese link firmado del Dev Dashboard; el botón de Mesa de Torre no puede hacerla (Shopify responde "The installation link for this app is invalid", probado el 2026-10-21 con la URL clásica y con la del admin unificado). Ábrelo en el admin de la tienda, aprueba e **ignora el token que te enseña**: Torre lo toma en el paso 2.3. Si el link trae `&no_redirect=true` y se lo quitas, Shopify regresa a Torre al aprobar y la tienda queda conectada sin apretar nada más; es opcional.
 7. Órdenes de más de 60 días: pide `read_all_orders` a Soporte de Shopify citando el Client ID. Cuando lo concedan: agrégalo a los scopes, publica otra versión, en Mesa marca "Soporte concedió read_all_orders" y aprieta **Actualizar permisos**.
 
 ## 2. En Mesa
 
 1. **Clientes → Nuevo**: nombre, slug, razón social, RFC, contacto, buffer, integración de envíos, carriers preferente y respaldo, avisos al comprador, umbral de visto bueno, voz y branding del rastreo.
 2. Ficha del cliente → form **Tienda**: dominio, Client ID, Client secret, la bandera de `read_all_orders` si aplica, activa. Token y webhook secret se dejan vacíos. Al guardar, el aviso dice "Ahora Conectar con Shopify desde la tabla".
-3. **Primera instalación**: abre el link de instalación del Dev Dashboard de Shopify (paso 1.6) en un navegador con sesión de admin de ESA tienda; en incógnito si Shopify se pone raro. Instalar. Shopify regresa a Torre con el código: si en ese navegador también tienes sesión de Mesa, vuelves a la ficha con el resumen; si no, ves la página "Torre quedó conectado". Si quien instala es el cliente, mándale ese mismo link del Dev Dashboard de Shopify.
+3. **Primera instalación, dos pasos**: (a) abre el link de instalación del Dev Dashboard de Shopify (paso 1.6) en un navegador con sesión de admin de ESA tienda, instala e ignora el token; (b) en Mesa de Torre aprieta **Conectar con Shopify**: se abre Shopify en otra pestaña, confirmas los permisos de la lista de Torre y Torre toma el token con el código que Shopify le regresa. Si en ese navegador tienes sesión de Mesa, esa pestaña cae en la ficha con el resumen; si no, ves la página "Torre quedó conectado". Si quien instala es el cliente, mándale el link del Dev Dashboard de Shopify para (a) y el **Link para el cliente** de Mesa para (b).
 4. El resumen dice: conectada, "Webhooks: 4 creados", "Metafield: creada", la location elegida o la lista de disponibles, y los permisos que falten si alguno. Columna **Conexión** desde entonces:
    - **Actualizar permisos**: vuelve a pasar por la pantalla de permisos de Shopify con la lista de Torre (scopes nuevos, o repetir los pasos post-conexión).
    - **Link para el cliente**: lo mismo, con un link de 7 días que el cliente abre con su sesión de admin, sin entrar a Mesa.
-   Si Shopify te enseñó el token en vez de regresar a Torre (link con `no_redirect`), pégalo en editar y aprieta Actualizar permisos: Torre completa el resto.
+   Si el botón fallara con la app ya instalada, el plan B es pegar en editar el token que enseñó el link y apretar Actualizar permisos: Torre completa el resto.
 5. Si no se eligió location sola, **editar** la tienda y pegar el ID de la location de WOP de la lista del resumen.
 6. **Sincronizar ahora**: catálogo y pedidos en segundo plano (backfill de 90 días; sin `read_all_orders` Shopify solo entrega 60). Revisa **Salud de sync** en unos minutos.
 7. Tarifario, usuarios del portal (y enviar acceso), correos de incidencias.
@@ -59,7 +59,7 @@ Proceso vigente desde el 2026-10-21 (primer uso: Soda Mate). Sustituye el copiad
 |---|---|---|
 | "Firma inválida" | El client secret pegado no es el de esa app | Corrige el secret en editar y vuelve a Conectar |
 | "Conexión no iniciada desde Torre o ya usada" | La tienda ya tiene token y la llegada no viene del botón: link caducado, ya usado, o Conectar apretado dos veces | Vuelve a apretar Actualizar permisos o genera otro link |
-| Shopify: "The installation link for this app is invalid" | Primera instalación intentada con el botón de Mesa de Torre, no con el link del Dev Dashboard de Shopify | Abre el link del Dev Dashboard de Shopify sin `no_redirect`; Torre recibe el código |
+| Shopify: "The installation link for this app is invalid" | Primera instalación intentada con el botón de Mesa de Torre antes de instalar con el link del Dev Dashboard de Shopify | Instala con el link del Dev Dashboard de Shopify y luego aprieta Conectar con Shopify |
 | 404 "Tienda desconocida" | El dominio en Mesa no es el de la tienda que aprobó | Corrige el dominio |
 | Shopify: redirect_uri no permitida | La Redirect URL de la app no es exacta | Corrígela en el Dev Dashboard de Shopify y publica |
 | Shopify: invalid scope | Un scope no está en la versión publicada, p. ej. `read_all_orders` sin concesión | Quita la bandera o publica la versión con el scope |
