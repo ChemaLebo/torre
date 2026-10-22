@@ -4101,6 +4101,16 @@ def cliente_skus(request, pk):
         if accion == "categorias_bulk":
             messages.success(request, _skus_categorias_bulk(request, cliente))
             return redirect("mesa:cliente_skus", pk=cliente.pk)
+        if accion == "sku_sincronizar":
+            # Botón «Sincronizar con Shopify» por SKU (Chema 2026-10-21), con modal de confirmación propio.
+            from apps.integraciones.services import sincronizar_sku_desde_shopify  # lazy por contrato
+
+            sku = get_object_or_404(SKU, pk=request.POST.get("sku_id"), cliente=cliente)
+            try:
+                messages.success(request, sincronizar_sku_desde_shopify(sku, request.user))
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect("mesa:cliente_skus", pk=cliente.pk)
         if accion == "sku_guardar":
             form = FormSKU(cliente, request.POST)
             if form.is_valid():
@@ -4119,6 +4129,7 @@ def cliente_skus(request, pk):
     # Link al admin de Shopify (por SKU): con la primera tienda activa basta —
     # la búsqueda por query encuentra el producto sin guardar product_id.
     tienda_principal = cliente.tiendas.filter(activo=True).first()
+    shopify_conectada = cliente.tiendas.filter(activo=True).exclude(token="").exists()  # habilita «Sincronizar con Shopify»
     sku_editar = None
     if form is None:
         editar_id = request.GET.get("editar", "").strip()
@@ -4170,6 +4181,7 @@ def cliente_skus(request, pk):
         "form": form,
         "sku_editar": sku_editar,
         "tienda_principal": tienda_principal,
+        "shopify_conectada": shopify_conectada,
         "categorias": list(Categoria.objects.filter(cliente=cliente)),
     })
 

@@ -77,7 +77,7 @@
             <td class="derecha mono">{{ sku.punto_reorden }}</td>
             <td class="derecha mono">{{ sku.disponible }}</td>
             <td>{% if sku.activo %}<span class="pill ok">activo</span>{% elif sku.shopify_variant_id and not sku.peso_gr %}<span class="pill warn" title="Llegó del pull de Shopify: falta peso y medidas">por completar</span>{% else %}<span class="pill crit">inactivo</span>{% endif %}</td>
-            <td>{% if tienda_principal %}<a class="small" href="https://{{ tienda_principal.dominio }}/admin/products?query={{ sku.codigo|urlencode }}" target="_blank" rel="noopener" title="Buscar el producto por SKU en el admin de Shopify">abrir ↗</a>{% else %}<span class="small muted">—</span>{% endif %}</td>
+            <td>{% if tienda_principal %}<a class="small" href="https://{{ tienda_principal.dominio }}/admin/products?query={{ sku.codigo|urlencode }}" target="_blank" rel="noopener" title="Buscar el producto por SKU en el admin de Shopify">abrir ↗</a>{% if shopify_conectada %} <button class="btn chico" type="button" data-sku="{{ sku.pk }}" data-codigo="{{ sku.codigo }}" onclick="abrirSincronizar(this)" title="Trae de Shopify nombre, variante, código de barras, precio, peso y medidas; lo que Shopify tiene vacío no borra nada">↻ sincronizar</button>{% endif %}{% else %}<span class="small muted">—</span>{% endif %}</td>
             <td class="derecha"><a class="btn chico" href="?editar={{ sku.pk }}#form-sku">editar</a></td>
           </tr>
           {% empty %}
@@ -102,6 +102,7 @@
     <div class="titulo">
       <h3>{% if sku_editar %}Editar {{ sku_editar.codigo }}{% else %}Nuevo SKU{% endif %}</h3>
       <div class="fila">
+        {% if sku_editar and shopify_conectada %}<button class="btn chico" type="button" data-sku="{{ sku_editar.pk }}" data-codigo="{{ sku_editar.codigo }}" onclick="abrirSincronizar(this)" title="Trae de Shopify nombre, variante, código de barras, precio, peso y medidas; lo que Shopify tiene vacío no borra nada">↻ Sincronizar con Shopify</button>{% endif %}
         {% if sku_editar %}<a class="small" href="{% url 'mesa:cliente_skus' cliente.pk %}">cancelar edición →</a>{% endif %}
         <button type="button" class="btn chico" onclick="document.getElementById('modal-sku').close()">cerrar ✕</button>
       </div>
@@ -220,6 +221,14 @@ document.addEventListener("DOMContentLoaded", function () {
   document.getElementById("modal-sku").showModal();
   {% endif %}
 });
+{% if shopify_conectada %}
+// «Sincronizar con Shopify» por SKU (Chema 2026-10-21): confirmación en modal propio; un solo form con el sku_id del botón que lo abrió.
+function abrirSincronizar(boton) {
+  document.getElementById("sincronizar-sku-id").value = boton.dataset.sku;
+  document.getElementById("sincronizar-codigo").textContent = boton.dataset.codigo;
+  document.getElementById("modal-sincronizar").showModal();
+}
+{% endif %}
 </script>
 
 {# Importar y transformar viven en modales (botones de la topbar, como en Shopify): a un lado no cabían. #}
@@ -258,5 +267,25 @@ document.addEventListener("DOMContentLoaded", function () {
     <button class="btn primario mt" type="submit">Transformar</button>
   </form>
 </dialog>
+
+{% if shopify_conectada %}
+<dialog class="modal" id="modal-sincronizar" aria-labelledby="sincronizar-titulo">
+  <div class="titulo"><h3 id="sincronizar-titulo">¿Sincronizar <span class="mono" id="sincronizar-codigo"></span> con Shopify?</h3><button class="btn chico" type="button" onclick="document.getElementById('modal-sincronizar').close()">Cerrar</button></div>
+  <form method="post" id="form-sincronizar-sku">
+    {% csrf_token %}
+    <input type="hidden" name="accion" value="sku_sincronizar">
+    <input type="hidden" name="sku_id" id="sincronizar-sku-id" value="">
+    <p class="small muted">
+      Trae de Shopify nombre, variante, código de barras, precio, peso y medidas empacadas.
+      Lo que Shopify trae con valor <b>pisa</b> lo capturado en Torre; lo vacío o en cero allá no borra nada.
+      Un producto «por completar» que recibe peso queda activo. Queda registro en la auditoría.
+    </p>
+    <div class="fila mt">
+      <button class="btn primario" type="submit">Sincronizar</button>
+      <button class="btn" type="button" onclick="document.getElementById('modal-sincronizar').close()">Cancelar</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
 
 {% endblock %}

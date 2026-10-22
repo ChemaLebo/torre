@@ -1432,6 +1432,84 @@ def sincronizar_catalogo(tienda):
     return resumen
 
 
+_NOMBRES_SINCRONIZADOS = {
+    "shopify_variant_id": "ligado a su variante", "descripcion": "nombre", "variante": "variante",
+    "codigo_barras": "código de barras", "precio_declarado": "precio", "peso_gr": "peso",
+    "largo_cm": "largo", "ancho_cm": "ancho", "alto_cm": "alto", "activo": "activado",
+}
+
+
+def _ficha_del_sku(sku):
+    """(tienda, ficha) de la variante del SKU: por id en cada tienda conectada
+    del cliente y, sin id (nació a mano o por CSV), por código exacto.
+    (None, None) si ninguna tienda lo tiene; ShopifyError se propaga."""
+    tiendas = list(Tienda.objects.filter(cliente=sku.cliente, activo=True).exclude(token="").order_by("pk"))
+    if not tiendas:
+        raise ValueError(f"{sku.cliente.nombre} no tiene una tienda de Shopify conectada.")
+    for tienda in tiendas:
+        api = ShopifyClient(tienda)
+        ficha = None
+        if sku.shopify_variant_id:
+            ficha = api.fichas_variantes([sku.shopify_variant_id]).get(sku.shopify_variant_id)
+        if ficha is None:
+            ficha = api.ficha_por_codigo(sku.codigo)
+        if ficha is not None:
+            return tienda, ficha
+    return None, None
+
+
+def sincronizar_sku_desde_shopify(sku, actor):
+    """Botón «Sincronizar con Shopify» de un SKU en Mesa (Chema 2026-10-21):
+    trae la ficha de SU variante y pisa en Torre lo que Shopify trae con
+    valor (nombre, variante, código de barras, precio, peso y medidas); lo
+    vacío o en cero allá no borra nada aquí. Un SKU "por completar" que
+    recibe peso se activa; el inactivo por decisión de Mesa no se toca. Sin
+    id de variante lo busca por código exacto y lo liga. Regresa el texto
+    para Mesa; ValueError con el motivo cuando no se pudo."""
+    try:
+        tienda, ficha = _ficha_del_sku(sku)
+    except ShopifyError as exc:
+        raise ValueError(f"Shopify no respondió: {exc}") from exc
+    if ficha is None:
+        raise ValueError(f"{sku.codigo} no está en Shopify: ni por id de variante ni por código exacto.")
+    por_completar = bool(sku.shopify_variant_id) and not sku.activo and not sku.peso_gr
+    try:
+        precio = Decimal(str(ficha["precio"] or 0))
+    except (InvalidOperation, ValueError):
+        precio = Decimal(0)
+    variante = ficha["titulo_variante"] if ficha["titulo_variante"] != _SIN_VARIANTE else ""
+    valores = {
+        "shopify_variant_id": "" if sku.shopify_variant_id else ficha["variant_id"],
+        "descripcion": ficha["producto"][:200], "variante": variante[:100], "codigo_barras": ficha["codigo_barras"][:64],
+        "precio_declarado": precio, "peso_gr": int(ficha["peso_gr"] or 0),
+        "largo_cm": int(ficha["largo_cm"] or 0), "ancho_cm": int(ficha["ancho_cm"] or 0), "alto_cm": int(ficha["alto_cm"] or 0),
+    }
+    cambios = {}
+    for campo, valor in valores.items():
+        if not valor:
+            continue  # vacío o cero en Shopify: no borra lo capturado en Torre
+        actual = getattr(sku, campo)
+        if valor != actual:
+            cambios[campo] = [str(actual), str(valor)]
+            setattr(sku, campo, valor)
+    if por_completar and sku.peso_gr > 0:
+        sku.activo = True
+        cambios["activo"] = ["False", "True"]
+    aviso = "" if ficha["con_medidas"] else " La API no dio las medidas empacadas (versión 2027-01): solo peso."
+    if not cambios:
+        return f"{sku.codigo} ya estaba igual que en {tienda.dominio}." + aviso
+    sku.save(update_fields=list(cambios))
+    registrar_evento(
+        "sku", sku.codigo, "sku_sincronizado_desde_shopify", actor=actor, cliente=sku.cliente,
+        delta={"tienda": tienda.dominio, **cambios},
+        motivo="Sincronizar con Shopify desde Mesa: lo que Shopify trae con valor pisa lo de Torre.",
+    )
+    return (
+        f"{sku.codigo} sincronizado desde {tienda.dominio}: "
+        + ", ".join(_NOMBRES_SINCRONIZADOS[c] for c in cambios) + "." + aviso
+    )
+
+
 def reconciliar_pedidos(tienda):
     """Polling `orders.json?updated_at_min=checkpoint` de la tienda. Cada pedido
     entra por el MISMO camino que un webhook (WebhookEvento con webhook_id
