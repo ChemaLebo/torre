@@ -148,6 +148,26 @@ class OAuthShopifyTests(TestCase):
             self.assertEqual(self.client.get(reverse("oauth:callback"), params).status_code, 403)
             post.assert_not_called()
 
+    def test_la_app_url_arranca_la_peticion_de_permisos_tras_instalar_desde_el_link(self):
+        """Soda Mate 2026-10-21: el link del Dev Dashboard sin no_redirect manda a la App URL; Torre sigue solo."""
+        params = {"shop": "sodamate.myshopify.com", "timestamp": "1700000000", "host": "aG9zdA"}
+        params["hmac"] = firmar(params, "secreto-app")
+        respuesta = self.client.get(reverse("oauth:app"), params)
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertTrue(respuesta["Location"].startswith("https://sodamate.myshopify.com/admin/oauth/authorize?"))
+        self.tienda.refresh_from_db()
+        self.assertTrue(self.tienda.oauth_state)
+        # Firma ajena: nada.
+        params["hmac"] = "0" * 64
+        self.assertEqual(self.client.get(reverse("oauth:app"), params).status_code, 403)
+        # Ya conectada: solo confirma, no vuelve a pedir permisos.
+        self.tienda.token = "shpat_x"
+        self.tienda.save()
+        params["hmac"] = firmar({k: v for k, v in params.items() if k != "hmac"}, "secreto-app")
+        respuesta = self.client.get(reverse("oauth:app"), params)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Torre quedó conectado")
+
     def test_callback_de_tienda_desconocida_es_404(self):
         respuesta = self.client.get(reverse("oauth:callback"), {"shop": "otra.myshopify.com", "code": "x", "hmac": "y", "state": "z"})
         self.assertEqual(respuesta.status_code, 404)

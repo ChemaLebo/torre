@@ -69,7 +69,7 @@
             {% elif tienda.token %}<span class="pill">token a mano</span>
             {% else %}<span class="pill warn">sin conectar</span>{% endif %}
             {% if tienda.client_id %}
-            {% if not tienda.token %}<div class="small muted">Primera instalación: 1) instala la app con el link del Dev Dashboard de Shopify en el admin de la tienda e ignora el token que te enseñe; 2) aprieta Conectar con Shopify: Torre toma el token y deja webhooks, metafield y location.</div>{% endif %}
+            {% if not tienda.token %}<div class="small muted">Primera instalación: abre el link de instalación del Dev Dashboard de Shopify (sin <span class="mono">no_redirect</span>) en el admin de la tienda; al instalar, Shopify manda a Torre y la conexión termina sola. Si Shopify te enseñó un token, ignóralo y aprieta Conectar con Shopify.</div>{% endif %}
             <form method="post" action="{% url 'mesa:tienda_conectar' cliente.pk tienda.pk %}" class="fila mt" style="gap:4px;flex-wrap:wrap">{% csrf_token %}
               <button class="btn chico primario" name="accion" value="conectar" type="submit" formtarget="_blank" title="Abre la pantalla de permisos de Shopify en otra pestaña, con la lista de Torre; al aprobar, el token se guarda solo">{% if tienda.token %}Actualizar permisos{% else %}Conectar con Shopify{% endif %}</button>
               <button class="btn chico" name="accion" value="link" type="submit" title="Link de 7 días para que el cliente apruebe desde su admin, sin entrar a Mesa">Link para el cliente</button>

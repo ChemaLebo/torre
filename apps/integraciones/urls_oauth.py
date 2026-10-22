@@ -8,5 +8,6 @@ app_name = "oauth"
 
 urlpatterns = [
     path("callback", views.oauth_callback, name="callback"),
+    path("app", views.oauth_app, name="app"),
     path("conectar/<str:firma>/", views.oauth_conectar_por_link, name="conectar_por_link"),
 ]

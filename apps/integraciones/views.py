@@ -164,3 +164,28 @@ def oauth_conectar_por_link(request, firma):
         return redirect(oauth.iniciar_conexion(tienda))
     except ValueError as exc:
         return render(request, "integraciones/conectada.html", {"tienda": tienda, "error": str(exc)}, status=400)
+
+
+def oauth_app(request):
+    """GET /oauth/app: la App URL de cada app custom (Dev Dashboard de Shopify).
+    Shopify manda aquí al merchant al terminar la instalación desde el link del
+    Dev Dashboard (sin `no_redirect`) o al abrir la app desde su admin, con
+    `shop`, `hmac`, `timestamp` y `host`. Sin token, Torre arranca sola la
+    petición de permisos (iniciar_conexion → /admin/oauth/authorize → callback
+    con el código): la instalación queda en un solo clic. Con token no se
+    vuelve a pedir nada: solo se confirma que ya está conectada."""
+    from . import oauth  # lazy por contrato
+
+    params = {clave: valor for clave, valor in request.GET.items()}
+    shop = (params.get("shop") or "").strip().lower()
+    tienda = Tienda.objects.select_related("cliente").filter(dominio=shop).first() if shop else None
+    if tienda is None or not tienda.client_secret:
+        return HttpResponseNotFound("Tienda desconocida o sin app configurada en Torre.")
+    if not oauth.firma_valida(params, tienda.client_secret):
+        return HttpResponseForbidden("Firma inválida: la petición no viene de Shopify para esta app.")
+    if tienda.token:
+        return render(request, "integraciones/conectada.html", {"tienda": tienda, "resumen": None})
+    try:
+        return redirect(oauth.iniciar_conexion(tienda, actor=request.user if request.user.is_authenticated else None))
+    except ValueError as exc:
+        return render(request, "integraciones/conectada.html", {"tienda": tienda, "error": str(exc)}, status=400)
