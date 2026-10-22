@@ -6,6 +6,7 @@ con snapshot viejo FALLA en vez de pisar al nuevo. Las mutaciones de inventario
 llevan la directiva `@idempotent(key: uuid)`, obligatoria desde 2026-04: una
 clave nueva por intento (cada intento parte de un snapshot fresco).
 """
+import math
 import uuid
 
 import requests
@@ -176,6 +177,116 @@ query catalogo($cursor: String) {
 }
 """
 
+# Ficha física de variantes (Chema 2026-10-21): peso y medidas empacadas para
+# el alta de SKUs y el botón «Sincronizar con Shopify». El peso vive en
+# inventoryItem.measurement desde 2024-07; packedDimensions solo existe desde
+# la versión 2027-01 (release candidate hasta el 2027-01-01). La ficha se pide
+# en VERSION_MEDIDAS y, si esa versión falla, se repite sin medidas en la
+# versión configurada: el alta nunca se queda sin peso por culpa de las medidas.
+VERSION_MEDIDAS = "2027-01"
+
+_CAMPOS_FICHA = """
+        id
+        sku
+        title
+        barcode
+        price
+        product { title status productType }
+        inventoryItem { measurement { weight { value unit } %(medidas)s } }
+"""
+_CAMPO_MEDIDAS = "packedDimensions { length width height unit }"
+
+CONSULTA_FICHAS_VARIANTES = """
+query fichasDeVariantes($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on ProductVariant {
+%(campos)s
+    }
+  }
+}
+"""
+
+CONSULTA_FICHA_POR_CODIGO = """
+query fichaPorCodigo($consulta: String!) {
+  productVariants(first: 10, query: $consulta) {
+    edges {
+      node {
+%(campos)s
+      }
+    }
+  }
+}
+"""
+
+_GRAMOS_POR_UNIDAD = {"GRAMS": 1, "KILOGRAMS": 1000, "OUNCES": 28.349523125, "POUNDS": 453.59237}
+_CM_POR_UNIDAD = {"CENTIMETERS": 1, "INCHES": 2.54}
+
+
+def _campos_ficha(con_medidas):
+    """Campos GraphQL de la ficha, con o sin packedDimensions."""
+    return _CAMPOS_FICHA % {"medidas": _CAMPO_MEDIDAS if con_medidas else ""}
+
+
+def gramos_de(peso):
+    """Weight de Shopify ({value, unit}) → gramos enteros; 0 si no hay peso o la unidad es rara."""
+    if not peso:
+        return 0
+    try:
+        valor = float(peso.get("value") or 0)
+    except (TypeError, ValueError):
+        return 0
+    factor = _GRAMOS_POR_UNIDAD.get(str(peso.get("unit") or "").upper())
+    if factor is None or valor <= 0:
+        return 0
+    return int(round(valor * factor))
+
+
+def centimetros_de(dimensiones):
+    """packedDimensions de Shopify → (largo, ancho, alto) en cm enteros, hacia
+    arriba (una pieza de 25.4 cm ocupa 26); ceros si no están capturadas."""
+    if not dimensiones:
+        return (0, 0, 0)
+    factor = _CM_POR_UNIDAD.get(str(dimensiones.get("unit") or "").upper())
+    if factor is None:
+        return (0, 0, 0)
+    medidas = []
+    for clave in ("length", "width", "height"):
+        try:
+            valor = float(dimensiones.get(clave) or 0)
+        except (TypeError, ValueError):
+            valor = 0
+        medidas.append(math.ceil(valor * factor - 1e-9) if valor > 0 else 0)
+    return tuple(medidas)
+
+
+def _datos_variante(nodo):
+    """Lo comercial de un nodo ProductVariant, como lo entrega `catalogo()`."""
+    producto = nodo.get("product") or {}
+    return {
+        "variant_id": str(nodo.get("id") or "").rsplit("/", 1)[-1],
+        "sku": (nodo.get("sku") or "").strip(),
+        "titulo_variante": (nodo.get("title") or "").strip(),
+        "producto": (producto.get("title") or "").strip(),
+        "tipo": (producto.get("productType") or "").strip(),
+        "estado": (producto.get("status") or "").strip(),
+        "codigo_barras": (nodo.get("barcode") or "").strip(),
+        "precio": nodo.get("price") or "",
+    }
+
+
+def _ficha(nodo, con_medidas):
+    """Datos comerciales + peso_gr, largo/ancho/alto_cm y `con_medidas` (si la
+    API pudo dar packedDimensions; sin ellas las medidas van en cero)."""
+    medicion = (nodo.get("inventoryItem") or {}).get("measurement") or {}
+    largo, ancho, alto = centimetros_de(medicion.get("packedDimensions")) if con_medidas else (0, 0, 0)
+    return {
+        **_datos_variante(nodo),
+        "peso_gr": gramos_de(medicion.get("weight")),
+        "largo_cm": largo, "ancho_cm": ancho, "alto_cm": alto,
+        "con_medidas": con_medidas,
+    }
+
+
 # Fulfillments ya escritos de una orden, con sus números de guía: para
 # recuperar ids de pedidos fulfilleados antes de guardarlos (backfill).
 CONSULTA_FULFILLMENTS_ORDEN = """
@@ -289,11 +400,13 @@ class ShopifyClient:
             raise ShopifyError(f"La tienda {self.tienda.dominio} no tiene location_id configurado.")
         return lid if lid.startswith("gid://") else f"gid://shopify/Location/{lid}"
 
-    def graphql(self, query, variables=None):
-        """POST /graphql.json. Levanta ShopifyError ante errores HTTP o de GraphQL."""
+    def graphql(self, query, variables=None, version=None):
+        """POST /graphql.json, en la versión configurada o en `version` si una
+        consulta necesita otra. Levanta ShopifyError ante errores HTTP o de GraphQL."""
+        base = f"https://{self.tienda.dominio}/admin/api/{version}" if version else self.base
         try:
             resp = self.sesion.post(
-                f"{self.base}/graphql.json",
+                f"{base}/graphql.json",
                 json={"query": query, "variables": variables or {}},
                 timeout=self.timeout,
             )
@@ -700,22 +813,48 @@ class ShopifyClient:
             datos = self.graphql(CONSULTA_CATALOGO, {"cursor": cursor})
             bloque = datos.get("productVariants") or {}
             for edge in bloque.get("edges") or []:
-                nodo = edge.get("node") or {}
-                producto = nodo.get("product") or {}
-                variantes.append({
-                    "variant_id": str(nodo.get("id") or "").rsplit("/", 1)[-1],
-                    "sku": (nodo.get("sku") or "").strip(),
-                    "titulo_variante": (nodo.get("title") or "").strip(),
-                    "producto": (producto.get("title") or "").strip(),
-                    "tipo": (producto.get("productType") or "").strip(),
-                    "estado": (producto.get("status") or "").strip(),
-                    "codigo_barras": (nodo.get("barcode") or "").strip(),
-                    "precio": nodo.get("price") or "",
-                })
+                variantes.append(_datos_variante(edge.get("node") or {}))
             info = bloque.get("pageInfo") or {}
             if not info.get("hasNextPage") or not info.get("endCursor"):
                 return variantes
             cursor = info["endCursor"]
+
+    # ── ficha física (peso y medidas empacadas) ──
+    def _version_medidas(self):
+        """Versión para pedir packedDimensions: la configurada si ya es 2027-01 o más nueva (o unstable)."""
+        return max(self.version, VERSION_MEDIDAS)
+
+    def _con_respaldo_de_medidas(self, consulta, variables):
+        """Corre la consulta con medidas en la versión de medidas; si esa versión
+        falla por lo que sea, la repite sin medidas en la configurada.
+        Regresa (datos, con_medidas); si también falla, propaga ShopifyError."""
+        try:
+            return self.graphql(consulta % {"campos": _campos_ficha(True)}, variables, version=self._version_medidas()), True
+        except ShopifyError:
+            return self.graphql(consulta % {"campos": _campos_ficha(False)}, variables), False
+
+    def fichas_variantes(self, ids):
+        """{variant_id numérico: ficha} de las variantes pedidas (ids numéricos o
+        gids), en lotes de 100. Las que Shopify ya no tiene no vienen."""
+        gids = [str(i) if str(i).startswith("gid://") else f"gid://shopify/ProductVariant/{i}" for i in ids]
+        fichas = {}
+        for inicio in range(0, len(gids), 100):
+            datos, con_medidas = self._con_respaldo_de_medidas(CONSULTA_FICHAS_VARIANTES, {"ids": gids[inicio:inicio + 100]})
+            for nodo in datos.get("nodes") or []:
+                if nodo and nodo.get("id"):
+                    ficha = _ficha(nodo, con_medidas)
+                    fichas[ficha["variant_id"]] = ficha
+        return fichas
+
+    def ficha_por_codigo(self, codigo):
+        """Ficha de la variante cuyo SKU es exactamente `codigo` (la búsqueda de
+        Shopify es difusa: se exige el match exacto); None si no existe."""
+        datos, con_medidas = self._con_respaldo_de_medidas(CONSULTA_FICHA_POR_CODIGO, {"consulta": f'sku:"{codigo}"'})
+        for edge in (datos.get("productVariants") or {}).get("edges") or []:
+            nodo = edge.get("node") or {}
+            if (nodo.get("sku") or "").strip() == codigo:
+                return _ficha(nodo, con_medidas)
+        return None
 
     def obtener_pedido(self, order_id):
         """GET /orders/{id}.json — la orden completa (re-ingesta tras un move)."""
