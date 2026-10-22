@@ -83,6 +83,14 @@ def iniciar_conexion(tienda, actor=None):
         "client_id": tienda.client_id, "scope": ",".join(scopes_de(tienda)),
         "redirect_uri": redirect_uri(), "state": tienda.oauth_state,
     })
+    # Primera instalación (sin token): por el admin unificado, que es a donde
+    # Shopify redirige hoy; la forma clásica {tienda}.myshopify.com/admin/oauth
+    # cayó en "The installation link for this app is invalid" con Soda Mate
+    # (2026-10-21). Con token (actualizar permisos) la forma clásica es la
+    # probada con Colima el 2026-09-23.
+    if not tienda.token:
+        handle = tienda.dominio[: -len(".myshopify.com")]
+        return f"https://admin.shopify.com/store/{handle}/oauth/authorize?{consulta}"
     return f"https://{tienda.dominio}/admin/oauth/authorize?{consulta}"
 
 

@@ -54,7 +54,7 @@ class OAuthShopifyTests(TestCase):
         url = oauth.iniciar_conexion(self.tienda)
         self.tienda.refresh_from_db()
         self.assertTrue(self.tienda.oauth_state)
-        self.assertTrue(url.startswith("https://sodamate.myshopify.com/admin/oauth/authorize?"))
+        self.assertTrue(url.startswith("https://admin.shopify.com/store/sodamate/oauth/authorize?"))  # sin token: admin unificado
         self.assertIn("client_id=cid123", url)
         self.assertIn("write_merchant_managed_fulfillment_orders", url)
         self.assertNotIn("read_all_orders", url)
@@ -63,6 +63,10 @@ class OAuthShopifyTests(TestCase):
         self.tienda.read_all_orders = True
         self.tienda.save()
         self.assertIn("read_all_orders", oauth.iniciar_conexion(self.tienda))
+        # Con token (actualizar permisos): la forma clásica probada con Colima.
+        self.tienda.token = "shpat_x"
+        self.tienda.save()
+        self.assertTrue(oauth.iniciar_conexion(self.tienda).startswith("https://sodamate.myshopify.com/admin/oauth/authorize?"))
 
     def test_sin_app_no_se_puede_iniciar(self):
         self.tienda.client_secret = ""
@@ -172,5 +176,5 @@ class OAuthShopifyTests(TestCase):
         self.assertTrue(link.startswith("http://127.0.0.1:8380/oauth/conectar/"))
         respuesta = self.client.get(link.replace("http://127.0.0.1:8380", ""))
         self.assertEqual(respuesta.status_code, 302)
-        self.assertTrue(respuesta["Location"].startswith("https://sodamate.myshopify.com/admin/oauth/authorize?"))
+        self.assertTrue(respuesta["Location"].startswith("https://admin.shopify.com/store/sodamate/oauth/authorize?"))
         self.assertEqual(self.client.get("/oauth/conectar/firma-falsa/").status_code, 404)

@@ -842,7 +842,7 @@ class TiendasTests(BaseGestionClientes):
         url = reverse("mesa:tienda_conectar", args=[self.colima.pk, tienda.pk])
         respuesta = self.client.post(url, {"accion": "conectar"})
         self.assertEqual(respuesta.status_code, 302)
-        self.assertIn("https://caney.myshopify.com/admin/oauth/authorize?client_id=cid", respuesta["Location"])
+        self.assertIn("https://admin.shopify.com/store/caney/oauth/authorize?client_id=cid", respuesta["Location"])
         respuesta = self.client.post(url, {"accion": "link"}, follow=True)
         self.assertContains(respuesta, "/oauth/conectar/")
         self.assertContains(self.client.post(url, {"accion": "sincronizar"}, follow=True), "conecta la tienda primero")
