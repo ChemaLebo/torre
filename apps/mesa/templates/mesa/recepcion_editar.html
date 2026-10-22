@@ -10,7 +10,7 @@
   </div>
   <div class="fila">
     <a class="btn chico" href="{% url 'mesa:recepciones' %}?cliente={{ orden.cliente.slug }}">Volver a recepciones</a>
-    <a class="btn chico" href="{% url 'mesa:recepcion_realidad_csv' orden.pk %}">Exportar realidad (CSV)</a>
+    <a class="btn chico" href="{% url 'mesa:recepcion_realidad_csv' orden.pk %}" download>Exportar realidad (CSV)</a>
   </div>
 </div>
 

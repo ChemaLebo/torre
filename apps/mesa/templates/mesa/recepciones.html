@@ -19,7 +19,7 @@
     {# Formato del CSV, arriba y visible: GET aparte (un form no puede anidar otro). #}
     <details id="asn-formato">
       <summary>Descargar el formato del CSV <span class="small muted">· marca los productos que llegan para prellenarlos</span></summary>
-      <form method="get" action="{% url 'mesa:recepciones_plantilla' %}" id="asn-formato-form">
+      <form method="get" action="{% url 'mesa:recepciones_plantilla' %}" id="asn-formato-form" data-descarga>
         <input type="hidden" name="cliente" value="{{ cliente_captura.slug }}">
         <p class="small muted">
           Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y

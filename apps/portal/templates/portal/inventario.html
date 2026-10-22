@@ -54,7 +54,7 @@
   <div class="card">
     <div class="titulo">
       <h3>Historia de {{ kardex.sku.codigo }} · {{ kardex.sku.descripcion }}</h3>
-      <a class="btn chico" href="{% url 'portal:exportar' %}?csv=kardex&amp;sku={{ kardex.sku.codigo|urlencode }}">Descargar CSV</a>
+      <a class="btn chico" href="{% url 'portal:exportar' %}?csv=kardex&amp;sku={{ kardex.sku.codigo|urlencode }}" download>Descargar CSV</a>
     </div>
     <div class="tabla-wrap">
       <table>

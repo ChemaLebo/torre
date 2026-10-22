@@ -215,6 +215,8 @@ window.addEventListener("load", function () {
     var a = ev.target.closest && ev.target.closest("a[href]");
     if (!a || ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     if (a.target && a.target !== "_self") return;
+    // Un link con download (CSV, plantillas) baja el archivo sin navegar: sin spinner (los CSV
+    // del sitio llevan el atributo; la prueba test_descargas_sin_throbber lo vigila).
     if (a.hasAttribute("download") || a.getAttribute("href").charAt(0) === "#") return;
     if (a.origin !== location.origin) return;
     mostrar();
@@ -228,6 +230,9 @@ window.addEventListener("load", function () {
     // Un envío que abre otra pestaña (formtarget=_blank) no navega esta: sin spinner ni botón bloqueado.
     var destino = (ev.submitter && ev.submitter.getAttribute("formtarget")) || ev.target.getAttribute("target");
     if (destino === "_blank") return;
+    // Un formulario que descarga un archivo (data-descarga, p. ej. el formato de ASN) tampoco
+    // navega: no habría pageshow que apague el spinner ni desbloquee el botón (Chema 2026-10-22).
+    if (ev.target.hasAttribute("data-descarga")) return;
     var boton = ev.submitter || ev.target.querySelector("button[type=submit], input[type=submit]");
     if (boton && !boton.disabled) {
       boton.setAttribute("data-cargando", "1");

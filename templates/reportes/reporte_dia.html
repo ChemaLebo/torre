@@ -31,7 +31,7 @@
       <a class="btn" href="{{ url_base }}?fecha={{ ayer|date:'Y-m-d' }}{% if es_mesa and cliente %}&cliente={{ cliente.slug }}{% endif %}">◀ Día anterior</a>
       {% if manana %}<a class="btn" href="{{ url_base }}?fecha={{ manana|date:'Y-m-d' }}{% if es_mesa and cliente %}&cliente={{ cliente.slug }}{% endif %}">Día siguiente ▶</a>{% endif %}
       {% if fecha != hoy %}<a class="btn" href="{{ url_base }}{% if es_mesa and cliente %}?cliente={{ cliente.slug }}{% endif %}">Hoy</a>{% endif %}
-      <a class="btn" href="{{ url_csv }}">Exportar CSV</a>
+      <a class="btn" href="{{ url_csv }}" download>Exportar CSV</a>
     </div>
   </form>
   {% if resumen %}

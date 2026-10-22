@@ -27,7 +27,7 @@
 <div class="card mb">
   <div class="titulo">
     <h3>Preview{% if total > 50 %} (primeras 50 de {{ total }}){% endif %}</h3>
-    <form method="post" action="{% url 'mesa:cliente_skus' cliente.pk %}">
+    <form method="post" action="{% url 'mesa:cliente_skus' cliente.pk %}" data-descarga>
       {% csrf_token %}
       <input type="hidden" name="accion" value="descargar_transformado">
       <input type="hidden" name="csv_transformado" value="{{ csv_transformado }}">

@@ -21,7 +21,7 @@
       Edita solo lo que difiera; deja vacío lo que no contaste (se ignora).
       Los SKUs sin stock salen con una fila vacía para capturarlos; si les pones ubicación, entran ahí.
     </p>
-    <a class="btn primario" href="{% url 'mesa:inventario_exportar_conteo' %}?cliente={{ cliente.slug }}">Exportar conteo (CSV)</a>
+    <a class="btn primario" href="{% url 'mesa:inventario_exportar_conteo' %}?cliente={{ cliente.slug }}" download>Exportar conteo (CSV)</a>
   </div>
   <div class="card">
     <div class="titulo"><h2>2 · Sube el conteo</h2></div>

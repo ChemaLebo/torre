@@ -14,7 +14,7 @@
     <span class="pill accent">{{ skus|length }} SKU(s)</span>
     <button class="btn" type="button" onclick="document.getElementById('modal-importar').showModal()">Importar CSV</button>
     <button class="btn" type="button" onclick="document.getElementById('modal-transformar').showModal()">Transformar export de Shopify</button>
-    <a class="btn" href="{% url 'mesa:cliente_skus_exportar' cliente.pk %}">Exportar CSV</a>
+    <a class="btn" href="{% url 'mesa:cliente_skus_exportar' cliente.pk %}" download>Exportar CSV</a>
     <button class="btn primario" type="button" onclick="document.getElementById('modal-sku').showModal()">+ Nuevo SKU</button>
   </div>
 </div>

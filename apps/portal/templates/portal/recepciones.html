@@ -46,7 +46,7 @@
     {# Formato del CSV, arriba y visible: GET aparte (un form no puede anidar otro). #}
     <details id="asn-formato">
       <summary>Descargar el formato del CSV <span class="small muted">· marca los productos que llegan para prellenarlos</span></summary>
-      <form method="get" action="{% url 'portal:recepciones_plantilla' %}" id="asn-formato-form">
+      <form method="get" action="{% url 'portal:recepciones_plantilla' %}" id="asn-formato-form" data-descarga>
         <p class="small muted">
           Columnas <span class="mono">codigo, descripcion, cantidad, lote, caducidad</span>. Los marcados bajan con código y
           descripción; tú llenas la cantidad (y lote y caducidad si aplican; la caducidad va como
