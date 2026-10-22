@@ -23,7 +23,8 @@ class Command(BaseCommand):
             catalogo = services.sincronizar_catalogo(tienda)
             if catalogo["nuevos"] or catalogo["renombrados"] or catalogo["recodificados"]:
                 self.stdout.write(
-                    f"{tienda.dominio}: catálogo {catalogo['nuevos']} SKU(s) nuevos por completar, "
+                    f"{tienda.dominio}: catálogo {catalogo['nuevos']} SKU(s) nuevos "
+                    f"({catalogo['activos']} activos con peso de Shopify, {catalogo['nuevos'] - catalogo['activos']} por completar), "
                     f"{catalogo['renombrados']} renombrados, {catalogo['recodificados']} recodificados"
                 )
         releidos = services.releer_pedidos_con_producto_no_registrado()

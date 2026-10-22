@@ -1300,23 +1300,50 @@ def _topic_desde_payload(payload):
 _SIN_VARIANTE = "Default Title"
 
 
+def _fichas_de_nuevas(api, tienda, variantes, por_variante, por_codigo):
+    """Peso y medidas de las variantes que van a nacer como SKU (las que no
+    están ligadas ni coinciden por código). Si Shopify no responde, {} y una
+    línea en el SyncLog: el alta sigue, inactiva por completar como antes."""
+    ids = [v["variant_id"] for v in variantes if v["sku"] and v["variant_id"] not in por_variante and v["sku"] not in por_codigo]
+    if not ids:
+        return {}
+    try:
+        fichas = api.fichas_variantes(ids)
+    except Exception as exc:  # noqa: BLE001 — sin ficha el alta no se detiene
+        SyncLog.objects.create(
+            tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
+            detalle=f"catálogo: sin peso ni medidas para {len(ids)} variante(s) nueva(s): {exc}"[:500],
+        )
+        return {}
+    if fichas and not any(f["con_medidas"] for f in fichas.values()):
+        SyncLog.objects.create(
+            tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
+            detalle="catálogo: la API no dio medidas empacadas (versión 2027-01); las nuevas nacen solo con peso",
+        )
+    return fichas
+
+
 def sincronizar_catalogo(tienda):
     """Pull de catálogo desde Shopify (Chema 2026-10-01), parte de sync_shopify:
-    cada variante con SKU que Torre no conoce nace como SKU INACTIVO "por
-    completar" (código, nombre, variante, código de barras y precio; peso y
-    medidas los captura Mesa: NUNCA vienen de Shopify) y, en los que ya
-    existen, se siguen SOLO los cambios de nombre (descripción/variante) y de
-    código de SKU (por el id de la variante, que se estampa al primer match
-    por código). Lo físico (peso, medidas, lote, reorden, kit, categoría,
-    banderas) no se toca. Borradores y activos entran igual: el producto se
-    da de alta antes de recibirlo. Sin token → nada. Regresa el resumen."""
+    cada variante con SKU que Torre no conoce nace como SKU con código,
+    nombre, variante, código de barras, precio y, desde 2026-10-21, el peso y
+    las medidas empacadas de Shopify (`ShopifyClient.fichas_variantes`): con
+    peso nace ACTIVO; sin peso allá, INACTIVO "por completar" para que Mesa
+    lo capture. En los que ya existen se siguen SOLO los cambios de nombre
+    (descripción/variante) y de código de SKU (por el id de la variante, que
+    se estampa al primer match por código). Lo físico (peso, medidas, lote,
+    reorden, kit, categoría, banderas) no se toca en actualizaciones: para
+    traerlo a mano está «Sincronizar con Shopify» por SKU en Mesa. Borradores
+    y activos entran igual: el producto se da de alta antes de recibirlo. Sin
+    token → nada. Regresa el resumen."""
     from apps.catalogo.models import SKU  # lazy: modelo de otra app
 
-    resumen = {"nuevos": 0, "renombrados": 0, "recodificados": 0, "ligados": 0, "variantes": 0}
+    resumen = {"nuevos": 0, "activos": 0, "renombrados": 0, "recodificados": 0, "ligados": 0, "variantes": 0}
     if not tienda.token:
         return resumen
     try:
-        variantes = ShopifyClient(tienda).catalogo()
+        api = ShopifyClient(tienda)
+        variantes = api.catalogo()
     except Exception as exc:  # noqa: BLE001 — Shopify caído: queda en SyncLog, el sync sigue
         SyncLog.objects.create(
             tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_ERROR,
@@ -1326,6 +1353,7 @@ def sincronizar_catalogo(tienda):
     cliente = tienda.cliente
     por_variante = {s.shopify_variant_id: s for s in SKU.objects.filter(cliente=cliente).exclude(shopify_variant_id="")}
     por_codigo = {s.codigo: s for s in SKU.objects.filter(cliente=cliente)}
+    fichas = _fichas_de_nuevas(api, tienda, variantes, por_variante, por_codigo)
     for v in variantes:
         if not v["sku"]:
             continue
@@ -1344,18 +1372,30 @@ def sincronizar_catalogo(tienda):
                 precio = Decimal(str(v["precio"] or 0))
             except (InvalidOperation, ValueError):
                 precio = Decimal(0)
+            fisico = fichas.get(v["variant_id"]) or {}
+            peso = int(fisico.get("peso_gr") or 0)
+            medidas = [int(fisico.get(campo) or 0) for campo in ("largo_cm", "ancho_cm", "alto_cm")]
             sku = SKU.objects.create(
                 cliente=cliente, codigo=v["sku"][:60], descripcion=(v["producto"] or v["sku"])[:200],
                 variante=variante[:100], codigo_barras=v["codigo_barras"][:64], precio_declarado=precio,
-                shopify_variant_id=v["variant_id"], activo=False,
+                shopify_variant_id=v["variant_id"], peso_gr=peso,
+                largo_cm=medidas[0], ancho_cm=medidas[1], alto_cm=medidas[2], activo=peso > 0,
             )
             por_codigo[sku.codigo] = sku
             por_variante[v["variant_id"]] = sku
             resumen["nuevos"] += 1
+            resumen["activos"] += int(sku.activo)
             registrar_evento(
                 "sku", sku.codigo, "sku_creado_desde_shopify", cliente=cliente,
-                delta={"tienda": tienda.dominio, "variant_id": v["variant_id"], "estado_shopify": v["estado"]},
-                motivo="Variante nueva en Shopify: nace inactivo, por completar peso y medidas en Mesa.",
+                delta={
+                    "tienda": tienda.dominio, "variant_id": v["variant_id"], "estado_shopify": v["estado"],
+                    "peso_gr": peso, "medidas_cm": medidas, "activo": sku.activo,
+                },
+                motivo=(
+                    "Variante nueva en Shopify: nace activa con el peso y las medidas de Shopify."
+                    if sku.activo else
+                    "Variante nueva en Shopify sin peso allá: nace inactiva, por completar peso y medidas en Mesa."
+                ),
             )
             continue
         cambios = {}
@@ -1384,7 +1424,8 @@ def sincronizar_catalogo(tienda):
     SyncLog.objects.create(
         tienda=tienda, direccion=SyncLog.DIRECCION_INGESTA, resultado=SyncLog.RESULTADO_OK,
         detalle=(
-            f"catálogo: {resumen['variantes']} variantes con SKU, {resumen['nuevos']} nuevas (inactivas, por completar), "
+            f"catálogo: {resumen['variantes']} variantes con SKU, {resumen['nuevos']} nuevas "
+            f"({resumen['activos']} activas con peso de Shopify, {resumen['nuevos'] - resumen['activos']} por completar), "
             f"{resumen['renombrados']} renombradas, {resumen['recodificados']} recodificadas"
         ),
     )

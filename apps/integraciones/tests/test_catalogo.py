@@ -1,6 +1,7 @@
 """Pull de catálogo desde Shopify (Chema 2026-10-01): productos nuevos nacen
-inactivos "por completar"; en los existentes solo se siguen nombre y código de
-SKU; peso y medidas jamás vienen de Shopify."""
+con el peso y las medidas de Shopify (activos si traen peso, inactivos "por
+completar" si no; 2026-10-21); en los existentes solo se siguen nombre y
+código de SKU, lo físico jamás se toca en actualizaciones."""
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -20,6 +21,12 @@ def variante(vid, sku, producto, titulo="Default Title", barcode="", precio="0",
             "estado": estado, "codigo_barras": barcode, "precio": precio}
 
 
+def ficha(vid, sku, peso_gr=0, medidas=(0, 0, 0), con_medidas=True, **extra):
+    """Lo que regresa ShopifyClient.fichas_variantes para una variante."""
+    return {**variante(vid, sku, extra.get("producto", sku)), "peso_gr": peso_gr,
+            "largo_cm": medidas[0], "ancho_cm": medidas[1], "alto_cm": medidas[2], "con_medidas": con_medidas}
+
+
 class CatalogoTests(TestCase):
     def setUp(self):
         self.cliente = crear_cliente()
@@ -27,35 +34,81 @@ class CatalogoTests(TestCase):
         self.existente = SKU.objects.create(cliente=self.cliente, codigo="C24CC6L", descripcion="24 pack línea", peso_gr=14700,
                                             largo_cm=40, ancho_cm=30, alto_cm=26, precio_declarado=Decimal("769"))
 
-    def _pull(self, variantes):
+    def _pull(self, variantes, fichas=None, error_fichas=None):
         with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
-            cliente_cls.return_value.catalogo.return_value = variantes
-            return sincronizar_catalogo(self.tienda)
+            api = cliente_cls.return_value
+            api.catalogo.return_value = variantes
+            if error_fichas is not None:
+                api.fichas_variantes.side_effect = error_fichas
+            else:
+                api.fichas_variantes.return_value = fichas or {}
+            resumen = sincronizar_catalogo(self.tienda)
+            self.ids_pedidos = [list(c.args[0]) for c in api.fichas_variantes.call_args_list]
+            return resumen
 
-    def test_producto_nuevo_en_borrador_nace_inactivo_por_completar(self):
+    def test_producto_nuevo_sin_peso_en_shopify_nace_inactivo_por_completar(self):
         resumen = self._pull([
             variante("1", "C24CC6L", "24 PACK CERVEZAS DE LÍNEA", precio="1099"),
             variante("2", "12NZP", "12 PACK NZ PILS", titulo="Botella 355 ml", barcode="750100", precio="420", estado="DRAFT"),
-        ])
-        self.assertEqual((resumen["nuevos"], resumen["ligados"], resumen["variantes"]), (1, 1, 2))
+        ], fichas={"2": ficha("2", "12NZP")})
+        self.assertEqual((resumen["nuevos"], resumen["activos"], resumen["ligados"], resumen["variantes"]), (1, 0, 1, 2))
+        self.assertEqual(self.ids_pedidos, [["2"]])  # la ficha solo se pide para lo que va a nacer
         nuevo = SKU.objects.get(cliente=self.cliente, codigo="12NZP")
         self.assertEqual((nuevo.activo, nuevo.descripcion, nuevo.variante, nuevo.codigo_barras, nuevo.precio_declarado),
                          (False, "12 PACK NZ PILS", "Botella 355 ml", "750100", Decimal("420")))
-        self.assertEqual((nuevo.peso_gr, nuevo.largo_cm, nuevo.shopify_variant_id), (0, 0, "2"))  # peso y medidas: Mesa
+        self.assertEqual((nuevo.peso_gr, nuevo.largo_cm, nuevo.shopify_variant_id), (0, 0, "2"))  # sin peso allá: lo captura Mesa
         self.existente.refresh_from_db()
         self.assertEqual(self.existente.shopify_variant_id, "1")
         self.assertEqual(self.existente.precio_declarado, Decimal("769"))  # lo existente no se pisa con el precio
-        self.assertTrue(EventoAuditoria.objects.filter(entidad="sku", entidad_id="12NZP", accion="sku_creado_desde_shopify").exists())
-        self.assertIn("1 nuevas", SyncLog.objects.latest("ts").detalle)
-        # Segundo pull igual: nada nuevo.
+        evento = EventoAuditoria.objects.get(entidad="sku", entidad_id="12NZP", accion="sku_creado_desde_shopify")
+        self.assertEqual((evento.delta["peso_gr"], evento.delta["activo"]), (0, False))
+        self.assertIn("1 nuevas (0 activas con peso de Shopify, 1 por completar)", SyncLog.objects.latest("ts").detalle)
+        # Segundo pull igual: nada nuevo ni ficha que pedir.
         resumen = self._pull([variante("1", "C24CC6L", "24 PACK CERVEZAS DE LÍNEA"), variante("2", "12NZP", "12 PACK NZ PILS", titulo="Botella 355 ml")])
-        self.assertEqual((resumen["nuevos"], resumen["renombrados"], resumen["recodificados"]), (0, 0, 0))
+        self.assertEqual((resumen["nuevos"], resumen["renombrados"], resumen["recodificados"], self.ids_pedidos), (0, 0, 0, []))
+
+    def test_producto_nuevo_con_peso_y_medidas_nace_activo(self):
+        """Chema 2026-10-21: Soda Mate captura peso y medidas en Shopify; con peso el SKU nace listo."""
+        resumen = self._pull(
+            [variante("5", "SM24LOR", "SODA MATE ORIGINAL LATA | 24 Pack", barcode="7503049667126", precio="1000.00")],
+            fichas={"5": ficha("5", "SM24LOR", peso_gr=15000, medidas=(40, 26, 25))},
+        )
+        self.assertEqual((resumen["nuevos"], resumen["activos"]), (1, 1))
+        nuevo = SKU.objects.get(cliente=self.cliente, codigo="SM24LOR")
+        self.assertEqual((nuevo.activo, nuevo.peso_gr, nuevo.largo_cm, nuevo.ancho_cm, nuevo.alto_cm, nuevo.codigo_barras),
+                         (True, 15000, 40, 26, 25, "7503049667126"))
+        evento = EventoAuditoria.objects.get(entidad="sku", entidad_id="SM24LOR", accion="sku_creado_desde_shopify")
+        self.assertEqual((evento.delta["peso_gr"], evento.delta["medidas_cm"], evento.delta["activo"]), (15000, [40, 26, 25], True))
+        self.assertIn("nace activa", evento.motivo)
+        self.assertIn("1 nuevas (1 activas con peso de Shopify, 0 por completar)", SyncLog.objects.latest("ts").detalle)
+        self.assertEqual(SyncLog.objects.filter(resultado=SyncLog.RESULTADO_ERROR).count(), 0)
+
+    def test_sin_ficha_el_alta_sigue_inactiva_y_queda_anotado(self):
+        resumen = self._pull([variante("5", "SM24LOR", "SODA MATE")], error_fichas=RuntimeError("502"))
+        self.assertEqual((resumen["nuevos"], resumen["activos"]), (1, 0))
+        nuevo = SKU.objects.get(cliente=self.cliente, codigo="SM24LOR")
+        self.assertEqual((nuevo.activo, nuevo.peso_gr), (False, 0))
+        error = SyncLog.objects.filter(resultado=SyncLog.RESULTADO_ERROR).get()
+        self.assertIn("sin peso ni medidas para 1 variante(s) nueva(s): 502", error.detalle)
+
+    def test_api_sin_medidas_nace_activa_solo_con_peso_y_queda_anotado(self):
+        resumen = self._pull(
+            [variante("5", "SM24LOR", "SODA MATE")],
+            fichas={"5": ficha("5", "SM24LOR", peso_gr=15000, con_medidas=False)},
+        )
+        self.assertEqual((resumen["nuevos"], resumen["activos"]), (1, 1))
+        nuevo = SKU.objects.get(cliente=self.cliente, codigo="SM24LOR")
+        self.assertEqual((nuevo.activo, nuevo.peso_gr, nuevo.largo_cm), (True, 15000, 0))
+        self.assertIn("no dio medidas empacadas", SyncLog.objects.filter(resultado=SyncLog.RESULTADO_ERROR).get().detalle)
 
     def test_cambio_de_nombre_y_de_codigo_se_siguen_por_la_variante(self):
         self._pull([variante("1", "C24CC6L", "24 pack línea")])
         self.existente.peso_gr = 14700
-        resumen = self._pull([variante("1", "C24CC6L-NUEVO", "24 PACK CERVEZAS DE LÍNEA BOTELLA 355 ML", titulo="Caja")])
-        self.assertEqual((resumen["renombrados"], resumen["recodificados"]), (1, 1))
+        resumen = self._pull(
+            [variante("1", "C24CC6L-NUEVO", "24 PACK CERVEZAS DE LÍNEA BOTELLA 355 ML", titulo="Caja")],
+            fichas={"1": ficha("1", "C24CC6L-NUEVO", peso_gr=99, medidas=(9, 9, 9))},  # aunque viniera, en actualización no se usa
+        )
+        self.assertEqual((resumen["renombrados"], resumen["recodificados"], self.ids_pedidos), (1, 1, []))
         self.existente.refresh_from_db()
         self.assertEqual((self.existente.codigo, self.existente.descripcion, self.existente.variante),
                          ("C24CC6L-NUEVO", "24 PACK CERVEZAS DE LÍNEA BOTELLA 355 ML", "Caja"))
@@ -80,6 +133,7 @@ class CatalogoTests(TestCase):
 
         with patch("apps.integraciones.services.ShopifyClient") as cliente_cls:
             cliente_cls.return_value.catalogo.return_value = [variante("9", "NUEVO-1", "Producto nuevo")]
+            cliente_cls.return_value.fichas_variantes.return_value = {}
             cliente_cls.return_value.obtener_pedidos.return_value = []
             cliente_cls.return_value.pedidos_actualizados.return_value = []
             call_command("sync_shopify", verbosity=0)
