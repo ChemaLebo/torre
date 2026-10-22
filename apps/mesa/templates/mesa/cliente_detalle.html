@@ -71,7 +71,7 @@
             {% if tienda.client_id %}
             {% if not tienda.token %}<div class="small muted">Primera instalación: abre el link de instalación del Dev Dashboard de Shopify en el admin de la tienda (sin <span class="mono">no_redirect</span>); al aprobar, Shopify regresa a Torre y la tienda queda conectada sola.</div>{% endif %}
             <form method="post" action="{% url 'mesa:tienda_conectar' cliente.pk tienda.pk %}" class="fila mt" style="gap:4px;flex-wrap:wrap">{% csrf_token %}
-              <button class="btn chico primario" name="accion" value="conectar" type="submit" title="Abre la pantalla de permisos de Shopify con la lista de Torre; al aprobar, el token se guarda solo">{% if tienda.token %}Actualizar permisos{% else %}Conectar con Shopify{% endif %}</button>
+              <button class="btn chico primario" name="accion" value="conectar" type="submit" formtarget="_blank" title="Abre la pantalla de permisos de Shopify en otra pestaña, con la lista de Torre; al aprobar, el token se guarda solo">{% if tienda.token %}Actualizar permisos{% else %}Conectar con Shopify{% endif %}</button>
               <button class="btn chico" name="accion" value="link" type="submit" title="Link de 7 días para que el cliente apruebe desde su admin, sin entrar a Mesa">Link para el cliente</button>
               {% if tienda.token %}<button class="btn chico" name="accion" value="sincronizar" type="submit" title="Catálogo y pedidos en segundo plano">Sincronizar ahora</button>{% endif %}
             </form>
