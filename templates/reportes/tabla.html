@@ -44,11 +44,14 @@
         {% for valor, texto in f.opciones %}<option value="{{ valor }}" {% for k, v in filtros.items %}{% if k == f.nombre and v == valor %}selected{% endif %}{% endfor %}>{{ texto }}</option>{% endfor %}
       </select>
       {% elif f.tipo == "multiselect" %}
-      {# Una, varias o todas (Chema 2026-10-22): sin nada elegido = todas. #}
-      <label for="f-{{ f.nombre }}">{{ f.etiqueta }} <span class="small muted">(nada = todas)</span></label>
-      <select id="f-{{ f.nombre }}" name="{{ f.nombre }}" multiple size="{% if f.opciones|length < 6 %}{{ f.opciones|length }}{% else %}6{% endif %}">
-        {% for valor, texto in f.opciones %}<option value="{{ valor }}" {% for k, v in filtros.items %}{% if k == f.nombre and valor in v %}selected{% endif %}{% endfor %}>{{ texto }}</option>{% endfor %}
-      </select>
+      {# Una, varias o todas (Chema 2026-10-22): dropdown con casillas; sin nada marcado = todas. #}
+      <label>{{ f.etiqueta }}</label>
+      <details class="desplegable" id="f-{{ f.nombre }}">
+        <summary>{% for k, v in filtros.items %}{% if k == f.nombre %}{% if v %}{{ v|length }} elegida{{ v|length|pluralize }}{% else %}Todas{% endif %}{% endif %}{% endfor %}</summary>
+        <div class="desplegable-panel">
+          {% for valor, texto in f.opciones %}<label class="desplegable-item"><input type="checkbox" name="{{ f.nombre }}" value="{{ valor }}" {% for k, v in filtros.items %}{% if k == f.nombre and valor in v %}checked{% endif %}{% endfor %}> {{ texto }}</label>{% endfor %}
+        </div>
+      </details>
       {% elif f.tipo == "rango" %}
       <label for="f-{{ f.nombre }}-min">{{ f.etiqueta }}</label>
       <div class="fila">
@@ -76,8 +79,10 @@
   {% endif %}
 </div>
 
-<div class="card mb">
-  <div class="titulo"><h3>Detalle</h3><a class="btn chico" href="{{ url_csv_tabla }}principal" download title="Solo esta tabla, para pegarla en tu Excel">CSV</a></div>
+{# Tarjetas plegables (Chema 2026-10-22): el detalle abre solo; los cortes son un acordeón (name=) de uno en uno. #}
+<details class="colapsable mb" open>
+  <summary>Detalle <span class="small muted">· {{ n_filas }} {{ n_filas|pluralize:"renglón,renglones" }}</span><a class="btn chico csv-tabla" href="{{ url_csv_tabla }}principal" download title="Solo esta tabla, para pegarla en tu Excel" onclick="event.stopPropagation()">CSV</a></summary>
+  <div class="colapsable-cuerpo">
   <div class="tabla-wrap">
     <table>
       <thead><tr>{% for e in encabezados %}<th>{{ e }}</th>{% endfor %}</tr></thead>
@@ -88,13 +93,16 @@
         <tr><td colspan="{{ encabezados|length }}" class="muted">Sin datos para estos filtros.</td></tr>
         {% endfor %}
       </tbody>
+      {% if totales %}<tfoot><tr class="totales">{% for valor, numerico in totales %}<td class="{% if numerico %}derecha mono{% endif %}">{{ valor }}</td>{% endfor %}</tr></tfoot>{% endif %}
     </table>
   </div>
-</div>
+  </div>
+</details>
 
 {% for g in grupos %}
-<div class="card mb">
-  <div class="titulo"><h3>{{ g.titulo }}</h3><a class="btn chico" href="{{ url_csv_tabla }}{{ forloop.counter0 }}" download title="Solo esta tabla, para pegarla en tu Excel">CSV</a></div>
+<details class="colapsable mb" name="cortes">
+  <summary>{{ g.titulo }} <span class="small muted">· {{ g.n_filas }} {{ g.n_filas|pluralize:"renglón,renglones" }}</span><a class="btn chico csv-tabla" href="{{ url_csv_tabla }}{{ forloop.counter0 }}" download title="Solo esta tabla, para pegarla en tu Excel" onclick="event.stopPropagation()">CSV</a></summary>
+  <div class="colapsable-cuerpo">
   {% if g.grafica_svg %}<div class="grafica">{{ g.grafica_svg|safe }}</div>{% endif %}
   <div class="tabla-wrap">
     <table>
@@ -106,9 +114,11 @@
         <tr><td colspan="{{ g.encabezados|length }}" class="muted">Sin datos.</td></tr>
         {% endfor %}
       </tbody>
+      {% if g.totales %}<tfoot><tr class="totales">{% for valor, numerico in g.totales %}<td class="{% if numerico %}derecha mono{% endif %}">{{ valor }}</td>{% endfor %}</tr></tfoot>{% endif %}
     </table>
   </div>
-</div>
+  </div>
+</details>
 {% endfor %}
 
 {% endblock %}

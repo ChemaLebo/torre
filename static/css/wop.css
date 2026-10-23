@@ -731,3 +731,25 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 .grafica-svg .eje { stroke: var(--hair-2); stroke-width: 1; }
 .grafica-svg .zona-hover { fill: transparent; }
 .grafica-svg .marca:hover .zona-hover { fill: var(--hair); }
+
+/* ── Reportes: dropdown de selección múltiple, totales y tarjetas plegables (2026-10-22) ── */
+details.desplegable { position: relative; min-width: 160px; }
+details.desplegable > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--hair-2); border-radius: var(--r); background: var(--panel-2); color: var(--ink);
+  font-family: var(--body); font-size: 14px; min-height: 40px;
+}
+details.desplegable > summary::-webkit-details-marker { display: none; }
+details.desplegable > summary::after { content: "▾"; margin-left: auto; color: var(--ink-50); font-size: 12px; }
+details.desplegable[open] > summary::after { content: "▴"; }
+.desplegable-panel {
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 240px; max-height: 280px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--hair-2); border-radius: var(--r); padding: 6px; box-shadow: var(--card-shadow);
+  display: grid; gap: 2px;
+}
+.desplegable-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+.desplegable-item:hover { background: var(--hair); }
+.desplegable-item input { margin: 0; }
+tr.totales td { font-weight: 600; border-top: 1px solid var(--hair-2); color: var(--ink); }
+details.colapsable > summary .csv-tabla { position: relative; z-index: 1; margin-left: 10px; }
+details.colapsable > summary .small { font-family: var(--body); letter-spacing: 0; }

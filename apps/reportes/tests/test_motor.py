@@ -80,9 +80,20 @@ class VistasMotorTests(ReportesTestCase):
         self.client.force_login(self.mesa)
         respuesta = self.client.get(self.url, {"cliente": "colima", "carrier": ["fedex"], "peso_min": "2", "sku": "SIX"})
         html = respuesta.content.decode()
-        self.assertIn('<select id="f-carrier" name="carrier" multiple', html)
-        self.assertIn('<option value="fedex" selected>FedEx</option>', html)
-        self.assertIn('<option value="estafeta" >Estafeta</option>', html)
+        # Multiselect = dropdown con casillas (Chema 2026-10-22): el resumen dice cuántas van marcadas.
+        self.assertIn('<details class="desplegable" id="f-carrier">', html)
+        self.assertIn("<summary>1 elegida</summary>", html)
+        self.assertIn('<input type="checkbox" name="carrier" value="fedex" checked>', html)
+        self.assertIn('<input type="checkbox" name="carrier" value="estafeta" >', html)
+        self.assertNotIn("<select id=\"f-carrier\"", html)
+        # Tarjetas plegables: el detalle abierto, los cortes como acordeón; totales por tabla.
+        self.assertIn('<details class="colapsable mb" open>', html)
+        self.assertEqual(html.count('<details class="colapsable mb" name="cortes">'), 2)
+        self.assertIn("Detalle <span class=\"small muted\">· 1 renglón</span>", html)
+        self.assertIn('<tr class="totales"><td class="">Total · 1 renglón</td><td class="">', html)
+        self.assertIn('<td class="derecha mono">$12.50</td></tr></tfoot>', html)
+        self.assertIn('<tr class="totales"><td class="">Total · 1 renglón</td><td class="derecha mono">1</td></tr>', html)  # grupo Por zona
+        self.assertIn('<tr class="totales"><td class="">Total · 1 renglón</td><td class="derecha mono"></td></tr>', html)  # grupo Por peso: None no suma
         self.assertIn('name="peso_min" min="0" step="any" placeholder="mín." style="width:6.5em" value="2"', html)
         self.assertIn('name="sku" autocomplete="off" placeholder="" value="SIX"', html)
         self.assertIn('<td class="">fedex</td>', html)

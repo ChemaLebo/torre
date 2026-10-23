@@ -117,20 +117,20 @@ class FulfillmentTests(ReportesTestCase):
         self.assertEqual((f[col["Horas en piso"]], f[col["Horas hasta salir"]], f[col["Horas hasta recolección"]], f[col["Horas de entrega"]]),
                          (5.0, 2.0, 4.0, 24.0))
         metro = Decimal(self.tarifas["envio_bloque"]["metro"])
-        self.assertEqual((f[col["Envío facturado sin IVA"]], f[col["Envío facturado con IVA"]], f[col["Reembolso"]]),
+        self.assertEqual((f[col["Ingreso envío sin IVA"]], f[col["Ingreso envío con IVA"]], f[col["Reembolso al cliente"]]),
                          (metro, (metro * Decimal("1.16")).quantize(Decimal("0.01")), None))
-        self.assertEqual((f[col["Picking"]], f[col["Empaque"]]), (Decimal(self.tarifas["alistamiento_pedido"]), Decimal(self.tarifas["empaque_pedido"])))
-        self.assertEqual((f[col["Cotizado al planear"]], f[col["Costo inicial"]], f[col["Costo final"]], f[col["Costo final sin IVA"]], f[col["Recargo carrier"]]),
+        self.assertEqual((f[col["Ingreso picking"]], f[col["Ingreso empaque"]]), (Decimal(self.tarifas["alistamiento_pedido"]), Decimal(self.tarifas["empaque_pedido"])))
+        self.assertEqual((f[col["Egreso cotizado al planear"]], f[col["Egreso inicial (compra)"]], f[col["Egreso final"]], f[col["Egreso final sin IVA"]], f[col["Egreso recargo carrier"]]),
                          (Decimal("297.00"), Decimal("276.00"), Decimal("300.00"), Decimal("258.62"), Decimal("24.00")))
-        self.assertEqual((f[col["Diferencia sin IVA"]], f[col["Diferencia con IVA"]]),
+        self.assertEqual((f[col["Margen sin IVA"]], f[col["Margen con IVA"]]),
                          (metro - Decimal("258.62"), (metro * Decimal("1.16")).quantize(Decimal("0.01")) - Decimal("300.00")))
         # 99minutos: sin crudo útil, cobrado por volumétrico vs real, sin manifiesto ni entrega → vacíos.
         g = filas["2243"]
         self.assertEqual((g[col["Peso real kg"]], g[col["Peso volumétrico kg"]], g[col["Peso declarado kg"]], g[col["Peso carrier kg"]], g[col["Cobrado por"]]),
                          (Decimal("4.0"), Decimal("2.6"), Decimal("4.0"), None, "real"))
-        self.assertEqual((g[col["Horas hasta salir"]], g[col["Horas hasta recolección"]], g[col["Horas de entrega"]], g[col["Picking"]], g[col["Empaque"]]),
+        self.assertEqual((g[col["Horas hasta salir"]], g[col["Horas hasta recolección"]], g[col["Horas de entrega"]], g[col["Ingreso picking"]], g[col["Ingreso empaque"]]),
                          (None, None, None, None, None))
-        self.assertEqual((g[col["Costo inicial"]], g[col["Costo final"]], g[col["Recargo carrier"]]), (Decimal("131.08"), Decimal("131.08"), None))
+        self.assertEqual((g[col["Egreso inicial (compra)"]], g[col["Egreso final"]], g[col["Egreso recargo carrier"]]), (Decimal("131.08"), Decimal("131.08"), None))
         self.assertEqual(g[col["Lotes"]], f"L-2026 ({self.lote.fecha_caducidad.isoformat()})")
 
     def test_cancelada_reposicion_y_resumen(self):
@@ -139,16 +139,16 @@ class FulfillmentTests(ReportesTestCase):
         col = {n: i for i, (n, _t) in enumerate(fulfillment.COLUMNAS + fulfillment.COLUMNAS_MESA)}
         local = Decimal(self.tarifas["envio_bloque"]["local"])
         canc, repo = filas["CANC"], filas["REPO"]
-        self.assertEqual((canc[col["Tipo"]], canc[col["Envío facturado sin IVA"]], canc[col["Reembolso"]], canc[col["Costo inicial"]], canc[col["Costo final"]]),
+        self.assertEqual((canc[col["Tipo"]], canc[col["Ingreso envío sin IVA"]], canc[col["Reembolso al cliente"]], canc[col["Egreso inicial (compra)"]], canc[col["Egreso final"]]),
                          ("cancelada", Decimal("0") - local, local, Decimal("90.00"), Decimal("90.00")))
-        self.assertEqual((repo[col["Tipo"]], repo[col["Envío facturado sin IVA"]], repo[col["Zona"]]), ("reposición", local, "Local"))
+        self.assertEqual((repo[col["Tipo"]], repo[col["Ingreso envío sin IVA"]], repo[col["Zona"]]), ("reposición", local, "Local"))
         resumen = dict(r["resumen"])
         self.assertEqual((resumen["pedidos"], resumen["guías"], resumen["paquetes"], resumen["piezas"]), (2, 4, 4, 6))  # A: 3+1, B: 1+1
         self.assertEqual((resumen["original"], resumen["cancelada"], resumen["reposición"], resumen["entregadas"]), (2, 1, 1, 1))
-        self.assertIn("costo final carriers MXN", resumen)
+        self.assertIn("egreso carriers (costo final) MXN", resumen)
         portal = self._generar(es_mesa=False)
         self.assertEqual(len(portal["filas"][0]), len(fulfillment.COLUMNAS))
-        self.assertNotIn("costo final carriers MXN", dict(portal["resumen"]))
+        self.assertNotIn("egreso carriers (costo final) MXN", dict(portal["resumen"]))
 
     def test_cortes_y_graficas(self):
         r = self._generar()
@@ -195,7 +195,10 @@ class FulfillmentTests(ReportesTestCase):
         self.client.force_login(self.mesa)
         pagina = self.client.get(reverse("mesa:reporte", args=["fulfillment"]), {"cliente": "colima", "desde": (timezone.localdate() - timedelta(days=7)).isoformat()})
         self.assertContains(pagina, "Fulfillment por guía")
-        self.assertContains(pagina, '<select id="f-carrier" name="carrier" multiple')
+        self.assertContains(pagina, '<details class="desplegable" id="f-carrier">')
+        self.assertContains(pagina, '<input type="checkbox" name="carrier" value="fedex" >')
+        self.assertContains(pagina, "Total · 4 renglones")
+        self.assertContains(pagina, '<details class="colapsable mb" name="cortes">')
         self.assertContains(pagina, "<svg xmlns")
         self.assertContains(pagina, "#4074")
         csv = self.client.get(reverse("mesa:reporte_csv", args=["fulfillment"]), {"cliente": "colima", "desde": (timezone.localdate() - timedelta(days=7)).isoformat(), "tabla": "0"})

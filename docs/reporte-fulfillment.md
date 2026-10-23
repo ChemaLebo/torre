@@ -20,11 +20,14 @@ Solo Mesa por ahora; el portal se replica después quitando costos y proveedor.
   estado y zona de cobro (Local, Metropolitana, Foránea).
 - Estado de la guía y tiempos en horas: en piso (ingreso → lista en salida),
   hasta salir (→ manifiesto), hasta recolección del carrier, de entrega.
-- Importes: envío facturado sin y con IVA (tarifa de la zona del tarifario del
-  cliente menos reembolsos), picking y empaque (una vez por pedido). Mesa ve
-  además cotizado al planear, costo inicial, costo final (lo que envia reporta
-  en el objeto de envío mientras la guía viva; si no, el inicial), costo final
-  sin IVA, recargo y diferencia sin y con IVA.
+- **Ingresos** = lo que se le cobra al cliente: envío sin y con IVA (tarifa de
+  la zona del tarifario del cliente menos reembolsos), picking y empaque (una
+  vez por pedido). **Egresos** = lo que nos cobra el carrier, solo Mesa:
+  cotizado al planear, inicial (compra), final (lo que envia reporta en el
+  objeto de envío mientras la guía viva; si no, el inicial), final sin IVA y
+  recargo. **Margen** sin y con IVA = ingreso menos egreso.
+- Cada tabla cierra con una fila de totales (en pantalla; el CSV va crudo) y
+  cada tarjeta se pliega: el detalle abre solo, los cortes de uno en uno.
 - Lo que no aplica va vacío, nunca en cero.
 
 ## Filtros

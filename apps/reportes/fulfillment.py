@@ -8,8 +8,9 @@ declarado al carrier y el que pesó el carrier si lo reportó), piezas, SKUs y
 lotes con caducidad, origen y destino (CP, ciudad, estado, zona de cobro),
 tiempos (en piso, hasta salir por manifiesto, hasta la recolección del carrier
 y de entrega) e importes (facturado sin y con IVA, reembolsos, picking y
-empaque; Mesa además cotizado al planear, costo inicial, costo final y la
-diferencia sin y con IVA).
+empaque; Mesa además los egresos: cotizado al planear, costo inicial, costo
+final y el margen sin y con IVA). Ingreso = lo que se le cobra al cliente;
+egreso = lo que nos cobra el carrier (Chema 2026-10-22).
 
 Lo que no aplica va vacío, nunca en cero. Los grupos (cada uno con su CSV y su
 gráfica) son los cortes del punto 4 del alcance: productos por guía, volumen
@@ -46,7 +47,7 @@ CLAVE = "fulfillment"
 TITULO = "Fulfillment por guía"
 DESCRIPCION = (
     "Una fila por guía de los pedidos ingresados en el periodo: tipo de envío, paquetería, caja, pesos, "
-    "productos y lotes, destino y zona, tiempos e importes facturados. Lo que no aplica va vacío. "
+    "productos y lotes, destino y zona, tiempos, ingresos (lo que se cobra al cliente) y, en Mesa, egresos (lo que nos cobra el carrier) y margen. Lo que no aplica va vacío. "
     "Los filtros aplican a la tabla, los cortes, el resumen y los CSV."
 )
 CON_FECHAS = True
@@ -92,19 +93,19 @@ COLUMNAS = [
     ("CP origen", "texto"), ("CP destino", "texto"), ("Ciudad", "texto"), ("Estado", "texto"), ("Zona", "texto"),
     ("Estado de la guía", "texto"),
     ("Horas en piso", "horas"), ("Horas hasta salir", "horas"), ("Horas hasta recolección", "horas"), ("Horas de entrega", "horas"),
-    ("Envío facturado sin IVA", "dinero"), ("Envío facturado con IVA", "dinero"), ("Reembolso", "dinero"),
-    ("Picking", "dinero"), ("Empaque", "dinero"),
+    ("Ingreso envío sin IVA", "dinero"), ("Ingreso envío con IVA", "dinero"), ("Reembolso al cliente", "dinero"),
+    ("Ingreso picking", "dinero"), ("Ingreso empaque", "dinero"),
 ]
 COLUMNAS_MESA = [
-    ("Cotizado al planear", "dinero"), ("Costo inicial", "dinero"), ("Costo final", "dinero"), ("Costo final sin IVA", "dinero"),
-    ("Recargo carrier", "dinero"), ("Diferencia sin IVA", "dinero"), ("Diferencia con IVA", "dinero"),
+    ("Egreso cotizado al planear", "dinero"), ("Egreso inicial (compra)", "dinero"), ("Egreso final", "dinero"), ("Egreso final sin IVA", "dinero"),
+    ("Egreso recargo carrier", "dinero"), ("Margen sin IVA", "dinero"), ("Margen con IVA", "dinero"),
 ]
 COLUMNAS_PRODUCTOS = [
     ("Pedido", "texto"), ("Guía", "texto"), ("Caja", "texto"), ("SKU", "texto"), ("Producto", "texto"),
     ("Piezas", "entero"), ("Lote", "texto"), ("Caducidad", "fecha"),
 ]
 COLUMNAS_VOLUMEN = [("Periodo", "texto"), ("Pedidos", "entero"), ("Guías", "entero"), ("Paquetes", "entero"), ("Piezas", "entero")]
-COLUMNAS_CORTE = [("Grupo", "texto"), ("Guías", "entero"), ("% de guías", "pct"), ("Piezas", "entero"), ("Envío facturado sin IVA", "dinero")]
+COLUMNAS_CORTE = [("Grupo", "texto"), ("Guías", "entero"), ("% de guías", "pct"), ("Piezas", "entero"), ("Ingreso envío sin IVA", "dinero")]
 
 
 # ── helpers de una guía ───────────────────────────────────────────────────────
@@ -432,19 +433,19 @@ def generar(cliente, inicio, fin, filtros, es_mesa):
         ("piezas", sum(r["piezas"] for r in registros)),
     ] + [(t, tipos[t]) for t, _n in TIPOS if tipos[t]] + [
         ("entregadas", sum(1 for r in registros if r["entregado"])),
-        ("envío facturado sin IVA MXN", dinero(facturado_total)),
-        ("envío facturado con IVA MXN", dinero(facturado_total * (1 + _iva()))),
+        ("ingreso envío sin IVA MXN", dinero(facturado_total)),
+        ("ingreso envío con IVA MXN", dinero(facturado_total * (1 + _iva()))),
     ]
     if es_mesa:
         costo_final = sum((r["fila"][35] or Decimal("0")) for r in registros)
-        resumen += [("costo final carriers MXN", dinero(costo_final)),
-                    ("diferencia con IVA MXN", dinero(facturado_total * (1 + _iva()) - costo_final))]
+        resumen += [("egreso carriers (costo final) MXN", dinero(costo_final)),
+                    ("margen envío con IVA MXN", dinero(facturado_total * (1 + _iva()) - costo_final))]
     grupos = [
         {"titulo": "Productos por guía", "columnas": COLUMNAS_PRODUCTOS, "filas": productos},
         _volumen("Volumen diario", dias),
         _volumen("Volumen mensual", por_mes),
         {**_corte("Guías por pedido", por_numero, len(guias_por_pedido), orden=list(por_numero), serie="pedidos"),
-         "columnas": [("Guías por pedido", "texto"), ("Pedidos", "entero"), ("% de pedidos", "pct"), ("Piezas", "entero"), ("Envío facturado sin IVA", "dinero")]},
+         "columnas": [("Guías por pedido", "texto"), ("Pedidos", "entero"), ("% de pedidos", "pct"), ("Piezas", "entero"), ("Ingreso envío sin IVA", "dinero")]},
         _corte("Guías por zona", por_zona, total, orden=[n for _z, n in ZONAS if n in por_zona]),
         _corte("Guías por ciudad", por_ciudad, total),
         _corte("Guías por código postal", por_cp, total),

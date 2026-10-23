@@ -84,6 +84,24 @@ def _formatear(columnas, filas):
     return [[(_celda(v, t), t in TIPOS_NUMERICOS) for v, t in zip(fila, tipos)] for fila in filas]
 
 
+def _totales(columnas, filas):
+    """Fila de totales para la pantalla (Chema 2026-10-22): suma de las columnas
+    entero / decimal / dinero, vacío en porcentajes, horas y texto; la primera
+    celda dice cuántos renglones suma. None sin filas. El CSV va crudo, sin ella."""
+    if not filas:
+        return None
+    celdas = []
+    for i, (_nombre, tipo) in enumerate(columnas):
+        if tipo in ("entero", "decimal", "dinero"):
+            valores = [f[i] for f in filas if i < len(f) and f[i] is not None and not isinstance(f[i], bool)]
+            total = sum((Decimal(str(v)) for v in valores), Decimal("0")) if valores else None
+            celdas.append((_celda(int(total) if tipo == "entero" and total is not None else total, tipo), True))
+        else:
+            celdas.append(("", tipo in TIPOS_NUMERICOS))
+    celdas[0] = (f"Total · {len(filas)} {'renglón' if len(filas) == 1 else 'renglones'}", False)
+    return celdas
+
+
 def render_reporte(request, clave, *, cliente, clientes, es_mesa, url_base, url_csv, url_indice, seccion):
     """Página del reporte: filtros, resumen, tabla principal y grupos."""
     m, ctx, resultado = _datos(request, clave, cliente, clientes, es_mesa)
@@ -102,11 +120,13 @@ def render_reporte(request, clave, *, cliente, clientes, es_mesa, url_base, url_
         "url_csv_tabla": url_csv + (f"?{params}&" if params else "?") + "tabla=",
         "encabezados": [n for n, _t in ctx["columnas"]],
         "filas": _formatear(ctx["columnas"], resultado["filas"]),
+        "totales": _totales(ctx["columnas"], resultado["filas"]),
         "n_filas": len(resultado["filas"]),
         "resumen": resultado["resumen"],
         "grupos": [
             {"titulo": g["titulo"], "encabezados": [n for n, _t in g["columnas"]],
-             "filas": _formatear(g["columnas"], g["filas"]), "grafica_svg": graficas.svg(g)}
+             "filas": _formatear(g["columnas"], g["filas"]), "totales": _totales(g["columnas"], g["filas"]),
+             "n_filas": len(g["filas"]), "grafica_svg": graficas.svg(g)}
             for g in resultado["grupos"]
         ],
         **ctx,
