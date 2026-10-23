@@ -235,10 +235,10 @@
       {% if cajas_rehacer %}
       {# Rehacer la entrega por caja (Chema 2026-10-10): precarga la reposición con todo lo que llevó esa caja. #}
       <div class="fila mb" style="flex-wrap:wrap;gap:6px">
-        {% for c in cajas_rehacer %}<a class="btn chico{% if c.pk == caja_prefill %} primario{% endif %}" href="?reponer=1&amp;caja={{ c.pk }}#compensaciones" title="Precarga la reposición con todo lo que llevó la caja {{ c.numero }}">Rehacer la entrega de la caja {{ c.numero }} <span class="muted">· {{ c.contenido|join:", " }}</span></a>{% endfor %}
+        {% for c in cajas_rehacer %}<a class="btn chico{% if c.pk == caja_prefill %} primario{% endif %}" href="?reponer=1&amp;caja={{ c.pk }}#compensaciones" title="Precarga la reposición con todo lo que llevó la caja {{ c.numero }}">Rehacer la entrega de la caja {{ c.numero }} <span class="muted">· {{ c.contenido|join:", " }}</span></a>{% endfor %}{% if cajas_rehacer|length > 1 %}<a class="btn chico{% if caja_prefill == "todas" %} primario{% endif %}" href="?reponer=1&amp;caja=todas#compensaciones" title="Precarga la reposición con el contenido de todas las cajas que salieron: una sola reposición, una sola vuelta a picking">Rehacer todo el pedido <span class="muted">· {{ cajas_rehacer|length }} cajas</span></a>{% endif %}
       </div>
       {% endif %}
-      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>{% if caja_prefill %}Reposición precargada con el contenido de la caja: quita lo que sí llegó bien, revisa el motivo y aprueba. {% endif %}Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan marcadas como "contenido repuesto" (se siguen rastreando aparte).</div>{% endif %}
+      {% if reponer %}<div class="banner warn mb"><span class="foco"></span>{% if caja_prefill == "todas" %}Reposición precargada con el contenido de TODAS las cajas: quita lo que sí llegó bien, revisa el motivo y aprueba. {% elif caja_prefill %}Reposición precargada con el contenido de la caja: quita lo que sí llegó bien, revisa el motivo y aprueba. {% endif %}Marca qué productos se reponen y aprueba: el pedido regresa a picking y las guías originales quedan marcadas como "contenido repuesto" (se siguen rastreando aparte).</div>{% endif %}
       {% for comp in compensaciones %}
       <div style="padding:8px 0;border-bottom:1px solid var(--hair)">
         <div class="fila entre">
@@ -319,8 +319,14 @@
               <td><span class="mono">{{ linea.sku.codigo }}</span> <span class="small">{{ linea.sku.descripcion }}</span></td>
               <td class="mono">{{ linea.cantidad }}</td>
               <td class="mono">{{ linea.salieron }}</td>
+              {% if linea.por_caja|length > 1 %}
+              {# Salió en varias cajas (Chema 2026-10-22): una casilla de piezas por caja, todas en la misma reposición. #}
+              <td class="small">cajas {% for c in linea.por_caja %}{{ c.numero }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+              <td><div class="fila" style="gap:6px;flex-wrap:wrap">{% for c in linea.por_caja %}<label class="small" style="white-space:nowrap">caja {{ c.numero }} <input type="number" name="cantidad_{{ linea.pk }}_{{ c.pk }}" min="0" max="{{ c.piezas }}" value="{% if linea.prefill %}{{ c.prefill }}{% else %}{{ c.piezas }}{% endif %}" data-tope="{{ c.piezas }}"{% if linea.prefill %} data-tocado="1"{% endif %} style="width:64px" aria-label="Piezas de {{ linea.sku.codigo }} de la caja {{ c.numero }}"></label>{% endfor %}</div></td>
+              {% else %}
               <td class="small">{% if linea.cajas_origen|length > 1 %}<select name="caja_{{ linea.pk }}" aria-label="Caja de la que salieron las piezas de {{ linea.sku.codigo }}" title="Reposición: de qué caja salieron las piezas que llegaron mal (una reposición por caja)">{% for pk, texto in linea.cajas_origen %}<option value="{{ pk }}"{% if pk == caja_prefill %} selected{% endif %}>{{ texto }}</option>{% endfor %}</select>{% elif linea.cajas_salida %}{{ linea.cajas_salida }}{% elif linea.salieron %}—{% else %}<span class="muted">en bodega</span>{% endif %}</td>
               <td><input type="number" name="cantidad_{{ linea.pk }}" min="1" max="{{ linea.cantidad }}" value="{% if linea.prefill %}{{ linea.prefill }}{% else %}{{ linea.cantidad }}{% endif %}"{% if linea.prefill %} data-tocado="1"{% endif %} style="width:90px" aria-label="Piezas de {{ linea.sku.codigo }}"></td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>
@@ -341,13 +347,16 @@
             document.querySelectorAll(".comp-linea").forEach(function (fila) {
               var tope = reposicion ? parseInt(fila.dataset.salieron, 10) : parseInt(fila.dataset.pedidas, 10);
               var marca = fila.querySelector("input[type=checkbox]");
-              var piezas = fila.querySelector("input[type=number]");
               var apagada = reposicion && tope <= 0;
               marca.disabled = apagada;
-              piezas.disabled = apagada;
               if (apagada) marca.checked = false;
-              piezas.max = Math.max(tope, 1);
-              if (!piezas.dataset.tocado || parseInt(piezas.value, 10) > tope) piezas.value = Math.max(tope, 1);
+              fila.querySelectorAll("input[type=number]").forEach(function (piezas) {
+                // Casilla por caja: su tope es lo que salió en ESA caja; la casilla única, lo de la fila.
+                var propio = piezas.dataset.tope ? parseInt(piezas.dataset.tope, 10) : tope;
+                piezas.disabled = apagada;
+                piezas.max = Math.max(propio, piezas.dataset.tope ? 0 : 1);
+                if (!piezas.dataset.tocado || parseInt(piezas.value, 10) > propio) piezas.value = piezas.dataset.tope ? propio : Math.max(propio, 1);
+              });
               fila.style.opacity = apagada ? "0.45" : "";
             });
           }

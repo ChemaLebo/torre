@@ -686,7 +686,10 @@ def _rehacer_entrega(incidencia, lineas, caja_param):
     pedido que ya salieron, con su contenido, para los botones del expediente;
     y, cuando viene ?caja=<pk>, el precargado de la reposición: cada línea
     que viajó en esa caja queda marcada con las piezas que llevó
-    (`linea.prefill`). Regresa (cajas, caja_pk | None)."""
+    (`linea.prefill`). ?caja=todas (Chema 2026-10-22, PED-00613) precarga
+    TODAS las cajas en una sola reposición. Cada línea recibe además
+    `por_caja` = [{pk, numero, piezas, prefill}] para la casilla por caja del
+    formulario. Regresa (cajas, caja_pk | "todas" | None)."""
     if incidencia.pedido_id is None or not lineas:
         return [], None
     from apps.pedidos.services import piezas_reponibles  # lazy por contrato
@@ -698,12 +701,20 @@ def _rehacer_entrega(incidencia, lineas, caja_param):
         for pk, c in (info["por_caja"].items() if info else []):
             caja = cajas.setdefault(pk, {"pk": pk, "numero": c["numero"], "contenido": []})
             caja["contenido"].append(f"{c['piezas']}× {linea.sku.codigo}")
-    caja_pk = int(caja_param) if str(caja_param).isdigit() and int(caja_param) in cajas else None
-    if caja_pk is not None:
-        for linea in lineas:
-            info = reponibles.get(linea.pk)
-            en_caja = info["por_caja"].get(caja_pk) if info else None
-            linea.prefill = en_caja["piezas"] if en_caja else 0
+    if str(caja_param) == "todas" and cajas:
+        caja_pk = "todas"
+    else:
+        caja_pk = int(caja_param) if str(caja_param).isdigit() and int(caja_param) in cajas else None
+    for linea in lineas:
+        info = reponibles.get(linea.pk)
+        por_caja = info["por_caja"] if info else {}
+        linea.por_caja = [
+            {"pk": pk, "numero": c["numero"], "piezas": c["piezas"],
+             "prefill": c["piezas"] if caja_pk == "todas" or pk == caja_pk else 0}
+            for pk, c in por_caja.items()
+        ]
+        if caja_pk is not None:
+            linea.prefill = sum(c["prefill"] for c in linea.por_caja)
     return sorted(cajas.values(), key=lambda c: c["numero"]), caja_pk
 
 

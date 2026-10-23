@@ -76,13 +76,40 @@ class CompensacionesMesaTests(TestCase):
         self.assertIn("Reposición precargada con el contenido de la caja", html)
         self.assertIn(f'name="linea_{self.linea.pk}" value="1" checked', html)
         self.assertIn(f'name="linea_{self.linea2.pk}" value="1" checked', html)
-        self.assertIn(f'name="cantidad_{self.linea.pk}" min="1" max="2" value="1" data-tocado="1"', html)
-        self.assertIn(f'<option value="{c2.pk}" selected>caja 2 · 1 pza</option>', html)  # SIX salió en dos cajas: la 2 elegida
+        self.assertIn(f'name="cantidad_{self.linea2.pk}" min="1" max="1" value="1" data-tocado="1"', html)  # C12: una sola caja
+        # SIX salió en dos cajas: una casilla por caja (2026-10-22); con la caja 2 precargada, la 1 va en cero.
+        self.assertIn(f'name="cantidad_{self.linea.pk}_{c1.pk}" min="0" max="1" value="0" data-tope="1" data-tocado="1"', html)
+        self.assertIn(f'name="cantidad_{self.linea.pk}_{c2.pk}" min="0" max="1" value="1" data-tope="1" data-tocado="1"', html)
+        self.assertNotIn(f'name="caja_{self.linea.pk}"', html)
+        self.assertIn("cajas 1, 2", html)
         self.assertIn('<option value="danada">', html)  # DAN: el motivo no se preselecciona
         self.assertNotIn('<option value="producto_erroneo" selected>', html)
         # Una caja que no es del pedido no precarga nada.
         html = self.client.get(f"{self.url}?reponer=1&caja=999999").content.decode()
         self.assertNotIn("data-tocado", html)
+
+    def test_rehacer_todo_el_pedido_precarga_todas_las_cajas_y_repone_en_una_sola(self):
+        """Chema 2026-10-22 (PED-00613): un botón precarga todas las cajas y la reposición
+        sale completa en una sola vuelta a picking."""
+        c1, c2 = self._dos_cajas_despachadas()
+        html = self.client.get(self.url).content.decode()
+        self.assertIn('href="?reponer=1&amp;caja=todas#compensaciones"', html)
+        self.assertIn('Rehacer todo el pedido <span class="muted">· 2 cajas</span>', html)
+        # Sin precarga, cada casilla propone lo que salió en su caja.
+        self.assertIn(f'name="cantidad_{self.linea.pk}_{c1.pk}" min="0" max="1" value="1" data-tope="1" style', html)
+        html = self.client.get(f"{self.url}?reponer=1&caja=todas").content.decode()
+        self.assertIn("contenido de TODAS las cajas", html)
+        self.assertIn(f'name="cantidad_{self.linea.pk}_{c1.pk}" min="0" max="1" value="1" data-tope="1" data-tocado="1"', html)
+        self.assertIn(f'name="cantidad_{self.linea.pk}_{c2.pk}" min="0" max="1" value="1" data-tope="1" data-tocado="1"', html)
+        self.assertIn(f'name="cantidad_{self.linea2.pk}" min="1" max="1" value="1" data-tocado="1"', html)
+        with patch("apps.pedidos.services.reponer_lineas", return_value=[MagicMock(cantidad=1)] * 3) as reponer:
+            self.client.post(self.url, {
+                "accion": "compensacion_crear", "tipo": "reposicion", "motivo": "danada", "aprobar": "1",
+                f"linea_{self.linea.pk}": "1", f"cantidad_{self.linea.pk}_{c1.pk}": "1", f"cantidad_{self.linea.pk}_{c2.pk}": "1",
+                f"linea_{self.linea2.pk}": "1", f"cantidad_{self.linea2.pk}": "1",
+            }, follow=True)
+        seleccion = reponer.call_args.args[1]
+        self.assertEqual([(l.pk, c, p) for l, c, p in seleccion], [(self.linea.pk, 1, c1.pk), (self.linea.pk, 1, c2.pk), (self.linea2.pk, 1, c2.pk)])
 
     def test_producto_erroneo_preselecciona_su_motivo_y_marca_la_guia(self):
         from apps.envios.models import Guia

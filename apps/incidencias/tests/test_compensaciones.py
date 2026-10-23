@@ -110,6 +110,49 @@ class CompensacionesTests(TestCase):
         comp = crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l1, 1)])
         self.assertEqual(comp.lineas, [{"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": None, "caja": None}])
 
+    def test_un_producto_que_salio_en_dos_cajas_se_repone_entero_en_una_sola_reposicion(self):
+        """Chema 2026-10-22 (PED-00613): una casilla de piezas por caja produce una
+        entrada por caja; para reembolso se suman en una. Al aprobar, reponer_lineas
+        suma las dos y guarda el origen de cada una."""
+        from apps.envios.models import Paquete, PaqueteLinea
+        from apps.incidencias.services import _seleccion_de, lineas_para_compensar
+
+        a = Paquete.objects.create(pedido=self.pedido, numero=1, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        b = Paquete.objects.create(pedido=self.pedido, numero=2, peso_kg=Decimal("4"), carrier="estafeta", estado=Paquete.DESPACHADO)
+        PaqueteLinea.objects.create(paquete=a, linea_pedido=self.l1, cantidad=1)
+        PaqueteLinea.objects.create(paquete=b, linea_pedido=self.l1, cantidad=1)
+        PaqueteLinea.objects.create(paquete=b, linea_pedido=self.l2, cantidad=1)
+        LineaPedido.objects.filter(pk=self.l1.pk).update(cantidad_despachada=2)
+        LineaPedido.objects.filter(pk=self.l2.pk).update(cantidad_despachada=1)
+        [six, c12] = lineas_para_compensar(self.inc)
+        self.assertEqual([pk for pk, _t in six.cajas_origen], [a.pk, b.pk])
+        post = {"tipo": "reposicion", f"linea_{self.l1.pk}": "1", f"cantidad_{self.l1.pk}_{a.pk}": "1", f"cantidad_{self.l1.pk}_{b.pk}": "1",
+                f"linea_{self.l2.pk}": "1", f"cantidad_{self.l2.pk}": "1"}
+        seleccion = seleccion_desde_post(post, self.inc)
+        self.assertEqual([(l.pk, c, p) for l, c, p in seleccion], [(self.l1.pk, 1, a.pk), (self.l1.pk, 1, b.pk), (self.l2.pk, 1, None)])
+        # Reembolso: la caja no importa; las casillas se suman en una entrada.
+        self.assertEqual([(l.pk, c, p) for l, c, p in seleccion_desde_post({**post, "tipo": "reembolso"}, self.inc)],
+                         [(self.l1.pk, 2, None), (self.l2.pk, 1, None)])
+        # Una casilla en cero no cuenta; más piezas de las que salieron en esa caja, no.
+        self.assertEqual(len(seleccion_desde_post({**post, f"cantidad_{self.l1.pk}_{a.pk}": "0"}, self.inc)), 2)
+        with self.assertRaises(ValueError) as ctx:
+            crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=[(self.l1, 2, a.pk)])
+        self.assertIn("en la caja 1 salieron 1 pieza(s)", str(ctx.exception))
+        comp = crear_compensacion(self.inc, "reposicion", None, "mesa", lineas=seleccion)
+        self.assertEqual(comp.lineas, [
+            {"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": a.pk, "caja": 1},
+            {"linea_id": self.l1.pk, "sku": "SIX", "cantidad": 1, "caja_id": b.pk, "caja": 2},
+            {"linea_id": self.l2.pk, "sku": "C12", "cantidad": 1, "caja_id": b.pk, "caja": 2},
+        ])
+        self.assertEqual(comp.monto, Decimal("1200"))  # 2 × 300 + 600
+        self.assertEqual([(l.pk, c, p) for l, c, p in _seleccion_de(comp)], [(self.l1.pk, 1, a.pk), (self.l1.pk, 1, b.pk), (self.l2.pk, 1, b.pk)])
+        aprobar_compensacion(comp, None)
+        self.l1.refresh_from_db()
+        self.l2.refresh_from_db()
+        self.pedido.refresh_from_db()
+        self.assertEqual((self.l1.cantidad_repuesta, self.l2.cantidad_repuesta, self.pedido.estado), (2, 1, "PENDIENTE"))
+        self.assertEqual([(o["numero"], o["cantidad"]) for o in self.l1.origen_reposicion], [(1, 1), (2, 1)])
+
     def test_reembolso_lo_ejecuta_shopify_y_queda_pagado(self):
         comp = crear_compensacion(self.inc, "reembolso", None, "mesa", lineas=[(self.l1, 2)], reembolsar_envio=True)
         self.assertEqual(comp.monto, Decimal("500"))  # estimado con el precio real de venta

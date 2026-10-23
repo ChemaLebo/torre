@@ -621,12 +621,31 @@ def lineas_para_compensar(incidencia):
 
 
 def seleccion_desde_post(post, incidencia):
-    """[(línea, cantidad, caja_pk|None)] marcadas en el formulario (linea_<pk>
-    + cantidad_<pk> + caja_<pk>: de qué caja salieron las piezas, solo para
-    reposición)."""
+    """[(línea, cantidad, caja_pk|None)] marcadas en el formulario: linea_<pk>
+    + cantidad_<pk> (+ caja_<pk>: de qué caja salieron las piezas, solo para
+    reposición). Un producto que salió en varias cajas trae UNA casilla por
+    caja, cantidad_<pk>_<caja_pk> (Chema 2026-10-22: PED-00613, reponer las
+    tres cajas en una sola reposición), y produce una entrada por caja; para
+    reembolso o cupón esas casillas se suman en una sola entrada sin caja."""
+    reposicion = (post.get("tipo") or "reposicion") == "reposicion"
     seleccion = []
     for linea in lineas_para_compensar(incidencia):
         if not post.get(f"linea_{linea.pk}"):
+            continue
+        por_caja = [(pk, post.get(f"cantidad_{linea.pk}_{pk}")) for pk, _texto in linea.cajas_origen]
+        por_caja = [(pk, crudo) for pk, crudo in por_caja if crudo not in (None, "")]
+        if por_caja:
+            entradas = []
+            for pk, crudo in por_caja:
+                try:
+                    cantidad = int(crudo)
+                except (TypeError, ValueError):
+                    raise ValueError(f"Cantidad inválida para {linea.sku.codigo}.") from None
+                if cantidad > 0:
+                    entradas.append((linea, cantidad, pk))
+            if not reposicion and entradas:
+                entradas = [(linea, sum(c for _l, c, _p in entradas), None)]
+            seleccion += entradas
             continue
         try:
             cantidad = int(post.get(f"cantidad_{linea.pk}") or linea.cantidad)
@@ -666,14 +685,14 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
     for linea, cantidad, _caja in seleccion:
         if cantidad > linea.cantidad:
             raise ValueError(f"{linea.sku.codigo}: el pedido lleva {linea.cantidad} pieza(s), no {cantidad}.")
-    cajas_elegidas = {}
+    cajas_elegidas = {}  # índice en `seleccion` → (caja_pk, número): un producto puede venir de varias cajas
     if tipo == Compensacion.TIPO_REPOSICION:
         if not seleccion:
             raise ValueError("Elige qué productos se reponen.")
         from apps.pedidos.services import piezas_reponibles  # lazy por contrato
 
         reponibles = piezas_reponibles(incidencia.pedido)
-        for linea, cantidad, caja in seleccion:
+        for indice, (linea, cantidad, caja) in enumerate(seleccion):
             info = reponibles.get(linea.pk)
             if info is None:
                 raise ValueError(f"{linea.sku.codigo}: no ha salido de bodega; eso se corrige en el pedido, no se repone.")
@@ -690,7 +709,7 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
                         f"{linea.sku.codigo}: en la caja {en_caja['numero']} salieron {en_caja['piezas']} pieza(s); "
                         f"no se reponen {cantidad} de esa caja (registra otra reposición para la otra caja)."
                     )
-                cajas_elegidas[linea.pk] = (caja, en_caja["numero"])
+                cajas_elegidas[indice] = (caja, en_caja["numero"])
         monto = sum((Decimal(linea.sku.precio_declarado or 0) * cantidad for linea, cantidad, _ in seleccion), Decimal(0))
         reembolsar_envio = False
     elif tipo == Compensacion.TIPO_REEMBOLSO:
@@ -709,10 +728,10 @@ def crear_compensacion(incidencia, tipo, actor, rol, lineas=None, monto=None, re
         lineas=[
             {
                 "linea_id": linea.pk, "sku": linea.sku.codigo, "cantidad": cantidad,
-                "caja_id": cajas_elegidas.get(linea.pk, (None, None))[0],
-                "caja": cajas_elegidas.get(linea.pk, (None, None))[1],
+                "caja_id": cajas_elegidas.get(indice, (None, None))[0],
+                "caja": cajas_elegidas.get(indice, (None, None))[1],
             }
-            for linea, cantidad, _ in seleccion
+            for indice, (linea, cantidad, _) in enumerate(seleccion)
         ],
         reembolsar_envio=bool(reembolsar_envio), avisar_comprador=bool(avisar_comprador),
         creada_por=Compensacion.CREADA_CLIENTE if rol == "cliente" else Compensacion.CREADA_MESA,
