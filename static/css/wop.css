@@ -701,3 +701,33 @@ details.colapsable .colapsable-cuerpo { padding: 0 14px 14px; }
 .tarjeta-eleccion .tarjeta-sub { font-size: 18px; margin-top: 4px; }
 .tarjeta-eleccion.tarjeta-otro input { width: 100%; }
 .campo-escaneo { font-size: 20px; padding: 12px 14px; }
+
+/* ── Gráficas SVG de los reportes (apps/reportes/graficas.py, 2026-10-22) ──
+   Paleta categórica validada con la skill de dataviz contra --panel en los dos
+   temas (claro: #FFFFFF, oscuro: #0D0D0D). El texto usa los tokens de texto,
+   nunca el color de la serie; los valores van en las puntas. */
+.grafica { margin: 4px 0 10px; }
+.grafica-svg { display: block; max-width: 100%; font-family: var(--body); }
+.grafica-svg .serie-1 { fill: #3987E5; }
+.grafica-svg .serie-2 { fill: #D95926; }
+.grafica-svg .serie-3 { fill: #199E70; }
+.grafica-svg .serie-4 { fill: #C98500; }
+.grafica-svg .serie-5 { fill: #D55181; }
+.grafica-svg .serie-6 { fill: #008300; }
+.grafica-svg .serie-7 { fill: #9085E9; }
+.grafica-svg .serie-8 { fill: #E66767; }
+[data-theme="light"] .grafica-svg .serie-1 { fill: #2A78D6; }
+[data-theme="light"] .grafica-svg .serie-2 { fill: #EB6834; }
+[data-theme="light"] .grafica-svg .serie-3 { fill: #1BAF7A; }
+[data-theme="light"] .grafica-svg .serie-4 { fill: #EDA100; }
+[data-theme="light"] .grafica-svg .serie-5 { fill: #E87BA4; }
+[data-theme="light"] .grafica-svg .serie-6 { fill: #008300; }
+[data-theme="light"] .grafica-svg .serie-7 { fill: #6250D6; }
+[data-theme="light"] .grafica-svg .serie-8 { fill: #E34948; }
+.grafica-svg text { font-size: 11px; fill: var(--ink-70); }
+.grafica-svg .valor { font-size: 11px; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.grafica-svg .tick { font-size: 10px; fill: var(--ink-50); font-variant-numeric: tabular-nums; }
+.grafica-svg .rejilla { stroke: var(--hair); stroke-width: 1; }
+.grafica-svg .eje { stroke: var(--hair-2); stroke-width: 1; }
+.grafica-svg .zona-hover { fill: transparent; }
+.grafica-svg .marca:hover .zona-hover { fill: var(--hair); }

@@ -8,6 +8,7 @@ from django.http import Http404, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
 
+from . import graficas
 from .base import TIPOS_NUMERICOS, filtros_desde_get, limites, opciones_de, rango_desde_get
 from .registro import modulo, modulos
 
@@ -104,7 +105,7 @@ def render_reporte(request, clave, *, cliente, clientes, es_mesa, url_base, url_
         "resumen": resultado["resumen"],
         "grupos": [
             {"titulo": g["titulo"], "encabezados": [n for n, _t in g["columnas"]],
-             "filas": _formatear(g["columnas"], g["filas"]), "grafica": g.get("grafica")}
+             "filas": _formatear(g["columnas"], g["filas"]), "grafica_svg": graficas.svg(g)}
             for g in resultado["grupos"]
         ],
         **ctx,
