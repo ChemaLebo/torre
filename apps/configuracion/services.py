@@ -8,6 +8,9 @@
 - etiquetas_manejo() -> (fragil, orientacion): cuántas etiquetas FRÁGIL y de
   orientación salen con la interna 51×51 de una caja marcada (modelo
   EtiquetasManejo, un renglón; sin renglón, ETIQUETAS_MANEJO_DEFAULT; 0 apaga).
+- origen_principal() -> Origen | None: el origen de envíos de WOP (modelo
+  Origen; las zonas de cobro por CP, modelo ZonaCP, cuelgan de él y las lee
+  finanzas.zonas; se cargan con `manage.py cargar_zonas_cp`).
 """
 from django.core.validators import validate_email
 from django.db.models import Q
@@ -81,3 +84,11 @@ def etiquetas_manejo():
     if fila is None:
         return ETIQUETAS_MANEJO_DEFAULT
     return fila.fragil, fila.orientacion
+
+
+def origen_principal():
+    """El origen de envíos de WOP (principal y activo); None si todavía no se cargó
+    (`manage.py cargar_zonas_cp` lo crea)."""
+    from .models import Origen  # lazy: evita el ciclo con el admin al importar
+
+    return Origen.objects.filter(principal=True, activo=True).first()
