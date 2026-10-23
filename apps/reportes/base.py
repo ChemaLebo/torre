@@ -17,7 +17,7 @@ Cada reporte es un módulo de esta app con el mismo contrato:
   con la columna "Cliente" al frente (views.render_reporte).
 """
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.utils import timezone
 
@@ -55,25 +55,61 @@ def limites(desde, hasta):
     return inicio, fin
 
 
-def filtros_desde_get(definiciones, get):
+def _decimal_o_none(crudo):
+    try:
+        return Decimal(str(crudo).strip()) if crudo not in (None, "") else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def filtros_desde_get(definiciones, get, es_mesa=True):
     """Valores de los filtros extra según su tipo; los que no vienen toman su
     default (checkbox: False si el form ya se mandó, default si es la primera
-    carga)."""
+    carga). Tipos: number | select | checkbox | text | multiselect (lista de
+    valores elegidos; vacía = todos) | rango (par (mínimo, máximo) leído de
+    <nombre>_min y <nombre>_max como Decimal, None lo que no se capturó).
+    Un filtro con `solo_mesa` se ignora fuera de Mesa (queda en su default).
+    `opciones` puede ser una lista o un callable sin argumentos (se evalúa al
+    pintar la pantalla, no aquí)."""
     enviado = bool(get)
+    obtener_lista = getattr(get, "getlist", None)
     valores = {}
     for f in definiciones:
-        crudo = get.get(f["nombre"])
-        tipo = f.get("tipo", "text")
+        nombre, tipo = f["nombre"], f.get("tipo", "text")
+        if tipo == "multiselect":
+            if f.get("solo_mesa") and not es_mesa:
+                crudos = []
+            elif obtener_lista is not None:
+                crudos = obtener_lista(nombre)
+            else:
+                crudos = get.get(nombre) or []
+                crudos = [crudos] if isinstance(crudos, str) else list(crudos)
+            valores[nombre] = [str(v).strip() for v in crudos if str(v).strip()] or list(f.get("default") or [])
+            continue
+        if tipo == "rango":
+            if f.get("solo_mesa") and not es_mesa:
+                valores[nombre] = (None, None)
+            else:
+                valores[nombre] = (_decimal_o_none(get.get(f"{nombre}_min")), _decimal_o_none(get.get(f"{nombre}_max")))
+            continue
+        fuera_de_mesa = bool(f.get("solo_mesa")) and not es_mesa
+        crudo = None if fuera_de_mesa else get.get(nombre)
         if tipo == "checkbox":
-            valores[f["nombre"]] = (crudo == "on") if enviado else bool(f.get("default"))
+            valores[nombre] = bool(f.get("default")) if (fuera_de_mesa or not enviado) else (crudo == "on")
         elif tipo == "number":
             try:
-                valores[f["nombre"]] = int(crudo) if crudo not in (None, "") else f.get("default")
+                valores[nombre] = int(crudo) if crudo not in (None, "") else f.get("default")
             except ValueError:
-                valores[f["nombre"]] = f.get("default")
+                valores[nombre] = f.get("default")
         else:
-            valores[f["nombre"]] = crudo if crudo not in (None, "") else f.get("default", "")
+            valores[nombre] = str(crudo).strip() if crudo not in (None, "") else f.get("default", "")
     return valores
+
+
+def opciones_de(filtro):
+    """Opciones de un filtro select/multiselect: la lista tal cual o el callable evaluado."""
+    opciones = filtro.get("opciones") or []
+    return list(opciones()) if callable(opciones) else list(opciones)
 
 
 def horas(desde, hasta):
