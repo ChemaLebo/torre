@@ -14,10 +14,11 @@ from .registro import modulo, modulos
 
 
 def indice(request, es_mesa, url_de):
-    """Lista de reportes con su descripción; `url_de(clave)` arma el link."""
+    """Lista de reportes con su descripción; `url_de(clave)` arma el link.
+    Los módulos con SOLO_MESA no se listan fuera de Mesa."""
     return [
         {"clave": clave, "titulo": m.TITULO, "descripcion": m.DESCRIPCION, "url": url_de(clave)}
-        for clave, m in modulos()
+        for clave, m in modulos() if es_mesa or not getattr(m, "SOLO_MESA", False)
     ]
 
 
@@ -25,7 +26,7 @@ def _datos(request, clave, cliente, clientes, es_mesa):
     """(módulo, contexto de filtros, resultado). Mesa sin cliente = todos los
     activos concatenados con la columna Cliente al frente."""
     m = modulo(clave)
-    if m is None:
+    if m is None or (getattr(m, "SOLO_MESA", False) and not es_mesa):
         raise Http404("Reporte desconocido")
     desde, hasta, valido = rango_desde_get(request.GET)
     if not valido:
