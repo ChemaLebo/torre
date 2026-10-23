@@ -515,6 +515,36 @@ traslapan (pendiente desde 2026-09-10). Ya no hay lecturas de negocio sobre
 `EventoAuditoria` fuera del reporte del día (quién hizo cada paso) y el
 reporte de reparto.
 
+## Reporte de fulfillment por guía — hecho 2026-10-22
+
+Hecho (ver CONVENTIONS "Fulfillment por guía", "Motor de reportes, ampliado" y
+"Orígenes y zonas de cobro"): reporte solo Mesa con tipos de envío, pesos,
+lotes, tiempos, importes, filtros, CSV por tabla y gráficas SVG; zonas y
+orígenes en Configuración con `cargar_zonas_cp`. Decisión de Chema: NADA
+fuera del reporte (ni campos en la guía ni cambios en compra o rastreo).
+Pendientes que salieron del plan (`~/.claude/plans/torre-reporte-fulfillment.md`):
+
+1. Portal: replicar el reporte quitando proveedor, costos y diferencias (hoy
+   `SOLO_MESA`).
+2. Recargos después de la entrega: el poller deja de refrescar `Guia.raw` en
+   estado terminal, así que un sobrepeso que envia aplique después no se ve.
+   envia manda el webhook `surcharge` (surcharge_type, amount, transaction_type
+   surcharge|refund, tracking_number) y expone `GET queries.envia.com/company/
+   tickets?tracking_number=…&type=3`: recibirlo → `AjusteGuia` y costo final =
+   inicial + ajustes.
+3. Peso volumétrico como campo en `Paquete` (hoy se calcula en el reporte con
+   L×A×H/5000) y guardar del rate de envia `zone` y `appliedWeightType`
+   (declared | volumetric) al cotizar: el objeto de envío de la compra no los
+   trae (zone llega en 0).
+4. `Pedido.origen` (FK a `configuracion.Origen`, vacío = WOP) y que el adapter
+   arme el remitente desde ahí: necesario para "fulfilled by merchant" y para
+   que el ruteo (`CP_LOCAL_PREFIJOS`) y la zona usen el origen del pedido.
+5. Tablas de tarifas de carriers (`TarifaCarrier(carrier, zona, peso_desde,
+   peso_hasta, precio)` + carga CSV) para ver en qué rango cayó cada guía;
+   ningún carrier manda el tipo de tarifa por API.
+6. IVA de iMile por confirmar (va por envia, ya no se usa); envia y 99minutos
+   confirmados con IVA incluido.
+
 ## Reportería para clientes (pedido de Colima) — hecho 2026-09-15
 
 Ejecutado el mismo día en seis commits (bloques 1-6 de abajo): app

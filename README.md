@@ -61,6 +61,7 @@ manage.py poll_tracking       # tracking Envia → transiciones + incidencias RE
 manage.py conteo_ciclico      # 3 SKUs del día (ABC)
 manage.py digest_diario       # resumen 17:30 por cliente
 manage.py cerrar_entregas_presuntas
+manage.py cargar_zonas_cp     # UNA vez tras el deploy del 2026-10-22: origen WOP + zonas de cobro por CP (después, el admin)
 ```
 
 ## Tests
